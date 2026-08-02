@@ -1,0 +1,15 @@
+node_modules/
+dist/
+
+# Build artefacts and local scratch
+*.tgz
+.pkg-test/
+
+# Copied into the package by `prepack`, removed by `postpack`
+packages/*/README.md
+packages/*/LICENSE
+
+# Editor / tooling state
+.claude/
+.DS_Store
+*.log

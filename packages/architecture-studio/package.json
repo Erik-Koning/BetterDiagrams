@@ -1,0 +1,97 @@
+{
+  "name": "@mosphere/architect-better-code-diagrams",
+  "version": "0.1.0-beta.0",
+  "description": "Embeddable React architecture and sequence diagram editors with an LLM-authorable JSON schema.",
+  "keywords": [
+    "diagram",
+    "architecture",
+    "sequence-diagram",
+    "react-flow",
+    "c4",
+    "editor",
+    "react",
+    "llm",
+    "mermaid",
+    "plantuml"
+  ],
+  "license": "MIT",
+  "author": "Erik Koning",
+  "type": "module",
+  "main": "./dist/architecture-studio.cjs",
+  "module": "./dist/architecture-studio.js",
+  "types": "./dist/architecture-studio.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/architecture-studio.d.ts",
+        "default": "./dist/architecture-studio.js"
+      },
+      "require": {
+        "types": "./dist/architecture-studio.d.cts",
+        "default": "./dist/architecture-studio.cjs"
+      }
+    },
+    "./contract": {
+      "import": {
+        "types": "./dist/contract.d.ts",
+        "default": "./dist/contract.js"
+      },
+      "require": {
+        "types": "./dist/contract.d.cts",
+        "default": "./dist/contract.cjs"
+      }
+    },
+    "./styles.css": "./dist/architecture-studio.css",
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "contract": [
+        "./dist/contract.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && vite build && npm run build:dts-cts",
+    "build:dts-cts": "node -e \"for (const f of ['architecture-studio','contract']) require('fs').copyFileSync('dist/'+f+'.d.ts','dist/'+f+'.d.cts')\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "cp ../../README.md ../../LICENSE .",
+    "postpack": "rm -f README.md LICENSE"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.3.5"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/node": "^26.1.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^5.2.0",
+    "jsdom": "^29.1.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.6.3",
+    "vite": "^7.3.6",
+    "vite-plugin-dts": "^4.5.4",
+    "vitest": "^3.2.7"
+  }
+}

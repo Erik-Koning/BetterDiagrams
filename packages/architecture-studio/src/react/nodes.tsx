@@ -1,0 +1,359 @@
+/**
+ * nodes.tsx — the three custom React Flow node renderers.
+ *
+ *   shape      → a boxed service/database/queue/... node
+ *   group      → a resizable container other nodes nest into
+ *   annotation → free text with no chrome
+ *
+ * Which renderer a kind uses is decided by the registry (`container` /
+ * `annotation` flags), not by a hard-coded list — see `toReactFlow`.
+ */
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import {
+  Handle,
+  NodeResizer,
+  Position,
+  useReactFlow,
+  type Node,
+  type NodeProps,
+} from "@xyflow/react";
+import type { CSSProperties } from "react";
+import { SvgIcon } from "./icons";
+import { useStudio } from "./context";
+import { DateChip } from "./chrome";
+import { kindDef, iconPaths } from "./registry-types";
+import { ZoneNode } from "./ZoneNode";
+import { silhouettePath, teamColor } from "./shapes";
+import type { DiagramNodeData } from "../contract/schema";
+
+export type ShapeNodeType = Node<DiagramNodeData, "shape">;
+export type GroupNodeType = Node<DiagramNodeData, "group">;
+export type AnnotationNodeType = Node<DiagramNodeData, "annotation">;
+
+/**
+ * Four handles per node, all declared as sources. The editor runs React Flow
+ * in `ConnectionMode.Loose`, which lets a source handle also accept an incoming
+ * connection — so a drag from any side to any side works without doubling the
+ * handle count, and without the user having to aim at a specific dot.
+ */
+const HANDLE_POSITIONS: Array<[string, Position]> = [
+  ["top", Position.Top],
+  ["right", Position.Right],
+  ["bottom", Position.Bottom],
+  ["left", Position.Left],
+];
+
+/**
+ * `hidden` makes the handles inert, NOT absent.
+ *
+ * Unmounting them looks like the obvious way to hide a connect affordance, and
+ * it silently removes every edge from the diagram: React Flow positions an
+ * edge from its endpoints' measured handle bounds, and a node with no handles
+ * has none, so `EdgeWrapper` renders nothing at all. A read-only or scrubbed
+ * diagram would draw its boxes and none of its connections.
+ *
+ * Keeping them mounted, un-connectable, and painted-out costs four empty divs
+ * per node and keeps the bounds React Flow needs.
+ */
+export function ConnectHandles({ hidden }: { hidden: boolean }) {
+  return (
+    <>
+      {HANDLE_POSITIONS.map(([id, position]) => (
+        <Handle
+          key={id}
+          id={id}
+          type="source"
+          position={position}
+          isConnectable={!hidden}
+          className={hidden ? "as-handle--inert" : undefined}
+        />
+      ))}
+    </>
+  );
+}
+
+// ─── Shape ───────────────────────────────────────────────────────────────────
+
+export const ShapeNode = memo(function ShapeNode({
+  data,
+  selected,
+  width,
+  height,
+}: NodeProps<ShapeNodeType>) {
+  const { registry, readOnly, tagFilter, showTeams, requestCommit, navigateFile } = useStudio();
+  const def = kindDef(registry, data.kind);
+  const paths = iconPaths(registry, data.icon);
+  const shape = def.shape ?? "card";
+
+  const w = width ?? 170;
+  const h = height ?? 76;
+  // Absolute-coordinate silhouette in a 1:1 viewBox — no stretch, so the
+  // person's head and the pipe's ends stay circular at any aspect ratio.
+  const sil = shape !== "card" ? silhouettePath(shape, 0.75, 0.75, w - 1.5, h - 1.5) : null;
+
+  // Tag filter: dim, never hide. Purely presentational, so it cannot interact
+  // with the visibility machinery that decides what persists.
+  const dimmed =
+    tagFilter.length > 0 && !data.tags?.some((tag) => tagFilter.includes(tag));
+
+  const style = {
+    "--as-node-accent": def.accent,
+    ...(sil
+      ? { paddingTop: 6 + sil.contentTop, paddingInline: 12 + sil.contentInlinePad }
+      : {}),
+  } as CSSProperties;
+
+  const className = [
+    "as-node",
+    shape !== "card" ? `as-node--shaped as-node--${shape}` : "",
+    selected ? "as-node--selected" : "",
+    data.ghost ? "as-ghost" : "",
+    dimmed ? "as-node--dimmed" : "",
+    data.status ? `as-node--status-${data.status}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <>
+      <NodeResizer
+        isVisible={!!selected && !readOnly && !data.locked}
+        minWidth={110}
+        minHeight={52}
+        lineClassName="as-resize-line"
+        onResizeEnd={requestCommit}
+      />
+      <ConnectHandles hidden={readOnly} />
+      <div
+        className={className}
+        style={style}
+        title={
+          data.ghost
+            ? `Hidden by the current provider selection — visible on ${data.providers?.join(", ")}`
+            : undefined
+        }
+      >
+        {sil ? (
+          <svg className="as-node__silhouette" width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
+            <path className="as-node__silhouette-base" d={sil.body} />
+            <path className="as-node__silhouette-tint" d={sil.body} />
+            {sil.detail ? <path className="as-node__silhouette-detail" d={sil.detail} /> : null}
+          </svg>
+        ) : null}
+        {paths ? (
+          <span className="as-node__iconbox" aria-hidden="true">
+            <SvgIcon paths={paths} size={17} color={def.accent} />
+          </span>
+        ) : null}
+        <div className="as-node__body">
+          <div className="as-node__kind">
+            {def.label}
+            {data.status ? <span className="as-node__status"> · {data.status}</span> : null}
+          </div>
+          <div className="as-node__title" title={data.label}>
+            {data.label}
+          </div>
+          {data.description ? <div className="as-node__desc">{data.description}</div> : null}
+          <DateChip date={data.date} prefix="Lands" />
+        </div>
+        {data.url?.startsWith("file:") ? (
+          navigateFile ? (
+            <button
+              type="button"
+              className="as-node__link nodrag"
+              title={`Open linked file: ${data.url.slice(5)}`}
+              aria-label={`Open linked file ${data.url.slice(5)}`}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                navigateFile(data.url!.slice(5));
+              }}
+            >
+              ↗
+            </button>
+          ) : null
+        ) : data.url ? (
+          <a
+            className="as-node__link nodrag"
+            href={data.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={data.url}
+            aria-label={`Open ${data.url}`}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            ↗
+          </a>
+        ) : null}
+        {data.locked ? (
+          <span className="as-node__lock" title="Locked" aria-label="Locked">
+            🔒
+          </span>
+        ) : null}
+        {data.ghost ? <span className="as-ghost__badge">{data.providers?.join(" · ")}</span> : null}
+        {data.team && showTeams ? (
+          <span
+            className="as-node__team"
+            style={{ "--as-team-color": teamColor(data.team) } as CSSProperties}
+            title={`Owned by ${data.team}`}
+          >
+            {data.team}
+          </span>
+        ) : null}
+      </div>
+    </>
+  );
+});
+
+// ─── Group ───────────────────────────────────────────────────────────────────
+
+export const GroupNode = memo(function GroupNode({ id, data, selected }: NodeProps<GroupNodeType>) {
+  const { registry, readOnly, showTeams, requestCommit } = useStudio();
+  const { updateNodeData } = useReactFlow();
+  const def = kindDef(registry, data.kind);
+
+  const style = { "--as-node-accent": def.accent } as CSSProperties;
+  const teamBadge =
+    data.team && showTeams ? (
+      <span
+        className="as-node__team as-node__team--inline"
+        style={{ "--as-team-color": teamColor(data.team) } as CSSProperties}
+        title={`Owned by ${data.team}`}
+      >
+        {data.team}
+      </span>
+    ) : null;
+
+  // Flipping `collapsed` changes which nodes exist on the canvas, so it flows
+  // through the same materialization path as a provider switch: this data
+  // change reaches the derived template, the view signature changes, and the
+  // canvas rebuilds (hiding/revealing children, re-routing their edges). It
+  // lands in the undo stack like any other document change.
+  const toggle = (
+    <button
+      type="button"
+      className="as-group__collapse nodrag"
+      onClick={(event) => {
+        event.stopPropagation();
+        updateNodeData(id, { collapsed: !data.collapsed });
+      }}
+      title={data.collapsed ? "Expand — restores the saved size and layout" : "Collapse to a chip"}
+      aria-label={data.collapsed ? `Expand ${data.label}` : `Collapse ${data.label}`}
+      aria-expanded={!data.collapsed}
+    >
+      {data.collapsed ? "▸" : "▾"}
+    </button>
+  );
+
+  if (data.collapsed) {
+    // The chip: a solid mini-card standing in for the whole group. Edges from
+    // the hidden contents attach here (see toReactFlow's re-routing).
+    return (
+      <>
+        <ConnectHandles hidden={readOnly} />
+        <div
+          className={`as-group-chip${selected ? " as-group-chip--selected" : ""}`}
+          style={style}
+          title={`${data.label} — collapsed`}
+        >
+          {!readOnly ? toggle : <span className="as-group__collapse">▸</span>}
+          <span className="as-group-chip__label">{data.label}</span>
+          <DateChip date={data.date} inline prefix="Lands" />
+          {teamBadge}
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <NodeResizer isVisible={!!selected && !readOnly && !data.locked} minWidth={160} minHeight={120} onResizeEnd={requestCommit} />
+      <ConnectHandles hidden={readOnly} />
+      <div
+        className={`as-group${selected ? " as-group--selected" : ""}${data.status ? ` as-node--status-${data.status}` : ""}`}
+        style={style}
+      >
+        <div className="as-group__label" title={data.label}>
+          {!readOnly ? toggle : null}
+          {data.label}
+          <DateChip date={data.date} inline prefix="Lands" />
+          {teamBadge}
+        </div>
+      </div>
+    </>
+  );
+});
+
+// ─── Annotation ──────────────────────────────────────────────────────────────
+
+export const AnnotationNode = memo(function AnnotationNode({
+  id,
+  data,
+  selected,
+}: NodeProps<AnnotationNodeType>) {
+  const { readOnly, requestCommit } = useStudio();
+  const { updateNodeData } = useReactFlow();
+  const [editing, setEditing] = useState(false);
+  const areaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (editing) areaRef.current?.focus();
+  }, [editing]);
+
+  const stopEditing = useCallback(() => {
+    setEditing(false);
+    // Inline edits go through updateNodeData, which bypasses the editor's
+    // commit path — record the finished edit so it's undoable and emitted.
+    requestCommit();
+  }, [requestCommit]);
+
+  const style = {
+    fontSize: data.fontSize ?? 13,
+    lineHeight: 1.35,
+  } as CSSProperties;
+
+  return (
+    <>
+      <NodeResizer isVisible={!!selected && !readOnly} minWidth={80} minHeight={28} onResizeEnd={requestCommit} />
+      <ConnectHandles hidden={readOnly} />
+      <div
+        className={`as-annotation${data.plain ? "" : " as-annotation--boxed"}${selected ? " as-annotation--selected" : ""}`}
+        style={style}
+        onDoubleClick={readOnly ? undefined : () => setEditing(true)}
+        title={readOnly ? undefined : "Double-click to edit"}
+      >
+        {editing ? (
+          <textarea
+            ref={areaRef}
+            className="as-annotation__input nodrag nowheel"
+            value={data.label}
+            onChange={(e) => updateNodeData(id, { label: e.target.value })}
+            onBlur={stopEditing}
+            onKeyDown={(e) => {
+              // Escape commits and exits; the editor's global Delete/Backspace
+              // handler must not fire while a caret is in this field.
+              if (e.key === "Escape") {
+                e.stopPropagation();
+                stopEditing();
+              }
+              e.stopPropagation();
+            }}
+          />
+        ) : (
+          <>
+            {data.label}
+            <DateChip date={data.date} inline prefix="Lands" />
+          </>
+        )}
+      </div>
+    </>
+  );
+});
+
+export const NODE_TYPES = {
+  shape: ShapeNode,
+  group: GroupNode,
+  annotation: AnnotationNode,
+  zone: ZoneNode,
+};

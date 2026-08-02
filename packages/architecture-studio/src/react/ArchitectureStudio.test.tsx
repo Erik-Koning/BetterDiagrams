@@ -1,0 +1,1646 @@
+/**
+ * @vitest-environment jsdom
+ *
+ * Component smoke tests.
+ *
+ * These mount the real component with React Flow inside jsdom. They are not a
+ * substitute for using it, but they do prove the thing renders, honours its
+ * props, and wires the registry through to the UI — which the type checker and
+ * the pure-logic tests cannot tell us.
+ */
+import { StrictMode, useState } from "react";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { ArchitectureStudio } from "./ArchitectureStudio";
+import { LIGHT_THEME, paletteFromTheme } from "./theme";
+import { copyFragment } from "../contract/clipboard";
+import {
+  EXAMPLE_TEMPLATE,
+  EXAMPLE_ZONED_TEMPLATE,
+  validateTemplate,
+  type DiagramTemplate,
+} from "../contract/schema";
+
+/** The component fills its parent, so give it a real box in the test DOM. */
+function mount(ui: React.ReactElement) {
+  return render(ui, {
+    container: Object.assign(document.body.appendChild(document.createElement("div")), {
+      style: "width: 1200px; height: 800px",
+    }),
+  });
+}
+
+/** Toolbar actions live in dropdowns — open the menu, then click the entry. */
+async function fromMenu(
+  user: ReturnType<typeof userEvent.setup>,
+  menu: string | RegExp,
+  item: string | RegExp,
+) {
+  await user.click(screen.getByRole("button", { name: menu }));
+  await user.click(screen.getByRole("menuitem", { name: item }));
+}
+
+describe("ArchitectureStudio", () => {
+  it("mounts and renders the toolbar", () => {
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    expect(screen.getByText("arch·studio")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Insert ▾" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Arrange ▾" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export ▾" })).toBeInTheDocument();
+  });
+
+  it("opens one toolbar menu at a time and closes on outside click", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+
+    await user.click(screen.getByRole("button", { name: "Insert ▾" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    // Opening another menu replaces the first — never two at once.
+    await user.click(screen.getByRole("button", { name: "Arrange ▾" }));
+    expect(screen.getAllByRole("menu")).toHaveLength(1);
+    expect(screen.getByRole("menuitem", { name: /^Tidy / })).toBeInTheDocument();
+
+    // A click anywhere outside closes it.
+    await user.click(screen.getByText("arch·studio"));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("renders the diagram's nodes", () => {
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+    expect(screen.getByText("Postgres")).toBeInTheDocument();
+    // The container node renders its label chip.
+    expect(screen.getByText("Application VPC")).toBeInTheDocument();
+    // The annotation renders as bare text.
+    expect(screen.getByText(/Tenant isolation enforced/)).toBeInTheDocument();
+  });
+
+  it("renders an empty diagram without crashing", () => {
+    mount(<ArchitectureStudio defaultValue={{ version: 1, nodes: [], edges: [] }} />);
+    expect(screen.getByText("arch·studio")).toBeInTheDocument();
+  });
+
+  it("hides editing affordances in readOnly mode", () => {
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} readOnly />);
+    expect(screen.queryByRole("button", { name: "Insert ▾" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Import" })).not.toBeInTheDocument();
+    // Export stays available — read-only should still be exportable.
+    expect(screen.getByRole("button", { name: "Export ▾" })).toBeInTheDocument();
+  });
+
+  it("omits the AI panel entirely when no generator is supplied", () => {
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    expect(screen.queryByRole("button", { name: /AI/ })).not.toBeInTheDocument();
+  });
+
+  it("shows the AI panel when a generator is supplied", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} generate={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: /AI/ }));
+    expect(screen.getByText("Generate architecture")).toBeInTheDocument();
+  });
+
+  it("shows a Save button only when onSave is provided", () => {
+    const { unmount } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    unmount();
+
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onSave={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+  });
+
+  it("calls onSave with the current template", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onSave={onSave} />);
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSave).toHaveBeenCalledTimes(1);
+
+    const saved = onSave.mock.calls[0][0] as DiagramTemplate;
+    expect(saved.version).toBe(1);
+    expect(saved.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length);
+    expect(saved.meta).toEqual(EXAMPLE_TEMPLATE.meta);
+  });
+
+  it("emits onChange when a node is added", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    await fromMenu(user, "Insert ▾", /^Node /);
+
+    expect(onChange).toHaveBeenCalled();
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length + 1);
+  });
+
+  it("lists registry-contributed exporters in the export menu", async () => {
+    const user = userEvent.setup();
+    mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_TEMPLATE}
+        registry={{
+          exporters: {
+            terraform: { label: "Terraform", hint: "HCL", run: () => undefined },
+            pdf: null,
+          },
+        }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Export ▾" }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByText("Terraform")).toBeInTheDocument();
+    expect(within(menu).getByText("PNG image")).toBeInTheDocument();
+    // Removed via `pdf: null`.
+    expect(within(menu).queryByText("PDF document")).not.toBeInTheDocument();
+  });
+
+  it("runs a custom exporter with the live template", async () => {
+    const user = userEvent.setup();
+    const run = vi.fn().mockReturnValue(undefined);
+    mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_TEMPLATE}
+        registry={{ exporters: { custom: { label: "Custom", run } } }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Export ▾" }));
+    await user.click(screen.getByText("Custom"));
+
+    expect(run).toHaveBeenCalledTimes(1);
+    const ctx = run.mock.calls[0][0];
+    expect(ctx.template.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length);
+    expect(ctx.filename).toBe("architecture");
+    expect(ctx.registry.nodeKinds.service.label).toBe("Service");
+  });
+
+  it("renders a registry-contributed node kind with its own colours", () => {
+    mount(
+      <ArchitectureStudio
+        registry={{
+          nodeKinds: { lambda: { label: "Lambda", accent: "#fb923c", icon: "bolt" } },
+        }}
+        defaultValue={{
+          version: 1,
+          nodes: [
+            {
+              id: "fn",
+              label: "Thumbnailer",
+              kind: "lambda",
+              icon: "bolt",
+              description: "",
+              parentId: null,
+              x: 0,
+              y: 0,
+              w: 170,
+              h: 76,
+            },
+          ],
+          edges: [],
+        }}
+      />,
+    );
+    expect(screen.getByText("Thumbnailer")).toBeInTheDocument();
+    // The kind's label renders as the small-caps eyebrow on the node.
+    expect(screen.getByText("Lambda")).toBeInTheDocument();
+  });
+
+  it("applies theme tokens as CSS custom properties", () => {
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} theme={{ accent: "#ff0000" }} />,
+    );
+    const root = container.querySelector(".as-root") as HTMLElement;
+    expect(root.style.getPropertyValue("--as-accent")).toBe("#ff0000");
+  });
+
+  it("LIGHT_THEME overrides every token and derives a light export palette", () => {
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} theme={LIGHT_THEME} />,
+    );
+    const root = container.querySelector(".as-root") as HTMLElement;
+    expect(root.style.getPropertyValue("--as-bg")).toBe("#f8fafc");
+    expect(root.style.getPropertyValue("--as-text")).toBe("#0f172a");
+    expect(root.style.getPropertyValue("--as-accent-ink")).toBe("#ffffff");
+
+    // Exports must follow the screen: the derived palette flips the same way.
+    const palette = paletteFromTheme(LIGHT_THEME)!;
+    expect(palette.bg).toBe("#f8fafc");
+    expect(palette.accentInk).toBe("#ffffff");
+    // The exporters' third text tier falls back to the theme's dim text.
+    expect(palette.textFaint).toBe(LIGHT_THEME.textDim);
+  });
+
+  it("adopts an externally changed `value` in controlled mode", () => {
+    const { rerender } = mount(<ArchitectureStudio value={EXAMPLE_TEMPLATE} onChange={vi.fn()} />);
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+
+    rerender(
+      <ArchitectureStudio
+        value={{
+          version: 1,
+          nodes: [
+            {
+              id: "solo",
+              label: "Replaced Service",
+              kind: "service",
+              icon: "box",
+              description: "",
+              parentId: null,
+              x: 0,
+              y: 0,
+              w: 170,
+              h: 76,
+            },
+          ],
+          edges: [],
+        }}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Replaced Service")).toBeInTheDocument();
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+  });
+
+  it("does not re-render from the echo of its own onChange", async () => {
+    // A controlled parent that mirrors onChange straight back into value is the
+    // most common integration shape; it must not cause a feedback loop.
+    const user = userEvent.setup();
+    let current: DiagramTemplate = EXAMPLE_TEMPLATE;
+    const onChange = vi.fn((next: DiagramTemplate) => {
+      current = next;
+    });
+
+    const { rerender } = mount(<ArchitectureStudio value={current} onChange={onChange} />);
+    await fromMenu(user, "Insert ▾", /^Node /);
+    rerender(<ArchitectureStudio value={current} onChange={onChange} />);
+
+    expect(current.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length + 1);
+    // The echoed value must not have reset the editor back to the old document.
+    expect(onChange.mock.calls.at(-1)![0].nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length + 1);
+  });
+
+  it("enables undo only after an edit, and reverts it", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    const undo = screen.getByRole("button", { name: "Undo" });
+    expect(undo).toBeDisabled();
+
+    await fromMenu(user, "Insert ▾", /^Node /);
+    expect(undo).toBeEnabled();
+
+    await user.click(undo);
+    const afterUndo = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(afterUndo.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length);
+  });
+
+  // ── Infra zones ───────────────────────────────────────────────────────────
+
+  it("renders zones with their labels and provider toggles", () => {
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
+    expect(screen.getByText("Cloud Region")).toBeInTheDocument();
+    expect(screen.getByText("Stripe")).toBeInTheDocument();
+    // Three-way segmented toggle on the region.
+    const toggle = screen.getByRole("group", { name: "Cloud Region provider" });
+    expect(within(toggle).getByRole("button", { name: "Azure" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(toggle).getByRole("button", { name: "AWS" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("shows only the provider-matching node for the active selection", () => {
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
+    expect(screen.getByText("Azure SQL")).toBeInTheDocument();
+    expect(screen.queryByText("Amazon RDS")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cloud SQL")).not.toBeInTheDocument();
+  });
+
+  it("swaps the visible nodes when the zone toggle is switched", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
+
+    const toggle = screen.getByRole("group", { name: "Cloud Region provider" });
+    await user.click(within(toggle).getByRole("button", { name: "AWS" }));
+
+    expect(screen.getByText("Amazon RDS")).toBeInTheDocument();
+    expect(screen.queryByText("Azure SQL")).not.toBeInTheDocument();
+    // Redis exists on azure and aws, so it survives the switch.
+    expect(screen.getByText("Redis")).toBeInTheDocument();
+    // The SaaS island has its own provider and is untouched.
+    expect(screen.getByText("Payments")).toBeInTheDocument();
+  });
+
+  it("tints the deployment toast with the provider's colour", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
+
+    await user.selectOptions(screen.getByLabelText("Scenario"), "aws");
+
+    // Tinted like the subject — the same plumbing colours the
+    // "Now on <zone>" toast when a dragged node lands in a zone.
+    const toast = screen.getByText("Showing the AWS deployment");
+    expect(toast).toHaveClass("as-toast--tinted");
+    expect(toast.style.getPropertyValue("--as-toast-color")).toBe("#ff9900");
+  });
+
+  it("hides a node absent from the newly selected provider", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
+
+    const toggle = screen.getByRole("group", { name: "Cloud Region provider" });
+    await user.click(within(toggle).getByRole("button", { name: "GCP" }));
+
+    expect(screen.getByText("Cloud SQL")).toBeInTheDocument();
+    // No managed Redis in the GCP build.
+    expect(screen.queryByText("Redis")).not.toBeInTheDocument();
+  });
+
+  it("never loses hidden nodes across a toggle round-trip", async () => {
+    // The data-loss guard, end to end through the component: React Flow only
+    // ever holds the visible subset, so a naive derivation would delete the
+    // others on the first edit after a switch.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} onChange={onChange} />);
+
+    const toggle = screen.getByRole("group", { name: "Cloud Region provider" });
+    await user.click(within(toggle).getByRole("button", { name: "AWS" }));
+    await user.click(within(toggle).getByRole("button", { name: "GCP" }));
+    await user.click(within(toggle).getByRole("button", { name: "Azure" }));
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes).toHaveLength(EXAMPLE_ZONED_TEMPLATE.nodes.length);
+    expect(latest.edges).toHaveLength(EXAMPLE_ZONED_TEMPLATE.edges.length);
+    for (const id of ["sql-az", "sql-aws", "sql-gcp", "cache"]) {
+      expect(latest.nodes.find((n) => n.id === id), `${id} survived`).toBeTruthy();
+    }
+  });
+
+  it("renders the infra legend with one row per provider on show", () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
+    // Scope to the legend — the provider names also appear on the zone toggles.
+    const legend = container.querySelector(".as-legend") as HTMLElement;
+    expect(legend).toBeTruthy();
+    expect(within(legend).getByText("Infrastructure")).toBeInTheDocument();
+    // Azure (the region) and SaaS (the island) are both on show.
+    expect(within(legend).getByText("Azure")).toBeInTheDocument();
+    expect(within(legend).getByText("SaaS")).toBeInTheDocument();
+    // AWS and GCP are offered but not active, so they are not in the legend.
+    expect(within(legend).queryByText("AWS")).not.toBeInTheDocument();
+  });
+
+  it("omits the legend when the diagram has no zones", () => {
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    expect(screen.queryByText("Infrastructure")).not.toBeInTheDocument();
+  });
+
+  it("drives every capable zone from the global scenario control", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} onChange={onChange} />);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /scenario/i }), "aws");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.zones!.find((z) => z.id === "region")!.provider).toBe("aws");
+    // The SaaS island cannot be AWS, so it keeps its own provider.
+    expect(latest.zones!.find((z) => z.id === "vendor")!.provider).toBe("saas");
+    expect(screen.getByText("Amazon RDS")).toBeInTheDocument();
+  });
+
+  it("adds a zone offering every registered provider", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    await fromMenu(user, "Insert ▾", /^Zone /);
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.zones).toHaveLength(1);
+    expect(latest.zones![0].providers.length).toBeGreaterThan(1);
+    expect(screen.getByText("New Zone")).toBeInTheDocument();
+  });
+
+  it("uses registry-contributed providers for zones", () => {
+    mount(
+      <ArchitectureStudio
+        registry={{ providers: { fly: { label: "Fly.io", color: "#8b5cf6" } } }}
+        defaultValue={{
+          version: 1,
+          zones: [
+            {
+              id: "z",
+              label: "Edge",
+              shape: "rounded",
+              x: 0,
+              y: 0,
+              w: 400,
+              h: 300,
+              providers: ["fly", "aws"],
+              provider: "fly",
+            },
+          ],
+          nodes: [],
+          edges: [],
+        }}
+      />,
+    );
+    const toggle = screen.getByRole("group", { name: "Edge provider" });
+    expect(within(toggle).getByRole("button", { name: "Fly.io" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("hides zone toggles in readOnly mode", () => {
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} readOnly />);
+    const toggle = screen.getByRole("group", { name: "Cloud Region provider" });
+    expect(within(toggle).getByRole("button", { name: "AWS" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Insert ▾" })).not.toBeInTheDocument();
+  });
+
+  // ── The example app's exact wiring: StrictMode + controlled ───────────────
+  //
+  // StrictMode double-invokes render in development. Any render-phase side
+  // effect — like advancing the derivation base inside a useMemo — runs twice,
+  // and the second pass sees state the first pass already moved. The app
+  // shipped in StrictMode while these tests didn't, which is how a
+  // provider-toggle data-loss bug passed 172 tests and then reproduced in the
+  // browser within a minute. These tests exist so that can't happen again.
+
+  function ControlledHost({
+    spy,
+    initial,
+  }: {
+    spy: (t: DiagramTemplate) => void;
+    initial: DiagramTemplate;
+  }) {
+    const [template, setTemplate] = useState(initial);
+    spy(template);
+    return (
+      <ArchitectureStudio
+        value={template}
+        onChange={(next) => {
+          setTemplate(next);
+        }}
+      />
+    );
+  }
+
+  it("survives a provider toggle in StrictMode + controlled mode", async () => {
+    const user = userEvent.setup();
+    const seen: DiagramTemplate[] = [];
+    mount(
+      <StrictMode>
+        <ControlledHost spy={(t) => seen.push(t)} initial={EXAMPLE_ZONED_TEMPLATE} />
+      </StrictMode>,
+    );
+
+    const toggle = screen.getByRole("group", { name: "Cloud Region provider" });
+    await user.click(within(toggle).getByRole("button", { name: "AWS" }));
+
+    // The AWS node must APPEAR — under the bug it was deleted before the
+    // rebuild could reveal it, so the toggle only ever removed things.
+    expect(screen.getByText("Amazon RDS")).toBeInTheDocument();
+    expect(screen.queryByText("Azure SQL")).not.toBeInTheDocument();
+    const afterAws = seen.at(-1)!;
+    expect(afterAws.nodes).toHaveLength(EXAMPLE_ZONED_TEMPLATE.nodes.length);
+  });
+
+  it("returns components when toggling away and back, in StrictMode + controlled mode", async () => {
+    const user = userEvent.setup();
+    const seen: DiagramTemplate[] = [];
+    mount(
+      <StrictMode>
+        <ControlledHost spy={(t) => seen.push(t)} initial={EXAMPLE_ZONED_TEMPLATE} />
+      </StrictMode>,
+    );
+
+    const toggle = screen.getByRole("group", { name: "Cloud Region provider" });
+    await user.click(within(toggle).getByRole("button", { name: "AWS" }));
+    await user.click(within(toggle).getByRole("button", { name: "GCP" }));
+    await user.click(within(toggle).getByRole("button", { name: "Azure" }));
+
+    // The reported symptom: components never came back.
+    expect(screen.getByText("Azure SQL")).toBeInTheDocument();
+    expect(screen.getByText("Redis")).toBeInTheDocument();
+
+    const finalT = seen.at(-1)!;
+    expect(finalT.nodes).toHaveLength(EXAMPLE_ZONED_TEMPLATE.nodes.length);
+    for (const id of ["sql-az", "sql-aws", "sql-gcp", "cache"]) {
+      expect(finalT.nodes.find((n) => n.id === id), `${id} survived`).toBeTruthy();
+    }
+  });
+
+  it("keeps ordinary edits working in StrictMode + controlled mode", async () => {
+    const user = userEvent.setup();
+    const seen: DiagramTemplate[] = [];
+    mount(
+      <StrictMode>
+        <ControlledHost spy={(t) => seen.push(t)} initial={EXAMPLE_ZONED_TEMPLATE} />
+      </StrictMode>,
+    );
+
+    await fromMenu(user, "Insert ▾", /^Node /);
+    expect(seen.at(-1)!.nodes).toHaveLength(EXAMPLE_ZONED_TEMPLATE.nodes.length + 1);
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(seen.at(-1)!.nodes).toHaveLength(EXAMPLE_ZONED_TEMPLATE.nodes.length);
+  });
+
+  it("undoes a provider toggle without losing nodes, in StrictMode + controlled mode", async () => {
+    const user = userEvent.setup();
+    const seen: DiagramTemplate[] = [];
+    mount(
+      <StrictMode>
+        <ControlledHost spy={(t) => seen.push(t)} initial={EXAMPLE_ZONED_TEMPLATE} />
+      </StrictMode>,
+    );
+
+    const toggle = screen.getByRole("group", { name: "Cloud Region provider" });
+    await user.click(within(toggle).getByRole("button", { name: "AWS" }));
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+
+    const finalT = seen.at(-1)!;
+    expect(finalT.nodes).toHaveLength(EXAMPLE_ZONED_TEMPLATE.nodes.length);
+    expect(finalT.zones!.find((z) => z.id === "region")!.provider).toBe("azure");
+    expect(screen.getByText("Azure SQL")).toBeInTheDocument();
+  });
+
+  // ── The newest toolbar wiring ─────────────────────────────────────────────
+
+  it("tidies overlapping nodes into distinct positions", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const stacked: DiagramTemplate = {
+      version: 1,
+      nodes: ["a", "b", "c"].map((id) => ({
+        id,
+        label: id.toUpperCase(),
+        kind: "service",
+        icon: "box",
+        description: "",
+        parentId: null,
+        x: 0,
+        y: 0,
+        w: 170,
+        h: 76,
+      })),
+      edges: [
+        { id: "e1", source: "a", target: "b", label: "", style: "solid", color: "slate" },
+        { id: "e2", source: "b", target: "c", label: "", style: "solid", color: "slate" },
+      ],
+    };
+    mount(<ArchitectureStudio defaultValue={stacked} onChange={onChange} />);
+
+    await fromMenu(user, "Arrange ▾", /^Tidy /);
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    const xs = latest.nodes.map((n) => n.x);
+    expect(new Set(xs).size, "each node got its own column").toBe(3);
+  });
+
+  it("offers Show hidden only when something is hidden, and reveals ghosts", async () => {
+    const user = userEvent.setup();
+    const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
+
+    // Two of the three databases are hidden under Azure.
+    await user.click(screen.getByRole("button", { name: /^View/ }));
+    const toggle = screen.getByRole("checkbox", { name: /Show hidden nodes/ });
+    expect(toggle).toBeInTheDocument();
+    expect(screen.queryByText("Amazon RDS")).not.toBeInTheDocument();
+
+    await user.click(toggle);
+
+    expect(screen.getByText("Amazon RDS")).toBeInTheDocument();
+    expect(screen.getByText("Cloud SQL")).toBeInTheDocument();
+    // Ghosts are visually distinguished, and the shown one is not a ghost.
+    expect(container.querySelectorAll(".as-ghost").length).toBeGreaterThan(0);
+    expect(screen.getByText("Azure SQL").closest(".as-ghost")).toBeNull();
+  });
+
+  it("has no Show hidden control when nothing is hidden", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    await user.click(screen.getByRole("button", { name: /^View/ }));
+    expect(screen.queryByRole("checkbox", { name: /Show hidden nodes/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps a ghosted node deletable rather than resurrecting it", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: /^View/ }));
+    await user.click(screen.getByRole("checkbox", { name: /Show hidden nodes/ }));
+    fireEvent.click(screen.getByText("Amazon RDS"));
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "sql-aws")).toBeUndefined();
+    // And nothing else went with it.
+    expect(latest.nodes).toHaveLength(EXAMPLE_ZONED_TEMPLATE.nodes.length - 1);
+  });
+
+  it("duplicates the selection with ⌘D, carrying direct connections", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.keyboard("{Meta>}d{/Meta}");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length + 1);
+    // The copy is a distinct node, offset from the original.
+    const copies = latest.nodes.filter((n) => n.label === "Postgres");
+    expect(copies).toHaveLength(2);
+    expect(copies[0].x).not.toBe(copies[1].x);
+
+    // Postgres has two incoming lines (api→db, wrk→db); the clone gets both,
+    // attached to the same neighbours.
+    const clone = copies.find((n) => n.id !== "db")!;
+    const mirrored = latest.edges.filter((e) => e.source === clone.id || e.target === clone.id);
+    expect(mirrored.map((e) => e.source).sort()).toEqual(["api", "wrk"]);
+  });
+
+  it("duplicates from the inspector's ⧉ button with connections", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.click(screen.getByRole("button", { name: "Duplicate with connections" }));
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    const clone = latest.nodes.find((n) => n.label === "Postgres" && n.id !== "db")!;
+    expect(clone).toBeTruthy();
+    expect(
+      latest.edges.filter((e) => e.source === clone.id || e.target === clone.id),
+    ).toHaveLength(2);
+  });
+
+  it("copy-paste of a single node does not bring its lines", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.keyboard("{Meta>}c{/Meta}");
+    await user.keyboard("{Meta>}v{/Meta}");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length + 1);
+    // A pasted fragment keeps only lines wholly inside the selection — a
+    // single node has none.
+    expect(latest.edges).toHaveLength(EXAMPLE_TEMPLATE.edges.length);
+  });
+
+  it("pasting a connected multi-selection keeps the line between the copies", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    // Clinic Staff and API Gateway are directly connected by e1 — a copied
+    // pair carries that internal line (and nothing else) through paste.
+    const fragment = copyFragment(EXAMPLE_TEMPLATE, ["u", "gw"]);
+    await navigator.clipboard.writeText(JSON.stringify(fragment));
+    await user.keyboard("{Meta>}v{/Meta}");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length + 2);
+    expect(latest.edges).toHaveLength(EXAMPLE_TEMPLATE.edges.length + 1);
+    const newEdge = latest.edges.find((e) => !EXAMPLE_TEMPLATE.edges.some((o) => o.id === e.id))!;
+    const originalIds = new Set(EXAMPLE_TEMPLATE.nodes.map((n) => n.id));
+    expect(originalIds.has(newEdge.source)).toBe(false);
+    expect(originalIds.has(newEdge.target)).toBe(false);
+  });
+
+  // ── The professional/C4 batch ─────────────────────────────────────────────
+
+  it("shows a chip for a custom provider a zone already lists, and removes it", async () => {
+    // The reported bug: chips iterated registry providers only, so a custom
+    // entry (kept deliberately by validation) rendered nothing and could
+    // never be removed.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const doc: DiagramTemplate = {
+      version: 1,
+      zones: [
+        {
+          id: "z",
+          label: "Edge",
+          shape: "rounded",
+          x: 0,
+          y: 0,
+          w: 400,
+          h: 300,
+          providers: ["heroku", "aws"],
+          provider: "heroku",
+        },
+      ],
+      nodes: [],
+      edges: [],
+    };
+    mount(<ArchitectureStudio defaultValue={doc} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Edge"));
+    const group = screen.getByRole("group", { name: "Providers this zone supports" });
+    // Custom entry renders (neutral fallback label = its id) and is active.
+    const heroku = within(group).getByRole("button", { name: /heroku/i });
+    expect(heroku).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(heroku);
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.zones![0].providers).toEqual(["aws"]);
+    expect(latest.zones![0].provider).toBe("aws");
+  });
+
+  // ── Polygon vertex editing ────────────────────────────────────────────────
+
+  const polyDoc: DiagramTemplate = {
+    version: 1,
+    zones: [
+      {
+        id: "p",
+        label: "Poly",
+        shape: "polygon",
+        x: 0,
+        y: 0,
+        w: 400,
+        h: 200,
+        points: [
+          [0, 0],
+          [1, 0],
+          [0.5, 1],
+        ],
+        providers: ["azure"],
+        provider: "azure",
+      },
+    ],
+    nodes: [],
+    edges: [],
+  };
+
+  /** jsdom measures everything as 0×0; give the vertex SVG the zone's box. */
+  function measureVertexSvg(container: HTMLElement): SVGSVGElement {
+    const svg = container.querySelector(".as-zone__vertices") as SVGSVGElement;
+    svg.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 400, height: 200, right: 400, bottom: 200, x: 0, y: 0 }) as DOMRect;
+    return svg;
+  }
+
+  it("adds a polygon point on pointer-down and drags it in the same gesture", async () => {
+    const onChange = vi.fn();
+    const { container } = mount(<ArchitectureStudio defaultValue={polyDoc} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Poly"));
+    measureVertexSvg(container);
+
+    // First midpoint handle sits between [0,0] and [1,0].
+    const add = container.querySelector(".as-zone__vertex--add") as SVGCircleElement;
+    fireEvent.pointerDown(add, { pointerId: 1, clientX: 200, clientY: 0 });
+    // Still holding: the just-added point follows the pointer.
+    fireEvent.pointerMove(add, { pointerId: 1, clientX: 300, clientY: 100 });
+    fireEvent.pointerUp(add, { pointerId: 1 });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const pts = (onChange.mock.calls.at(-1)![0] as DiagramTemplate).zones![0].points!;
+    expect(pts).toHaveLength(4);
+    expect(pts[1][0]).toBeCloseTo(300 / 400);
+    expect(pts[1][1]).toBeCloseTo(100 / 200);
+  });
+
+  it("grows the zone when a vertex is dragged past its edge", async () => {
+    const onChange = vi.fn();
+    const { container } = mount(<ArchitectureStudio defaultValue={polyDoc} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Poly"));
+    measureVertexSvg(container);
+
+    // The [1, 0] vertex, dragged 30% past the right edge.
+    const vertices = container.querySelectorAll(".as-zone__vertex:not(.as-zone__vertex--add)");
+    const v1 = vertices[1] as SVGCircleElement;
+    fireEvent.pointerDown(v1, { pointerId: 1, clientX: 400, clientY: 0 });
+    fireEvent.pointerMove(v1, { pointerId: 1, clientX: 520, clientY: 0 });
+    fireEvent.pointerUp(v1, { pointerId: 1 });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const zone = (onChange.mock.calls.at(-1)![0] as DiagramTemplate).zones![0];
+    // The box grew to hold the vertex…
+    expect(zone.w).toBeCloseTo(400 * 1.3);
+    // …and every stored point is normalised back into 0..1.
+    for (const [px, py] of zone.points!) {
+      expect(px).toBeGreaterThanOrEqual(0);
+      expect(px).toBeLessThanOrEqual(1);
+      expect(py).toBeGreaterThanOrEqual(0);
+      expect(py).toBeLessThanOrEqual(1);
+    }
+    expect(Math.max(...zone.points!.map((p) => p[0]))).toBeCloseTo(1);
+  });
+
+  it("duplicates a whole zone with its members via ⌘D", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const doc: DiagramTemplate = {
+      version: 1,
+      zones: [
+        { id: "z", label: "Region", shape: "rounded", x: 0, y: 0, w: 500, h: 400, providers: ["azure"], provider: "azure" },
+      ],
+      nodes: [
+        { id: "in", label: "Inside", kind: "service", icon: "box", description: "", parentId: null, zoneId: "z", x: 60, y: 80, w: 170, h: 76 },
+        { id: "out", label: "Outside", kind: "service", icon: "box", description: "", parentId: null, x: 700, y: 80, w: 170, h: 76 },
+      ],
+      edges: [{ id: "e", source: "in", target: "out", label: "", style: "solid", color: "slate" }],
+    };
+    mount(<ArchitectureStudio defaultValue={doc} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Region"));
+    await user.keyboard("{Meta>}d{/Meta}");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    // A second region exists, under a fresh id, with a cloned member.
+    expect(latest.zones).toHaveLength(2);
+    expect(latest.zones!.filter((z) => z.id === "z")).toHaveLength(1);
+    const clone = latest.nodes.find((n) => n.label === "Inside" && n.id !== "in")!;
+    expect(clone).toBeTruthy();
+    // The member's boundary edge is mirrored to the outside neighbour.
+    expect(latest.edges.some((e) => e.source === clone.id && e.target === "out")).toBe(true);
+    // The original wiring is untouched.
+    expect(latest.edges.find((e) => e.id === "e")).toMatchObject({ source: "in", target: "out" });
+  });
+
+  it("copies and pastes a zone with ⌘C/⌘V", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const doc: DiagramTemplate = {
+      version: 1,
+      zones: [
+        { id: "z", label: "Region", shape: "hexagon", x: 0, y: 0, w: 500, h: 400, providers: ["aws", "gcp"], provider: "gcp" },
+      ],
+      nodes: [
+        { id: "in", label: "Inside", kind: "service", icon: "box", description: "", parentId: null, zoneId: "z", x: 60, y: 80, w: 170, h: 76 },
+      ],
+      edges: [],
+    };
+    mount(<ArchitectureStudio defaultValue={doc} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Region"));
+    await user.keyboard("{Meta>}c{/Meta}");
+    await user.keyboard("{Meta>}v{/Meta}");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.zones).toHaveLength(2);
+    const pastedZone = latest.zones!.find((z) => z.id !== "z")!;
+    // The clone keeps the zone's semantics: shape, providers, active provider.
+    expect(pastedZone.shape).toBe("hexagon");
+    expect(pastedZone.providers).toEqual(["aws", "gcp"]);
+    expect(pastedZone.provider).toBe("gcp");
+    expect(latest.nodes.filter((n) => n.label === "Inside")).toHaveLength(2);
+  });
+
+  it("adds a custom provider to Supports via the free-text input", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Cloud Region"));
+    const input = screen.getByLabelText("Providers this zone supports — add");
+    await user.type(input, "fly{Enter}");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.zones!.find((z) => z.id === "region")!.providers).toContain("fly");
+    // And it now renders as a chip so it can be toggled/removed.
+    const group = screen.getByRole("group", { name: "Providers this zone supports" });
+    expect(within(group).getByRole("button", { name: /fly/i })).toBeInTheDocument();
+  });
+
+  it("collapses and expands a group without losing its contents (StrictMode + controlled)", async () => {
+    const user = userEvent.setup();
+    const seen: DiagramTemplate[] = [];
+    mount(
+      <StrictMode>
+        <ControlledHost spy={(t) => seen.push(t)} initial={EXAMPLE_TEMPLATE} />
+      </StrictMode>,
+    );
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Collapse Application VPC" }));
+    // Children leave the canvas; the chip stands in.
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+    expect(screen.queryByText("Worker Service")).not.toBeInTheDocument();
+    // The document keeps every node — collapse is presentation, not deletion.
+    const collapsed = seen.at(-1)!;
+    expect(collapsed.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length);
+    expect(collapsed.nodes.find((n) => n.id === "vpc")).toMatchObject({
+      collapsed: true,
+      w: 440,
+      h: 380, // stored size survives the 180×44 chip
+    });
+
+    await user.click(screen.getByRole("button", { name: "Expand Application VPC" }));
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+    const expanded = seen.at(-1)!;
+    expect(expanded.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length);
+    expect(expanded.edges).toHaveLength(EXAMPLE_TEMPLATE.edges.length);
+  });
+
+  it("search selects and centres a match on Enter", async () => {
+    const user = userEvent.setup();
+    const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+
+    await user.type(screen.getByLabelText("Search nodes"), "Postgres{Enter}");
+
+    const wrapper = container.querySelector('[data-id="db"]');
+    expect(wrapper?.classList.contains("selected")).toBe(true);
+    expect(screen.getByText("1/1")).toBeInTheDocument();
+  });
+
+  it("toggles diagram-wide orthogonal routing through meta", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: "Arrange ▾" }));
+    await user.click(screen.getByRole("checkbox", { name: "Right-angle connectors" }));
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).meta?.routing).toBe("orthogonal");
+
+    // The menu stays open for repeated toggling.
+    await user.click(screen.getByRole("checkbox", { name: "Right-angle connectors" }));
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).meta?.routing).toBe("curved");
+  });
+
+  it("locks a node from the inspector", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.click(screen.getByRole("button", { name: "Lock in place" }));
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "db")!.locked).toBe(true);
+  });
+
+  it("adds a tag from the inspector and dims non-matching nodes via the filter", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />,
+    );
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.type(screen.getByLabelText("Node tags — add"), "pci{Enter}");
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "db")!.tags).toEqual(["pci"]);
+
+    // Filter on it: the tagged node stays crisp, everything else dims.
+    await user.click(screen.getByRole("button", { name: /^View/ }));
+    await user.click(screen.getByRole("checkbox", { name: "pci" }));
+    expect(container.querySelector('[data-id="db"] .as-node--dimmed')).toBeNull();
+    expect(container.querySelector('[data-id="api"] .as-node--dimmed')).not.toBeNull();
+  });
+
+  it("does not burn an undo step on the Show-hidden view toggle", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
+
+    const undo = screen.getByRole("button", { name: "Undo" });
+    expect(undo).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: /^View/ }));
+    await user.click(screen.getByRole("checkbox", { name: /Show hidden nodes/ }));
+    await user.click(screen.getByRole("checkbox", { name: /Show hidden nodes/ }));
+
+    // Ghost mode is a view change, not a document change — nothing to undo.
+    expect(undo).toBeDisabled();
+  });
+
+  it("shows owning-team badges and hides them via the View menu", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
+
+    // The REST API node carries team "Platform" in the example document.
+    expect(screen.getByText("Platform")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /^View/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Show team badges" }));
+    expect(screen.queryByText("Platform")).not.toBeInTheDocument();
+
+    // Purely presentational: hiding badges is not an edit, nothing to undo.
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
+  it("sets a node's owning team from the inspector", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.type(screen.getByLabelText("Owning team"), "Data");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "db")!.team).toBe("Data");
+    // The badge appears on the node immediately.
+    expect(screen.getByText("Data")).toBeInTheDocument();
+  });
+
+  it("sets lifecycle status from the inspector and renders its convention", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />,
+    );
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.selectOptions(screen.getByLabelText("Lifecycle status"), "deprecated");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "db")!.status).toBe("deprecated");
+    expect(container.querySelector('[data-id="db"] .as-node--status-deprecated')).not.toBeNull();
+
+    // Back to active removes the field entirely.
+    await user.selectOptions(screen.getByLabelText("Lifecycle status"), "active");
+    const reverted = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect("status" in reverted.nodes.find((n) => n.id === "db")!).toBe(false);
+  });
+
+  it("shows the version tag chip, edits it, and moves it between corners", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} onChange={onChange} />);
+
+    // Renders from meta.versionTag; click to edit.
+    await user.click(screen.getByRole("button", { name: "v2.1" }));
+    const input = screen.getByLabelText("Version tag");
+    await user.clear(input);
+    await user.type(input, "v3.0{Enter}");
+
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).meta?.versionTag).toBe("v3.0");
+    expect(screen.getByRole("button", { name: "v3.0" })).toBeInTheDocument();
+
+    // Adjustable spot: the corner select moves it, as a committed edit.
+    await user.click(screen.getByRole("button", { name: "v3.0" }));
+    await user.selectOptions(screen.getByLabelText("Version tag corner"), "bottom-right");
+    expect(
+      (onChange.mock.calls.at(-1)![0] as DiagramTemplate).meta?.versionTagPosition,
+    ).toBe("bottom-right");
+  });
+
+  it("offers Set version tag in the View menu when none exists", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    await fromMenu(user, /^View/, /Set version tag/);
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).meta?.versionTag).toBe("v0.1");
+    expect(screen.getByRole("button", { name: "v0.1" })).toBeInTheDocument();
+  });
+
+  it("surfaces lint findings in Checks and jumps to the offender", async () => {
+    const user = userEvent.setup();
+    const bad: DiagramTemplate = {
+      version: 1,
+      nodes: [
+        { id: "ext", label: "Partner", kind: "external", icon: "globe", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76 },
+        { id: "db", label: "Ledger", kind: "database", icon: "database", description: "", parentId: null, x: 400, y: 0, w: 170, h: 76 },
+      ],
+      edges: [{ id: "e", source: "ext", target: "db", label: "", style: "solid", color: "slate" }],
+    };
+    const { container } = mount(<ArchitectureStudio defaultValue={bad} />);
+
+    await user.click(screen.getByRole("button", { name: /Checks \(/ }));
+    await user.click(
+      screen.getByRole("menuitem", { name: /External system reaches a datastore/ }),
+    );
+
+    // The finding's nodes are selected so the offence is visible.
+    expect(container.querySelector('[data-id="ext"]')?.classList.contains("selected")).toBe(true);
+    expect(container.querySelector('[data-id="db"]')?.classList.contains("selected")).toBe(true);
+  });
+
+  it("boxes text notes by default and lets the Outline toggle opt out", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />,
+    );
+
+    const note = () => container.querySelector('[data-id="note"] .as-annotation');
+    expect(note()!.classList.contains("as-annotation--boxed")).toBe(true);
+
+    fireEvent.click(screen.getByText(/Tenant isolation enforced/));
+    await user.click(await screen.findByRole("checkbox", { name: "Outline" }));
+
+    let latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "note")!.plain).toBe(true);
+    expect(note()!.classList.contains("as-annotation--boxed")).toBe(false);
+
+    // Re-checking removes the field rather than storing the default.
+    await user.click(screen.getByRole("checkbox", { name: "Outline" }));
+    latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect("plain" in latest.nodes.find((n) => n.id === "note")!).toBe(false);
+  });
+
+  it("commits inline annotation edits on blur", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />,
+    );
+
+    const note = screen.getByText(/Tenant isolation enforced/);
+    fireEvent.doubleClick(note);
+    // Scope to the inline editor — the toolbar search is also a textbox.
+    const box = container.querySelector(".as-annotation__input") as HTMLTextAreaElement;
+    expect(box).toBeTruthy();
+    await user.clear(box);
+    await user.type(box, "Rewritten note");
+    fireEvent.blur(box);
+
+    // The commit rides a microtask (commitLater → queueMicrotask); wait for it.
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "note")!.label).toBe("Rewritten note");
+    // And it is undoable.
+    expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+  });
+
+  // ── Compare mode ──────────────────────────────────────────────────────────
+  // The document with Redis removed, the API renamed, and a service added —
+  // one of each diff state against EXAMPLE_TEMPLATE as the baseline.
+  const mutatedForDiff = validateTemplate({
+    ...EXAMPLE_TEMPLATE,
+    nodes: [
+      ...EXAMPLE_TEMPLATE.nodes
+        .filter((n) => n.id !== "cache")
+        .map((n) => (n.id === "api" ? { ...n, label: "REST API v2" } : n)),
+      { id: "search", label: "Search Service", kind: "service", icon: "box", description: "", parentId: null, x: 1030, y: 430, w: 170, h: 76 },
+    ],
+    edges: EXAMPLE_TEMPLATE.edges.filter((e) => e.source !== "cache" && e.target !== "cache"),
+  });
+
+  it("renders the diff overlay for a diffBase prop", () => {
+    const { container } = mount(
+      <ArchitectureStudio value={mutatedForDiff} onChange={vi.fn()} diffBase={EXAMPLE_TEMPLATE} />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("vs baseline");
+    // The removed node renders, ghosted in place, even though the current
+    // document no longer contains it.
+    expect(screen.getByText("Redis")).toBeInTheDocument();
+    expect(container.querySelector(".as-diff--removed")).not.toBeNull();
+    expect(container.querySelector(".as-diff--added")).not.toBeNull();
+    expect(container.querySelector(".as-diff--changed")).not.toBeNull();
+    // Prop-driven baseline: exiting is the host's call, not a button.
+    expect(screen.queryByRole("button", { name: "Exit compare" })).not.toBeInTheDocument();
+  });
+
+  it("draws the connections in the diff overlay, not just the boxes", async () => {
+    const { container } = mount(
+      <ArchitectureStudio value={mutatedForDiff} onChange={vi.fn()} diffBase={EXAMPLE_TEMPLATE} />,
+    );
+    // Every handle is declared as a source, so the overlay's canvas has to run
+    // in ConnectionMode.Loose — in strict mode React Flow resolves no edge
+    // position and silently renders a diagram with no lines in it at all.
+    await waitFor(() =>
+      expect(container.querySelectorAll(".as-edge__stroke").length).toBeGreaterThan(0),
+    );
+  });
+
+  it("still draws connections when editing is disabled", async () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} readOnly />);
+    // Read-only hides the connect affordance; it must not unmount the handles,
+    // because React Flow positions every edge from their measured bounds.
+    await waitFor(() =>
+      expect(container.querySelectorAll(".as-edge__stroke").length).toBe(
+        EXAMPLE_TEMPLATE.edges.length,
+      ),
+    );
+  });
+
+  it("enters and exits compare via the toolbar without touching the document", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={mutatedForDiff} onChange={onChange} />,
+    );
+
+    const inputs = container.querySelectorAll('input[type="file"]');
+    const compareInput = inputs[inputs.length - 1] as HTMLInputElement;
+    const file = new File([JSON.stringify(EXAMPLE_TEMPLATE)], "baseline.json", {
+      type: "application/json",
+    });
+    fireEvent.change(compareInput, { target: { files: [file] } });
+
+    await waitFor(() => expect(screen.getByText("Redis")).toBeInTheDocument());
+    expect(container.querySelector(".as-diff--removed")).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Exit compare" }));
+    expect(screen.queryByText("Redis")).not.toBeInTheDocument();
+    // Compare is a view: nothing was ever committed.
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the document untouched through compare in StrictMode + controlled mode", () => {
+    const onChange = vi.fn();
+    const changedValue = validateTemplate({
+      ...mutatedForDiff,
+      meta: { ...mutatedForDiff.meta, title: "Retitled mid-diff" },
+    });
+
+    const { rerender } = mount(
+      <StrictMode>
+        <ArchitectureStudio value={mutatedForDiff} onChange={onChange} diffBase={EXAMPLE_TEMPLATE} />
+      </StrictMode>,
+    );
+    expect(screen.getByText("Redis")).toBeInTheDocument();
+
+    // An external value change arrives MID-DIFF (the controlled host moved
+    // on); then the host clears the baseline.
+    rerender(
+      <StrictMode>
+        <ArchitectureStudio value={changedValue} onChange={onChange} diffBase={EXAMPLE_TEMPLATE} />
+      </StrictMode>,
+    );
+    rerender(
+      <StrictMode>
+        <ArchitectureStudio value={changedValue} onChange={onChange} />
+      </StrictMode>,
+    );
+
+    // The editor shows the latest document; the overlay's injected removals
+    // never leaked into it, and no spurious commit ever fired.
+    expect(screen.getByText("REST API v2")).toBeInTheDocument();
+    expect(screen.queryByText("Redis")).not.toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // ── Timeline mode ─────────────────────────────────────────────────────────
+  // Three phases against one undated backdrop: the shape every roadmap has.
+  const dated = validateTemplate({
+    version: 1,
+    nodes: [
+      { id: "core", label: "Core API", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76 },
+      { id: "wrk", label: "Worker", kind: "service", icon: "gear", description: "", parentId: null, date: "2026-06-15", x: 240, y: 0, w: 170, h: 76 },
+      { id: "pay", label: "Payments", kind: "external", icon: "lock", description: "", parentId: null, date: "2026-09-30", x: 480, y: 0, w: 170, h: 76 },
+    ],
+    edges: [
+      { id: "e1", source: "core", target: "wrk", label: "", style: "solid", color: "slate" },
+    ],
+  });
+
+  it("renders a node's date as a chip, abbreviated month-and-day", () => {
+    mount(<ArchitectureStudio defaultValue={dated} />);
+    // 2026 is not the current year at time of writing, so the year shows.
+    expect(screen.getByText(/^Jun 15/)).toBeInTheDocument();
+    expect(screen.getByText(/^Sep 30/)).toBeInTheDocument();
+  });
+
+  it("offers the timeline only once something is dated", () => {
+    const { unmount } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    expect(screen.queryByRole("button", { name: /Timeline/ })).not.toBeInTheDocument();
+    unmount();
+
+    mount(<ArchitectureStudio defaultValue={dated} />);
+    expect(screen.getByRole("button", { name: /Timeline/ })).toBeInTheDocument();
+  });
+
+  it("scrubs to the first stop, showing only that date plus the undated", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={dated} onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: /Timeline/ }));
+    const slider = screen.getByRole("slider", { name: "Scrub to a date" });
+    // Everything later is hidden outright rather than greyed.
+    await user.click(screen.getByRole("button", { name: "Hide later" }));
+    fireEvent.change(slider, { target: { value: "0" } });
+
+    await waitFor(() => expect(screen.queryByText("Payments")).not.toBeInTheDocument());
+    expect(screen.getByText("Core API")).toBeInTheDocument();
+    expect(screen.getByText("Worker")).toBeInTheDocument();
+    // Scrubbing is a view — it must never commit.
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("shows every node at the last stop", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={dated} />);
+
+    await user.click(screen.getByRole("button", { name: /Timeline/ }));
+    await user.click(screen.getByRole("button", { name: "Hide later" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Scrub to a date" }), {
+      target: { value: "1" },
+    });
+
+    await waitFor(() => expect(screen.getByText("Payments")).toBeInTheDocument());
+    expect(screen.getByRole("group", { name: "Timeline scrubber" })).toHaveTextContent("all here");
+  });
+
+  it("keeps later nodes on the canvas, disabled, in ghost mode", async () => {
+    const user = userEvent.setup();
+    const { container } = mount(<ArchitectureStudio defaultValue={dated} />);
+
+    await user.click(screen.getByRole("button", { name: /Timeline/ }));
+    fireEvent.change(screen.getByRole("slider", { name: "Scrub to a date" }), {
+      target: { value: "0" },
+    });
+
+    await waitFor(() => expect(container.querySelector(".as-future")).not.toBeNull());
+    // Present, but marked — the difference from "Hide later".
+    expect(screen.getByText("Payments")).toBeInTheDocument();
+  });
+
+  it("leaves the document exactly as it was on exit", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={dated} onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: /Timeline/ }));
+    await user.click(screen.getByRole("button", { name: "Hide later" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Scrub to a date" }), {
+      target: { value: "0" },
+    });
+    await waitFor(() => expect(screen.queryByText("Payments")).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Exit timeline" }));
+    // Everything the scrub hid is back, and nothing was ever committed.
+    await waitFor(() => expect(screen.getByText("Payments")).toBeInTheDocument());
+    expect(screen.getByText("Worker")).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("exports the slice it is showing, not the whole diagram", async () => {
+    const user = userEvent.setup();
+    const seen: DiagramTemplate[] = [];
+    mount(
+      <ArchitectureStudio
+        defaultValue={dated}
+        registry={{
+          exporters: {
+            probe: {
+              label: "Probe",
+              // Returns nothing: this exporter exists to capture the subject
+              // it was handed, not to produce a file.
+              run: ({ template }) => {
+                seen.push(template);
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Timeline/ }));
+    await user.click(screen.getByRole("button", { name: "Hide later" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Scrub to a date" }), {
+      target: { value: "0" },
+    });
+    await fromMenu(user, "Export ▾", "Probe");
+
+    // A PNG of the June view must not come back as the finished architecture.
+    await waitFor(() => expect(seen).toHaveLength(1));
+    expect(seen[0].nodes.map((n) => n.id).sort()).toEqual(["core", "wrk"]);
+
+    // Ghost mode shows the whole document, so it exports the whole document.
+    await user.click(screen.getByRole("button", { name: "Ghost later" }));
+    await fromMenu(user, "Export ▾", "Probe");
+    await waitFor(() => expect(seen).toHaveLength(2));
+    expect(seen[1].nodes).toHaveLength(3);
+  });
+
+  it("sets and clears a date from the node inspector", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Postgres"));
+    const field = await screen.findByLabelText("Node date");
+    fireEvent.change(field, { target: { value: "2026-03-04" } });
+
+    await waitFor(() => {
+      const last = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+      expect(last.nodes.find((n) => n.id === "db")?.date).toBe("2026-03-04");
+    });
+
+    await user.click(screen.getByRole("button", { name: "Clear date" }));
+    await waitFor(() => {
+      const last = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+      expect(last.nodes.find((n) => n.id === "db")?.date).toBeUndefined();
+    });
+  });
+
+  // ── File workspace chrome ─────────────────────────────────────────────────
+
+  const workspaceFiles = [
+    { id: "f1", name: "Platform", kind: "arch" },
+    { id: "f2", name: "Order flow", kind: "seq" },
+  ];
+
+  it("replaces the brand with the file selector when files are provided", async () => {
+    const user = userEvent.setup();
+    mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} files={workspaceFiles} activeFileId="f1" />,
+    );
+
+    expect(screen.queryByText("arch·studio")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    expect(screen.getByRole("menuitem", { name: /Order flow/ })).toBeInTheDocument();
+    // Kind badges render.
+    expect(screen.getByText("arch")).toBeInTheDocument();
+    expect(screen.getByText("seq")).toBeInTheDocument();
+  });
+
+  it("selects a file, closing the menu, and creates one from the footer", async () => {
+    const user = userEvent.setup();
+    const onFileSelect = vi.fn();
+    const onFileCreate = vi.fn();
+    mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_TEMPLATE}
+        files={workspaceFiles}
+        activeFileId="f1"
+        onFileSelect={onFileSelect}
+        onFileCreate={onFileCreate}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("menuitem", { name: /Order flow/ }));
+    expect(onFileSelect).toHaveBeenCalledWith("f2");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("menuitem", { name: /New file/ }));
+    expect(onFileCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("renames a file inline via ✎: type, Enter commits; Escape cancels", async () => {
+    const user = userEvent.setup();
+    const onFileRename = vi.fn();
+    mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_TEMPLATE}
+        files={workspaceFiles}
+        activeFileId="f1"
+        onFileRename={onFileRename}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Rename Platform" }));
+    const input = screen.getByLabelText("File name");
+    await user.clear(input);
+    await user.type(input, "Core Platform{Enter}");
+    expect(onFileRename).toHaveBeenCalledWith("f1", "Core Platform");
+
+    // Escape cancels without firing.
+    await user.click(screen.getByRole("button", { name: "Rename Platform" }));
+    await user.type(screen.getByLabelText("File name"), "{Escape}");
+    expect(onFileRename).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes an EMPTY file immediately, and never offers × for the last file", async () => {
+    const user = userEvent.setup();
+    const onFileDelete = vi.fn();
+    const { unmount } = mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_TEMPLATE}
+        files={[workspaceFiles[0], { ...workspaceFiles[1], empty: true }]}
+        activeFileId="f1"
+        onFileDelete={onFileDelete}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Delete Order flow" }));
+    // Nothing to lose, so no dialog.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(onFileDelete).toHaveBeenCalledWith("f2");
+    unmount();
+
+    mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_TEMPLATE}
+        files={[workspaceFiles[0]]}
+        activeFileId="f1"
+        onFileDelete={onFileDelete}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    expect(screen.queryByRole("button", { name: "Delete Platform" })).not.toBeInTheDocument();
+  });
+
+  it("confirms before deleting a file that still has content", async () => {
+    const user = userEvent.setup();
+    const onFileDelete = vi.fn();
+    mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_TEMPLATE}
+        files={workspaceFiles}
+        activeFileId="f1"
+        onFileDelete={onFileDelete}
+      />,
+    );
+
+    // Cancel leaves the file alone.
+    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Delete Order flow" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete Order flow?" });
+    expect(within(dialog).getByText(/still has content/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(onFileDelete).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    // Escape also cancels.
+    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Delete Order flow" }));
+    await user.keyboard("{Escape}");
+    expect(onFileDelete).not.toHaveBeenCalled();
+
+    // Confirming deletes.
+    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Delete Order flow" }));
+    await user.click(screen.getByRole("button", { name: "Delete file" }));
+    expect(onFileDelete).toHaveBeenCalledWith("f2");
+  });
+
+  it("recovers a deleted file from the Recently removed modal", async () => {
+    const user = userEvent.setup();
+    const onFileRestore = vi.fn();
+    const { unmount } = mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} files={workspaceFiles} activeFileId="f1" />,
+    );
+    // No trash, no entry.
+    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    expect(screen.queryByRole("menuitem", { name: /Recently removed/ })).not.toBeInTheDocument();
+    unmount();
+
+    mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_TEMPLATE}
+        files={workspaceFiles}
+        activeFileId="f1"
+        removedFiles={[{ id: "gone", name: "Legacy", kind: "arch" }]}
+        onFileRestore={onFileRestore}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("menuitem", { name: /Recently removed/ }));
+
+    const dialog = screen.getByRole("dialog", { name: "Recently removed" });
+    await user.click(within(dialog).getByRole("button", { name: "Restore Legacy" }));
+    expect(onFileRestore).toHaveBeenCalledWith("gone");
+
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("renders file: urls as a jump to the linked file, https as a real link", async () => {
+    const user = userEvent.setup();
+    const onNavigateFile = vi.fn();
+    const doc: DiagramTemplate = {
+      version: 1,
+      nodes: [
+        { id: "a", label: "Orders", kind: "service", icon: "box", description: "", parentId: null, url: "file:Payments", x: 0, y: 0, w: 170, h: 76 },
+        { id: "b", label: "Docs", kind: "service", icon: "box", description: "", parentId: null, url: "https://example.com", x: 300, y: 0, w: 170, h: 76 },
+      ],
+      edges: [],
+    };
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={doc} onNavigateFile={onNavigateFile} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Open linked file Payments" }));
+    expect(onNavigateFile).toHaveBeenCalledWith("Payments");
+    // The plain https url stays a normal external link.
+    const anchor = container.querySelector('a.as-node__link') as HTMLAnchorElement;
+    expect(anchor.href).toContain("example.com");
+    expect(anchor.target).toBe("_blank");
+  });
+
+  it("redoes an undone edit", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    await fromMenu(user, "Insert ▾", /^Node /);
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await user.click(screen.getByRole("button", { name: "Redo" }));
+
+    const afterRedo = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(afterRedo.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length + 1);
+  });
+});

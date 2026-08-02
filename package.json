@@ -1,0 +1,15 @@
+{
+  "name": "architecture-studio-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "packages/*",
+    "example"
+  ],
+  "scripts": {
+    "build": "npm run build -w @mosphere/architect-better-code-diagrams",
+    "dev": "npm run dev -w example",
+    "test": "npm run test -w @mosphere/architect-better-code-diagrams",
+    "typecheck": "npm run typecheck -w @mosphere/architect-better-code-diagrams"
+  }
+}

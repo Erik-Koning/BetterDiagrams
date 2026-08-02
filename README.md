@@ -1,0 +1,441 @@
+# Architecture Studio
+
+An embeddable React architecture-diagram editor. An LLM authors a JSON template, React Flow
+renders it, a human drags it into shape, and the edits save back to the same JSON.
+
+```
+packages/architecture-studio/
+  src/contract/    zero-dependency: the document, validation, prompt, layout, clipboard
+  src/react/       the editor component, registry, exporters
+example/           a small React JS app that integrates it
+legacy/            the original single-file prototype, superseded
+```
+
+The package is two halves. `contract/` has **no dependencies at all** — no React, no
+@xyflow/react, no DOM — so it runs in a backend, a Lambda, or an LLM pipeline:
+
+```js
+import { validateTemplate, buildSystemPrompt, autoLayout } from "@mosphere/architect-better-code-diagrams/contract";
+```
+
+That's 12 kB gzipped versus 92 kB for the full editor, and it's enforced by a test that walks
+the import graph rather than trusted to a comment.
+
+## Quick start
+
+```bash
+npm install
+npm run dev        # example app on http://localhost:5173
+npm test           # 332 tests
+npm run build      # builds the library to packages/architecture-studio/dist
+```
+
+The example runs fully offline. AI generation is optional and needs a second terminal:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+npm run server -w example        # proxy on :8787, Vite forwards /api to it
+```
+
+## Using it
+
+```jsx
+import { ArchitectureStudio } from "@mosphere/architect-better-code-diagrams";
+import "@mosphere/architect-better-code-diagrams/styles.css";
+
+<ArchitectureStudio
+  value={template}          // controlled; or defaultValue for uncontrolled
+  onChange={setTemplate}    // fires on every committed edit
+  onSave={persistToDb}      // adds a Save button (⌘S)
+/>
+```
+
+The component **fills its parent box**. Give it a sized container — it never assumes the viewport,
+so it embeds in a panel, a modal, or a split view without fighting your layout.
+
+### Props
+
+| Prop | Type | Notes |
+|---|---|---|
+| `value` | `DiagramTemplate` | Controlled document. Pair with `onChange`. |
+| `defaultValue` | `DiagramTemplate` | Initial document when uncontrolled. |
+| `onChange` | `(t) => void` | Every committed edit, already validated. |
+| `onSave` | `(t) => void \| Promise` | Shows a Save button; `⌘S` also triggers it. |
+| `readOnly` | `boolean` | Hides editing affordances; pan/zoom/export still work. |
+| `registry` | `RegistryExtensions` | Add node kinds, icons, exporters. See below. |
+| `theme` | `Theme` | Overrides `--as-*` design tokens. `LIGHT_THEME` / `DARK_THEME` are complete presets — `theme={LIGHT_THEME}` flips the whole editor **and** its image exports (the export palette derives from the theme). |
+| `generate` | `DiagramGenerator` | Enables the AI panel. Omitted ⇒ no network code runs. |
+| `minimap` | `boolean` | Default `true`. |
+| `legend` | `boolean` | Infra legend in the corner. Default `true`; only renders when zones exist. |
+| `defaultShowHidden` | `boolean` | Start with provider-hidden nodes ghosted rather than omitted. Default `false`. |
+| `diffBase` | `DiagramTemplate` | Baseline to compare against: the canvas becomes a read-only diff view (added/removed/changed) while set. The toolbar's Compare button offers the same via a file picker. |
+| `filename` | `string` | Base name for exports. Default `"architecture"`. |
+| `files` / `activeFileId` / `onFileSelect` / `onFileCreate` / `onFileRename` / `onFileDelete` | `StudioFile[]`, callbacks | When `files` is provided the brand becomes a **file selector** (switch, ＋ new, ✎ rename, × delete). The host owns all storage — the editor only calls back. Both editors take these. Set `StudioFile.empty` and a blank file deletes straight away; anything else asks for confirmation first. |
+| `removedFiles` / `onFileRestore` | `StudioFile[]`, `(id) => void` | Deleted documents the host still holds. The menu grows a **Recently removed…** entry opening a recovery modal. |
+| `onNavigateFile` | `(ref) => void` | Fired when a node url with the `file:` prefix (e.g. `file:Order flow`) has its ↗ clicked — resolve by id, then name, and switch documents. |
+| `toolbarExtras` / `inspectorExtras` | `ReactNode \| (ctx) => ReactNode` | Slots for your own controls. |
+
+## The schema is the contract
+
+`contract/schema.ts` is the single source of truth for the vocabulary, the validator, **and the
+LLM system prompt** — the prompt is generated from the same constants the validator checks
+against, so they cannot drift apart.
+
+```ts
+import { buildSystemPrompt, validateTemplate, parseLlmTemplate } from "@mosphere/architect-better-code-diagrams";
+```
+
+`validateTemplate` never throws on recoverable input — an unknown kind becomes `service`, a
+duplicate id gets suffixed, an edge to a missing node is dropped, and **parent cycles are broken**
+so every consumer can assume the parent graph is a forest. It throws only when there is no
+`nodes` array at all.
+
+Text notes render **boxed by default** — a subtle outline and background, on screen and in image
+exports. Set `plain: true` (or untick **Outline** in the inspector) for bare text. Like every
+default, it is stored only when it differs, so pre-existing documents round-trip byte-identical.
+
+## Infrastructure zones
+
+A **zone** is a shaped background region tagged to an infra provider. Zones are deliberately *not*
+containers — nodes reference one by `zoneId` rather than being parented to it, so a node can sit in
+the "Azure West US" zone **and** the "Payments" group at once.
+
+Each zone lists the providers it can be switched between. Switching changes its colour **and which
+nodes inside it render**:
+
+```jsonc
+{
+  "zones": [
+    { "id": "region", "label": "Cloud Region", "shape": "rounded",
+      "x": 40, "y": 40, "w": 940, "h": 520,
+      "providers": ["azure", "aws", "gcp"], "provider": "azure", "z": 0 },
+
+    // A SaaS island drawn on top — higher z, so it claims the nodes inside it
+    { "id": "vendor", "label": "Stripe", "shape": "hexagon",
+      "x": 660, "y": 340, "w": 280, "h": 190,
+      "providers": ["saas"], "provider": "saas", "z": 1 }
+  ],
+  "nodes": [
+    { "id": "sql-az",  "zoneId": "region", "providers": ["azure"] },        // only on Azure
+    { "id": "sql-aws", "zoneId": "region", "providers": ["aws"] },          // only on AWS
+    { "id": "cache",   "zoneId": "region", "providers": ["azure", "aws"] }, // not on GCP
+    { "id": "api",     "zoneId": "region" }                                 // always visible
+  ]
+}
+```
+
+Flip the region to AWS and Azure SQL becomes RDS in place. Flip it to GCP and Redis disappears
+too. **Hidden nodes are never deleted** — they stay in the document and come back when the
+provider does. `EXAMPLE_ZONED_TEMPLATE` is exactly this diagram; the example app loads it.
+
+| Concept | What it does |
+|---|---|
+| Per-zone toggle | Segmented control in the zone header (a `<select>` past 4 providers). |
+| Global scenario | Toolbar control drives every zone that *offers* that provider; zones that don't keep theirs. |
+| Legend | Corner panel listing providers on show, with a count and how many nodes are hidden. |
+| Shapes | `rect`, `rounded`, `ellipse`, `hexagon`, `polygon` — the last with draggable vertices (press an edge midpoint to add a point and keep holding to place it; double-click a vertex to remove; drag a vertex past the box edge and the zone grows to hold it). |
+| Membership | Assigned on drop using **shape-aware** containment, so an L-shaped zone's notch isn't "inside" it. Overlaps resolve by highest `z`, then smallest area. |
+
+Providers are registry-extensible like everything else:
+
+```jsx
+registry={{ providers: { fly: { label: "Fly.io", color: "#8b5cf6" }, aws: { color: "#ff9d2e" } } }}
+```
+
+Programmatic control, if you'd rather drive it from your own UI:
+
+```ts
+import { setZoneProvider, setAllZoneProviders, visibleElements, activeScenario } from "@mosphere/architect-better-code-diagrams";
+
+setAllZoneProviders(template, "aws");   // the "show me the all-AWS build" switch
+visibleElements(template).nodes;        // Set<string> of what renders right now
+activeScenario(template);               // "aws" when uniform, null when mixed
+```
+
+> **If you consume `fromReactFlow` directly, pass `base`.** `toReactFlow` omits hidden nodes, so
+> without the original document as `base` those nodes are absent from the round-trip and get
+> deleted — toggling a zone and back would permanently destroy every provider-specific node. The
+> component does this for you.
+
+## Extending it
+
+Three plain records, shallow-merged over the built-ins. Omit a key to keep the built-in, pass a
+partial to override it, pass `null` to remove it:
+
+```jsx
+<ArchitectureStudio
+  registry={{
+    nodeKinds: {
+      lambda: { label: "Lambda", accent: "#fb923c", icon: "lambda" },
+      region: { label: "AWS Region", container: true },   // nodes can nest inside it
+      queue: null,                                         // remove a built-in
+    },
+    icons: { lambda: ["M4 4h6l7 16h3", "M20 4h-5L8 20H4"] },  // 24x24 viewBox paths
+    exporters: { terraform: myExporter, pdf: null },
+    promptExtraRules: "- This org runs on AWS; prefer lambda for compute.",
+  }}
+/>
+```
+
+A registered kind shows up in the inspector dropdown **and** in the generated system prompt, so
+the model can emit it too. `example/src/extensions.js` demonstrates all of it.
+
+## Exports
+
+PNG, PDF, SVG, template JSON, React Flow JSON, Mermaid, and C4-PlantUML ship built in. The
+image formats render from one emitter: `emitTemplate(template, registry, palette)` produces a
+backend-neutral command list that `drawToCanvas` and `drawToSvg` both replay — through the
+**same** edge geometry the screen uses — so PNG, PDF, and SVG can never disagree with each
+other or the editor. The `palette` (see `ExportPalette`, `DARK_EXPORT_PALETTE`,
+`LIGHT_EXPORT_PALETTE`) recolours an export without touching its layout; the editor passes one
+derived from the active `theme`, so a light-mode app exports light images automatically.
+
+Image exports draw zones behind everything, honour the active provider selection (hidden nodes
+and their edges are omitted, and the crop tightens to what's visible), and stamp the legend into
+the corner so the file explains its own colours. Mermaid can't express overlapping regions, so it
+records the active selection as `%% zone:` comments and reserves subgraphs for groups.
+
+A custom exporter returns a blob to download, or nothing if it delivered the result itself:
+
+```js
+const summary = {
+  label: "Copy summary",
+  async run({ template, registry, filename }) {
+    await navigator.clipboard.writeText(`${template.nodes.length} nodes`);
+    // returning nothing = handled, no download
+  },
+};
+```
+
+## AI generation
+
+The editor **never calls a model provider directly** — that would ship an API key to every
+visitor and be CORS-blocked anyway. You supply `generate`:
+
+```jsx
+import { createProxyGenerator } from "@mosphere/architect-better-code-diagrams";
+const generate = createProxyGenerator({ endpoint: "/api/diagram" });
+```
+
+Your route receives `{ mode, input, systemPrompt, current }` and returns `{ text }` or
+`{ template }`. `example/server.mjs` is a complete ~90-line reference using `claude-opus-5`.
+
+## C4 & professional editing
+
+The schema and editor cover C4's notational essentials:
+
+| Feature | Where |
+|---|---|
+| **Silhouettes** — `person` (client), `cylinder` (database), `pipe` (queue) | Registry-level `shape` on a kind; identical geometry in exports |
+| **Edge tech label** — C4's `[JSON/HTTPS]` | `edge.tech`, second line under the label |
+| **Numbered dynamic flows** | `edge.seq` renders a circled step badge; C4-PlantUML export prefixes `1.` |
+| **Direction** — `forward` / `both` / `none` arrowheads | `edge.direction` |
+| **Right-angle routing** | `meta.routing: "orthogonal"` sets the diagram default (Arrange ▾ → Right-angle connectors); `edge.routing` overrides per edge |
+| **Collapsible groups** | ▾ on a group collapses it to a chip; contents hide, their edges re-route to the chip, and the stored size survives expand. Never destructive — collapse is view state that rides the undo stack |
+| **Tags + filter** | `node.tags`; the View ▾ tag filter dims non-matching nodes — dim only, never hide, so the filter can't touch what persists |
+| **Doc links** | `node.url` renders an ↗ affix (a real link in read-only) |
+| **Team ownership** | `node.team` renders a tag riding the node's edge, coloured stably per team name (same hue on screen and in image exports); View ▾ → Show team badges toggles them while editing |
+| **Lifecycle status** | `node.status`: `proposed` (dotted) / `planned` (dashed) / `active` (default, never stored) / `deprecated` (dimmed) / `retired` (dimmed + struck through). Same conventions in image exports; C4-PlantUML gets `$tags` |
+| **Version tag** | `meta.versionTag` ("v2.1", "2026-Q3 draft") renders as a corner notice — `meta.versionTagPosition` picks the corner; click it to edit, View ▾ → Set version tag… to create one. Stamped into image exports |
+| **Lock** | `node.locked` / zone lock pins an element against drags and resizes |
+| **Search** | ⌘K, matches id/label/description/kind/tags, Enter cycles and centres |
+| **Snap & align** | Arrange ▾: snap-to-grid, align left/centre/right/top/middle/bottom (2+ selected), distribute (3+) |
+| **Title block** | `meta.title` stamps exported images |
+| **C4-PlantUML export** | `Person`/`ContainerDb`/`ContainerQueue`/`System_Ext`/`Container`, `Container_Boundary` for groups, `Deployment_Node` for zones, `Rel`/`BiRel` with tech |
+
+Zone **Supports** is editable in place: chips toggle registered providers, the free-text input
+adds any provider by name (neutral colour until the host registers it), and custom entries can
+be removed the same way.
+
+## Sequence mode
+
+A second, **feature-complete schema** — `SequenceTemplate` — with its own editor,
+`SequenceStudio`, sharing the same chrome (toolbar dropdowns, bottom-centre inspector, undo,
+save, theming, version tag) but sequence-style:
+
+| Element | Schema | On canvas |
+|---|---|---|
+| Participants | `participants[]` — `kind` (actor/service/database/queue/external), `team`, `status` | Header row; drag horizontally to reorder columns |
+| Messages | `messages[]` — `style` (sync/async/reply), `tech`, self-messages (`from === to`), lost/found (`null` endpoint) | Horizontal arrows; **drag a label up/down to reorder time**; drag between headers to connect |
+| Activation bars | `activations[]` — anchored to message ids | **Press-drag on a lifeline to add one**, resize its ends, Delete to remove |
+| Fragments | `fragments[]` — loop/alt/opt/par/break with else branches | Frames with operator tabs; wrap the selected messages via Insert ▾ |
+| Notes | `notes[]` — side, anchor message | Dog-eared cards; drag to re-side/re-anchor |
+
+The document stores **no coordinates**: participant column = array order, message time = array
+order, and spans anchor to message *ids* — so inserting a message inside a `loop` grows the
+loop, diffs stay structural, and the whole document maps 1:1 onto Mermaid/PlantUML. Exports:
+PNG/PDF/SVG through the same draw-command backends (light/dark palettes included), Mermaid
+`sequenceDiagram`, PlantUML (full fidelity incl. lost/found), and the JSON itself. The example
+app's **Architecture | Sequence** tabs switch editors.
+
+```jsx
+import { SequenceStudio, EXAMPLE_SEQUENCE } from "@mosphere/architect-better-code-diagrams";
+<SequenceStudio value={doc} onChange={setDoc} onSave={persist} theme={LIGHT_THEME} />
+```
+
+**Architecture → sequence, deterministically.** `sequenceFromTemplate(archTemplate)` derives a
+base sequence with no model involved: edges carrying `seq` (the numbered dynamic flow) become
+the messages in order — or every edge in document order when nothing is numbered — with
+kind/team/status/tech carried over and `direction: "both"` expanding to a call plus a dashed
+reply. The example app's **→ Sequence** button on the Architecture tab is exactly this.
+
+**Files & linking.** Both editors accept a `files` list + callbacks; the toolbar brand then
+becomes a file selector (switch, create, rename, delete — with a confirmation before losing
+a document that still has content, and a **Recently removed** modal to undo a mistake) while
+the HOST owns the workspace —
+the example app keeps a unified file list in localStorage where each file's kind (arch/seq)
+decides which editor mounts. Cross-file links reuse `node.url` with the `file:` prefix
+(`file:Order flow` by name or `file:<id>`): the node's ↗ then jumps to that file via
+`onNavigateFile` instead of opening a browser tab. **→ Sequence** derives a NEW sequence file
+from the active architecture — it never overwrites an existing document.
+
+The example app also carries a **⇄ mode switch** (flips a blank file between architecture and
+sequence in place; on a file with content it opens a new blank file of the other type) and a
+**✦ Copy schema** button that puts the active mode's schema contract on the clipboard for
+pasting into an external AI agent.
+
+**AI is optional, per editor.** Pass the same `generate` function the architecture editor takes
+(`createProxyGenerator` works unchanged — the sequence system prompt travels with each request)
+and the Sequence tab gains the ✦ AI panel: a context box for describing who participates, how
+the flow goes, and the steps in order, plus a refine input against the current document. Omit
+`generate` and no network code runs; the example app's "AI panel" checkbox toggles it for both
+tabs.
+
+## Governance: Checks and Compare
+
+**Checks** is an architecture lint. `lintTemplate(template, rules)` is a pure contract function
+run on every committed edit; findings appear in the toolbar's **Checks** menu (error-first) and
+clicking one selects and centres the offenders. Built-in rules: unconnected components,
+synchronous cycles, external systems reaching datastores directly (error), partially-missing
+team ownership, unlabeled cross-team edges, and active components depending on
+deprecated/retired ones. Hosts add or remove rules through the registry:
+
+```js
+registry={{ lintRules: {
+  "keep-it-small": {
+    label: "Diagram too large",
+    severity: "warning",
+    check: (t) => (t.nodes.length > 30 ? [{ message: `${t.nodes.length} nodes` }] : []),
+  },
+  "missing-owner": null,   // remove a built-in
+} }}
+```
+
+**Compare** diffs the live document against a baseline — `diffTemplates(base, current)` matches
+by id and ignores pure moves/resizes, so the diff is about structure, not tidying. On screen,
+added elements outline green-dashed, removed ones render **ghosted in place** in red, changed
+ones amber, with a `+a −r ~c` banner. Pass `diffBase` (e.g. the last approved revision from
+your DB) or use the toolbar's Compare button with a `.json` file. The view is strictly
+read-only and rendered by a separate canvas, so entering and leaving it can never touch the
+document.
+
+## Timeline: dates and the scrubber
+
+Every element in both documents — nodes, edges, zones, sequence participants and messages —
+may carry a `date` (`"YYYY-MM-DD"`). It renders on the element as a small grey outlined chip
+(`Mar 14`, gaining a two-digit year once the year stops being the current one) and it appears in
+image exports, so a roadmap survives into the shared artefact.
+
+```json
+{ "id": "wrk", "label": "Worker", "kind": "service", "date": "2026-06-15" }
+```
+
+The dates **are** the timeline — there is no separate phases structure to keep in sync with the
+diagram. `templateTimeline(doc)` collects the distinct dates into ascending *stops*, and the
+toolbar's **⏱ Timeline** button appears as soon as one element is dated. Scrubbing walks those
+stops left to right, so the bar can only ever land where something actually changes:
+
+- an element dated **on or before** the cursor is present;
+- an element with **no date** is present at every stop — undated means "always been there",
+  not "due at the epoch";
+- so the **first** stop shows that date's elements plus the undated backdrop, and the **last**
+  stop — being the latest date in the document — shows everything.
+
+Dates **cascade down containment**: a node's effective date is the latest in its ancestor chain,
+because a box cannot exist before the boundary drawn around it. An edge is never earlier than
+the two nodes it joins, and a sequence message never earlier than its two participants. A zone's
+date is its own — `zoneId` is membership, not containment, so a region arriving later says
+nothing about when its members do.
+
+**Ghost later / Hide later** decides what happens to everything ahead of the cursor: greyed out
+and non-interactive, or omitted from the view entirely. In a sequence diagram, hiding really
+does renumber the rows — time is array order there, so a flow with two of its five steps not
+yet built *is* a three-step flow.
+
+Exports follow what is on screen: with **Hide later** on, an export while scrubbed produces the
+slice you are looking at, not the finished architecture. **Ghost later** exports the whole
+document, because that is what it is showing. Dates travel into the Mermaid exports as well as
+the image ones; C4-PlantUML has no honest slot for them (`$tags` is a styling hook), so they are
+omitted there.
+
+Scrubbing is strictly a **view**. Like Compare, it renders through a separate read-only canvas
+(`TimelineCanvas` / `SequenceTimelineCanvas`) and never reaches the editor's own state, so no
+scrub can commit, and exiting restores the diagram exactly. The whole document is framed once on
+entry rather than re-fitted per step, so a box that appears in June appears exactly where it
+will sit in September. `←` / `→` step between stops; `Esc` leaves.
+
+Set a date from the **Date** section of any inspector, or have the model author one — both
+generated prompts describe the field and tell the model to use it only when the request is
+actually about a rollout. The scrubbing logic is pure and lives in `contract/timeline.ts`
+(`timelineView`, `sequenceTimelineView`, `normalizeDate`, `formatDiagramDate`), so a backend can
+render "the architecture as of 2026-06-15" without React.
+
+## Layout, clipboard, ghosts
+
+**Tidy** arranges nodes within each zone and group using a layered (Sugiyama-style) layout,
+growing containers to fit but never moving them. It's written in-package rather than delegating
+to dagre because the layout has to be *container-constrained* — a global layout that ignored
+zones would drag nodes out of the region deciding whether they're visible, silently changing the
+document's meaning. It also runs automatically on generated diagrams, but only when
+`hasOverlaps` says the output is actually a mess.
+
+**Copy / paste** (`⌘C` / `⌘V`) travel as template JSON through the system clipboard, so a
+fragment pastes into another diagram or another tab. Descendants come along with a copied
+container, ids are remapped, and an existing zone is reused rather than cloned. A fragment
+keeps only the lines wholly **inside** the selection — copy two connected nodes and the line
+between them pastes too; copy one node and no lines come along (the other endpoint may not
+exist wherever the fragment lands).
+
+**Duplicate** (`⌘D`, or the ⧉ button in the inspector) is different by design: it happens in
+the same document, so it carries the selection's **direct connections** — internal lines clone
+between the copies, and boundary lines re-attach their cloned end to the copy while keeping the
+original neighbour (`duplicateWithConnections` in the contract).
+
+**Zones** copy too, with subject/ride-along asymmetry: a zone that rides along because a copied
+node references it is *reused* by id when pasting into the same diagram (pasting a node from
+"Cloud Region" must not spawn a second region), but a zone you select and copy is a **subject**
+— it brings its member nodes and their internal edges, and paste always clones it under a fresh
+id, re-zoning the copied members into the clone. `⌘D` / ⧉ on a zone duplicates the whole region
+with its members and mirrors their boundary connections.
+
+**Show hidden nodes** (View ▾) ghosts the nodes the active provider hides, so they stay
+selectable and editable instead of being unreachable. Ghosts never appear in exports — an export
+shows the active scenario.
+
+The toolbar groups its actions into four dropdowns — **Insert** (node/group/text/zone),
+**Arrange** (tidy, align, distribute, routing, snap), **View** (ghosts, tag filter), and
+**Export** — all sharing one open-menu slot, so opening one closes the rest and a click
+anywhere else closes them all. The inspector reads as captioned sections (Node · Style · On ·
+Tags · Link) instead of an unbroken run of inputs.
+
+## Keyboard
+
+`⌘Z` undo · `⇧⌘Z` redo · `⌘S` save · `⌘C`/`⌘V`/`⌘D` copy/paste/duplicate · `Delete` remove
+selection (cascades into groups) · `Esc` close panels and leave timeline mode · `←`/`→` step
+between timeline stops while scrubbing. Drag from a node edge to connect. Drop a node onto a
+group to nest it, drag it out to un-nest. Drag an edge label to slide it along the curve. Drop a
+`.json` template file on the canvas to load it.
+
+## Versioning
+
+Documents carry a `version`, and `migrateTemplate` runs them up to `CURRENT_VERSION` through a
+registered migration chain. A document from a **newer** build throws rather than being coerced —
+silently dropping fields a future release added would turn "open an old client" into irreversible
+data loss on the next save. `MIGRATIONS` is empty today; the hook exists so v2 has somewhere to
+go.
+
+## Known issue
+
+`npm audit` reports 4 high advisories from `vite-plugin-dts` → `@vue/language-core` → `minimatch`.
+These are DoS-only, build-time-only, and never reach the published bundle. Fixing them needs a
+breaking downgrade of the `.d.ts` generator.

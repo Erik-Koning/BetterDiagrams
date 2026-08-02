@@ -1,0 +1,259 @@
+/* Host-app styling. Deliberately plain and un-namespaced, to demonstrate that
+   the editor's own styles are self-contained and neither leak nor absorb.
+
+   The shell has its own light/dark tokens (`--shell-*`) so the Theme toggle
+   restyles the host chrome in step with the editor's `theme` prop. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.app {
+  --shell-bg: #060b16;
+  --shell-surface: #0b1220;
+  --shell-surface-2: #1e293b;
+  --shell-border: #1e293b;
+  --shell-border-2: #334155;
+  --shell-text: #e2e8f0;
+  --shell-text-mid: #cbd5e1;
+  --shell-text-dim: #94a3b8;
+  --shell-text-faint: #64748b;
+  --shell-code: #a5b4fc;
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--shell-bg);
+  color: var(--shell-text);
+}
+
+.app[data-theme="light"] {
+  --shell-bg: #eef2f7;
+  --shell-surface: #ffffff;
+  --shell-surface-2: #e2e8f0;
+  --shell-border: #e2e8f0;
+  --shell-border-2: #cbd5e1;
+  --shell-text: #0f172a;
+  --shell-text-mid: #334155;
+  --shell-text-dim: #64748b;
+  --shell-text-faint: #94a3b8;
+  --shell-code: #4f46e5;
+}
+
+.app__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--shell-border);
+  background: var(--shell-surface);
+}
+
+.app__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.app__sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--shell-text-dim);
+}
+
+.app__sub code,
+.app__note code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--shell-surface-2);
+  font-size: 11px;
+}
+
+.app__tabs {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--shell-border-2);
+  border-radius: 8px;
+  background: var(--shell-surface);
+}
+
+.app__tab {
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--shell-text-dim);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.app__tab--on {
+  background: var(--shell-surface-2);
+  color: var(--shell-text);
+}
+
+.app__controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.app__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--shell-text-mid);
+  cursor: pointer;
+  user-select: none;
+}
+
+.app__toggle input[type="color"] {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--shell-border-2);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+.app__btn {
+  padding: 6px 12px;
+  border: 1px solid var(--shell-border-2);
+  border-radius: 6px;
+  background: var(--shell-surface-2);
+  color: var(--shell-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.app__btn:hover {
+  background: var(--shell-border-2);
+}
+
+.app__body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  min-height: 0;
+}
+
+.app__body--wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* The editor is given a bounded box with a border, to make it obvious it is a
+   component in a layout rather than a full-page takeover. */
+.app__editor {
+  min-width: 0;
+  min-height: 0;
+  margin: 14px;
+  overflow: hidden;
+  border: 1px solid var(--shell-border);
+  border-radius: 12px;
+}
+
+.app__side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Right padding leaves room for the fixed collapse handle. */
+  padding: 14px 30px 14px 0;
+}
+
+.app__side-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.app__side h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.app__meta {
+  font-size: 11px;
+  color: var(--shell-text-faint);
+}
+
+/* The one panel handle, hugging the right edge in both states. */
+.app__side-tab {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  z-index: 30;
+  padding: 10px 7px;
+  border: 1px solid var(--shell-border-2);
+  border-right: 0;
+  border-radius: 8px 0 0 8px;
+  background: var(--shell-surface);
+  color: var(--shell-text-faint);
+  transform: translateY(-50%);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.app__side-tab:hover {
+  color: var(--shell-code);
+  background: var(--shell-surface-2);
+}
+
+/* Open: same tab, same place — only the tone shifts so it reads as active. */
+.app__side-tab--open {
+  background: var(--shell-surface-2);
+  color: var(--shell-text-dim);
+}
+
+.app__note {
+  margin: 6px 0 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--shell-text-dim);
+}
+
+.app__json {
+  flex: 1;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--shell-border);
+  border-radius: 8px;
+  background: var(--shell-surface);
+  color: var(--shell-code);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+@media (max-width: 900px) {
+  .app__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app__side {
+    max-height: 40vh;
+    padding: 0 14px 14px;
+  }
+}
