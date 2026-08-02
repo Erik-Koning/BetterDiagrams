@@ -16,6 +16,15 @@
   ],
   "license": "MIT",
   "author": "Erik Koning",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Erik-Koning/BetterDiagrams.git",
+    "directory": "packages/better-diagrams"
+  },
+  "homepage": "https://github.com/Erik-Koning/BetterDiagrams#readme",
+  "bugs": {
+    "url": "https://github.com/Erik-Koning/BetterDiagrams/issues"
+  },
   "type": "module",
   "main": "./dist/better-diagrams.cjs",
   "module": "./dist/better-diagrams.js",
