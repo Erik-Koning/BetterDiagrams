@@ -16,7 +16,7 @@ const useClientBanner = {
   name: "use-client-banner",
   generateBundle(_options: unknown, bundle: Record<string, { type: string; name?: string; code?: string }>) {
     for (const chunk of Object.values(bundle)) {
-      if (chunk.type === "chunk" && chunk.name === "architecture-studio" && chunk.code) {
+      if (chunk.type === "chunk" && chunk.name === "better-diagrams" && chunk.code) {
         chunk.code = `"use client";\n${chunk.code}`;
       }
     }
@@ -32,10 +32,10 @@ export default defineConfig({
   build: {
     lib: {
       entry: {
-        // Two entries so `@mosphere/architect-better-code-diagrams/contract` is a real
+        // Two entries so `@mosphere/better-diagrams/contract` is a real
         // build artifact, not just a source-tree convention — importing it
         // must not pull the React half into a backend bundle.
-        "architecture-studio": `${here}src/index.ts`,
+        "better-diagrams": `${here}src/index.ts`,
         contract: `${here}src/contract/index.ts`,
       },
       name: "ArchitectureStudio",
@@ -50,7 +50,7 @@ export default defineConfig({
       external: ["react", "react-dom", "react/jsx-runtime", "@xyflow/react"],
       output: {
         globals: { react: "React", "react-dom": "ReactDOM" },
-        assetFileNames: "architecture-studio.css",
+        assetFileNames: "better-diagrams.css",
       },
     },
     sourcemap: true,

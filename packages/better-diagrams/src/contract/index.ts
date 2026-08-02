@@ -6,7 +6,7 @@
  * defines the document, validates it, generates the system prompt that
  * produces it, and transforms it.
  *
- *   import { validateTemplate, buildSystemPrompt } from "@mosphere/architect-better-code-diagrams/contract";
+ *   import { validateTemplate, buildSystemPrompt } from "@mosphere/better-diagrams/contract";
  *
  * The React Flow adapters live here too (`toReactFlow` / `fromReactFlow`), but
  * only as *structural* types — they describe the shape without importing the

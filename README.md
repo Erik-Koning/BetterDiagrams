@@ -1,10 +1,16 @@
-# Architecture Studio
+# BetterDiagrams
 
-An embeddable React architecture-diagram editor. An LLM authors a JSON template, React Flow
-renders it, a human drags it into shape, and the edits save back to the same JSON.
+Embeddable React diagram editors — **architecture** diagrams (nodes, groups, infra zones with
+provider switching) and **sequence** diagrams (participants, messages, activation bars,
+combined fragments). An LLM authors a JSON document, React Flow renders it, a human drags it
+into shape, and the edits save back to the same JSON.
+
+```bash
+npm install @mosphere/better-diagrams
+```
 
 ```
-packages/architecture-studio/
+packages/better-diagrams/
   src/contract/    zero-dependency: the document, validation, prompt, layout, clipboard
   src/react/       the editor component, registry, exporters
 example/           a small React JS app that integrates it
@@ -15,7 +21,7 @@ The package is two halves. `contract/` has **no dependencies at all** — no Rea
 @xyflow/react, no DOM — so it runs in a backend, a Lambda, or an LLM pipeline:
 
 ```js
-import { validateTemplate, buildSystemPrompt, autoLayout } from "@mosphere/architect-better-code-diagrams/contract";
+import { validateTemplate, buildSystemPrompt, autoLayout } from "@mosphere/better-diagrams/contract";
 ```
 
 That's 12 kB gzipped versus 92 kB for the full editor, and it's enforced by a test that walks
@@ -27,7 +33,7 @@ the import graph rather than trusted to a comment.
 npm install
 npm run dev        # example app on http://localhost:5173
 npm test           # 332 tests
-npm run build      # builds the library to packages/architecture-studio/dist
+npm run build      # builds the library to packages/better-diagrams/dist
 ```
 
 The example runs fully offline. AI generation is optional and needs a second terminal:
@@ -40,8 +46,8 @@ npm run server -w example        # proxy on :8787, Vite forwards /api to it
 ## Using it
 
 ```jsx
-import { ArchitectureStudio } from "@mosphere/architect-better-code-diagrams";
-import "@mosphere/architect-better-code-diagrams/styles.css";
+import { ArchitectureStudio } from "@mosphere/better-diagrams";
+import "@mosphere/better-diagrams/styles.css";
 
 <ArchitectureStudio
   value={template}          // controlled; or defaultValue for uncontrolled
@@ -82,7 +88,7 @@ LLM system prompt** — the prompt is generated from the same constants the vali
 against, so they cannot drift apart.
 
 ```ts
-import { buildSystemPrompt, validateTemplate, parseLlmTemplate } from "@mosphere/architect-better-code-diagrams";
+import { buildSystemPrompt, validateTemplate, parseLlmTemplate } from "@mosphere/better-diagrams";
 ```
 
 `validateTemplate` never throws on recoverable input — an unknown kind becomes `service`, a
@@ -145,7 +151,7 @@ registry={{ providers: { fly: { label: "Fly.io", color: "#8b5cf6" }, aws: { colo
 Programmatic control, if you'd rather drive it from your own UI:
 
 ```ts
-import { setZoneProvider, setAllZoneProviders, visibleElements, activeScenario } from "@mosphere/architect-better-code-diagrams";
+import { setZoneProvider, setAllZoneProviders, visibleElements, activeScenario } from "@mosphere/better-diagrams";
 
 setAllZoneProviders(template, "aws");   // the "show me the all-AWS build" switch
 visibleElements(template).nodes;        // Set<string> of what renders right now
@@ -213,7 +219,7 @@ The editor **never calls a model provider directly** — that would ship an API 
 visitor and be CORS-blocked anyway. You supply `generate`:
 
 ```jsx
-import { createProxyGenerator } from "@mosphere/architect-better-code-diagrams";
+import { createProxyGenerator } from "@mosphere/better-diagrams";
 const generate = createProxyGenerator({ endpoint: "/api/diagram" });
 ```
 
@@ -269,7 +275,7 @@ PNG/PDF/SVG through the same draw-command backends (light/dark palettes included
 app's **Architecture | Sequence** tabs switch editors.
 
 ```jsx
-import { SequenceStudio, EXAMPLE_SEQUENCE } from "@mosphere/architect-better-code-diagrams";
+import { SequenceStudio, EXAMPLE_SEQUENCE } from "@mosphere/better-diagrams";
 <SequenceStudio value={doc} onChange={setDoc} onSave={persist} theme={LIGHT_THEME} />
 ```
 

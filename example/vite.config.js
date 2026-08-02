@@ -14,12 +14,12 @@ export default defineConfig({
   resolve: {
     // Consume the library from source so `npm run dev` picks up edits with no rebuild.
     alias: {
-      "@mosphere/architect-better-code-diagrams/styles.css": new URL(
-        "../packages/architecture-studio/src/styles.css",
+      "@mosphere/better-diagrams/styles.css": new URL(
+        "../packages/better-diagrams/src/styles.css",
         import.meta.url,
       ).pathname,
-      "@mosphere/architect-better-code-diagrams": new URL(
-        "../packages/architecture-studio/src/index.ts",
+      "@mosphere/better-diagrams": new URL(
+        "../packages/better-diagrams/src/index.ts",
         import.meta.url,
       ).pathname,
     },

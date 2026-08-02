@@ -24,7 +24,7 @@ SOFTWARE.
 
 THIRD-PARTY NOTICE
 
-The published stylesheet (dist/architecture-studio.css) inlines the stylesheet
+The published stylesheet (dist/better-diagrams.css) inlines the stylesheet
 of React Flow (@xyflow/react), which is likewise MIT licensed:
 
   MIT License — Copyright (c) 2019-2025 webkid GmbH (https://reactflow.dev)

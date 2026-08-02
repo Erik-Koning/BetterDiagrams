@@ -5,7 +5,7 @@
  * nothing here can leak into a host app and host resets cannot reach in. All
  * visual constants resolve through `--as-*` custom properties (see theme.ts).
  *
- * Consumers import this once:  import "@mosphere/architect-better-code-diagrams/styles.css";
+ * Consumers import this once:  import "@mosphere/better-diagrams/styles.css";
  */
 
 @import "@xyflow/react/dist/style.css";

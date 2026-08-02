@@ -8,7 +8,7 @@
 import { validateTemplate, type DiagramTemplate, type ValidateOptions } from "./schema";
 
 /** Marks a template as a clipboard fragment rather than a whole document. */
-export const FRAGMENT_MARKER = "architecture-studio/fragment";
+export const FRAGMENT_MARKER = "better-diagrams/fragment";
 
 export interface Fragment extends DiagramTemplate {
   meta?: {

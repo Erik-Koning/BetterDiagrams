@@ -1,5 +1,5 @@
 {
-  "name": "@mosphere/architect-better-code-diagrams",
+  "name": "@mosphere/better-diagrams",
   "version": "0.1.0-beta.0",
   "description": "Embeddable React architecture and sequence diagram editors with an LLM-authorable JSON schema.",
   "keywords": [
@@ -17,18 +17,18 @@
   "license": "MIT",
   "author": "Erik Koning",
   "type": "module",
-  "main": "./dist/architecture-studio.cjs",
-  "module": "./dist/architecture-studio.js",
-  "types": "./dist/architecture-studio.d.ts",
+  "main": "./dist/better-diagrams.cjs",
+  "module": "./dist/better-diagrams.js",
+  "types": "./dist/better-diagrams.d.ts",
   "exports": {
     ".": {
       "import": {
-        "types": "./dist/architecture-studio.d.ts",
-        "default": "./dist/architecture-studio.js"
+        "types": "./dist/better-diagrams.d.ts",
+        "default": "./dist/better-diagrams.js"
       },
       "require": {
-        "types": "./dist/architecture-studio.d.cts",
-        "default": "./dist/architecture-studio.cjs"
+        "types": "./dist/better-diagrams.d.cts",
+        "default": "./dist/better-diagrams.cjs"
       }
     },
     "./contract": {
@@ -41,7 +41,7 @@
         "default": "./dist/contract.cjs"
       }
     },
-    "./styles.css": "./dist/architecture-studio.css",
+    "./styles.css": "./dist/better-diagrams.css",
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -65,7 +65,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && vite build && npm run build:dts-cts",
-    "build:dts-cts": "node -e \"for (const f of ['architecture-studio','contract']) require('fs').copyFileSync('dist/'+f+'.d.ts','dist/'+f+'.d.cts')\"",
+    "build:dts-cts": "node -e \"for (const f of ['better-diagrams','contract']) require('fs').copyFileSync('dist/'+f+'.d.ts','dist/'+f+'.d.cts')\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "prepack": "cp ../../README.md ../../LICENSE .",

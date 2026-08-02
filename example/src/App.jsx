@@ -27,12 +27,13 @@ import {
   sequenceFromTemplate,
   validateSequence,
   validateTemplate,
-} from "@mosphere/architect-better-code-diagrams";
-import "@mosphere/architect-better-code-diagrams/styles.css";
+} from "@mosphere/better-diagrams";
+import "@mosphere/better-diagrams/styles.css";
 import { registry } from "./extensions.js";
 
-const WORKSPACE_KEY = "architecture-studio:workspace";
-// Pre-workspace storage, migrated once on first load.
+const WORKSPACE_KEY = "better-diagrams:workspace";
+// Storage keys from earlier builds, read once so saved work survives a rename.
+const LEGACY_WORKSPACE_KEY = "architecture-studio:workspace";
 const LEGACY_ARCH_KEY = "architecture-studio:example";
 const LEGACY_SEQ_KEY = "architecture-studio:example-sequence";
 
@@ -51,7 +52,8 @@ const isBlank = (kind, doc) =>
 /** Load the saved workspace, migrating pre-workspace storage on first run. */
 function seedWorkspace() {
   try {
-    const raw = localStorage.getItem(WORKSPACE_KEY);
+    const raw =
+      localStorage.getItem(WORKSPACE_KEY) ?? localStorage.getItem(LEGACY_WORKSPACE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed.files) && parsed.files.length) {
@@ -368,7 +370,7 @@ export default function App() {
       <Toaster theme={mode} position="bottom-right" closeButton richColors />
       <header className="app__bar">
         <div>
-          <h1 className="app__title">Architecture Studio</h1>
+          <h1 className="app__title">BetterDiagrams</h1>
           <p className="app__sub">
             A workspace of files · controlled by <code>value</code> / <code>onChange</code>
           </p>

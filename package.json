@@ -1,5 +1,5 @@
 {
-  "name": "architecture-studio-workspace",
+  "name": "better-diagrams-workspace",
   "private": true,
   "version": "0.0.0",
   "workspaces": [
@@ -7,9 +7,9 @@
     "example"
   ],
   "scripts": {
-    "build": "npm run build -w @mosphere/architect-better-code-diagrams",
+    "build": "npm run build -w @mosphere/better-diagrams",
     "dev": "npm run dev -w example",
-    "test": "npm run test -w @mosphere/architect-better-code-diagrams",
-    "typecheck": "npm run typecheck -w @mosphere/architect-better-code-diagrams"
+    "test": "npm run test -w @mosphere/better-diagrams",
+    "typecheck": "npm run typecheck -w @mosphere/better-diagrams"
   }
 }
