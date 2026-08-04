@@ -77,6 +77,32 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   globalThis.URL.createObjectURL ??= () => "blob:stub";
   globalThis.URL.revokeObjectURL ??= () => {};
 
+  // The download helper clicks a programmatic <a href>. jsdom responds by
+  // attempting real navigation and printing "Not implemented: navigation to
+  // another Document" on every export test. Nothing listens to that anchor —
+  // it exists only for its default action — so a no-op silences the noise
+  // without changing what any test observes. (Re-dispatching the event would
+  // not help: jsdom runs anchor activation behaviour on dispatched clicks
+  // too, so it would navigate all the same.)
+  HTMLAnchorElement.prototype.click = function click() {};
+
+  // React Flow updates its internal store from async work no test can wrap —
+  // the resize-observer microtask above, d3-zoom init, fitView timers. Each
+  // mount prints dozens of act(...) warnings for library internals, burying
+  // real failures. Filter EXACTLY that warning; every other console.error
+  // (including act warnings that name no component, and our own code's
+  // errors) still comes through.
+  const realConsoleError = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    if (
+      typeof args[0] === "string" &&
+      args[0].includes("was not wrapped in act(")
+    ) {
+      return;
+    }
+    realConsoleError(...args);
+  };
+
   // jsdom has no pointer capture; the polygon vertex editor uses it so a drag
   // keeps tracking even when the pointer leaves the small handle.
   Element.prototype.setPointerCapture ??= () => {};
