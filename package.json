@@ -10,6 +10,8 @@
     "build": "npm run build -w @mosphere/better-diagrams",
     "dev": "npm run dev -w example",
     "test": "npm run test -w @mosphere/better-diagrams",
-    "typecheck": "npm run typecheck -w @mosphere/better-diagrams"
+    "typecheck": "npm run typecheck -w @mosphere/better-diagrams",
+    "release": "npm publish -w @mosphere/better-diagrams",
+    "release:dry": "npm publish --dry-run -w @mosphere/better-diagrams"
   }
 }
