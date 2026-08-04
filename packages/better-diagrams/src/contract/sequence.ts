@@ -22,6 +22,7 @@
 import { NODE_STATUSES, VERSION_TAG_POSITIONS } from "./schema";
 import type { DiagramTemplate, Migration, NodeStatus, VersionTagPosition } from "./schema";
 import { normalizeDate, type DiagramDate } from "./timeline";
+import { parseLlmJson } from "./json-repair";
 import {
   BAR_OVERHANG,
   BAR_W,
@@ -144,6 +145,74 @@ export interface SequenceTemplate {
 }
 
 export const EMPTY_SEQUENCE: SequenceTemplate = { version: 1, participants: [], messages: [] };
+
+// ─── Key vocabularies ────────────────────────────────────────────────────────
+// Known keys per object, for editors that warn about keys the schema doesn't
+// define. See TEMPLATE_KEYS in schema.ts for how the Record enforces the list.
+// `meta` is absent — its index signature admits anything.
+
+const SEQUENCE_KEY_MAP: Record<keyof SequenceTemplate, true> = {
+  version: true,
+  meta: true,
+  participants: true,
+  messages: true,
+  activations: true,
+  fragments: true,
+  notes: true,
+};
+export const SEQUENCE_KEYS: readonly string[] = Object.keys(SEQUENCE_KEY_MAP);
+
+const PARTICIPANT_KEY_MAP: Record<keyof SeqParticipant, true> = {
+  id: true,
+  label: true,
+  kind: true,
+  description: true,
+  team: true,
+  status: true,
+  date: true,
+};
+export const PARTICIPANT_KEYS: readonly string[] = Object.keys(PARTICIPANT_KEY_MAP);
+
+const MESSAGE_KEY_MAP: Record<keyof SeqMessage, true> = {
+  id: true,
+  from: true,
+  to: true,
+  label: true,
+  style: true,
+  tech: true,
+  date: true,
+};
+export const MESSAGE_KEYS: readonly string[] = Object.keys(MESSAGE_KEY_MAP);
+
+const ACTIVATION_KEY_MAP: Record<keyof SeqActivation, true> = {
+  id: true,
+  participant: true,
+  from: true,
+  to: true,
+};
+export const ACTIVATION_KEYS: readonly string[] = Object.keys(ACTIVATION_KEY_MAP);
+
+const FRAGMENT_KEY_MAP: Record<keyof SeqFragment, true> = {
+  id: true,
+  kind: true,
+  label: true,
+  from: true,
+  to: true,
+  elses: true,
+};
+export const FRAGMENT_KEYS: readonly string[] = Object.keys(FRAGMENT_KEY_MAP);
+
+export const FRAGMENT_ELSE_KEYS: readonly string[] = ["label", "at"];
+
+const NOTE_KEY_MAP: Record<keyof SeqNote, true> = {
+  id: true,
+  text: true,
+  side: true,
+  participant: true,
+  across: true,
+  at: true,
+};
+export const NOTE_KEYS: readonly string[] = Object.keys(NOTE_KEY_MAP);
 
 // ─── Migration ───────────────────────────────────────────────────────────────
 
@@ -693,7 +762,7 @@ export function buildSequencePrompt(): string {
   const sides = NOTE_SIDES.join("|");
   return `You produce and edit SEQUENCE DIAGRAM documents for a visual editor. Return ONLY a JSON object matching:
 
-{"version":1,"meta":{"title":"Name","autonumber":true},"participants":[{"id":"slug","label":"Name","kind":"${kinds}","description":"one short line or empty","team":"","date":"YYYY-MM-DD"}],"messages":[{"id":"m1","from":"participantId","to":"participantId","label":"what is sent","style":"${styles}","tech":"JSON/HTTPS","date":"YYYY-MM-DD"}],"activations":[{"id":"a1","participant":"participantId","from":"messageId","to":"messageId"}],"fragments":[{"id":"f1","kind":"${frags}","label":"guard condition","from":"messageId","to":"messageId","elses":[{"label":"else guard","at":"messageId"}]}],"notes":[{"id":"n1","text":"...","side":"${sides}","participant":"participantId","at":"messageId"}]}
+{"version":1,"meta":{"title":"Name","autonumber":true},"participants":[{"id":"slug","label":"Name","kind":"${kinds}","description":"one short line or empty","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD"}],"messages":[{"id":"m1","from":"participantId","to":"participantId","label":"what is sent","style":"${styles}","tech":"JSON/HTTPS","date":"YYYY-MM-DD"}],"activations":[{"id":"a1","participant":"participantId","from":"messageId","to":"messageId"}],"fragments":[{"id":"f1","kind":"${frags}","label":"guard condition","from":"messageId","to":"messageId","elses":[{"label":"else guard","at":"messageId"}]}],"notes":[{"id":"n1","text":"...","side":"${sides}","participant":"participantId","at":"messageId"}]}
 
 Rules:
 - Message ARRAY ORDER is time: earlier entries happen first. There are no coordinates anywhere.
@@ -701,29 +770,19 @@ Rules:
 - "style": sync = a blocking call (solid, filled arrow), async = fire-and-forget (dashed, open arrow), reply = a response (dashed).
 - "tech" = protocol/format ("JSON/HTTPS", "gRPC", "SQL"); omit when obvious.
 - Activations mark the span a participant is busy: "from"/"to" are MESSAGE ids (the call that starts the work and the reply that ends it). Fragments frame a message range; "elses" split alt/par branches, where "at" is the first message of that branch.
+- Participant "status" = lifecycle stage when stated ("stubbed" scaffolding only, "dark" built but not enabled, "deprecated" being sunset); omit for normal active participants.
 - "date" ("YYYY-MM-DD") is WHEN a participant or step joins the flow, not where it sits in it — ordering is still array order. Set it only when the user describes a rollout, phases, or a migration; omit it otherwise. Undated means always present, so date the new steps and leave the existing flow undated.
 - Follow the user's description of the flow and its steps faithfully — keep their ordering, add activations for request/response spans, and fragments for the loops and conditions they describe.
 - Return the FULL document as pure JSON. No markdown fences, no commentary.`;
 }
 
-/** Parse a model reply (possibly fenced, possibly chatty) into a validated sequence. */
+/**
+ * Parse a model reply (possibly fenced, possibly chatty) into a validated
+ * sequence. Lightly damaged JSON is healed by json-repair rather than
+ * rejected; what can't be healed throws a user-facing message.
+ */
 export function parseLlmSequence(llmText: string): SequenceTemplate {
-  const cleaned = llmText.replace(/```json/gi, "").replace(/```/g, "").trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start === -1) {
-    throw new Error("No JSON object found in the model's reply");
-  }
-  if (end === -1 || end < start) {
-    throw new Error("Model returned malformed JSON: the object is unterminated (response truncated?)");
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned.slice(start, end + 1));
-  } catch (err) {
-    throw new Error(`Model returned malformed JSON: ${(err as Error).message}`);
-  }
-  return validateSequence(parsed);
+  return validateSequence(parseLlmJson(llmText));
 }
 
 /** Build the user-turn message for a sequence refine request. */

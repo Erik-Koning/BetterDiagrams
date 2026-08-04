@@ -83,6 +83,14 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   Element.prototype.releasePointerCapture ??= () => {};
   Element.prototype.hasPointerCapture ??= () => false;
 
+  // CodeMirror (the welcome modal's JSON editor) measures text with ranges
+  // and probes elementFromPoint/scrollIntoView; jsdom implements none of them.
+  Range.prototype.getClientRects ??= () => ({ length: 0, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }) as unknown as DOMRectList;
+  Range.prototype.getBoundingClientRect ??= () =>
+    ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }) as DOMRect;
+  document.elementFromPoint ??= () => null;
+  Element.prototype.scrollIntoView ??= () => {};
+
   // jsdom leaves `view` null on synthetically dispatched mouse events, and
   // d3-drag (under React Flow) does `event.view.document` on mousedown — so
   // clicking any node throws. Real browsers always populate it; fall back to

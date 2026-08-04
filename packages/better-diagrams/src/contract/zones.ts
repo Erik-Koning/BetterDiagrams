@@ -18,6 +18,10 @@
 export const ZONE_SHAPES = ["rect", "rounded", "ellipse", "hexagon", "polygon"] as const;
 export type ZoneShape = (typeof ZONE_SHAPES)[number];
 
+/** How a zone's outline draws. `solid` is the default and is never stored. */
+export const ZONE_OUTLINES = ["solid", "dashed", "dotted", "none"] as const;
+export type ZoneOutline = (typeof ZONE_OUTLINES)[number];
+
 /** A normalised vertex, 0..1 within the zone's bounding box. */
 export type ZonePoint = [number, number];
 
@@ -35,6 +39,18 @@ export interface DiagramZone {
   providers: string[];
   /** The active provider id. Always a member of `providers` after validation. */
   provider: string;
+  /**
+   * Ink override: the OUTLINE colour, canonical lowercase `#rrggbb`. Absent
+   * means "the provider's colour". This is deliberately the vivid colour —
+   * the human-visible one — and the background fill is DERIVED from it as a
+   * duller tint (`opacity` at composite time), so picking one colour styles
+   * the whole region coherently in both themes.
+   */
+  color?: string;
+  /** Outline style. Absent = solid. `none` hides the outline entirely. */
+  outline?: ZoneOutline;
+  /** Background fill on/off. Absent = filled; stored only when `false`. */
+  fill?: boolean;
   /** Fill opacity 0..1. Defaults to 0.14 — a tint, not a block of colour. */
   opacity?: number;
   /** Stacking order among zones; higher draws on top. An island beats its host. */
@@ -49,6 +65,29 @@ export interface DiagramZone {
    */
   date?: string;
 }
+
+// Known keys, for editors that warn about keys the schema doesn't define.
+// See TEMPLATE_KEYS in schema.ts for how the Record enforces the list.
+const ZONE_KEY_MAP: Record<keyof DiagramZone, true> = {
+  id: true,
+  label: true,
+  shape: true,
+  points: true,
+  x: true,
+  y: true,
+  w: true,
+  h: true,
+  providers: true,
+  provider: true,
+  color: true,
+  outline: true,
+  fill: true,
+  opacity: true,
+  z: true,
+  locked: true,
+  date: true,
+};
+export const ZONE_KEYS: readonly string[] = Object.keys(ZONE_KEY_MAP);
 
 /** Regular hexagon inscribed in the bounding box, flat-top. */
 export const HEXAGON_POINTS: ZonePoint[] = [

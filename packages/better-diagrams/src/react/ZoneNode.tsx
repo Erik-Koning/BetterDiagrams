@@ -22,7 +22,7 @@ import { NodeResizer, useReactFlow, type Node, type NodeProps } from "@xyflow/re
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { useStudio } from "./context";
 import { DateChip } from "./chrome";
-import { providerDef } from "./registry-types";
+import { providerDef, zoneFill, zoneInk } from "./registry-types";
 import {
   containZonePoints,
   outlineToSvgPoints,
@@ -30,7 +30,7 @@ import {
   type DiagramZone,
   type ZonePoint,
 } from "../contract/zones";
-import { DEFAULT_ZONE_OPACITY, type ZoneNodeData } from "../contract/schema";
+import type { ZoneNodeData } from "../contract/schema";
 
 export type ZoneNodeType = Node<ZoneNodeData, "zone">;
 
@@ -41,9 +41,11 @@ export const ZoneNode = memo(function ZoneNode({ id, data, selected }: NodeProps
   const { registry, readOnly, requestCommit } = useStudio();
   const { setNodes } = useReactFlow();
   const zone = data.zone;
-  const def = providerDef(registry, zone.provider);
   const outline = zoneOutline(zone);
-  const opacity = zone.opacity ?? DEFAULT_ZONE_OPACITY;
+  // The ink (a per-zone override, else the provider colour) drives everything:
+  // outline, header chip, swatch — and the fill is DERIVED from it as a dull
+  // tint, so one picked colour styles the whole region in either theme.
+  const ink = zoneInk(registry, zone);
 
   /** Write a change back into this zone node's `data.zone`. */
   const patchZone = useCallback(
@@ -105,12 +107,19 @@ export const ZoneNode = memo(function ZoneNode({ id, data, selected }: NodeProps
   );
 
   const style = {
-    "--as-zone-color": def.color,
-    "--as-zone-opacity": String(opacity),
+    "--as-zone-color": ink,
+    // Precomputed rgba, byte-identical to what the exporters paint — deriving
+    // it in CSS instead would be a second formula that could drift.
+    "--as-zone-fill": zoneFill(registry, zone),
   } as CSSProperties;
 
   return (
-    <div className="as-zone" style={style} data-selected={selected ? "" : undefined}>
+    <div
+      className="as-zone"
+      style={style}
+      data-selected={selected ? "" : undefined}
+      data-outline={zone.outline ?? "solid"}
+    >
       <NodeResizer isVisible={!!selected && !readOnly && !zone.locked} minWidth={120} minHeight={100} onResizeEnd={requestCommit} />
 
       {/* The fill. Never interactive — clicks must reach the nodes above it. */}
@@ -188,7 +197,9 @@ export const ZoneNode = memo(function ZoneNode({ id, data, selected }: NodeProps
             </select>
           )
         ) : (
-          <span className="as-zone__single">{def.label}</span>
+          // The provider's NAME, not the zone's ink — a recoloured zone is
+          // still hosted where it is hosted.
+          <span className="as-zone__single">{providerDef(registry, zone.provider).label}</span>
         )}
       </div>
 

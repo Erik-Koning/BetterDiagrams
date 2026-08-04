@@ -7,6 +7,8 @@
  */
 import type { IconPaths } from "./icons";
 import type { DiagramTemplate, IconName, NodeKind } from "../contract/schema";
+import { DEFAULT_ZONE_OPACITY } from "../contract/schema";
+import type { DiagramZone } from "../contract/zones";
 import type { LintRuleDef } from "../contract/lint";
 
 // ─── Node kinds ──────────────────────────────────────────────────────────────
@@ -35,6 +37,12 @@ export interface NodeKindDef {
   container?: boolean;
   /** Rendered as bare text with no box or icon. */
   annotation?: boolean;
+  /**
+   * Cloud pack tag ("aws" | "azure" | "gcp" | …). Registry-level metadata:
+   * the UI groups the kind under its provider and demotes it when the
+   * document doesn't reference that provider. Documents never store it.
+   */
+  provider?: string;
 }
 
 /** Used for kinds that are referenced but not registered. */
@@ -91,6 +99,14 @@ export interface ExporterDef<TDoc = DiagramTemplate> {
   label: string;
   /** Secondary line under the label. */
   hint?: string;
+  /**
+   * Receive the WHOLE document even while the editor is scrubbed with later
+   * elements hidden. Static formats export the slice on screen — a PNG of the
+   * June view should look like June — but an exporter that carries its own
+   * timeline (the interactive HTML) needs every element and every date, or
+   * the file it produces would have nothing left to scrub.
+   */
+  fullDocument?: boolean;
   /**
    * Produce a file to download, or return void/undefined if the exporter
    * delivered the result itself (clipboard, postMessage, a network upload).
@@ -149,4 +165,41 @@ export function iconPaths(registry: ResolvedRegistry, icon: IconName): IconPaths
 /** Look up a provider, falling back to a neutral grey for unregistered ids. */
 export function providerDef(registry: ResolvedRegistry, provider: string): ProviderDef {
   return registry.providers[provider] ?? { ...FALLBACK_PROVIDER, label: provider || "Unknown" };
+}
+
+// ─── Zone colour resolution ──────────────────────────────────────────────────
+//
+// One resolver for every surface that paints a zone — the canvas, the minimap,
+// and the image emitter. The model: a zone stores (or inherits) its INK, the
+// vivid outline colour a human actually reads; the background fill is DERIVED
+// from it as the same colour at low alpha, which composites duller against
+// either theme's canvas. Inlining this in three places is how the editor and
+// the exports would drift apart.
+
+/** The zone's ink: its own override, else its provider's colour. */
+export function zoneInk(
+  registry: ResolvedRegistry,
+  zone: Pick<DiagramZone, "color" | "provider">,
+): string {
+  return zone.color ?? providerDef(registry, zone.provider).color;
+}
+
+/**
+ * The derived background fill, as a CSS `rgba()` string.
+ *
+ * Byte-for-byte the same arithmetic as the canvas exporter's `rgba()` helper
+ * in draw.ts, so what the editor paints and what a PNG shows cannot disagree.
+ * Returns `transparent` when the zone opts out of a fill entirely.
+ */
+export function zoneFill(
+  registry: ResolvedRegistry,
+  zone: Pick<DiagramZone, "color" | "provider" | "opacity" | "fill">,
+): string {
+  if (zone.fill === false) return "transparent";
+  const ink = zoneInk(registry, zone);
+  const alpha = zone.opacity ?? DEFAULT_ZONE_OPACITY;
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(ink.trim());
+  if (!m) return ink; // non-hex ink (host-supplied provider colour) — use as-is
+  const [r, g, b] = [m[1], m[2], m[3]].map((h) => Number.parseInt(h, 16));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }

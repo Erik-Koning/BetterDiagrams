@@ -20,6 +20,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { useSequence } from "./context";
 import { ConnectHandles } from "../nodes";
 import { DateChip } from "../chrome";
+import { isOverdue } from "../../contract/timeline";
 import { teamColor } from "../shapes";
 import { SEQ_KIND_ACCENT } from "../sequence-draw";
 import type {
@@ -55,7 +56,9 @@ export const ParticipantNode = memo(function ParticipantNode({
   const { readOnly, commitSpanGeometry } = useSequence();
   const { setNodes, screenToFlowPosition } = useReactFlow();
   const p = data.participant;
-  const accent = SEQ_KIND_ACCENT[p.kind] ?? "#64748b";
+  // Resolved through a per-kind variable so a light theme can darken it; the
+  // table hex rides along as the fallback.
+  const accent = `var(--as-seq-${p.kind}, ${SEQ_KIND_ACCENT[p.kind] ?? "#64748b"})`;
 
   /**
    * Press on the lifeline creates an activation bar at that row and, while
@@ -123,7 +126,7 @@ export const ParticipantNode = memo(function ParticipantNode({
           <div className="as-seq-head__kind">
             {p.kind}
             {p.status ? <span className="as-node__status"> · {p.status}</span> : null}
-            <DateChip date={p.date} inline prefix="Joins" />
+            <DateChip date={p.date} inline prefix="Joins" overdue={isOverdue(p.date, p.status)} />
           </div>
           <div
             className="as-seq-head__label"
@@ -174,7 +177,7 @@ export const ActivationBarNode = memo(function ActivationBarNode({
   // The bar tints like its participant, matching the image exporter.
   const parent = useInternalNode(data.activation.participant);
   const kind = (parent?.data as { participant?: SeqParticipant } | undefined)?.participant?.kind;
-  const accent = SEQ_KIND_ACCENT[kind ?? "service"] ?? SEQ_KIND_ACCENT.service;
+  const accent = `var(--as-seq-${kind ?? "service"}, ${SEQ_KIND_ACCENT[kind ?? "service"] ?? SEQ_KIND_ACCENT.service})`;
   return (
     <>
       <NodeResizer

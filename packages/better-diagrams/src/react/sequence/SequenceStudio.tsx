@@ -71,12 +71,18 @@ import { NODE_STATUSES, type NodeStatus, type VersionTagPosition } from "../../c
 import type { DiagramGenerator } from "../../contract/llm";
 import type { DiagramTemplate } from "../../contract/schema";
 import {
-  currentStopIndex,
+  openingCursor,
   sequenceTimeline,
   sequenceTimelineView,
-  timelineStop,
+  type DiagramDate,
+  type SequenceTimelineView,
   type TimelineFutureMode,
 } from "../../contract/timeline";
+import {
+  countStateCombos,
+  materializeSequenceCombo,
+  sequenceStateAxes,
+} from "../../contract/states";
 import { useHistory, type Snapshot } from "../history";
 import {
   FileMenu,
@@ -85,14 +91,40 @@ import {
   ToolbarMenu,
   VersionTagChip,
   type StudioFile,
+  type StudioFileInit,
 } from "../chrome";
+import {
+  WelcomeModal,
+  clearWelcomeSuppression,
+  suppressNextWelcome,
+  welcomeSuppressed,
+} from "../WelcomeModal";
 import { SequenceContext, type SequenceContextValue } from "./context";
-import { SequenceTimelineCanvas } from "./SequenceTimelineCanvas";
 import { SEQUENCE_NODE_TYPES } from "./SequenceNodes";
 import { SEQUENCE_EDGE_TYPES } from "./MessageEdge";
-import { BUILTIN_SEQUENCE_EXPORTERS } from "../sequence-exporters";
+import {
+  BUILTIN_SEQUENCE_EXPORTERS,
+  renderSequenceToCanvas,
+  renderSequenceToSvg,
+} from "../sequence-exporters";
+import { ExportStatesModal, type ExportStatesChoice } from "../ExportStatesModal";
+import { runStateExport, type StateExportFormat } from "../state-export";
 import { createRegistry } from "../create-registry";
 import { paletteFromTheme, themeToStyle, type Theme } from "../theme";
+
+/**
+ * The canvas selection in DOCUMENT terms — ids bucketed by the template
+ * section they live in, so a host can point straight at `participants`,
+ * `messages`, `activations`, `fragments`, or `notes` (e.g. to highlight
+ * those entries in a JSON view). Canvas id prefixes never leak through.
+ */
+export interface SequenceSelection {
+  participants: string[];
+  messages: string[];
+  activations: string[];
+  fragments: string[];
+  notes: string[];
+}
 
 export interface SequenceStudioProps {
   /** Controlled document. Provide with `onChange`. */
@@ -114,16 +146,32 @@ export interface SequenceStudioProps {
   theme?: Theme;
   /** Base name for exported files. */
   filename?: string;
+  /**
+   * Show the welcome/import modal over a brand-new document (or an empty
+   * workspace) — same contract as the architecture editor. Defaults to true.
+   */
+  welcome?: boolean;
   /** Host workspace files — same contract as the architecture editor. */
   files?: StudioFile[];
   activeFileId?: string;
   onFileSelect?: (id: string) => void;
-  onFileCreate?: () => void;
+  /**
+   * Create a file. Called with no argument from the file menu's "＋ New file";
+   * the welcome modal passes a {@link StudioFileInit} so the host can seed the
+   * name and (when JSON was inserted) the document.
+   */
+  onFileCreate?: (init?: StudioFileInit) => void;
   onFileRename?: (id: string, name: string) => void;
   onFileDelete?: (id: string) => void;
   /** Deleted documents the host still holds, offered for recovery. */
   removedFiles?: StudioFile[];
   onFileRestore?: (id: string) => void;
+  /**
+   * Fires with the {@link SequenceSelection} on mount (empty) and whenever it
+   * changes — so a host that remounts the editor per file never holds a
+   * selection from the previous document.
+   */
+  onSelectionChange?: (selection: SequenceSelection) => void;
   toolbarExtras?: ReactNode;
   inspectorExtras?: ReactNode;
   className?: string;
@@ -182,6 +230,7 @@ function SequenceInner({
   readOnly = false,
   theme,
   filename = "sequence",
+  welcome = true,
   files,
   activeFileId,
   onFileSelect,
@@ -190,6 +239,7 @@ function SequenceInner({
   onFileDelete,
   removedFiles,
   onFileRestore,
+  onSelectionChange: onHostSelectionChange,
   toolbarExtras,
   inspectorExtras,
   className,
@@ -220,8 +270,10 @@ function SequenceInner({
   const [createInput, setCreateInput] = useState("");
   const [refineInput, setRefineInput] = useState("");
   /** Scrub cursor, or null when the timeline is off. Pure view state. */
-  const [timelineIndex, setTimelineIndex] = useState<number | null>(null);
+  const [timelineCursor, setTimelineCursor] = useState<DiagramDate | null>(null);
   const [timelineFuture, setTimelineFuture] = useState<TimelineFutureMode>("dim");
+  /** A PNG/SVG/PDF export waiting on the states modal. Null = no modal open. */
+  const [pendingExport, setPendingExport] = useState<StateExportFormat | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const templateRef = useRef<SequenceTemplate>(initial);
@@ -417,7 +469,14 @@ function SequenceInner({
         ...t,
         messages: [
           ...t.messages,
-          { id: nextId("m"), from: conn.source, to: conn.target, label: "message", style: "sync" },
+          {
+            id: nextId("m"),
+            from: conn.source,
+            to: conn.target,
+            label: "message",
+            style: "sync",
+            ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
+          },
         ],
       });
     },
@@ -432,6 +491,33 @@ function SequenceInner({
     [],
   );
 
+  // Report the selection to the host in document terms — canvas node ids
+  // bucket by their prefix (activation/fragment/note vs bare participant),
+  // and every edge is a message. Keyed by content, not array identity, so
+  // hosts aren't re-rendered by no-op selection events.
+  const lastReported = useRef("");
+  useEffect(() => {
+    if (!onHostSelectionChange) return;
+    const bucket = (prefix: string) =>
+      selectedNodeIds.filter((id) => id.startsWith(prefix)).map((id) => id.slice(prefix.length));
+    const selection: SequenceSelection = {
+      participants: selectedNodeIds.filter(
+        (id) =>
+          !id.startsWith(ACT_ID_PREFIX) &&
+          !id.startsWith(FRAG_ID_PREFIX) &&
+          !id.startsWith(NOTE_ID_PREFIX),
+      ),
+      messages: selectedEdgeIds,
+      activations: bucket(ACT_ID_PREFIX),
+      fragments: bucket(FRAG_ID_PREFIX),
+      notes: bucket(NOTE_ID_PREFIX),
+    };
+    const key = JSON.stringify(selection);
+    if (key === lastReported.current) return;
+    lastReported.current = key;
+    onHostSelectionChange(selection);
+  }, [selectedNodeIds, selectedEdgeIds, onHostSelectionChange]);
+
   // ── Document edits ────────────────────────────────────────────────────────
 
   const addParticipant = useCallback(
@@ -441,7 +527,14 @@ function SequenceInner({
         ...t,
         participants: [
           ...t.participants,
-          { id: nextId("p"), label: kind === "actor" ? "New Actor" : "New Participant", kind },
+          {
+            id: nextId("p"),
+            label: kind === "actor" ? "New Actor" : "New Participant",
+            kind,
+            // Inserted while scrubbing: the new column belongs to the moment
+            // being looked at, not to the beginning of the flow.
+            ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
+          },
         ],
       });
     },
@@ -470,7 +563,14 @@ function SequenceInner({
         ...t,
         messages: [
           ...t.messages,
-          { id: nextId("m"), from, to, label: self ? "do work" : "message", style: "sync" },
+          {
+            id: nextId("m"),
+            from,
+            to,
+            label: self ? "do work" : "message",
+            style: "sync",
+            ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
+          },
         ],
       });
     },
@@ -540,26 +640,125 @@ function SequenceInner({
   const versionTag = template.meta?.versionTag;
   const versionTagPosition: VersionTagPosition = template.meta?.versionTagPosition ?? "top-left";
 
-  const timeline = useMemo(() => sequenceTimeline(template), [template]);
-  const timelineActive = timelineIndex !== null && timeline.stops.length > 0;
-  const timelineAt = timelineActive ? timelineStop(timeline, timelineIndex) : null;
-  // "dim" deliberately: the count is mode-independent, and that mode returns
-  // the document as-is instead of allocating a filtered copy on every step.
-  const timelineFutureCount = useMemo(
-    () => (timelineAt ? sequenceTimelineView(template, timelineAt, "dim").futureCount : 0),
-    [template, timelineAt],
+  // ── Welcome modal ─────────────────────────────────────────────────────────
+  // Same contract as the architecture editor's — see the notes there.
+
+  const isBlankDoc = (doc: SequenceTemplate) => !doc.participants.length && !doc.messages.length;
+
+  const zeroFiles = files !== undefined && files.length === 0;
+  const [welcomeOpen, setWelcomeOpen] = useState(
+    () => welcome && !readOnly && !welcomeSuppressed() && (isBlankDoc(initial) || zeroFiles),
+  );
+  // The open decision above already read the hand-off latch — clear it so it
+  // can't suppress a later, genuinely new blank file.
+  useEffect(() => {
+    clearWelcomeSuppression();
+  }, []);
+
+  useEffect(() => {
+    if (!isBlankDoc(template) || readOnly) setWelcomeOpen(false);
+  }, [template, readOnly]);
+
+  const prevFileCount = useRef(files?.length);
+  useEffect(() => {
+    if (files?.length === 0 && prevFileCount.current !== 0 && welcome && !readOnly) {
+      setWelcomeOpen(true);
+    }
+    prevFileCount.current = files?.length;
+  }, [files?.length, welcome, readOnly]);
+
+  const activeFile = files?.find((file) => file.id === activeFileId) ?? files?.[0];
+  const welcomeName = zeroFiles ? "Untitled 1" : (activeFile?.name ?? filename);
+  const sequencePrompt = useMemo(() => buildSequencePrompt(), []);
+
+  const handleWelcomeInsert = useCallback(
+    (doc: unknown, name: string) => {
+      // The chosen name becomes the document's own title too — see the
+      // architecture editor's title↔name sync.
+      const incoming = {
+        ...(doc as Record<string, unknown>),
+        meta: { ...((doc as { meta?: Record<string, unknown> })?.meta ?? {}), title: name },
+      };
+      if (zeroFiles && onFileCreate) {
+        onFileCreate({ name, kind: "sequence", doc: incoming });
+      } else {
+        applyTemplate(incoming);
+        if (activeFile && onFileRename && name !== activeFile.name) {
+          onFileRename(activeFile.id, name);
+        }
+      }
+      setWelcomeOpen(false);
+    },
+    [zeroFiles, onFileCreate, applyTemplate, activeFile, onFileRename],
   );
 
-  const stepTimeline = useCallback(
-    (delta: number) => {
-      setTimelineIndex((current) =>
-        current === null
-          ? current
-          : Math.max(0, Math.min(timeline.stops.length - 1, current + delta)),
-      );
+
+  const handleWelcomeDismiss = useCallback(
+    (name: string) => {
+      setWelcomeOpen(false);
+      if (zeroFiles && onFileCreate) {
+        suppressNextWelcome();
+        onFileCreate({ name, kind: "sequence" });
+      }
     },
-    [timeline.stops.length],
+    [zeroFiles, onFileCreate],
   );
+
+  const timeline = useMemo(() => sequenceTimeline(template), [template]);
+  const timelineActive = timelineCursor !== null && timeline.stops.length > 0;
+  const timelineAt = timelineActive ? timelineCursor : null;
+
+  /** What is dated after the cursor. Mode-independent, so it is asked once. */
+  const timelineViewState: SequenceTimelineView | null = useMemo(
+    () => (timelineAt ? sequenceTimelineView(template, timelineAt, "dim") : null),
+    [template, timelineAt],
+  );
+  const timelineFutureIds = timelineViewState?.future ?? null;
+  // The view already counted — re-summing the sets here was a second copy of
+  // the same formula that had to stay in agreement by luck.
+  const timelineFutureCount = timelineViewState?.futureCount ?? 0;
+
+  /** Jump to the next real dated point in a direction. */
+  const stepTimelineStop = useCallback(
+    (direction: 1 | -1) => {
+      setTimelineCursor((current) => {
+        if (current === null) return current;
+        const next =
+          direction === 1
+            ? timeline.stops.find((stop) => stop > current)
+            : [...timeline.stops].reverse().find((stop) => stop < current);
+        return next ?? current;
+      });
+    },
+    [timeline.stops],
+  );
+
+  /**
+   * The timeline as a DISPLAY pass over the canvas the editor already holds —
+   * see the architecture editor's `applyTimelineView` for why this is not a
+   * re-materialization. It matters more here: this editor's inverse adapter is
+   * TOTAL, so a canvas missing a participant would derive a document without
+   * it. Flagging a complete array cannot.
+   *
+   * Rows and columns keep their positions, so a hidden step leaves a gap where
+   * it will land rather than renumbering the flow underneath the cursor — and
+   * `data.y`, which is what message ORDER is read back from, is never touched.
+   */
+  const { nodes: viewNodes, edges: viewEdges } = useMemo(
+    () => applySequenceTimelineView(nodes, edges, timelineFutureIds, timelineFuture),
+    [nodes, edges, timelineFutureIds, timelineFuture],
+  );
+
+  const timelineAtRef = useRef<DiagramDate | null>(null);
+  useEffect(() => {
+    timelineAtRef.current = timelineAt;
+  }, [timelineAt]);
+
+  // Same guard as the architecture editor: when editing removes the last
+  // dated element, the cursor leaves with the bar rather than lying in wait.
+  useEffect(() => {
+    if (timelineCursor !== null && !timeline.stops.length) setTimelineCursor(null);
+  }, [timelineCursor, timeline.stops.length]);
 
   // ── Undo / redo / keyboard ────────────────────────────────────────────────
 
@@ -595,14 +794,18 @@ function SequenceInner({
     const onKeyDown = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
       if (isTypingTarget(event.target)) return;
-      if (timelineActive && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      // Arrows walk the plan stop to stop — but only with nothing selected, so
+      // they stay available to whatever the user is editing.
+      if (
+        timelineActive &&
+        !selectedNodeIds.length &&
+        !selectedEdgeIds.length &&
+        (event.key === "ArrowLeft" || event.key === "ArrowRight")
+      ) {
         event.preventDefault();
-        stepTimeline(event.key === "ArrowRight" ? 1 : -1);
+        stepTimelineStop(event.key === "ArrowRight" ? 1 : -1);
         return;
       }
-      // The scrubbed canvas shows a slice, not the document — a delete here
-      // would remove something the user may not even be able to see.
-      if (timelineActive && (event.key === "Delete" || event.key === "Backspace")) return;
       if (mod && event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) doRedo();
@@ -626,12 +829,12 @@ function SequenceInner({
       }
       if (event.key === "Escape") {
         setOpenMenu(null);
-        setTimelineIndex(null);
+        setTimelineCursor(null);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [doUndo, doRedo, deleteSelection, handleSave, onSave, timelineActive, stepTimeline]);
+  }, [doUndo, doRedo, deleteSelection, handleSave, onSave, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds]);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -652,29 +855,85 @@ function SequenceInner({
   // ── Export / import / meta ────────────────────────────────────────────────
 
   const exportPalette = useMemo(() => paletteFromTheme(theme), [theme]);
-  const runExport = useCallback(
+  const runDirectExport = useCallback(
     async (key: string) => {
-      setOpenMenu(null);
       const exporter = BUILTIN_SEQUENCE_EXPORTERS[key];
       if (!exporter) return;
       // Export what is on screen — while scrubbing with later steps hidden,
-      // that is the slice, not the finished flow.
+      // that is the slice, not the finished flow. Exporters that carry their
+      // own timeline (`fullDocument`) get everything regardless.
       const subject =
-        timelineActive && timelineFuture === "hide"
+        timelineActive && timelineFuture === "hide" && !exporter.fullDocument
           ? sequenceTimelineView(templateRef.current, timelineAt, "hide").template
           : templateRef.current;
-      const result = await exporter.run({
-        template: subject,
-        registry,
-        filename,
-        palette: exportPalette,
-      });
-      if (result) {
-        download(result.blob, result.filename);
-        showToast(`Exported ${result.filename}`);
+      try {
+        const result = await exporter.run({
+          template: subject,
+          registry,
+          filename,
+          palette: exportPalette,
+        });
+        if (result) {
+          download(result.blob, result.filename);
+          showToast(`Exported ${result.filename}`);
+        }
+      } catch (err) {
+        // This editor has no error panel — surface it the way loadFile does,
+        // rather than letting the rejection vanish unhandled.
+        showToast(`Export failed: ${(err as Error).message}`);
       }
     },
     [registry, filename, exportPalette, showToast, timelineActive, timelineAt, timelineFuture],
+  );
+
+  const stateAxes = useMemo(() => sequenceStateAxes(template), [template]);
+
+  const runExport = useCallback(
+    async (key: string) => {
+      setOpenMenu(null);
+      // Dated documents get the "which states?" modal for the snapshot
+      // formats — one picture per timeline stop. Sequences have no zone
+      // axis, so the modal only ever shows dates.
+      if ((key === "png" || key === "svg" || key === "pdf") && countStateCombos(stateAxes) > 1) {
+        setPendingExport(key);
+        return;
+      }
+      await runDirectExport(key);
+    },
+    [stateAxes, runDirectExport],
+  );
+
+  const onExportStatesChoice = useCallback(
+    async (choice: ExportStatesChoice) => {
+      const format = pendingExport;
+      setPendingExport(null);
+      if (!format) return;
+      if (choice.kind === "current") {
+        await runDirectExport(format);
+        return;
+      }
+      try {
+        const result = await runStateExport({
+          format,
+          filename,
+          axes: stateAxes,
+          combos: choice.combos,
+          pdfLayout: choice.pdfLayout,
+          materialize: (combo) => materializeSequenceCombo(templateRef.current, combo),
+          renderSvg: (doc) => renderSequenceToSvg(doc, exportPalette),
+          renderCanvas: (doc) => renderSequenceToCanvas(doc, 2, exportPalette),
+        });
+        download(result.blob, result.filename);
+        showToast(
+          choice.combos.length === 1
+            ? `Exported ${result.filename}`
+            : `Exported ${choice.combos.length} states → ${result.filename}`,
+        );
+      } catch (err) {
+        showToast(`Export failed: ${(err as Error).message}`);
+      }
+    },
+    [pendingExport, runDirectExport, filename, stateAxes, exportPalette, showToast],
   );
 
   const loadFile = useCallback(
@@ -698,6 +957,42 @@ function SequenceInner({
     },
     [applyTemplate],
   );
+
+  /** One title, two homes — the mirror of the architecture editor's sync. */
+  const renameFile = useCallback(
+    (id: string, name: string) => {
+      onFileRename?.(id, name);
+      if (id === activeFile?.id && name.trim()) patchMeta({ title: name.trim() });
+    },
+    [onFileRename, activeFile?.id, patchMeta],
+  );
+
+  const metaTitle =
+    typeof templateRef.current.meta?.title === "string" ? templateRef.current.meta.title.trim() : "";
+  /** See the architecture editor's reconciler — which side moved decides. */
+  const titleSyncRef = useRef<{ fileId: string; title: string; name: string } | null>(null);
+  useEffect(() => {
+    if (!activeFile) return;
+    const name = activeFile.name;
+    const prev = titleSyncRef.current;
+    const record = () => {
+      titleSyncRef.current = { fileId: activeFile.id, title: metaTitle, name };
+    };
+
+    if (!prev || prev.fileId !== activeFile.id) {
+      if (metaTitle && metaTitle !== name) onFileRename?.(activeFile.id, metaTitle);
+      record();
+      return;
+    }
+
+    if (metaTitle !== prev.title) {
+      if (metaTitle && metaTitle !== name) onFileRename?.(activeFile.id, metaTitle);
+    } else if (name !== prev.name && name.trim() && name !== metaTitle) {
+      patchMeta({ title: name.trim() });
+    }
+    record();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metaTitle, activeFile?.id, activeFile?.name, onFileRename, patchMeta]);
 
   const runGenerate = useCallback(
     async (mode: "create" | "refine") => {
@@ -800,21 +1095,13 @@ function SequenceInner({
                 onFileSelect?.(id);
               }}
               onCreate={onFileCreate}
-              onRename={onFileRename}
+              onRename={onFileRename ? renameFile : undefined}
               onDelete={onFileDelete}
               removedFiles={removedFiles}
               onFileRestore={onFileRestore}
             />
           ) : (
-            <div className="as-brand">
-              <span className="as-brand__mark" aria-hidden="true">
-                <i />
-                <i />
-                <i />
-                <i />
-              </span>
-              seq·studio
-            </div>
+            <div className="as-brand">seq·studio</div>
           )}
 
           {generate && !readOnly ? (
@@ -941,7 +1228,7 @@ function SequenceInner({
                 type="button"
                 className={`as-btn${timelineActive ? " as-btn--on" : ""}`}
                 onClick={() =>
-                  setTimelineIndex(timelineActive ? null : currentStopIndex(timeline))
+                  setTimelineCursor(timelineActive ? null : openingCursor(timeline))
                 }
                 aria-pressed={timelineActive}
                 title={`Scrub through the ${timeline.stops.length} dated point${
@@ -992,16 +1279,17 @@ function SequenceInner({
         {timelineActive ? (
           <TimelineScrubber
             timeline={timeline}
-            index={timelineIndex}
-            onIndex={setTimelineIndex}
+            at={timelineAt!}
+            onScrub={setTimelineCursor}
             futureMode={timelineFuture}
             onFutureMode={setTimelineFuture}
             futureCount={timelineFutureCount}
-            onExit={() => setTimelineIndex(null)}
+            onExit={() => setTimelineCursor(null)}
+            stampNotice={!readOnly}
           />
         ) : null}
 
-        <div className={`as-canvas${timelineActive ? " as-canvas--timeline" : ""}`}>
+        <div className="as-canvas">
           {panelOpen && generate && !readOnly ? (
             <div className="as-panel">
               <div className="as-panel__head">
@@ -1061,12 +1349,9 @@ function SequenceInner({
             </div>
           ) : null}
 
-          {timelineActive ? (
-            <SequenceTimelineCanvas template={template} at={timelineAt} mode={timelineFuture} />
-          ) : (
           <ReactFlow
-            nodes={nodes}
-            edges={edges}
+            nodes={viewNodes}
+            edges={viewEdges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -1100,9 +1385,8 @@ function SequenceInner({
               </Panel>
             ) : null}
           </ReactFlow>
-          )}
 
-          {(singleNode || singleEdge) && !readOnly && !timelineActive ? (
+          {(singleNode || singleEdge) && !readOnly ? (
             <div className="as-inspector">
               {singleNode?.type === "participant" ? (
                 <ParticipantInspector
@@ -1166,9 +1450,84 @@ function SequenceInner({
             </div>
           </div>
         </div>
+
+        {welcomeOpen ? (
+          <WelcomeModal
+            kind="sequence"
+            defaultName={welcomeName}
+            showNameField={zeroFiles ? !!onFileCreate : !!(activeFile && onFileRename)}
+            systemPrompt={sequencePrompt}
+            parse={parseLlmSequence}
+            onInsert={handleWelcomeInsert}
+            onDismiss={handleWelcomeDismiss}
+          />
+        ) : null}
+
+        {pendingExport ? (
+          <ExportStatesModal
+            format={pendingExport}
+            axes={stateAxes}
+            registry={registry}
+            filename={filename}
+            onCancel={() => setPendingExport(null)}
+            onConfirm={(choice) => void onExportStatesChoice(choice)}
+          />
+        ) : null}
       </div>
     </SequenceContext.Provider>
   );
+}
+
+/**
+ * Flag the canvas for the scrub cursor. A pure map applied on the way INTO
+ * React Flow, never written back into state — see the architecture editor's
+ * `applyTimelineView`.
+ *
+ * Each family lives in the same node array under its own id prefix, so the
+ * future sets, which are keyed by DOCUMENT id, are consulted through it.
+ */
+function applySequenceTimelineView(
+  nodes: Node[],
+  edges: Edge[],
+  future: SequenceTimelineView["future"] | null,
+  mode: TimelineFutureMode,
+): { nodes: Node[]; edges: Edge[] } {
+  if (!future) return { nodes, edges };
+
+  const nodeIsFuture = (node: Node) => {
+    switch (node.type) {
+      case "participant":
+        return future.participants.has(node.id);
+      case "activation":
+        return future.activations.has(node.id.slice(ACT_ID_PREFIX.length));
+      case "fragment":
+        return future.fragments.has(node.id.slice(FRAG_ID_PREFIX.length));
+      case "seqnote":
+        return future.notes.has(node.id.slice(NOTE_ID_PREFIX.length));
+      default:
+        return false;
+    }
+  };
+
+  function mark<T extends { className?: string; hidden?: boolean; selected?: boolean }>(
+    item: T,
+    isFuture: boolean,
+  ): T {
+    if (!isFuture) return item;
+    if (mode === "hide") return { ...item, hidden: true, selected: false };
+    return { ...item, className: `${item.className ? `${item.className} ` : ""}as-future` };
+  }
+
+  return {
+    nodes: nodes.map((n) => mark(n, nodeIsFuture(n))),
+    edges: edges.map((e) => {
+      const isFuture = future.messages.has(e.id);
+      // The label renders through a portal, outside the edge's own group, so a
+      // wrapper class alone would leave it bright — see SeqRFEdge.data.future.
+      const flagged = isFuture ? { ...e, data: { ...e.data, future: true } } : e;
+      return mark(flagged, isFuture);
+    }),
+  };
 }
 
 // ─── Inspectors ──────────────────────────────────────────────────────────────

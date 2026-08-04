@@ -16,11 +16,12 @@ import {
   type DiagramNode,
   type DiagramTemplate,
 } from "../contract/schema";
-import { formatDiagramDate } from "../contract/timeline";
+import { formatDiagramDate, templateTimeline } from "../contract/timeline";
 // Imports `./registry-types`, not `./registry` — registry.ts imports
 // BUILTIN_EXPORTERS from here, so depending on it directly would be a cycle.
 import type { ExportContext, ExporterDef, ResolvedRegistry } from "./registry-types";
 import { emitTemplate, type ExportPalette } from "./draw";
+import { buildTimelineHtml } from "./html-export";
 import {
   blobToUint8,
   buildSinglePageJpegPdf,
@@ -266,9 +267,30 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
       };
     },
   },
+  html: {
+    label: "Interactive HTML",
+    hint: "Self-contained page with a timeline scrubber",
+    // The page carries its own scrubber, so it needs every element and every
+    // date — a hide-mode slice would leave it nothing to scrub.
+    fullDocument: true,
+    run({ template, registry, filename, palette }: ExportContext) {
+      const page = buildTimelineHtml({
+        svg: renderTemplateToSvg(template, registry, palette),
+        title: String(template.meta?.title ?? filename),
+        stops: templateTimeline(template).stops,
+        palette,
+      });
+      return { blob: new Blob([page], { type: "text/html" }), filename: `${filename}.html` };
+    },
+  },
   template: {
     label: "Template (.json)",
     hint: "The schema — save this to your database",
+    // A round-trip document, per its own hint. Slicing it under a hide-mode
+    // scrub would turn "export → save" into silent deletion of everything the
+    // cursor was hiding — the picture formats show the slice, the persistence
+    // formats never do.
+    fullDocument: true,
     run({ template, filename }: ExportContext) {
       return { blob: json(template), filename: `${filename}.template.json` };
     },
@@ -276,6 +298,9 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
   reactflow: {
     label: "React Flow (.json)",
     hint: "Nodes and edges for @xyflow/react",
+    // Document-shaped like `template`: consumers rebuild state from it, so a
+    // slice would propagate the same silent loss one hop downstream.
+    fullDocument: true,
     run({ template, registry, filename }: ExportContext) {
       const rf = toReactFlow(template, {
         containerKinds: registry.containerKinds,

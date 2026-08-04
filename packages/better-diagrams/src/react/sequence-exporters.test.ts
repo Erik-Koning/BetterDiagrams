@@ -164,3 +164,66 @@ describe("emitSequence images", () => {
     expect(svg).not.toContain('fill="#0b1220"');
   });
 });
+
+describe("lifecycle stages in the sequence image export", () => {
+  const doc = (status: string) =>
+    validateSequence({
+      version: 1,
+      participants: [{ id: "p", label: "P", kind: "service", status }],
+      messages: [],
+    });
+
+  it("stubbed and dark carry the same conventions as the architecture export", () => {
+    expect(renderSequenceToSvg(doc("stubbed"))).toContain('stroke-dasharray="10 4"');
+    const dark = renderSequenceToSvg(doc("dark"));
+    expect(dark).toContain('stroke="#020617"');
+    expect(dark).toMatch(/stroke="#f8fafc"[^/]*stroke-dasharray="6 6"/);
+  });
+
+  it("deprecated's status token exports in salmon, date segment intact", () => {
+    const withDate = validateSequence({
+      version: 1,
+      participants: [
+        { id: "p", label: "P", kind: "service", status: "deprecated", date: "2026-06-15" },
+      ],
+      messages: [],
+    });
+    const svg = renderSequenceToSvg(withDate);
+    expect(svg).toContain('fill="#fa8072"');
+    expect(svg).toContain("DEPRECATED");
+    // The date still renders as its own accent-coloured segment — ellipsised
+    // to the header's remaining width, so assert the un-truncated prefix.
+    expect(svg).toContain("· Jun");
+    expect(renderSequenceToSvg(doc("retired"))).not.toContain("#fa8072");
+  });
+
+  it("an active participant carries neither", () => {
+    const svg = renderSequenceToSvg(doc("active"));
+    expect(svg).not.toContain("#020617");
+    expect(svg).not.toContain("stroke-dasharray=\"10 4\"");
+  });
+});
+
+describe("sequence colour theming", () => {
+  it("light exports darken the participant accents", () => {
+    const doc = validateSequence({
+      version: 1,
+      participants: [{ id: "p", label: "P", kind: "service" }],
+      messages: [],
+    });
+    expect(renderSequenceToSvg(doc)).toContain("#38bdf8");
+    const light = renderSequenceToSvg(doc, LIGHT_EXPORT_PALETTE);
+    expect(light).toContain("#0284c7");
+    expect(light).not.toContain("#38bdf8");
+  });
+
+  it("an overdue participant's date segment exports amber", () => {
+    const doc = validateSequence({
+      version: 1,
+      participants: [{ id: "p", label: "P", kind: "service", status: "planned", date: "2020-01-01" }],
+      messages: [],
+    });
+    const svg = renderSequenceToSvg(doc);
+    expect(svg).toContain('fill="#f59e0b"');
+  });
+});

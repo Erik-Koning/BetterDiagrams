@@ -1,0 +1,265 @@
+/**
+ * @vitest-environment jsdom
+ *
+ * WelcomeModal behavior tests. The CodeMirror editor is stubbed with a
+ * textarea — typing into a real EditorView is unreliable in jsdom, and the
+ * editor's own mounting is covered by JsonCodeEditor.test.tsx. What matters
+ * here is the modal's contract: CTAs, the name field, and the parse → insert
+ * / error flow.
+ */
+import { describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { WelcomeModal, type WelcomeModalProps } from "./WelcomeModal";
+
+vi.mock("./JsonCodeEditor", () => ({
+  JsonCodeEditor: ({
+    value,
+    onChange,
+    placeholder,
+    ariaLabel,
+  }: {
+    value: string;
+    onChange: (text: string) => void;
+    placeholder?: string;
+    ariaLabel?: string;
+  }) => (
+    <textarea
+      aria-label={ariaLabel ?? "Diagram JSON"}
+      placeholder={placeholder}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
+}));
+
+function mountModal(overrides: Partial<WelcomeModalProps> = {}) {
+  const props: WelcomeModalProps = {
+    kind: "architecture",
+    defaultName: "Untitled 1",
+    showNameField: true,
+    systemPrompt: "THE PROMPT",
+    parse: (text: string) => JSON.parse(text),
+    onInsert: vi.fn(),
+    onDismiss: vi.fn(),
+    ...overrides,
+  };
+  render(<WelcomeModal {...props} />);
+  return props;
+}
+
+describe("WelcomeModal", () => {
+  it("renders the brand, both CTAs, and the prefilled name field", () => {
+    mountModal();
+    expect(screen.getByRole("dialog", { name: "Get started" })).toBeInTheDocument();
+    expect(screen.getByText("BetterDiagrams")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Insert Node Manually/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Copy Schema & System Prompt/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("File name")).toHaveValue("Untitled 1");
+  });
+
+  it("hides the name field when the host can't use it", () => {
+    mountModal({ showNameField: false });
+    expect(screen.queryByLabelText("File name")).not.toBeInTheDocument();
+  });
+
+  it("shows the kind-appropriate placeholder", () => {
+    mountModal({ kind: "sequence" });
+    expect(screen.getByLabelText("Diagram JSON")).toHaveAttribute(
+      "placeholder",
+      expect.stringContaining('"participants"'),
+    );
+  });
+
+  it("dismisses with the typed name from the manual CTA", async () => {
+    const user = userEvent.setup();
+    const props = mountModal();
+    const name = screen.getByLabelText("File name");
+    await user.clear(name);
+    await user.type(name, "Payments");
+    await user.click(screen.getByRole("button", { name: /Insert Node Manually/ }));
+    expect(props.onDismiss).toHaveBeenCalledWith("Payments");
+  });
+
+  it("copies the system prompt", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    mountModal();
+    await user.click(screen.getByRole("button", { name: /Copy Schema & System Prompt/ }));
+    expect(writeText).toHaveBeenCalledWith("THE PROMPT");
+    expect(await screen.findByText(/Copied/)).toBeInTheDocument();
+  });
+
+  it("reveals Insert only once there is text", async () => {
+    const user = userEvent.setup();
+    mountModal();
+    expect(screen.queryByRole("button", { name: "Insert" })).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("Diagram JSON"), "x");
+    expect(screen.getByRole("button", { name: "Insert" })).toBeInTheDocument();
+  });
+
+  it("surfaces parse errors as an alert and does not insert", async () => {
+    const user = userEvent.setup();
+    const props = mountModal({
+      parse: () => {
+        throw new Error("bad template");
+      },
+    });
+    await user.type(screen.getByLabelText("Diagram JSON"), "not json");
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("bad template");
+    expect(props.onInsert).not.toHaveBeenCalled();
+  });
+
+  it("offers 'Approximate a fix' for damaged JSON and heals on click", async () => {
+    const user = userEvent.setup();
+    const props = mountModal();
+    const editor = screen.getByLabelText("Diagram JSON");
+    await user.click(editor);
+    // The real-world mangle: a copy dropped text, fusing icon into description.
+    await user.paste('{"kind":"client","icon":y React 18+ app","x":40}');
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Approximate a fix \(1 guess\)/ }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect((editor as HTMLTextAreaElement).value).toContain('"icon": "y React 18+ app"');
+
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    expect(props.onInsert).toHaveBeenCalledWith(
+      { kind: "client", icon: "y React 18+ app", x: 40 },
+      "Untitled 1",
+    );
+  });
+
+  it("keeps the rescue button away from text that is not JSON-shaped", async () => {
+    const user = userEvent.setup();
+    mountModal({
+      parse: () => {
+        throw new Error("bad template");
+      },
+    });
+    await user.type(screen.getByLabelText("Diagram JSON"), "not json");
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Approximate a fix/ })).not.toBeInTheDocument();
+  });
+
+  it("hints when an architecture paste looks like a sequence document", async () => {
+    const user = userEvent.setup();
+    mountModal({
+      parse: () => {
+        throw new Error("missing nodes");
+      },
+    });
+    const editor = screen.getByLabelText("Diagram JSON");
+    // paste — typing JSON through user.type trips on the {} keystroke syntax
+    await user.click(editor);
+    await user.paste('{"version": 1, "participants": []}');
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/looks like a sequence document/);
+  });
+
+  it("inserts the parsed document with the typed name", async () => {
+    const user = userEvent.setup();
+    const props = mountModal();
+    const name = screen.getByLabelText("File name");
+    await user.clear(name);
+    await user.type(name, "From LLM");
+    const editor = screen.getByLabelText("Diagram JSON");
+    await user.click(editor);
+    await user.paste('{"version": 1, "nodes": [], "edges": []}');
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    expect(props.onInsert).toHaveBeenCalledWith(
+      { version: 1, nodes: [], edges: [] },
+      "From LLM",
+    );
+  });
+
+  it("prefills the editor from initialText, with Insert available immediately", async () => {
+    const user = userEvent.setup();
+    const props = mountModal({ initialText: '{"version": 1, "nodes": [], "edges": []}' });
+    expect(screen.getByLabelText("Diagram JSON")).toHaveValue(
+      '{"version": 1, "nodes": [], "edges": []}',
+    );
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    expect(props.onInsert).toHaveBeenCalledWith(
+      { version: 1, nodes: [], edges: [] },
+      "Untitled 1",
+    );
+  });
+
+  it("falls back to the default name when the field is cleared", async () => {
+    const user = userEvent.setup();
+    const props = mountModal();
+    await user.clear(screen.getByLabelText("File name"));
+    await user.click(screen.getByRole("button", { name: /Insert Node Manually/ }));
+    expect(props.onDismiss).toHaveBeenCalledWith("Untitled 1");
+  });
+});
+
+describe("WelcomeModal cloud toggle", () => {
+  const CLOUDS = [
+    { id: "aws", label: "AWS", color: "#ff9900" },
+    { id: "azure", label: "Azure", color: "#0078d4" },
+    { id: "gcp", label: "GCP", color: "#4285f4" },
+  ];
+
+  it("renders the toggle row only when cloud providers are passed", () => {
+    mountModal();
+    expect(screen.queryByRole("group", { name: "Cloud providers" })).not.toBeInTheDocument();
+  });
+
+  it("multi-selects and deselects chips via aria-pressed", async () => {
+    const user = userEvent.setup();
+    mountModal({ cloudProviders: CLOUDS });
+    const aws = screen.getByRole("button", { name: "AWS" });
+    const gcp = screen.getByRole("button", { name: "GCP" });
+    expect(aws).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(aws);
+    await user.click(gcp);
+    expect(aws).toHaveAttribute("aria-pressed", "true");
+    expect(gcp).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(aws);
+    expect(aws).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("copies the prompt built for the selected clouds", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const promptForClouds = vi.fn((clouds: string[]) => `PROMPT[${clouds.join("+")}]`);
+    mountModal({ cloudProviders: CLOUDS, promptForClouds });
+
+    await user.click(screen.getByRole("button", { name: "AWS" }));
+    await user.click(screen.getByRole("button", { name: "GCP" }));
+    await user.click(screen.getByRole("button", { name: /Copy Schema & System Prompt/ }));
+    expect(promptForClouds).toHaveBeenCalledWith(["aws", "gcp"]);
+    expect(writeText).toHaveBeenCalledWith("PROMPT[aws+gcp]");
+  });
+
+  it("copies the base prompt when nothing is selected", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const promptForClouds = vi.fn(() => "BASE");
+    mountModal({ cloudProviders: CLOUDS, promptForClouds });
+    await user.click(screen.getByRole("button", { name: /Copy Schema & System Prompt/ }));
+    expect(promptForClouds).toHaveBeenCalledWith([]);
+    expect(writeText).toHaveBeenCalledWith("BASE");
+  });
+});

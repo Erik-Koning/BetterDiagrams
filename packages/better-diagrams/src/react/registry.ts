@@ -24,6 +24,7 @@
  * without touching library source.
  */
 import { BUILTIN_ICON_PATHS } from "./icons";
+import { CLOUD_KIND_ORDER, CLOUD_NODE_KINDS } from "./cloud-kinds";
 import { BUILTIN_LINT_RULES } from "../contract/lint";
 import type { LintRuleDef } from "../contract/lint";
 import {
@@ -47,7 +48,7 @@ export type {
   ExportResult,
   ExporterDef,
 } from "./registry-types";
-export { kindDef, iconPaths, providerDef, FALLBACK_KIND, FALLBACK_PROVIDER } from "./registry-types";
+export { kindDef, iconPaths, providerDef, zoneInk, zoneFill, FALLBACK_KIND, FALLBACK_PROVIDER } from "./registry-types";
 
 /**
  * Infra providers a zone can be switched between.
@@ -105,7 +106,10 @@ export function resolveRegistry(
   builtinExporters: Record<string, ExporterDef> = {},
 ): ResolvedRegistry {
   // -- node kinds ------------------------------------------------------------
-  const nodeKinds: Record<string, NodeKindDef> = { ...BUILTIN_NODE_KINDS };
+  // Cloud packs are built-ins too: always-valid vocabulary, surfaced in the
+  // UI by relevance (the kind picker demotes clouds the document doesn't
+  // reference). Extensions apply over them like over any builtin.
+  const nodeKinds: Record<string, NodeKindDef> = { ...BUILTIN_NODE_KINDS, ...CLOUD_NODE_KINDS };
   const extraKindOrder: string[] = [];
 
   for (const [key, value] of Object.entries(extensions.nodeKinds ?? {})) {
@@ -123,7 +127,11 @@ export function resolveRegistry(
     }
   }
 
-  const kindOrder = [...BUILTIN_KIND_ORDER.filter((k) => k in nodeKinds), ...extraKindOrder];
+  const kindOrder = [
+    ...BUILTIN_KIND_ORDER.filter((k) => k in nodeKinds),
+    ...CLOUD_KIND_ORDER.filter((k) => k in nodeKinds),
+    ...extraKindOrder,
+  ];
 
   // -- icons -----------------------------------------------------------------
   const icons: Record<string, IconPaths> = { ...BUILTIN_ICON_PATHS };

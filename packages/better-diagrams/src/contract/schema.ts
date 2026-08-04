@@ -18,28 +18,19 @@
 
 import {
   DEFAULT_POLYGON_POINTS,
+  ZONE_OUTLINES,
   ZONE_SHAPES,
   clampBoxIntoZone,
   pointInZone,
   zoneAt,
   type DiagramZone,
+  type ZoneOutline,
   type ZonePoint,
   type ZoneShape,
 } from "./zones";
+import { ALL_CLOUD_KIND_IDS } from "./cloud";
 import { normalizeDate, type DiagramDate } from "./timeline";
-
-export {
-  ZONE_SHAPES,
-  HEXAGON_POINTS,
-  DEFAULT_POLYGON_POINTS,
-  zoneOutline,
-  outlineToSvgPoints,
-  pointInZone,
-  zoneArea,
-  zoneAt,
-  clampBoxIntoZone,
-} from "./zones";
-export type { DiagramZone, ZoneShape, ZonePoint } from "./zones";
+import { parseLlmJson } from "./json-repair";
 
 // ─── Vocabulary ──────────────────────────────────────────────────────────────
 
@@ -104,7 +95,24 @@ export type EdgeRouting = (typeof EDGE_ROUTINGS)[number];
  * Lifecycle stage of a node. `active` is the default and is never stored —
  * validation strips it so pre-status documents stay byte-identical.
  */
-export const NODE_STATUSES = ["proposed", "planned", "active", "deprecated", "retired"] as const;
+/**
+ * Lifecycle stages, in rough chronological order. Everything except `active`
+ * renders visually set apart:
+ *
+ *   proposed   an idea — dotted outline
+ *   planned    committed future work — dashed outline
+ *   stubbed    scaffolding exists, the implementation doesn't — heavy
+ *              construction dashes over a faint diagonal hatch
+ *   dark       built and shipped but not yet switched on ("shipped dark") —
+ *              black/white hazard-tape outline
+ *   active     the default; never stored
+ *   deprecated being sunset — dimmed
+ *   retired    gone — heavily dimmed, struck through
+ *
+ * Every dulled stage brightens to full strength under the cursor, so its
+ * label stays readable.
+ */
+export const NODE_STATUSES = ["proposed", "planned", "stubbed", "dark", "active", "deprecated", "retired"] as const;
 export type NodeStatus = (typeof NODE_STATUSES)[number];
 
 /** Corner the version-tag notice sits in. */
@@ -177,8 +185,9 @@ export interface DiagramNode {
    */
   team?: string;
   /**
-   * Lifecycle stage: proposed/planned render with dotted/dashed outlines,
-   * deprecated/retired render dimmed. Absent means `active`.
+   * Lifecycle stage: proposed/planned/stubbed render with dotted/dashed/
+   * construction outlines, dark with a hazard-tape outline, deprecated/
+   * retired dimmed. Absent means `active`. See NODE_STATUSES.
    */
   status?: NodeStatus;
   /**
@@ -271,6 +280,66 @@ export interface DiagramTemplate {
 
 export const EMPTY_TEMPLATE: DiagramTemplate = { version: 1, nodes: [], edges: [] };
 
+// ─── Key vocabularies ────────────────────────────────────────────────────────
+//
+// The known keys of each document object, for editors that warn about keys
+// the schema doesn't define (they are ignored on load, never an error).
+// `Record<keyof T, true>` makes the compiler enforce the list in BOTH
+// directions: add a field to the interface and this line stops compiling
+// until the list learns it; list a key the interface lacks and it also fails.
+// `meta` is deliberately absent — its index signature admits anything.
+
+const TEMPLATE_KEY_MAP: Record<keyof DiagramTemplate, true> = {
+  version: true,
+  meta: true,
+  zones: true,
+  nodes: true,
+  edges: true,
+};
+export const TEMPLATE_KEYS: readonly string[] = Object.keys(TEMPLATE_KEY_MAP);
+
+const NODE_KEY_MAP: Record<keyof DiagramNode, true> = {
+  id: true,
+  label: true,
+  kind: true,
+  icon: true,
+  description: true,
+  parentId: true,
+  x: true,
+  y: true,
+  w: true,
+  h: true,
+  fontSize: true,
+  zoneId: true,
+  providers: true,
+  tags: true,
+  url: true,
+  team: true,
+  status: true,
+  date: true,
+  locked: true,
+  plain: true,
+  collapsed: true,
+};
+export const NODE_KEYS: readonly string[] = Object.keys(NODE_KEY_MAP);
+
+const EDGE_KEY_MAP: Record<keyof DiagramEdge, true> = {
+  id: true,
+  source: true,
+  target: true,
+  label: true,
+  labelT: true,
+  style: true,
+  color: true,
+  providers: true,
+  tech: true,
+  direction: true,
+  seq: true,
+  routing: true,
+  date: true,
+};
+export const EDGE_KEYS: readonly string[] = Object.keys(EDGE_KEY_MAP);
+
 // ─── Versioning ──────────────────────────────────────────────────────────────
 
 /** The version this build writes. Bump when a change needs a migration. */
@@ -352,7 +421,7 @@ export function buildSystemPrompt(opts: PromptOptions = {}): string {
   const shapes = ZONE_SHAPES.join("|");
 
   return `You convert software requirements, source code, or natural-language descriptions into an architecture diagram template. Respond with ONLY compact valid JSON (no markdown fences, no commentary) matching:
-{"version":1,"meta":{"title":"Name","routing":"curved|orthogonal","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${PROVIDER_IDS[0]}"],"provider":"${PROVIDER_IDS[0]}","z":0,"date":"YYYY-MM-DD"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false,"x":0,"y":0,"w":170,"h":76,"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":"","labelT":0.5,"style":"${styles}","color":"${colors}","direction":"forward|both|none","seq":0,"date":"YYYY-MM-DD"}]}
+{"version":1,"meta":{"title":"Name","routing":"curved|orthogonal","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${PROVIDER_IDS[0]}"],"provider":"${PROVIDER_IDS[0]}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false,"x":0,"y":0,"w":170,"h":76,"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":"","labelT":0.5,"style":"${styles}","color":"${colors}","direction":"forward|both|none","seq":0,"date":"YYYY-MM-DD"}]}
 Rules:
 - "group" = boundary (VPC, cluster, tier, bounded context). Children set parentId; child x/y are RELATIVE to the group's top-left. Size groups to contain all children (+24px sides, +48px top).
 - "text" = free annotation; put the sentence in label, fontSize 12-16, w~300 h~60, no edges.
@@ -360,10 +429,11 @@ Rules:
 - Edge style semantics: dashed = async/event-driven, dotted = cache/optional/telemetry, solid = synchronous. Vary color by concern (e.g. amber = data, violet = messaging). labelT (0.15-0.85) slides the label along the arrow to avoid collisions.
 - Edge "tech" = protocol/format, C4 style ("JSON/HTTPS", "gRPC", "SQL"); omit when obvious. "direction":"both" for genuinely bidirectional links, "none" for plain association; omit for normal flow. When the user asks for a request flow or sequence, number the participating edges with "seq":1,2,3… in traversal order; omit seq otherwise.
 - meta.routing "orthogonal" gives right-angle connectors (formal/dense diagrams); omit for curved. meta.title names the diagram. meta.versionTag labels the revision ("v2.1", "2026-Q3 draft") when the user gives one; omit otherwise.
-- Node "tags" = short lowercase labels for cross-cutting concerns the user mentions ("pci","gdpr","deprecated","planned"); omit when none. Node "url" = deep link to docs/repo if the user supplies one; omit otherwise. Node "team" = the owning or contact team when the user names one ("Payments", "Platform"); omit otherwise. Node "status" = lifecycle stage when stated ("planned" for future work, "deprecated" for being sunset); omit for normal active components. Text notes draw a subtle box by default; set "plain":true only when the user wants bare text with no outline.
+- Node "tags" = short lowercase labels for cross-cutting concerns the user mentions ("pci","gdpr","deprecated","planned"); omit when none. Node "url" = deep link to docs/repo if the user supplies one; omit otherwise. Node "team" = the owning or contact team when the user names one ("Payments", "Platform"); omit otherwise. Node "status" = lifecycle stage when stated: "planned" for future work, "stubbed" for scaffolding that exists but does nothing yet, "dark" for built-and-shipped but not yet enabled, "deprecated" for being sunset; omit for normal active components. Text notes draw a subtle box by default; set "plain":true only when the user wants bare text with no outline.
 - Node/edge/zone "date" = when that piece lands or landed, as "YYYY-MM-DD". Set it ONLY when the user gives a roadmap, phases, quarters, or a migration order; omit it everywhere else. Undated elements are treated as always present, so a phased plan dates the new pieces and leaves today's system undated. A node inside a group is never shown before the group, so date the group with its earliest phase.
 - parentId must reference a container node that exists. Never create a parent cycle.
 - ZONES are infra backgrounds, drawn behind everything, in ABSOLUTE canvas coordinates (never relative). Provider ids: ${providers}. Omit the "zones" key entirely unless the request actually involves infrastructure or hosting.
+- Zone "color" (optional) is the OUTLINE hex; the background derives from it automatically. It may carry "/NN" percent alpha for fill strength ("#38bdf8/22"). Omit for the provider's default colour. Zone "outline" (optional): dashed for logical/planned boundaries, dotted for soft groupings, none for a pure background wash; omit for solid.
 - A zone's "providers" lists every provider it could run on; "provider" is the one shown. Use a higher "z" for a small zone that sits on top of a bigger one (e.g. a third-party SaaS island inside a cloud region).
 - Nodes reference a zone with "zoneId" — this is INDEPENDENT of parentId, so a node can be in a zone and a group at once. Position them so they fall inside the zone's box.
 - A node's "providers" lists which providers it exists on; it is hidden when the zone shows anything else. Omit it (or use []) for nodes present in every deployment. Use it to show provider-specific services, e.g. a node with providers:["aws"] for RDS alongside one with providers:["azure"] for Azure SQL.
@@ -414,7 +484,14 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
   const r = migrateTemplate(raw ?? {}) as unknown as Partial<DiagramTemplate>;
   if (!Array.isArray(r.nodes)) throw new Error("Template is missing a `nodes` array");
 
-  const kindSet = new Set<string>([...NODE_KINDS, ...(opts.knownKinds ?? [])]);
+  // Cloud pack kinds (aws-lambda, azure-functions, …) are base vocabulary:
+  // a backend or host validating without the react registry must not coerce
+  // them away.
+  const kindSet = new Set<string>([
+    ...NODE_KINDS,
+    ...ALL_CLOUD_KIND_IDS,
+    ...(opts.knownKinds ?? []),
+  ]);
   const iconSet = new Set<string>([...ICON_NAMES, ...(opts.knownIcons ?? [])]);
   const containerSet = new Set<string>(opts.containerKinds ?? CONTAINER_KINDS);
   const annotationSet = new Set<string>(opts.annotationKinds ?? ANNOTATION_KINDS);
@@ -600,6 +677,7 @@ function validateZones(raw: unknown, providerSet: Set<string>): DiagramZone[] {
 
       const points = shape === "polygon" ? validatePolygon(z.points) : undefined;
       const date = normalizeDate(z.date);
+      const color = normalizeHexColor(z.color);
 
       return {
         id,
@@ -607,13 +685,24 @@ function validateZones(raw: unknown, providerSet: Set<string>): DiagramZone[] {
         shape,
         ...(points ? { points } : {}),
         ...(date ? { date } : {}),
+        ...(color ? { color: color.hex } : {}),
+        // `solid` is the default and never stored; garbage strips with it.
+        ...((ZONE_OUTLINES as readonly string[]).includes(z.outline as string) &&
+        z.outline !== "solid"
+          ? { outline: z.outline as ZoneOutline }
+          : {}),
+        // Filled is the default; only the opt-out persists.
+        ...(z.fill === false ? { fill: false } : {}),
         x: num(z.x, 0),
         y: num(z.y, 0),
         w: positive(z.w, 400),
         h: positive(z.h, 300),
         providers,
         provider,
-        opacity: clamp(num(z.opacity, DEFAULT_ZONE_OPACITY), 0, 1),
+        // Precedence via num()'s fallback chain: an explicit `opacity` wins,
+        // an alpha carried on the colour ("#38bdf8/40" or #rrggbbaa) comes
+        // second, the default last.
+        opacity: clamp(num(z.opacity, color?.alpha ?? DEFAULT_ZONE_OPACITY), 0, 1),
         z: Math.round(num(z.z, 0)),
         ...(z.locked === true ? { locked: true } : {}),
       };
@@ -927,27 +1016,44 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
 }
 
-/** Strip markdown fences / prose and parse the first JSON object in an LLM reply. */
+/**
+ * Coerce a colour into canonical lowercase `#rrggbb`, or null.
+ *
+ * Accepts `#rgb` (expanded), `#rrggbb`, `#rrggbbaa` (CSS 8-digit hex), and
+ * `#rrggbb/NN` (NN = percent). An alpha, however written, comes back as a
+ * separate 0..1 number rather than staying inside the colour — the schema
+ * stores fill opacity in one place (`opacity`), and a second copy riding the
+ * hex would drift from it.
+ */
+function normalizeHexColor(raw: unknown): { hex: string; alpha?: number } | null {
+  if (typeof raw !== "string") return null;
+  const text = raw.trim().toLowerCase();
+
+  const slash = /^(#[0-9a-f]{3}|#[0-9a-f]{6})\/(\d{1,3})$/.exec(text);
+  const base = slash ? slash[1] : text;
+  let alpha: number | undefined = slash ? clamp(Number(slash[2]), 0, 100) / 100 : undefined;
+
+  let hex: string | null = null;
+  if (/^#[0-9a-f]{6}$/.test(base)) hex = base;
+  else if (/^#[0-9a-f]{3}$/.test(base)) hex = `#${[...base.slice(1)].map((c) => c + c).join("")}`;
+  else if (/^#[0-9a-f]{8}$/.test(base)) {
+    hex = base.slice(0, 7);
+    // 8-digit hex carries its own alpha; a /NN suffix on top is malformed and
+    // the explicit suffix wins.
+    alpha ??= Number.parseInt(base.slice(7), 16) / 255;
+  }
+  if (!hex) return null;
+  return alpha !== undefined ? { hex, alpha } : { hex };
+}
+
+/**
+ * Strip markdown fences / prose and parse the first JSON object in an LLM
+ * reply or a pasted document. Lightly damaged JSON (smart quotes, trailing
+ * commas, a truncated reply) is healed by json-repair rather than rejected;
+ * what can't be healed throws a user-facing message pointing at the damage.
+ */
 export function parseLlmTemplate(llmText: string, opts?: ValidateOptions): DiagramTemplate {
-  const cleaned = llmText.replace(/```json/gi, "").replace(/```/g, "").trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start === -1) {
-    throw new Error("No JSON object found in the model's reply");
-  }
-  if (end === -1 || end < start) {
-    // An opening brace with no close almost always means the response was cut
-    // off mid-object — worth saying so, because the fix is more output tokens,
-    // not a different prompt.
-    throw new Error("Model returned malformed JSON: the object is unterminated (response truncated?)");
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned.slice(start, end + 1));
-  } catch (err) {
-    throw new Error(`Model returned malformed JSON: ${(err as Error).message}`);
-  }
-  return validateTemplate(parsed, opts);
+  return validateTemplate(parseLlmJson(llmText), opts);
 }
 
 // ─── Geometry helpers ────────────────────────────────────────────────────────
@@ -1149,6 +1255,17 @@ function firstSize(...values: Array<number | string | null | undefined>): number
 }
 
 /**
+ * The canvas paints in fixed bands: zones (-1000…) under container boundaries
+ * (0…depth) under edges under leaf nodes (1000…). This is the edges' band —
+ * splines must clear a container's translucent body but always travel UNDER
+ * the nodes themselves, never across a card. Requires the canvas to run React
+ * Flow in `zIndexMode="manual"`; the default "basic" mode raises any edge
+ * whose endpoint sits inside a container to that node's own z, putting the
+ * spline on top of every node it crosses.
+ */
+export const EDGE_Z_INDEX = 500;
+
+/**
  * Map a validated template to React Flow nodes/edges.
  *
  * React Flow requires a parent to appear BEFORE its children in the array for
@@ -1241,7 +1358,9 @@ export function toReactFlow(
         height: h,
         style: { width: w, height: h },
         // Containers must render behind their children; deeper nesting wins.
-        zIndex: isContainer ? depth : 1000 + depth,
+        // A collapsed container is a solid chip with no children on the
+        // canvas, so it joins the leaf band and edges pass under it too.
+        zIndex: isContainer && !n.collapsed ? depth : 1000 + depth,
         ...(n.locked ? { draggable: false } : {}),
         // Deliberately NOT `extent: "parent"`. That clamps a child inside its
         // container, which makes it impossible to drag a node back out of a

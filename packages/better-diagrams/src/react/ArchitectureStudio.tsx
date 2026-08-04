@@ -39,32 +39,33 @@ import {
 } from "@xyflow/react";
 
 import {
+  COLLAPSED_EDGE_PREFIX,
   DEFAULT_ZONE_OPACITY,
   EDGE_COLORS,
+  EDGE_Z_INDEX,
   EDGE_COLOR_HEX,
   EDGE_DASH,
   EDGE_STYLES,
   EMPTY_TEMPLATE,
   NODE_STATUSES,
-  ZONE_SHAPES,
   activeScenario,
   assignZonesByGeometry,
   buildSystemPrompt,
   snapNodesIntoZones,
   fromReactFlow,
   fromZoneNodeId,
+  isCollapsedEdgeId,
   isZoneNodeId,
+  parseLlmTemplate,
   setAllZoneProviders,
   templateProviders,
   toReactFlow,
   toZoneNodeId,
   validateTemplate,
   visibleElements,
-  zoneAt,
   type DiagramEdgeData,
   type DiagramNodeData,
   type DiagramTemplate,
-  type DiagramZone,
   type EdgeColor,
   type EdgeDirection,
   type EdgeRouting,
@@ -72,20 +73,33 @@ import {
   type NodeStatus,
   type VersionTagPosition,
   type ZoneNodeData,
-  type ZoneShape,
 } from "../contract/schema";
-import { DEFAULT_POLYGON_POINTS } from "../contract/zones";
+import {
+  DEFAULT_POLYGON_POINTS,
+  ZONE_OUTLINES,
+  ZONE_SHAPES,
+  zoneAt,
+  type DiagramZone,
+  type ZoneOutline,
+  type ZoneShape,
+} from "../contract/zones";
 import { lintTemplate, type LintFinding } from "../contract/lint";
 import { diffTemplates } from "../contract/diff";
 import {
-  currentStopIndex,
+  openingCursor,
   templateTimeline,
-  timelineStop,
   timelineView,
+  type DiagramDate,
+  type TimelineFuture,
   type TimelineFutureMode,
+  type TimelineView,
 } from "../contract/timeline";
+import {
+  countStateCombos,
+  materializeCombo,
+  templateStateAxes,
+} from "../contract/states";
 import { DiffCanvas } from "./DiffCanvas";
-import { TimelineCanvas } from "./TimelineCanvas";
 import {
   FileMenu,
   InspectorSection,
@@ -93,7 +107,21 @@ import {
   ToolbarMenu,
   VersionTagChip,
   type StudioFile,
+  type StudioFileInit,
 } from "./chrome";
+import {
+  WelcomeModal,
+  clearWelcomeSuppression,
+  suppressNextWelcome,
+  welcomeSuppressed,
+} from "./WelcomeModal";
+import { buildArchitectureLint } from "./schema-lint";
+import { KindSelect } from "./KindSelect";
+import {
+  CLOUD_PROVIDER_IDS,
+  buildCloudPromptSections,
+  cloudKindIds,
+} from "../contract/cloud";
 import { autoLayout, hasOverlaps } from "../contract/layout";
 import {
   copyFragment,
@@ -102,8 +130,11 @@ import {
   pasteFragment,
 } from "../contract/clipboard";
 import { createRegistry } from "./create-registry";
+import { BUILTIN_EXPORTERS, renderTemplateToCanvas, renderTemplateToSvg } from "./exporters";
+import { ExportStatesModal, type ExportStatesChoice } from "./ExportStatesModal";
+import { runStateExport, type StateExportFormat } from "./state-export";
 import type { RegistryExtensions, ResolvedRegistry } from "./registry-types";
-import { kindDef, providerDef } from "./registry-types";
+import { kindDef, providerDef, zoneInk } from "./registry-types";
 import { NODE_TYPES } from "./nodes";
 import { EDGE_TYPES } from "./edges";
 import { StudioContext } from "./context";
@@ -115,6 +146,11 @@ import {
   type DiagramGenerator,
 } from "../contract/llm";
 
+// Module-level so the object identity is stable across renders — React Flow
+// stores it and would churn on a fresh literal every pass. See EDGE_Z_INDEX
+// for the layering bands this pins edges into.
+const DEFAULT_EDGE_OPTIONS = { zIndex: EDGE_Z_INDEX };
+
 // ─── Props ───────────────────────────────────────────────────────────────────
 
 export interface StudioSlotContext {
@@ -123,6 +159,19 @@ export interface StudioSlotContext {
   registry: ResolvedRegistry;
   /** Replace the whole document (adds an undo point). */
   setTemplate: (next: DiagramTemplate) => void;
+}
+
+/**
+ * The canvas selection in DOCUMENT terms — ids bucketed by the template
+ * section they live in, so a host can point straight at `template.nodes`,
+ * `.edges`, or `.zones` (e.g. to highlight those entries in a JSON view).
+ * Canvas-only artifacts (zone-node prefixes, collapse-rerouted edge ids)
+ * never leak through.
+ */
+export interface StudioSelection {
+  nodes: string[];
+  edges: string[];
+  zones: string[];
 }
 
 export interface ArchitectureStudioProps {
@@ -146,6 +195,13 @@ export interface ArchitectureStudioProps {
   filename?: string;
   /** Show the React Flow minimap. Defaults to true. */
   minimap?: boolean;
+  /**
+   * Show the welcome/import modal over a brand-new document (or an empty
+   * workspace): brand mark, "Insert Node Manually", "Copy Schema & System
+   * Prompt", and a paste-JSON editor. Defaults to true; suppressed while
+   * `readOnly` or `diffBase` is set.
+   */
+  welcome?: boolean;
   /** Show the infra legend in the corner. Defaults to true; only renders when zones exist. */
   legend?: boolean;
   /** Start with provider-hidden nodes ghosted rather than omitted. Defaults to false. */
@@ -166,13 +222,24 @@ export interface ArchitectureStudioProps {
   files?: StudioFile[];
   activeFileId?: string;
   onFileSelect?: (id: string) => void;
-  onFileCreate?: () => void;
+  /**
+   * Create a file. Called with no argument from the file menu's "＋ New file";
+   * the welcome modal passes a {@link StudioFileInit} so the host can seed the
+   * name and (when JSON was inserted) the document.
+   */
+  onFileCreate?: (init?: StudioFileInit) => void;
   onFileRename?: (id: string, name: string) => void;
   onFileDelete?: (id: string) => void;
   /** Deleted documents the host still holds, offered for recovery. */
   removedFiles?: StudioFile[];
   onFileRestore?: (id: string) => void;
   onNavigateFile?: (ref: string) => void;
+  /**
+   * Fires with the {@link StudioSelection} on mount (empty) and whenever it
+   * changes — so a host that remounts the editor per file never holds a
+   * selection from the previous document.
+   */
+  onSelectionChange?: (selection: StudioSelection) => void;
   /** Extra toolbar content, rendered after the built-in buttons. */
   toolbarExtras?: ReactNode | ((ctx: StudioSlotContext) => ReactNode);
   /** Extra inspector content, rendered when something is selected. */
@@ -234,6 +301,7 @@ function StudioInner({
   generate,
   filename = "architecture",
   minimap = true,
+  welcome = true,
   legend = true,
   defaultShowHidden = false,
   diffBase,
@@ -246,6 +314,7 @@ function StudioInner({
   removedFiles,
   onFileRestore,
   onNavigateFile,
+  onSelectionChange: onHostSelectionChange,
   toolbarExtras,
   inspectorExtras,
   className,
@@ -313,8 +382,10 @@ function StudioInner({
    * Pure view state: it never reaches the document, and the scrubbed canvas is
    * a separate read-only React Flow instance, so nothing here can edit.
    */
-  const [timelineIndex, setTimelineIndex] = useState<number | null>(null);
+  const [timelineCursor, setTimelineCursor] = useState<DiagramDate | null>(null);
   const [timelineFuture, setTimelineFuture] = useState<TimelineFutureMode>("dim");
+  /** A PNG/SVG/PDF export waiting on the states modal. Null = no modal open. */
+  const [pendingExport, setPendingExport] = useState<StateExportFormat | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const compareInputRef = useRef<HTMLInputElement>(null);
@@ -372,6 +443,15 @@ function StudioInner({
    * double render writes the same settled value twice, harmlessly.
    */
   const templateRef = useRef<DiagramTemplate>(initialTemplate);
+
+  /**
+   * The scrub cursor, for the insert handlers.
+   *
+   * They are declared above the timeline block and only ever fire from user
+   * events, so a ref keeps them out of the dependency chain — reading the
+   * state directly would rebuild every insert callback on every day of a drag.
+   */
+  const timelineAtRef = useRef<DiagramDate | null>(null);
 
   const deriveTemplate = useCallback(
     (n: Node[], e: Edge[]): DiagramTemplate =>
@@ -550,6 +630,10 @@ function StudioInner({
           icon: def.icon,
           description: "",
           fontSize: 13,
+          // Inserted while scrubbing: the new box belongs to the moment being
+          // looked at, or it would appear to have existed all along — and in
+          // "Hide later" it would vanish the instant it was created.
+          ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
         } satisfies DiagramNodeData,
       };
 
@@ -844,10 +928,9 @@ function StudioInner({
       try {
         const raw = JSON.parse(await file.text());
         setCompareTemplate(validateTemplate(raw, registryOpts(registry)));
-        // Compare and timeline are both read-only views of the same canvas
-        // slot; leaving the scrubber "on" underneath would make the toolbar
-        // claim a mode the canvas isn't in.
-        setTimelineIndex(null);
+        // Compare takes over the canvas; leaving the scrubber "on" underneath
+        // would make the toolbar claim a mode the canvas is not in.
+        setTimelineCursor(null);
         showToast(`Comparing against ${file.name}`);
       } catch (err) {
         setError(`Could not load ${file.name}: ${(err as Error).message}`);
@@ -862,41 +945,90 @@ function StudioInner({
   // moment something is dated and withdraws when the last date is removed —
   // there is no separate timeline to keep in sync with the diagram.
   const timeline = useMemo(() => templateTimeline(template), [template]);
-  // Compare and timeline are both read-only views of the same canvas slot, and
-  // a host can turn compare on via the `diffBase` prop at any moment. Deciding
-  // the precedence once, here, is what keeps the toolbar, the bar, the canvas,
-  // and the inspector from ever disagreeing about which mode is on.
-  const timelineActive =
-    timelineIndex !== null && timeline.stops.length > 0 && !activeDiffBase;
-  const timelineAt = timelineActive ? timelineStop(timeline, timelineIndex) : null;
-  // Asked in "dim" mode deliberately: the count is the same either way, and
-  // that mode returns the document as-is instead of allocating a filtered copy
-  // on every step of a drag.
-  const timelineFutureCount = useMemo(
-    () => (timelineAt ? timelineView(template, timelineAt, "dim").futureCount : 0),
+  // Compare and timeline are both views of the same canvas, and a host can
+  // turn compare on via the `diffBase` prop at any moment. Deciding the
+  // precedence once, here, is what keeps the toolbar, the bar, and the canvas
+  // from ever disagreeing about which mode is on.
+  const timelineActive = timelineCursor !== null && timeline.stops.length > 0 && !activeDiffBase;
+  const timelineAt = timelineActive ? timelineCursor : null;
+
+  /**
+   * What is dated after the cursor. Asked in "dim" mode deliberately: the sets
+   * are the same either way, and that mode returns the document as-is instead
+   * of allocating a filtered copy on every day of a drag.
+   */
+  const timelineViewState: TimelineView | null = useMemo(
+    () => (timelineAt ? timelineView(template, timelineAt, "dim") : null),
     [template, timelineAt],
   );
+  const timelineFutureIds = timelineViewState?.future ?? null;
+  // The view already counted — re-summing the sets here was a second copy of
+  // the same formula that had to stay in agreement by luck.
+  const timelineFutureCount = timelineViewState?.futureCount ?? 0;
 
   const enterTimeline = useCallback(() => {
-    // Open on today rather than at the origin: the interesting question is
-    // usually "what changes from here", not "what did we start with".
-    setTimelineIndex(currentStopIndex(timeline));
-    // Compare and timeline are both read-only views of the same canvas slot;
-    // only one can own it.
+    // Open on today, held inside the plan's own span — "what changes from
+    // here" is the question, not "what did we start with".
+    setTimelineCursor(openingCursor(timeline));
     setCompareTemplate(null);
     setOpenMenu(null);
   }, [timeline]);
 
-  const stepTimeline = useCallback(
-    (delta: number) => {
-      setTimelineIndex((current) =>
-        current === null
-          ? current
-          : Math.max(0, Math.min(timeline.stops.length - 1, current + delta)),
-      );
+  /** Jump to the next real dated point in a direction. */
+  const stepTimelineStop = useCallback(
+    (direction: 1 | -1) => {
+      setTimelineCursor((current) => {
+        if (current === null) return current;
+        const next =
+          direction === 1
+            ? timeline.stops.find((s) => s > current)
+            : [...timeline.stops].reverse().find((s) => s < current);
+        return next ?? current;
+      });
     },
-    [timeline.stops.length],
+    [timeline.stops],
   );
+
+  /**
+   * The timeline applied as a DISPLAY pass, over the canvas the editor is
+   * already holding.
+   *
+   * Deliberately NOT a re-materialization. The editor derives its document
+   * from its canvas, so a canvas rebuilt without the later elements would read
+   * as "the user deleted them" — the exact failure the provider machinery
+   * exists to prevent. Flagging a complete node array instead means `nodes`
+   * stays whole, `fromReactFlow` is untouched, dragging and inserting behave
+   * normally while scrubbing, and moving the cursor a day costs one map
+   * instead of a full rebuild.
+   */
+  const { nodes: viewNodes, edges: viewEdges } = useMemo(() => {
+    const view = applyTimelineView(nodes, edges, timelineFutureIds, timelineFuture);
+    // Manual z-index mode (see the <ReactFlow> props) drops React Flow's
+    // built-in elevate-on-select, so restore it here as a display pass: a
+    // selected node floats above whatever it is dragged across. Containers
+    // stay put — lifting one would put its translucent body over the edges
+    // pinned below the leaf band, washing out its own children's wiring.
+    return {
+      ...view,
+      nodes: view.nodes.map((n) =>
+        n.selected && n.type !== "group" && n.type !== "zone"
+          ? { ...n, zIndex: (n.zIndex ?? 0) + 1000 }
+          : n,
+      ),
+    };
+  }, [nodes, edges, timelineFutureIds, timelineFuture]);
+
+  useEffect(() => {
+    timelineAtRef.current = timelineAt;
+  }, [timelineAt]);
+
+  // Editing can remove the last dated element mid-scrub. The bar disappears
+  // the moment the stops empty, so the cursor must go with it — a lingering
+  // cursor would resurrect the scrubber, uninvited, the next time anything
+  // acquires a date.
+  useEffect(() => {
+    if (timelineCursor !== null && !timeline.stops.length) setTimelineCursor(null);
+  }, [timelineCursor, timeline.stops.length]);
 
   const versionTag = template.meta?.versionTag;
   const versionTagPosition: VersionTagPosition = template.meta?.versionTagPosition ?? "top-left";
@@ -957,6 +1089,7 @@ function StudioInner({
       provider: providers[0],
       opacity: DEFAULT_ZONE_OPACITY,
       z: topZ + 1,
+      ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
     };
 
     const node: Node = {
@@ -1004,6 +1137,7 @@ function StudioInner({
               labelT: 0.5,
               style: "solid",
               color: "slate",
+              ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
               // New edges inherit the diagram default (no own `routing`).
               routingResolved: meta.current?.routing === "orthogonal" ? "orthogonal" : "curved",
             } satisfies DiagramEdgeData,
@@ -1298,20 +1432,24 @@ function StudioInner({
       }
       if (isTypingTarget(event.target)) return;
 
-      // Arrow keys step the scrubber whenever the canvas has focus, so the
-      // whole plan can be walked without aiming at the slider.
-      if (timelineActive && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      // Arrows walk the plan stop to stop — but only with nothing selected,
+      // so they stay available to whatever the user is editing.
+      if (
+        timelineActive &&
+        !selectedNodeIds.length &&
+        !selectedEdgeIds.length &&
+        (event.key === "ArrowLeft" || event.key === "ArrowRight")
+      ) {
         event.preventDefault();
-        stepTimeline(event.key === "ArrowRight" ? 1 : -1);
+        stepTimelineStop(event.key === "ArrowRight" ? 1 : -1);
         return;
       }
 
-      // Compare and timeline both show something other than the live document
-      // — block shortcuts that would edit what the user cannot see. Undo,
-      // redo, and save stay live; both views recompute from the document, so
-      // they remain coherent.
+      // Compare shows a diff rather than the document, so shortcuts that would
+      // edit what the user cannot see are blocked. Timeline mode is NOT in
+      // this list: it shows the real canvas, and editing it is the point.
       if (
-        (activeDiffBase || timelineActive) &&
+        activeDiffBase &&
         (event.key === "Delete" ||
           event.key === "Backspace" ||
           (mod && ["c", "v", "d", "x"].includes(event.key.toLowerCase())))
@@ -1357,13 +1495,13 @@ function StudioInner({
       if (event.key === "Escape") {
         setOpenMenu(null);
         setPanelOpen(false);
-        setTimelineIndex(null);
+        setTimelineCursor(null);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, activeDiffBase, timelineActive, stepTimeline]);
+  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds]);
 
   const toggleMenu = useCallback(
     (id: "files" | "insert" | "arrange" | "view" | "checks" | "export") =>
@@ -1389,18 +1527,19 @@ function StudioInner({
   // Derived in the theme workstream; dark until a light theme is passed.
   const exportPalette = useMemo(() => paletteFromTheme(theme), [theme]);
 
-  const runExport = useCallback(
+  const runDirectExport = useCallback(
     async (key: string) => {
-      setOpenMenu(null);
       const exporter = registry.exporters[key];
       if (!exporter) return;
       try {
         // Export what is on screen. While scrubbing, that is the slice — asking
         // for a PNG of the March view and getting the finished architecture
         // would be the one thing nobody means. Ghost mode exports the whole
-        // document because that is what it is showing.
+        // document because that is what it is showing — and so does an
+        // exporter that carries its own timeline (`fullDocument`), which needs
+        // the elements a hide-mode slice would strip.
         const subject =
-          timelineActive && timelineFuture === "hide"
+          timelineActive && timelineFuture === "hide" && !exporter.fullDocument
             ? timelineView(template, timelineAt, "hide").template
             : template;
         const result = await exporter.run({ template: subject, registry, filename, palette: exportPalette });
@@ -1414,6 +1553,64 @@ function StudioInner({
       }
     },
     [registry, template, filename, exportPalette, showToast, timelineActive, timelineAt, timelineFuture],
+  );
+
+  const stateAxes = useMemo(() => templateStateAxes(template), [template]);
+
+  const runExport = useCallback(
+    async (key: string) => {
+      setOpenMenu(null);
+      // A multi-state document gets the "which states?" modal — but only for
+      // the UNTOUCHED builtin snapshot exporters. A host that overrides
+      // png/svg/pdf supplied its own pipeline, which the combo loop couldn't
+      // honor; those keep the direct path they always had.
+      if (
+        (key === "png" || key === "svg" || key === "pdf") &&
+        registry.exporters[key] === BUILTIN_EXPORTERS[key] &&
+        countStateCombos(stateAxes) > 1
+      ) {
+        setPendingExport(key);
+        return;
+      }
+      await runDirectExport(key);
+    },
+    [registry, stateAxes, runDirectExport],
+  );
+
+  const onExportStatesChoice = useCallback(
+    async (choice: ExportStatesChoice) => {
+      const format = pendingExport;
+      setPendingExport(null);
+      if (!format) return;
+      if (choice.kind === "current") {
+        await runDirectExport(format);
+        return;
+      }
+      try {
+        // Combos materialize from copies — the live document, its undo
+        // history, and onChange never see the forced providers or slices.
+        const result = await runStateExport({
+          format,
+          filename,
+          axes: stateAxes,
+          combos: choice.combos,
+          pdfLayout: choice.pdfLayout,
+          materialize: (combo) => materializeCombo(template, combo),
+          renderSvg: (doc) => renderTemplateToSvg(doc, registry, exportPalette),
+          renderCanvas: (doc) => renderTemplateToCanvas(doc, registry, 2, exportPalette),
+        });
+        download(result.blob, result.filename);
+        showToast(
+          choice.combos.length === 1
+            ? `Exported ${result.filename}`
+            : `Exported ${choice.combos.length} states → ${result.filename}`,
+        );
+      } catch (err) {
+        setError(`Export failed: ${(err as Error).message}`);
+        setPanelOpen(true);
+      }
+    },
+    [pendingExport, runDirectExport, filename, stateAxes, template, registry, exportPalette, showToast],
   );
 
   const loadFile = useCallback(
@@ -1479,14 +1676,236 @@ function StudioInner({
 
   // ── AI generation ─────────────────────────────────────────────────────────
 
-  const systemPrompt = useMemo(
-    () =>
+  /**
+   * Providers the document references — zone providers, node providers, edge
+   * providers, and any node whose KIND belongs to a cloud pack (one
+   * aws-lambda in the diagram makes the whole AWS pack first-class). Drives
+   * which cloud packs count as "relevant": their kinds list un-demoted in the
+   * kind picker, and their prompt sections ride along.
+   */
+  const referencedProviderSet = useMemo(() => {
+    const out = new Set<string>();
+    for (const zone of template.zones ?? []) for (const p of zone.providers) out.add(p);
+    for (const node of template.nodes) {
+      for (const p of node.providers ?? []) out.add(p);
+      const cloud = registry.nodeKinds[node.kind]?.provider;
+      if (cloud) out.add(cloud);
+    }
+    for (const edge of template.edges) for (const p of edge.providers ?? []) out.add(p);
+    return out;
+  }, [template, registry]);
+
+  /** Kind ids with no cloud tag — what the prompt advertises before clouds. */
+  const baseKinds = useMemo(
+    () => registry.kindOrder.filter((kind) => !registry.nodeKinds[kind]?.provider),
+    [registry],
+  );
+
+  const promptForClouds = useCallback(
+    (clouds: readonly string[]) =>
       buildSystemPrompt({
+        kinds: [...baseKinds, ...cloudKindIds(clouds)],
+        icons: registry.iconNames,
+        providers: registry.providerOrder,
+        extraRules: [registry.promptExtraRules, buildCloudPromptSections(clouds)]
+          .filter(Boolean)
+          .join("\n"),
+      }),
+    [baseKinds, registry],
+  );
+
+  // The AI panel's prompt adapts to the document: the clouds it references
+  // contribute their kind ids and component sections automatically.
+  const referencedClouds = useMemo(
+    () => CLOUD_PROVIDER_IDS.filter((p) => referencedProviderSet.has(p)),
+    [referencedProviderSet],
+  );
+  const systemPrompt = useMemo(
+    () => promptForClouds(referencedClouds),
+    [promptForClouds, referencedClouds],
+  );
+
+  // ── Welcome modal ─────────────────────────────────────────────────────────
+
+  /** Zones count as content — a zones-only document is a started diagram. */
+  const isBlankDoc = (doc: DiagramTemplate) =>
+    !doc.nodes.length && !doc.edges.length && !doc.zones?.length;
+
+  const zeroFiles = files !== undefined && files.length === 0;
+  const [welcomeOpen, setWelcomeOpen] = useState(
+    () =>
+      welcome &&
+      !readOnly &&
+      !diffBase &&
+      !welcomeSuppressed() &&
+      (isBlankDoc(initialTemplate) || zeroFiles),
+  );
+  // The open decision above already read the hand-off latch — clear it so it
+  // can't suppress a later, genuinely new blank file.
+  useEffect(() => {
+    clearWelcomeSuppression();
+  }, []);
+
+  // Close as soon as there is content (insert, AI generate, controlled swap);
+  // dismissal is sticky per mount, so undoing back to blank doesn't re-open.
+  useEffect(() => {
+    if (!isBlankDoc(template) || readOnly || diffBase) setWelcomeOpen(false);
+  }, [template, readOnly, diffBase]);
+
+  // Re-open when the workspace empties out under a host that doesn't remount.
+  const prevFileCount = useRef(files?.length);
+  useEffect(() => {
+    if (files?.length === 0 && prevFileCount.current !== 0 && welcome && !readOnly && !diffBase) {
+      setWelcomeOpen(true);
+    }
+    prevFileCount.current = files?.length;
+  }, [files?.length, welcome, readOnly, diffBase]);
+
+  const activeFile = files?.find((file) => file.id === activeFileId) ?? files?.[0];
+  const welcomeName = zeroFiles ? "Untitled 1" : (activeFile?.name ?? filename);
+
+  // Registry-aware, so a custom kind lints clean exactly where it inserts clean.
+  const welcomeLint = useMemo(
+    () =>
+      buildArchitectureLint({
         kinds: registry.kindOrder,
         icons: registry.iconNames,
-        extraRules: registry.promptExtraRules,
+        providers: registry.providerOrder,
       }),
     [registry],
+  );
+
+  // The modal's AWS/Azure/GCP toggle — labels and colors from the registry,
+  // skipping any cloud an extension deleted.
+  const welcomeClouds = useMemo(
+    () =>
+      CLOUD_PROVIDER_IDS.filter((p) => p in registry.providers).map((p) => ({
+        id: p,
+        label: registry.providers[p].label,
+        color: registry.providers[p].color,
+      })),
+    [registry],
+  );
+
+  const parseWelcomeJson = useCallback(
+    (text: string) => {
+      // A document with no real coordinates (validation coerces missing x/y
+      // to 0, so every node piles up at the origin) gets laid out instead of
+      // stacked. Any explicitly placed node disables this — the author's
+      // coordinates are truth.
+      const laidOut = (template: DiagramTemplate): DiagramTemplate =>
+        template.nodes.length > 1 && template.nodes.every((n) => n.x === 0 && n.y === 0)
+          ? autoLayout(template)
+          : template;
+      // Accept a raw React Flow export too, exactly like the Import button.
+      // Validated here, not just downstream: on the zero-files path the result
+      // goes straight to the host's onFileCreate, which is promised a
+      // validated document.
+      try {
+        const raw = JSON.parse(text);
+        if (Array.isArray(raw?.nodes) && raw.nodes[0] && "position" in raw.nodes[0]) {
+          return laidOut(
+            validateTemplate(
+              fromReactFlow(raw.nodes, raw.edges ?? [], registryOpts(registry)),
+              registryOpts(registry),
+            ),
+          );
+        }
+      } catch {
+        // Not plain JSON — parseLlmTemplate handles fences and better errors.
+      }
+      return laidOut(parseLlmTemplate(text, registryOpts(registry)));
+    },
+    [registry],
+  );
+
+  const handleWelcomeInsert = useCallback(
+    (doc: unknown, name: string) => {
+      // The chosen name becomes the document's own title too — otherwise an
+      // example doc's baked-in meta.title would win the title↔name sync and
+      // stomp the name the user just typed.
+      const incoming = withMetaTitle(doc as DiagramTemplate, name);
+      if (zeroFiles && onFileCreate) {
+        onFileCreate({ name, kind: "architecture", doc: incoming });
+      } else {
+        applyTemplate(incoming);
+        if (activeFile && onFileRename && name !== activeFile.name) {
+          onFileRename(activeFile.id, name);
+        }
+      }
+      setWelcomeOpen(false);
+    },
+    [zeroFiles, onFileCreate, applyTemplate, activeFile, onFileRename],
+  );
+
+  /**
+   * The file name and the document's `meta.title` are ONE title with two
+   * homes — the host's workspace label and the document itself (what exports
+   * print, what the LLM writes). Renaming pushes the name into the active
+   * document; the effect below pushes a document title (adopted, imported,
+   * or AI-generated) back out to the host. Both directions converge on
+   * equality, so they cannot ping-pong.
+   */
+  const renameFile = useCallback(
+    (id: string, name: string) => {
+      onFileRename?.(id, name);
+      // Only the active document is in this editor's hands; a host that
+      // stores the others can mirror the rename there (the example app does).
+      if (id === activeFile?.id && name.trim()) {
+        applyTemplate(withMetaTitle(templateRef.current, name.trim()), { fit: false });
+      }
+    },
+    [onFileRename, activeFile?.id, applyTemplate],
+  );
+
+  const metaTitle = typeof template.meta?.title === "string" ? template.meta.title.trim() : "";
+  /**
+   * The last (title, name) pair the two homes agreed on, per file. The
+   * reconciler below needs it as a tiebreaker: on a mismatch, WHICH side
+   * moved since they last agreed decides the direction. Without it, a
+   * host-side rename (another tab, the host's own UI) would be read as a
+   * stale name and reverted by the document's title.
+   */
+  const titleSyncRef = useRef<{ fileId: string; title: string; name: string } | null>(null);
+  useEffect(() => {
+    if (!activeFile) return;
+    const name = activeFile.name;
+    const prev = titleSyncRef.current;
+    const record = () => {
+      titleSyncRef.current = { fileId: activeFile.id, title: metaTitle, name };
+    };
+
+    // Mount, or a different file became active: the document names itself.
+    if (!prev || prev.fileId !== activeFile.id) {
+      if (metaTitle && metaTitle !== name) onFileRename?.(activeFile.id, metaTitle);
+      record();
+      return;
+    }
+
+    if (metaTitle !== prev.title) {
+      // The document's title moved (edit, import, generation, undo) — push it
+      // out. Ties (both moved) resolve this way too: the document is truth.
+      if (metaTitle && metaTitle !== name) onFileRename?.(activeFile.id, metaTitle);
+    } else if (name !== prev.name && name.trim() && name !== metaTitle) {
+      // Only the NAME moved — an external rename. Adopt it as the title, the
+      // same committed, undoable edit the ✎ affordance makes.
+      applyTemplate(withMetaTitle(templateRef.current, name.trim()), { fit: false });
+    }
+    record();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metaTitle, activeFile?.id, activeFile?.name, onFileRename, applyTemplate]);
+
+  const handleWelcomeDismiss = useCallback(
+    (name: string) => {
+      setWelcomeOpen(false);
+      // With no files at all, "manually" still needs a file to land in. The
+      // latch keeps that brand-new blank file from greeting all over again.
+      if (zeroFiles && onFileCreate) {
+        suppressNextWelcome();
+        onFileCreate({ name, kind: "architecture" });
+      }
+    },
+    [zeroFiles, onFileCreate],
   );
 
   const runGenerate = useCallback(
@@ -1539,6 +1958,31 @@ function StudioInner({
     setSelectedNodeIds(params.nodes.map((n) => n.id));
     setSelectedEdgeIds(params.edges.map((e) => e.id));
   }, []);
+
+  // Report the selection to the host in template terms: zone nodes drop their
+  // canvas prefix, and a collapse-rerouted edge resolves to the document edge
+  // it stands in for (deduped — several hidden edges can share one stand-in).
+  // Keyed by content, not array identity, so hosts aren't re-rendered by the
+  // no-op selection events React Flow emits while dragging.
+  const lastReported = useRef("");
+  useEffect(() => {
+    if (!onHostSelectionChange) return;
+    const selection: StudioSelection = {
+      nodes: selectedNodeIds.filter((id) => !isZoneNodeId(id)),
+      edges: [
+        ...new Set(
+          selectedEdgeIds.map((id) =>
+            isCollapsedEdgeId(id) ? id.slice(COLLAPSED_EDGE_PREFIX.length) : id,
+          ),
+        ),
+      ],
+      zones: selectedNodeIds.filter(isZoneNodeId).map(fromZoneNodeId),
+    };
+    const key = JSON.stringify(selection);
+    if (key === lastReported.current) return;
+    lastReported.current = key;
+    onHostSelectionChange(selection);
+  }, [selectedNodeIds, selectedEdgeIds, onHostSelectionChange]);
 
   const singleSelected =
     selectedNodeIds.length === 1 ? nodes.find((n) => n.id === selectedNodeIds[0]) : undefined;
@@ -1628,21 +2072,13 @@ function StudioInner({
                 onFileSelect?.(id);
               }}
               onCreate={onFileCreate}
-              onRename={onFileRename}
+              onRename={onFileRename ? renameFile : undefined}
               onDelete={onFileDelete}
               removedFiles={removedFiles}
               onFileRestore={onFileRestore}
             />
           ) : (
-            <div className="as-brand">
-              <span className="as-brand__mark" aria-hidden="true">
-                <i />
-                <i />
-                <i />
-                <i />
-              </span>
-              arch·studio
-            </div>
+            <div className="as-brand">arch·studio</div>
           )}
 
           {generate && !readOnly ? (
@@ -2057,7 +2493,7 @@ function StudioInner({
               <button
                 type="button"
                 className={`as-btn${timelineActive ? " as-btn--on" : ""}`}
-                onClick={() => (timelineActive ? setTimelineIndex(null) : enterTimeline())}
+                onClick={() => (timelineActive ? setTimelineCursor(null) : enterTimeline())}
                 aria-pressed={timelineActive}
                 title={`Scrub through the ${timeline.stops.length} dated point${
                   timeline.stops.length === 1 ? "" : "s"
@@ -2128,20 +2564,19 @@ function StudioInner({
         {timelineActive ? (
           <TimelineScrubber
             timeline={timeline}
-            index={timelineIndex}
-            onIndex={setTimelineIndex}
+            at={timelineAt!}
+            onScrub={setTimelineCursor}
             futureMode={timelineFuture}
             onFutureMode={setTimelineFuture}
             futureCount={timelineFutureCount}
-            onExit={() => setTimelineIndex(null)}
+            onExit={() => setTimelineCursor(null)}
+            stampNotice={!readOnly}
           />
         ) : null}
 
         <div
           ref={canvasRef}
-          className={`as-canvas${dropActive ? " as-canvas--dropping" : ""}${activeDiffBase ? " as-canvas--diff" : ""}${
-            timelineActive ? " as-canvas--timeline" : ""
-          }`}
+          className={`as-canvas${dropActive ? " as-canvas--dropping" : ""}${activeDiffBase ? " as-canvas--diff" : ""}`}
           onDrop={onDrop}
           onDragOver={onDragOver}
           onDragLeave={() => setDropActive(false)}
@@ -2207,17 +2642,10 @@ function StudioInner({
 
           {activeDiffBase && diff ? (
             <DiffCanvas base={activeDiffBase} current={template} diff={diff} />
-          ) : timelineActive ? (
-            <TimelineCanvas
-              template={template}
-              at={timelineAt}
-              mode={timelineFuture}
-              registry={registry}
-            />
           ) : (
           <ReactFlow
-            nodes={nodes}
-            edges={edges}
+            nodes={viewNodes}
+            edges={viewEdges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -2227,6 +2655,12 @@ function StudioInner({
             onPaneClick={() => setOpenMenu(null)}
             nodeTypes={NODE_TYPES}
             edgeTypes={EDGE_TYPES}
+            // Manual mode makes React Flow honour each element's own zIndex.
+            // In the default "basic" mode an edge touching a nested node
+            // inherits that node's z (1000+), so splines ride over other
+            // nodes — they must always travel under them (see EDGE_Z_INDEX).
+            zIndexMode="manual"
+            defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
             connectionMode={ConnectionMode.Loose}
             nodesDraggable={!readOnly}
             nodesConnectable={!readOnly}
@@ -2255,7 +2689,7 @@ function StudioInner({
                 maskColor="color-mix(in srgb, var(--as-bg) 70%, transparent)"
                 nodeColor={(node) =>
                   isZoneNodeId(node.id)
-                    ? providerDef(registry, (node.data as unknown as ZoneNodeData).zone.provider).color
+                    ? zoneInk(registry, (node.data as unknown as ZoneNodeData).zone)
                     : kindDef(registry, (node.data as DiagramNodeData).kind).accent
                 }
               />
@@ -2300,15 +2734,13 @@ function StudioInner({
           </ReactFlow>
           )}
 
-          {(selectedNode || selectedEdge || selectedZoneNode) &&
-          !readOnly &&
-          !activeDiffBase &&
-          !timelineActive ? (
+          {(selectedNode || selectedEdge || selectedZoneNode) && !readOnly && !activeDiffBase ? (
             <div className="as-inspector">
               {selectedZoneNode ? (
                 <ZoneInspector
                   zone={(selectedZoneNode.data as unknown as ZoneNodeData).zone}
                   registry={registry}
+                  zones={zones}
                   onPatch={patchZone}
                 />
               ) : null}
@@ -2321,6 +2753,7 @@ function StudioInner({
                   // React Flow's copy can lag by a frame after a zone is
                   // dragged, since the reassignment happens during derivation.
                   zoneId={template.nodes.find((n) => n.id === selectedNode.id)?.zoneId ?? null}
+                  relevantProviders={referencedProviderSet}
                   onPatch={patchNode}
                 />
               ) : null}
@@ -2362,6 +2795,32 @@ function StudioInner({
             </div>
           </div>
         </div>
+
+        {welcomeOpen ? (
+          <WelcomeModal
+            kind="architecture"
+            defaultName={welcomeName}
+            showNameField={zeroFiles ? !!onFileCreate : !!(activeFile && onFileRename)}
+            systemPrompt={systemPrompt}
+            cloudProviders={welcomeClouds}
+            promptForClouds={promptForClouds}
+            parse={parseWelcomeJson}
+            onInsert={handleWelcomeInsert}
+            onDismiss={handleWelcomeDismiss}
+            lint={welcomeLint}
+          />
+        ) : null}
+
+        {pendingExport ? (
+          <ExportStatesModal
+            format={pendingExport}
+            axes={stateAxes}
+            registry={registry}
+            filename={filename}
+            onCancel={() => setPendingExport(null)}
+            onConfirm={(choice) => void onExportStatesChoice(choice)}
+          />
+        ) : null}
       </div>
     </StudioContext.Provider>
   );
@@ -2506,12 +2965,41 @@ function ChipListEditor({
 function ZoneInspector({
   zone,
   registry,
+  zones,
   onPatch,
 }: {
   zone: DiagramZone;
   registry: ResolvedRegistry;
+  /** Every zone in the document — the palette harvests their custom colours. */
+  zones: DiagramZone[];
   onPatch: (zoneId: string, patch: Partial<DiagramZone>) => void;
 }) {
+  const ink = zoneInk(registry, zone);
+
+  /**
+   * The swatch palette: every provider default, then every custom colour any
+   * zone in the document already uses — matching an existing colour should be
+   * one click, not an eyedropper exercise. Deduped by canonical hex; customs
+   * that merely equal a default collapse into it.
+   */
+  const paletteColors = useMemo(() => {
+    const out: Array<{ color: string; label: string }> = [];
+    const seen = new Set<string>();
+    for (const providerId of registry.providerOrder) {
+      const def = providerDef(registry, providerId);
+      const hex = def.color.toLowerCase();
+      if (seen.has(hex)) continue;
+      seen.add(hex);
+      out.push({ color: def.color, label: def.label });
+    }
+    for (const other of zones) {
+      const hex = other.color?.toLowerCase();
+      if (!hex || seen.has(hex)) continue;
+      seen.add(hex);
+      out.push({ color: hex, label: `Custom (${other.label})` });
+    }
+    return out;
+  }, [registry, zones]);
   const toggleProvider = (provider: string) => {
     const next = zone.providers.includes(provider)
       ? zone.providers.filter((p) => p !== provider)
@@ -2567,6 +3055,87 @@ function ZoneInspector({
         </select>
       </InspectorSection>
 
+      {/* The picker sets the OUTLINE colour — the vivid one a human reads —
+          and the background fill derives from it as a dull tint, so one choice
+          styles the whole region coherently in either theme. */}
+      <InspectorSection caption="Colour">
+        <div className="as-swatches">
+          {paletteColors.map(({ color, label }) => (
+            <button
+              key={color}
+              type="button"
+              title={label}
+              aria-label={`Zone colour ${label}`}
+              aria-pressed={color.toLowerCase() === ink.toLowerCase()}
+              className={`as-swatch${color.toLowerCase() === ink.toLowerCase() ? " as-swatch--on" : ""}`}
+              style={{ background: color }}
+              onClick={() => onPatch(zone.id, { color: color.toLowerCase() })}
+            />
+          ))}
+        </div>
+        <input
+          className="as-swatch as-swatch--custom"
+          type="color"
+          value={ink}
+          onChange={(event) => onPatch(zone.id, { color: event.target.value.toLowerCase() })}
+          aria-label="Custom zone colour"
+          title="Pick any outline colour — the fill derives from it"
+        />
+        {zone.color ? (
+          <button
+            type="button"
+            className="as-chip"
+            onClick={() => onPatch(zone.id, { color: undefined })}
+            title="Back to the provider's colour"
+          >
+            Auto
+          </button>
+        ) : null}
+      </InspectorSection>
+
+      <InspectorSection caption="Style">
+        <select
+          className="as-select"
+          value={zone.outline ?? "solid"}
+          onChange={(event) => {
+            const value = event.target.value as ZoneOutline;
+            // `solid` is the default and never stored.
+            onPatch(zone.id, { outline: value === "solid" ? undefined : value });
+          }}
+          aria-label="Zone outline style"
+          title="Outline — solid, dashed, dotted, or none"
+        >
+          {ZONE_OUTLINES.map((o) => (
+            <option key={o} value={o}>
+              outline: {o}
+            </option>
+          ))}
+        </select>
+        <label className="as-check" title="Draw the derived background tint">
+          <input
+            type="checkbox"
+            checked={zone.fill !== false}
+            onChange={(event) =>
+              // Filled is the default; only the opt-out is stored.
+              onPatch(zone.id, { fill: event.target.checked ? undefined : false })
+            }
+          />
+          Fill
+        </label>
+        <input
+          className="as-range"
+          type="range"
+          min={0}
+          max={0.6}
+          step={0.02}
+          value={zone.opacity ?? DEFAULT_ZONE_OPACITY}
+          disabled={zone.fill === false}
+          onChange={(event) => onPatch(zone.id, { opacity: Number(event.target.value) })}
+          aria-label="Fill opacity"
+          title="How strong the background tint is"
+        />
+      </InspectorSection>
+
       <ChipListEditor
         caption="Supports"
         ariaLabel="Providers this zone supports"
@@ -2614,12 +3183,15 @@ function NodeInspector({
   registry,
   zones,
   zoneId,
+  relevantProviders,
   onPatch,
 }: {
   node: Node;
   registry: ResolvedRegistry;
   zones: DiagramZone[];
   zoneId: string | null;
+  /** Providers the document references — the kind picker demotes the rest. */
+  relevantProviders: ReadonlySet<string>;
   onPatch: (id: string, patch: Partial<DiagramNodeData>) => void;
 }) {
   const data = node.data as DiagramNodeData;
@@ -2650,23 +3222,16 @@ function NodeInspector({
           onChange={(event) => onPatch(node.id, { label: event.target.value })}
           aria-label="Node label"
         />
-        <select
-          className="as-select"
+        <KindSelect
+          registry={registry}
           value={data.kind as string}
-          onChange={(event) => {
-            const kind = event.target.value;
+          relevantProviders={relevantProviders}
+          onChange={(kind) => {
             // Adopt the new kind's default icon so the node doesn't keep a glyph
             // that made sense only for the old kind.
             onPatch(node.id, { kind, icon: kindDef(registry, kind).icon });
           }}
-          aria-label="Node kind"
-        >
-          {registry.kindOrder.map((kind) => (
-            <option key={kind} value={kind}>
-              {registry.nodeKinds[kind].label}
-            </option>
-          ))}
-        </select>
+        />
         {!def.annotation ? (
           <select
             className="as-select"
@@ -2677,7 +3242,7 @@ function NodeInspector({
               onPatch(node.id, { status: value === "active" ? undefined : value });
             }}
             aria-label="Lifecycle status"
-            title="Lifecycle stage — proposed/planned outline, deprecated/retired dim"
+            title="Lifecycle stage — proposed/planned/stubbed outline, dark hazard-taped, deprecated/retired dim"
           >
             {NODE_STATUSES.map((status) => (
               <option key={status} value={status}>
@@ -2935,7 +3500,9 @@ function EdgeInspector({
               aria-label={`Edge colour ${color}`}
               aria-pressed={data.color === color}
               className={`as-swatch${data.color === color ? " as-swatch--on" : ""}`}
-              style={{ background: EDGE_COLOR_HEX[color as EdgeColor] }}
+              // Resolves through the theme's --as-edge-* override when set,
+              // so the picker shows the colour the edge will actually be.
+              style={{ background: `var(--as-edge-${color}, ${EDGE_COLOR_HEX[color as EdgeColor]})` }}
               onClick={() => onPatch(edge.id, { color: color as EdgeColor })}
             />
           ))}
@@ -2946,6 +3513,11 @@ function EdgeInspector({
 }
 
 // ─── Small utilities ─────────────────────────────────────────────────────────
+
+/** The document with its title set — the write half of the title↔name sync. */
+function withMetaTitle<T extends { meta?: Record<string, unknown> }>(doc: T, title: string): T {
+  return { ...doc, meta: { ...doc.meta, title } };
+}
 
 function registryOpts(registry: ResolvedRegistry) {
   return {
@@ -2982,6 +3554,49 @@ function viewSignatureOf(template: DiagramTemplate, showHidden: boolean): string
   // document part (zones + collapse → commit) from the view part (ghost
   // toggle → no undo entry). Collapse after it would silently stop committing.
   return `${zones}|collapsed:${collapsed}|hidden:${showHidden}`;
+}
+
+/**
+ * Flag the canvas for the scrub cursor: later elements are either greyed out
+ * or dropped from the render.
+ *
+ * A pure map over what the editor already holds, applied on the way INTO
+ * React Flow and never written back into state, so the document the editor
+ * derives from its canvas is unaffected by where the cursor stands.
+ */
+function applyTimelineView(
+  nodes: Node[],
+  edges: Edge[],
+  future: TimelineFuture | null,
+  mode: TimelineFutureMode,
+): { nodes: Node[]; edges: Edge[] } {
+  if (!future) return { nodes, edges };
+
+  // Zones share the node array under a prefixed id, so the future sets — keyed
+  // by DOCUMENT id — are consulted through that prefix.
+  const nodeIsFuture = (id: string) =>
+    isZoneNodeId(id) ? future.zones.has(fromZoneNodeId(id)) : future.nodes.has(id);
+
+  function mark<T extends { className?: string; hidden?: boolean; selected?: boolean }>(
+    item: T,
+    isFuture: boolean,
+  ): T {
+    if (!isFuture) return item;
+    // Hidden rather than removed: React Flow keeps it in the array, so the
+    // editor's own state stays complete. Deselected with it, or the inspector
+    // would be editing something invisible.
+    if (mode === "hide") return { ...item, hidden: true, selected: false };
+    return { ...item, className: `${item.className ? `${item.className} ` : ""}as-future` };
+  }
+
+  return {
+    nodes: nodes.map((n) => mark(n, nodeIsFuture(n.id))),
+    // An endpoint check as well as the edge's own id: a collapse-rerouted edge
+    // carries a synthetic id that no future set can know about.
+    edges: edges.map((e) =>
+      mark(e, future.edges.has(e.id) || nodeIsFuture(e.source) || nodeIsFuture(e.target)),
+    ),
+  };
 }
 
 /**

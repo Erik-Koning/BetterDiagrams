@@ -1,16 +1,17 @@
 /**
  * extensions.js — proof that the editor extends without being forked.
  *
- * Nothing here imports library internals. Three plain objects add two AWS-ish
+ * Nothing here imports library internals. Three plain objects add two custom
  * node kinds, an icon for each, and a custom exporter — and because the
  * registry also feeds the generated LLM system prompt, the model can emit the
- * new kinds too.
+ * new kinds too. (AWS/Azure/GCP components ship built in — these demo kinds
+ * deliberately cover things the cloud packs don't.)
  */
 
 /** 24x24 viewBox path data, same format as the built-in icons. */
 export const icons = {
-  lambda: ["M4 4h6l7 16h3", "M20 4h-5L8 20H4"],
-  bucket: ["M4 6h16l-2 14H6z", "M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3"],
+  vault: ["M12 2l9 5v10l-9 5-9-5V7z", "M12 9v6", "M9 12h6"],
+  cache: ["M4 7h16v10H4z", "M4 12h16", "M8 7v10"],
 };
 
 /**
@@ -18,19 +19,19 @@ export const icons = {
  * has to state what makes it different.
  */
 export const nodeKinds = {
-  lambda: {
-    label: "Lambda",
-    fill: "#2a1607",
-    accent: "#fb923c",
-    text: "#fed7aa",
-    icon: "lambda",
+  vault: {
+    label: "Vault",
+    fill: "#241a04",
+    accent: "#eab308",
+    text: "#fde68a",
+    icon: "vault",
   },
-  bucket: {
-    label: "S3 Bucket",
-    fill: "#052e1a",
-    accent: "#4ade80",
-    text: "#bbf7d0",
-    icon: "bucket",
+  cache: {
+    label: "Redis Cache",
+    fill: "#2d0a0a",
+    accent: "#f87171",
+    text: "#fecaca",
+    icon: "cache",
   },
   // A container kind, so nodes can nest inside it exactly like a Group.
   region: {
@@ -90,6 +91,6 @@ export const providers = {
 
 /** Extra guidance appended to the generated LLM system prompt. */
 export const promptExtraRules =
-  '- This organisation runs on AWS. Prefer "lambda" for compute, "bucket" for object storage, and wrap cloud resources in a "region" container.';
+  '- This organisation runs on AWS. Prefer the aws-* component kinds for cloud resources, "vault" for secrets management, "cache" for Redis, and wrap cloud resources in a "region" container.';
 
 export const registry = { nodeKinds, icons, exporters, providers, promptExtraRules };

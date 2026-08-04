@@ -7,13 +7,11 @@
  */
 
 export { ArchitectureStudio } from "./ArchitectureStudio";
-export type { ArchitectureStudioProps, StudioSlotContext } from "./ArchitectureStudio";
+export type { ArchitectureStudioProps, StudioSelection, StudioSlotContext } from "./ArchitectureStudio";
 export { DiffCanvas } from "./DiffCanvas";
-export { TimelineCanvas } from "./TimelineCanvas";
 
 export { SequenceStudio } from "./sequence/SequenceStudio";
-export type { SequenceStudioProps } from "./sequence/SequenceStudio";
-export { SequenceTimelineCanvas } from "./sequence/SequenceTimelineCanvas";
+export type { SequenceSelection, SequenceStudioProps } from "./sequence/SequenceStudio";
 export {
   BUILTIN_SEQUENCE_EXPORTERS,
   renderSequenceToCanvas,
@@ -31,6 +29,8 @@ export {
   kindDef,
   iconPaths,
   providerDef,
+  zoneInk,
+  zoneFill,
   FALLBACK_KIND,
   FALLBACK_PROVIDER,
 } from "./registry";
@@ -58,12 +58,16 @@ export {
   DARK_EXPORT_PALETTE,
   LIGHT_EXPORT_PALETTE,
 } from "./exporters";
-export type { ExportPalette, DrawCmd, Emitted } from "./draw";
+export type { ExportPalette, DrawCmd, DrawTag, Emitted } from "./draw";
+export { buildTimelineHtml } from "./html-export";
+export type { TimelineHtmlOptions } from "./html-export";
 export { silhouettePath } from "./shapes";
 export type { Silhouette } from "./shapes";
 
 export { themeToStyle, paletteFromTheme, DARK_THEME, LIGHT_THEME } from "./theme";
 export type { Theme } from "./theme";
 
-export { DateChip, TimelineScrubber } from "./chrome";
-export type { StudioFile } from "./chrome";
+export { BrandMark, DateChip, TimelineScrubber } from "./chrome";
+export { WelcomeModal } from "./WelcomeModal";
+export type { WelcomeModalProps } from "./WelcomeModal";
+export type { StudioFile, StudioFileInit } from "./chrome";

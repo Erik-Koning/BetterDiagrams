@@ -95,6 +95,11 @@ export const LabeledEdge = memo(function LabeledEdge({
           ? "#f59e0b"
           : undefined;
   const color = diffStroke ?? (EDGE_COLOR_HEX[data?.color ?? "slate"] ?? EDGE_COLOR_HEX.slate);
+  // Colour arrives twice: the hex as an SVG attribute (jsdom, no-CSS
+  // fallback), and a class the stylesheet resolves through --as-edge-* /
+  // --as-diff-* variables — which is what lets a light theme darken every
+  // edge without this component knowing about themes.
+  const colorClass = data?.diffState ? `as-edge--${data.diffState}` : `as-edge--c-${data?.color ?? "slate"}`;
   const dash = EDGE_DASH[data?.style ?? "solid"]?.join(" ") || undefined;
   const direction = data?.direction ?? "forward";
   const hasLabel = !!data?.label || !!data?.tech || !!data?.seq || !!data?.date;
@@ -110,8 +115,8 @@ export const LabeledEdge = memo(function LabeledEdge({
       <path
         className={[
           "as-edge__stroke",
+          colorClass,
           selected && !diffStroke ? "as-edge__stroke--selected" : "",
-          data?.diffState ? `as-edge--${data.diffState}` : "",
         ]
           .filter(Boolean)
           .join(" ")}
@@ -124,6 +129,7 @@ export const LabeledEdge = memo(function LabeledEdge({
       />
       {direction !== "none" ? (
         <polygon
+          className={`as-edge__arrow ${colorClass}`}
           points="0,-4.5 9,0 0,4.5"
           fill={color}
           transform={`translate(${geo.tip.x} ${geo.tip.y}) rotate(${(geo.angle * 180) / Math.PI})`}
@@ -132,6 +138,7 @@ export const LabeledEdge = memo(function LabeledEdge({
       ) : null}
       {direction === "both" ? (
         <polygon
+          className={`as-edge__arrow ${colorClass}`}
           points="0,-4.5 9,0 0,4.5"
           fill={color}
           transform={`translate(${origin.x} ${origin.y}) rotate(${(startAngle(geo) * 180) / Math.PI})`}
@@ -143,7 +150,7 @@ export const LabeledEdge = memo(function LabeledEdge({
           {data?.seq ? (
             <>
               <circle
-                className="as-edge__seq"
+                className={`as-edge__seq as-edge--c-${data?.color ?? "slate"}`}
                 cx={geo.label.x - seqBadgeOffset(data.label)}
                 cy={geo.label.y - 9}
                 r={8}

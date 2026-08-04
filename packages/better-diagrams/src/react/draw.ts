@@ -29,13 +29,12 @@ import {
   type DiagramEdge,
   type DiagramNode,
   type DiagramTemplate,
-  type DiagramZone,
 } from "../contract/schema";
-import { zoneOutline } from "../contract/zones";
-import { formatDiagramDate } from "../contract/timeline";
+import { zoneOutline, type DiagramZone } from "../contract/zones";
+import { dateToDay, effectiveNodeDates, formatDiagramDate, isOverdue, laterDate } from "../contract/timeline";
 import { edgeGeometryFor, startAngle, type Box } from "../contract/geometry";
 import { seqBadgeOffset, silhouettePath, teamColor } from "./shapes";
-import { kindDef, iconPaths, providerDef, type ResolvedRegistry } from "./registry-types";
+import { kindDef, iconPaths, providerDef, zoneInk, type ResolvedRegistry } from "./registry-types";
 
 export const PAD = 48;
 export const GRID = 24;
@@ -61,6 +60,32 @@ export interface ExportPalette {
   gridDot: string;
   /** Ink on accent-coloured chips (the seq badge number). */
   accentInk: string;
+  /** Deprecated status text (salmon family). */
+  warn?: string;
+  /** Past-due date chips on not-yet-active elements (amber family). */
+  overdue?: string;
+  /**
+   * Per-edge-colour overrides. An object, or a JSON string of one —
+   * `paletteFromTheme` has to squeeze through a string map, so the emitters
+   * accept either.
+   */
+  edgeColors?: Record<string, string> | string;
+  /** Per-participant-kind accents for the sequence emitter. Same encoding. */
+  seqAccents?: Record<string, string> | string;
+}
+
+/** Normalize the record-or-JSON palette fields. */
+export function paletteRecord(
+  value: Record<string, string> | string | undefined,
+): Record<string, string> | undefined {
+  if (!value) return undefined;
+  if (typeof value !== "string") return value;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export const DARK_EXPORT_PALETTE: ExportPalette = {
@@ -73,6 +98,8 @@ export const DARK_EXPORT_PALETTE: ExportPalette = {
   border: "#334155",
   gridDot: "#1e293b",
   accentInk: "#04121f",
+  warn: "#fa8072",
+  overdue: "#f59e0b",
 };
 
 export const LIGHT_EXPORT_PALETTE: ExportPalette = {
@@ -85,11 +112,29 @@ export const LIGHT_EXPORT_PALETTE: ExportPalette = {
   border: "#e2e8f0",
   gridDot: "#e2e8f0",
   accentInk: "#ffffff",
+  warn: "#e0674f",
+  overdue: "#d97706",
+  edgeColors: { slate: "#475569", sky: "#0284c7", emerald: "#059669", amber: "#d97706", rose: "#e11d48", violet: "#7c3aed" },
+  seqAccents: { actor: "#64748b", service: "#0284c7", database: "#d97706", queue: "#7c3aed", external: "#475569" },
 };
 
 // ─── Command set ─────────────────────────────────────────────────────────────
 
-export type DrawCmd =
+/**
+ * Which document element a command belongs to, and when that element lands
+ * (as an epoch day — see `dateToDay`). Stamped by the emitters; the canvas
+ * backend ignores it, the SVG backend groups consecutive same-tag commands in
+ * a `<g data-el data-day>` so the interactive HTML export can scrub elements
+ * in and out client-side without re-rendering anything.
+ */
+export interface DrawTag {
+  id: string;
+  day?: number;
+}
+
+export type DrawCmd = RawDrawCmd & { tag?: DrawTag };
+
+type RawDrawCmd =
   | {
       op: "path";
       d: string;
@@ -279,11 +324,24 @@ export function emitTemplate(
   paletteOverride: Partial<ExportPalette> = {},
 ): Emitted {
   const palette: ExportPalette = { ...DARK_EXPORT_PALETTE, ...paletteOverride };
+  // Fixed-hex palettes re-resolve per theme: a light export darkens the edge
+  // colours the same way the canvas's CSS variables do.
+  const edgeHex = { ...EDGE_COLOR_HEX, ...paletteRecord(palette.edgeColors) };
   const { placed, byId, zones, edges, legend } = layout(template);
   const b = templateBounds(template, { onlyVisible: true });
   const width = Math.max(1, b.maxX - b.minX + PAD * 2);
   const height = Math.max(1, b.maxY - b.minY + PAD * 2);
   const cmds: DrawCmd[] = [];
+
+  // Effective landing days, for tagging: nodes after the containment cascade,
+  // edges never earlier than either endpoint — the same rules the editor's
+  // scrubber applies, resolved here so a viewer only ever compares numbers.
+  const nodeDates = effectiveNodeDates(template);
+  const dayOf = (date?: string) => (date ? dateToDay(date) : undefined);
+  /** Stamp everything pushed since `start` as belonging to one element. */
+  const stamp = (start: number, id: string, day?: number) => {
+    for (let i = start; i < cmds.length; i++) cmds[i].tag ??= { id, ...(day !== undefined ? { day } : {}) };
+  };
 
   // Background + dot grid.
   cmds.push({
@@ -301,10 +359,15 @@ export function emitTemplate(
     color: palette.gridDot,
   });
 
-  // Zones, back to front.
+  // Zones, back to front. The ink (override or provider colour) mirrors what
+  // the canvas paints — see zoneInk; the fill is the same colour tinted.
   for (const zone of zones) {
+    const zoneStart = cmds.length;
     const def = providerDef(registry, zone.provider);
+    const ink = zoneInk(registry, zone);
     const alpha = zone.opacity ?? DEFAULT_ZONE_OPACITY;
+    const outlined = zone.outline !== "none";
+    const filled = zone.fill !== false;
     const polygon = zoneOutlineAbs(zone);
     const d =
       zone.shape === "ellipse"
@@ -312,10 +375,32 @@ export function emitTemplate(
         : polygon
           ? `M ${polygon.map(([px, py]) => `${px} ${py}`).join(" L ")} Z`
           : roundedRectPath(zone.x, zone.y, zone.w, zone.h, zone.shape === "rounded" ? 18 : 2);
-    cmds.push({ op: "path", d, fill: def.color, fillAlpha: alpha, stroke: def.color, strokeAlpha: 0.75, strokeWidth: 1.5 });
+    // No outline AND no fill leaves nothing to draw — skip rather than emit a
+    // no-op path that would pollute the HTML player's tagged groups.
+    if (outlined || filled) {
+      cmds.push({
+        op: "path",
+        d,
+        ...(filled ? { fill: ink, fillAlpha: alpha } : {}),
+        ...(outlined
+          ? {
+              stroke: ink,
+              strokeAlpha: 0.75,
+              strokeWidth: 1.5,
+              // Same dash tables the canvas CSS uses, so the outline in a PNG
+              // is the outline on screen.
+              ...(zone.outline === "dashed" || zone.outline === "dotted"
+                ? { dash: EDGE_DASH[zone.outline] }
+                : {}),
+            }
+          : {}),
+      });
+    }
 
     // The date rides inside the zone's own header chip rather than beside it,
-    // so the chip's width formula stays the single source of its size.
+    // so the chip's width formula stays the single source of its size. The
+    // label keeps the PROVIDER's name — a recoloured zone is still hosted
+    // where it is hosted.
     const label = `${zone.label}  ·  ${def.label}${
       zone.date ? `  ·  ${formatDiagramDate(zone.date)}` : ""
     }`;
@@ -323,26 +408,30 @@ export function emitTemplate(
     cmds.push({
       op: "path",
       d: roundedRectPath(zone.x, zone.y, chipW, 22, 6),
-      fill: def.color,
+      fill: ink,
       fillAlpha: 0.22,
-      stroke: def.color,
+      stroke: ink,
       strokeAlpha: 0.55,
       strokeWidth: 1,
     });
-    cmds.push({ op: "path", d: roundedRectPath(zone.x + 8, zone.y + 8, 7, 7, 1.5), fill: def.color });
+    cmds.push({ op: "path", d: roundedRectPath(zone.x + 8, zone.y + 8, 7, 7, 1.5), fill: ink });
     cmds.push({ op: "text", x: zone.x + 21, y: zone.y + 15, text: label, size: 11, font: "mono", weight: 600, color: palette.text });
+    stamp(zoneStart, `zone:${zone.id}`, dayOf(zone.date));
   }
 
   // Date chip — the same outlined grey chip the editor renders (.as-date), so
   // "this lands in June" survives into the shared artefact rather than being
   // an editor-only affordance.
   const dateChipW = (date: string) => approxTextWidth(formatDiagramDate(date), 9, "mono") + 12;
-  const pushDateChip = (date: string, x: number, y: number) => {
+  const pushDateChip = (date: string, x: number, y: number, overdue = false) => {
     const text = formatDiagramDate(date);
+    // Overdue — past date, element still pre-active — is the chip's one loud
+    // moment: amber border and text, same as the editor.
+    const ink = overdue ? (palette.overdue ?? "#f59e0b") : palette.textDim;
     const d = roundedRectPath(x, y, approxTextWidth(text, 9, "mono") + 12, 15, 4);
     cmds.push({ op: "path", d, fill: palette.surface, fillAlpha: 0.7 });
-    cmds.push({ op: "path", d, stroke: palette.textDim, strokeAlpha: 0.4, strokeWidth: 1 });
-    cmds.push({ op: "text", x: x + 6, y: y + 11, text, size: 9, font: "mono", weight: 500, color: palette.textDim });
+    cmds.push({ op: "path", d, stroke: ink, strokeAlpha: overdue ? 0.65 : 0.4, strokeWidth: 1 });
+    cmds.push({ op: "text", x: x + 6, y: y + 11, text, size: 9, font: "mono", weight: 500, color: ink });
   };
 
   // Owning-team tag — the same pill the editor renders (see .as-node__team),
@@ -356,31 +445,12 @@ export function emitTemplate(
     cmds.push({ op: "text", x: x + 7, y: y + 11.5, text: team, size: 9, font: "mono", weight: 600, color: c });
   };
 
-  // Containers: expanded boundaries or collapsed chips.
+  // Expanded container boundaries. Collapsed chips paint later, with the
+  // leaves — they are solid cards, and edges travel under cards, not over.
   for (const { node, box } of placed) {
     const def = kindDef(registry, node.kind);
-    if (!def.container) continue;
-    if (node.collapsed) {
-      const d = roundedRectPath(box.x, box.y, box.width, box.height, 9);
-      cmds.push({ op: "path", d, fill: palette.surface });
-      cmds.push({ op: "path", d, fill: def.accent, fillAlpha: 0.1, stroke: def.accent, strokeAlpha: 0.45, strokeWidth: 1 });
-      cmds.push({
-        op: "text",
-        x: box.x + 10,
-        y: box.y + box.height / 2 + 4,
-        text: ellipsise(`▸ ${node.label}`, 11, "mono", box.width - 18),
-        size: 11,
-        font: "mono",
-        weight: 600,
-        color: palette.text,
-      });
-      if (node.date) pushDateChip(node.date, box.x + box.width - dateChipW(node.date) - 8, box.y + (box.height - 15) / 2);
-      if (node.team) {
-        const shift = node.date ? dateChipW(node.date) + 6 : 0;
-        pushTeamPill(node.team, box.x + box.width - teamPillW(node.team) - 8 - shift, box.y + (box.height - 16) / 2);
-      }
-      continue;
-    }
+    if (!def.container || node.collapsed) continue;
+    const nodeStart = cmds.length;
     cmds.push({
       op: "path",
       d: roundedRectPath(box.x, box.y, box.width, box.height, 10),
@@ -397,20 +467,22 @@ export function emitTemplate(
     // label renders them: date first, then the owning team.
     let cursor = box.x + chipW + 6;
     if (node.date) {
-      pushDateChip(node.date, cursor, box.y + 4);
+      pushDateChip(node.date, cursor, box.y + 4, isOverdue(node.date, node.status));
       cursor += dateChipW(node.date) + 6;
     }
     if (node.team) pushTeamPill(node.team, cursor, box.y + 3);
+    stamp(nodeStart, `node:${node.id}`, dayOf(nodeDates.get(node.id)));
   }
 
   // Edges.
   const defaultRouting = defaultRoutingOf(template);
   for (const edge of edges) {
+    const edgeStart = cmds.length;
     const s = byId.get(edge.source);
     const t = byId.get(edge.target);
     if (!s || !t) continue;
     const geo = edgeGeometryFor(edge.routing ?? defaultRouting, s.box, t.box, edge.labelT ?? 0.5);
-    const color = EDGE_COLOR_HEX[edge.color] ?? EDGE_COLOR_HEX.slate;
+    const color = edgeHex[edge.color] ?? edgeHex.slate;
     const direction = edge.direction ?? "forward";
 
     cmds.push({ op: "path", d: geo.path, stroke: color, strokeWidth: 1.8, dash: EDGE_DASH[edge.style] });
@@ -468,12 +540,42 @@ export function emitTemplate(
         knockout: { color: palette.bg, padX: 3, height: 11 },
       });
     }
+    stamp(
+      edgeStart,
+      `edge:${edge.id}`,
+      dayOf(laterDate(edge.date, laterDate(nodeDates.get(edge.source), nodeDates.get(edge.target)))),
+    );
   }
 
-  // Leaves and annotations.
+  // Leaves, annotations, and collapsed-container chips — everything edges
+  // must pass under.
   for (const { node, box } of placed) {
     const def = kindDef(registry, node.kind);
-    if (def.container) continue;
+    if (def.container && !node.collapsed) continue;
+    const leafStart = cmds.length;
+
+    if (def.container) {
+      const d = roundedRectPath(box.x, box.y, box.width, box.height, 9);
+      cmds.push({ op: "path", d, fill: palette.surface });
+      cmds.push({ op: "path", d, fill: def.accent, fillAlpha: 0.1, stroke: def.accent, strokeAlpha: 0.45, strokeWidth: 1 });
+      cmds.push({
+        op: "text",
+        x: box.x + 10,
+        y: box.y + box.height / 2 + 4,
+        text: ellipsise(`▸ ${node.label}`, 11, "mono", box.width - 18),
+        size: 11,
+        font: "mono",
+        weight: 600,
+        color: palette.text,
+      });
+      if (node.date) pushDateChip(node.date, box.x + box.width - dateChipW(node.date) - 8, box.y + (box.height - 15) / 2, isOverdue(node.date, node.status));
+      if (node.team) {
+        const shift = node.date ? dateChipW(node.date) + 6 : 0;
+        pushTeamPill(node.team, box.x + box.width - teamPillW(node.team) - 8 - shift, box.y + (box.height - 16) / 2);
+      }
+      stamp(leafStart, `node:${node.id}`, dayOf(nodeDates.get(node.id)));
+      continue;
+    }
 
     if (def.annotation) {
       const size = node.fontSize || 13;
@@ -500,14 +602,32 @@ export function emitTemplate(
         const below = box.y + (boxed ? 6 : 0) + lines.length * (size + 5) + 2;
         pushDateChip(node.date, box.x + pad, Math.min(below, box.y + box.height - 17));
       }
+      stamp(leafStart, `node:${node.id}`, dayOf(nodeDates.get(node.id)));
       continue;
     }
 
     // Lifecycle status: outline style for not-built-yet, dimming for on-the-
-    // way-out — the same conventions the editor's CSS applies.
+    // way-out — the same conventions the editor's CSS applies. `stubbed` gets
+    // the heavy construction dash; `dark` gets a hazard-tape ring on top.
     const status = node.status;
-    const statusDash = status === "proposed" ? [2, 3] : status === "planned" ? [6, 5] : undefined;
-    const dim = status === "deprecated" ? 0.55 : status === "retired" ? 0.4 : 1;
+    const statusDash =
+      status === "proposed"
+        ? [2, 3]
+        : status === "planned"
+          ? [6, 5]
+          : status === "stubbed"
+            ? [10, 4]
+            : undefined;
+    const dim =
+      status === "deprecated"
+        ? 0.55
+        : status === "retired"
+          ? 0.4
+          : status === "dark"
+            ? 0.65
+            : status === "stubbed"
+              ? 0.85
+              : 1;
 
     const sil = silhouettePath(def.shape ?? "card", box.x + 0.75, box.y + 0.75, box.width - 1.5, box.height - 1.5);
     cmds.push({ op: "path", d: sil.body, fill: palette.surface });
@@ -522,6 +642,13 @@ export function emitTemplate(
       ...(statusDash ? { dash: statusDash } : {}),
     });
     if (sil.detail) cmds.push({ op: "path", d: sil.detail, stroke: def.accent, strokeAlpha: 0.35 * dim, strokeWidth: 1.2 });
+    if (status === "dark") {
+      // Black/white hazard tape: a black underlay with white dashes over it,
+      // matching the editor's two-layer border. Undimmed on purpose — the
+      // warning IS the point, whatever the body fades to.
+      cmds.push({ op: "path", d: sil.body, stroke: "#020617", strokeWidth: 2.5 });
+      cmds.push({ op: "path", d: sil.body, stroke: "#f8fafc", strokeWidth: 1.8, dash: [6, 6] });
+    }
 
     const cTop = sil.contentTop;
     const icon = iconPaths(registry, node.icon);
@@ -547,9 +674,27 @@ export function emitTemplate(
     }
 
     const textW = box.width - (textX - box.x) - 10;
-    const eyebrow = def.label.toUpperCase() + (status ? ` · ${status.toUpperCase()}` : "");
+    const kindText = def.label.toUpperCase();
+    const statusText = status ? ` · ${status.toUpperCase()}` : "";
     const title = ellipsise(node.label, 13, "sans", textW);
-    cmds.push({ op: "text", x: textX, y: box.y + cTop + 16, text: eyebrow, size: 9, font: "mono", color: def.accent, alpha: 0.8 * dim });
+    if (status === "deprecated") {
+      // The status token gets the editor's salmon; the node's own dimming
+      // still applies through the shared alpha, exactly as opacity does on
+      // the canvas.
+      cmds.push({ op: "text", x: textX, y: box.y + cTop + 16, text: kindText, size: 9, font: "mono", color: def.accent, alpha: 0.8 * dim });
+      cmds.push({
+        op: "text",
+        x: textX + approxTextWidth(kindText, 9, "mono"),
+        y: box.y + cTop + 16,
+        text: statusText,
+        size: 9,
+        font: "mono",
+        color: palette.warn ?? "#fa8072",
+        alpha: 0.8 * dim,
+      });
+    } else {
+      cmds.push({ op: "text", x: textX, y: box.y + cTop + 16, text: kindText + statusText, size: 9, font: "mono", color: def.accent, alpha: 0.8 * dim });
+    }
     cmds.push({ op: "text", x: textX, y: box.y + cTop + 31, text: title, size: 13, font: "sans", weight: 600, color: palette.text, ...(dim < 1 ? { alpha: dim } : {}) });
     if (status === "retired") {
       const strikeW = approxTextWidth(title, 13, "sans");
@@ -564,10 +709,11 @@ export function emitTemplate(
       // inside the box — a two-line description on a default-height node
       // leaves no room, and the chip must not escape the silhouette.
       const below = box.y + cTop + 36 + descLines.length * 13;
-      pushDateChip(node.date, textX, Math.min(below, box.y + box.height - 19));
+      pushDateChip(node.date, textX, Math.min(below, box.y + box.height - 19), isOverdue(node.date, node.status));
     }
     // Bottom-right, riding the edge — mirrors the editor's placement.
     if (node.team) pushTeamPill(node.team, box.x + box.width - teamPillW(node.team) - 6, box.y + box.height - 8);
+    stamp(leafStart, `node:${node.id}`, dayOf(nodeDates.get(node.id)));
   }
 
   // Legend.
@@ -722,7 +868,24 @@ const esc = (s: string) =>
 
 export function drawToSvg(cmds: DrawCmd[]): string {
   const out: string[] = [];
+  // Consecutive commands stamped with one tag render inside one group, so a
+  // whole element can be shown, dimmed, or hidden by touching a single <g>.
+  // The emitters push each element's commands contiguously, which is what
+  // makes run-length grouping sufficient.
+  let openTag: string | null = null;
+  const keyOf = (tag?: DrawTag) => (tag ? `${tag.id}\u0000${tag.day ?? ""}` : null);
   for (const cmd of cmds) {
+    const key = keyOf(cmd.tag);
+    if (key !== openTag) {
+      if (openTag !== null) out.push("</g>");
+      if (key !== null) {
+        const tag = cmd.tag!;
+        out.push(
+          `<g class="bd-el" data-el="${esc(tag.id)}"${tag.day !== undefined ? ` data-day="${tag.day}"` : ""}>`,
+        );
+      }
+      openTag = key;
+    }
     switch (cmd.op) {
       case "grid": {
         // A pattern keeps the SVG small where canvas just loops.
@@ -787,5 +950,6 @@ export function drawToSvg(cmds: DrawCmd[]): string {
       }
     }
   }
+  if (openTag !== null) out.push("</g>");
   return out.join("\n");
 }

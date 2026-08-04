@@ -30,6 +30,9 @@ body {
   --shell-text-dim: #94a3b8;
   --shell-text-faint: #64748b;
   --shell-code: #a5b4fc;
+  /* Canvas-selection highlight in the JSON panel: LIGHTER than the dark
+     panel here, darker than the white one in light mode. */
+  --shell-json-hit: rgb(226 232 240 / 11%);
 
   display: flex;
   flex-direction: column;
@@ -49,6 +52,7 @@ body {
   --shell-text-dim: #64748b;
   --shell-text-faint: #94a3b8;
   --shell-code: #4f46e5;
+  --shell-json-hit: rgb(15 23 42 / 8%);
 }
 
 .app__bar {
@@ -60,6 +64,28 @@ body {
   padding: 14px 20px;
   border-bottom: 1px solid var(--shell-border);
   background: var(--shell-surface);
+}
+
+.app__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* The library's BrandMark reads --as-* tokens; outside the studio root the
+   shell maps them per theme (the accent matches each studio theme's accent). */
+.app__logo {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  --as-accent: #38bdf8;
+  --as-surface: var(--shell-bg);
+  --as-surface-2: var(--shell-surface-2);
+  --as-border: var(--shell-border-2);
+}
+
+.app[data-theme="light"] .app__logo {
+  --as-accent: #0284c7;
 }
 
 .app__title {
@@ -75,7 +101,8 @@ body {
 }
 
 .app__sub code,
-.app__note code {
+.app__note code,
+.app__side-pop code {
   padding: 1px 4px;
   border-radius: 3px;
   background: var(--shell-surface-2);
@@ -147,6 +174,75 @@ body {
 
 .app__btn:hover {
   background: var(--shell-border-2);
+}
+
+/* Anchor for the settings dropdown. */
+.app__menu {
+  position: relative;
+}
+
+.app__dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  padding: 6px;
+  border: 1px solid var(--shell-border-2);
+  border-radius: 10px;
+  background: var(--shell-surface);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 35%);
+}
+
+.app__dropdown-caption {
+  padding: 4px 8px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--shell-text-faint);
+}
+
+.app__dropdown-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--shell-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.app__dropdown-item:hover:not(:disabled) {
+  background: var(--shell-surface-2);
+}
+
+.app__dropdown-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.app__dropdown-desc {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--shell-text-dim);
+}
+
+.app__dropdown-note {
+  padding: 4px 8px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--shell-text-dim);
 }
 
 .app__body {
@@ -226,6 +322,46 @@ body {
   color: var(--shell-text-dim);
 }
 
+/* Hover card for the collapsed handle. The 200ms show delay lives in the
+   hover-state transition; hiding is immediate-ish so it never lingers.
+   `visibility` keeps it out of hit-testing while invisible. */
+.app__side-pop {
+  position: fixed;
+  top: 50%;
+  right: 34px;
+  z-index: 30;
+  max-width: 240px;
+  padding: 10px 12px;
+  border: 1px solid var(--shell-border-2);
+  border-radius: 10px;
+  background: var(--shell-surface);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 35%);
+  transform: translateY(-50%);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 140ms, visibility 0s 140ms;
+  pointer-events: none;
+}
+
+.app__side-tab:hover + .app__side-pop,
+.app__side-tab:focus-visible + .app__side-pop {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 140ms 200ms, visibility 0s 200ms;
+}
+
+.app__side-pop-title {
+  font-size: 12px;
+  color: var(--shell-text);
+}
+
+.app__side-pop-text {
+  margin: 3px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--shell-text-dim);
+}
+
 .app__note {
   margin: 6px 0 10px;
   font-size: 11px;
@@ -233,10 +369,42 @@ body {
   color: var(--shell-text-dim);
 }
 
+/* Wraps the JSON viewer so the edit affordance can float inside it, bottom
+   centre, without joining the scrolling content. */
+.app__json-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.app__json-edit {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border: 1px solid var(--shell-border-2);
+  border-radius: 999px;
+  background: var(--shell-surface-2);
+  color: var(--shell-text-mid);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 120ms, border-color 120ms;
+}
+
+.app__json-edit:hover {
+  color: var(--shell-text);
+  border-color: var(--shell-text-faint);
+}
+
 .app__json {
   flex: 1;
   margin: 0;
-  padding: 12px;
+  /* Extra bottom padding keeps the last lines clear of the floating button. */
+  padding: 12px 12px 48px;
   overflow: auto;
   border: 1px solid var(--shell-border);
   border-radius: 8px;
@@ -245,6 +413,17 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
   line-height: 1.5;
+}
+
+/* The JSON entries for elements selected on the canvas. Inline-block with a
+   min-width, so each hit reads as one solid bar at least the panel wide even
+   when other lines force a horizontal scroll. */
+.app__json-hit {
+  display: inline-block;
+  min-width: 100%;
+  border-radius: 4px;
+  background: var(--shell-json-hit);
+  color: var(--shell-text);
 }
 
 @media (max-width: 900px) {

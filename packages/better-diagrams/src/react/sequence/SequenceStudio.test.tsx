@@ -8,7 +8,7 @@
  */
 import { StrictMode, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SequenceStudio } from "./SequenceStudio";
 import {
@@ -181,6 +181,44 @@ describe("SequenceStudio", () => {
     expect(latest.activations?.some((a) => a.participant === "db")).toBeFalsy();
   });
 
+  it("reports the canvas selection to the host in document terms", async () => {
+    const onSelectionChange = vi.fn();
+    mount(<SequenceStudio defaultValue={example} onSelectionChange={onSelectionChange} />);
+
+    // The mount itself reports (an empty selection), so a host that remounts
+    // the editor per file never keeps the previous document's selection.
+    expect(onSelectionChange).toHaveBeenCalledWith({
+      participants: [],
+      messages: [],
+      activations: [],
+      fragments: [],
+      notes: [],
+    });
+
+    fireEvent.click(screen.getByText("Orders DB"));
+    await waitFor(() =>
+      expect(onSelectionChange).toHaveBeenLastCalledWith({
+        participants: ["db"],
+        messages: [],
+        activations: [],
+        fragments: [],
+        notes: [],
+      }),
+    );
+
+    // A note buckets under `notes` with its DOCUMENT id — no canvas prefix.
+    fireEvent.click(screen.getByText("Idempotent by order id"));
+    await waitFor(() =>
+      expect(onSelectionChange).toHaveBeenLastCalledWith({
+        participants: [],
+        messages: [],
+        activations: [],
+        fragments: [],
+        notes: ["n1"],
+      }),
+    );
+  });
+
   it("toggles autonumber from the View menu", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -327,6 +365,31 @@ describe("SequenceStudio", () => {
     expect(onFileSelect).toHaveBeenCalledWith("s2");
   });
 
+  it("renaming the active file writes the document's meta.title", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(
+      <SequenceStudio
+        defaultValue={example}
+        onChange={onChange}
+        files={[{ id: "s1", name: "Order flow", kind: "seq" }]}
+        activeFileId="s1"
+        onFileRename={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Order flow ▾" }));
+    await user.click(screen.getByRole("button", { name: "Rename Order flow" }));
+    const input = screen.getByLabelText("File name");
+    await user.clear(input);
+    await user.type(input, "Checkout{Enter}");
+
+    await waitFor(() => {
+      const last = onChange.mock.calls.at(-1)![0] as SequenceTemplate;
+      expect(last.meta?.title).toBe("Checkout");
+    });
+  });
+
   it("confirms before deleting a non-empty file here too", async () => {
     const user = userEvent.setup();
     const onFileDelete = vi.fn();
@@ -403,9 +466,13 @@ describe("SequenceStudio", () => {
 
     await user.click(screen.getByRole("button", { name: /Timeline/ }));
     await user.click(screen.getByRole("button", { name: "Hide later" }));
-    fireEvent.change(screen.getByRole("slider", { name: "Scrub to a date" }), {
-      target: { value: "0" },
-    });
+    // Walk back to the first dated point — deterministic however the real
+    // date moves, since the cursor opens on today inside the plan's span.
+    for (let guard = 0; guard < 20; guard++) {
+      const back = screen.getByRole("button", { name: "Previous dated point" });
+      if ((back as HTMLButtonElement).disabled) break;
+      await user.click(back);
+    }
 
     // March: the API exists, the ledger does not.
     await waitFor(() => expect(screen.queryByText("Ledger")).not.toBeInTheDocument());
@@ -423,6 +490,35 @@ describe("SequenceStudio", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it("stamps the cursor onto inserts and keeps hidden steps through the commit", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<SequenceStudio defaultValue={phased} onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: /Timeline/ }));
+    await user.click(screen.getByRole("button", { name: "Hide later" }));
+    for (let guard = 0; guard < 20; guard++) {
+      const back = screen.getByRole("button", { name: "Previous dated point" });
+      if ((back as HTMLButtonElement).disabled) break;
+      await user.click(back);
+    }
+    await waitFor(() => expect(screen.queryByText("Ledger")).not.toBeInTheDocument());
+
+    // Editing stays live while scrubbing — and the commit it causes must not
+    // destroy the hidden June participant or its messages.
+    await user.click(screen.getByRole("button", { name: "Insert ▾" }));
+    await user.click(screen.getByRole("menuitem", { name: /Participant/ }));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const last = onChange.mock.calls.at(-1)![0] as SequenceTemplate;
+    expect(last.participants.some((p) => p.id === "led")).toBe(true);
+    expect(last.messages).toHaveLength(phased.messages.length);
+    // The insert inherits the cursor — the first stop, March.
+    const added = last.participants.find(
+      (p) => !phased.participants.some((d) => d.id === p.id),
+    );
+    expect(added?.date).toBe("2026-03-02");
+  });
+
   it("sets a participant's date from the inspector", async () => {
     const onChange = vi.fn();
     mount(<SequenceStudio defaultValue={example} onChange={onChange} />);
@@ -435,5 +531,66 @@ describe("SequenceStudio", () => {
       const last = onChange.mock.calls.at(-1)![0] as SequenceTemplate;
       expect(last.participants.find((p) => p.id === "api")?.date).toBe("2026-06-15");
     });
+  });
+});
+
+describe("SequenceStudio welcome modal", () => {
+  it("shows over a brand-new sequence and dismisses via the manual CTA", async () => {
+    const user = userEvent.setup();
+    mount(<SequenceStudio defaultValue={{ version: 1, participants: [], messages: [] }} />);
+    expect(screen.getByRole("dialog", { name: "Get started" })).toBeInTheDocument();
+    expect(screen.getByText("BetterDiagrams")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Insert Node Manually/ }));
+    expect(screen.queryByRole("dialog", { name: "Get started" })).not.toBeInTheDocument();
+  });
+
+  it("does not show over a sequence with content", () => {
+    mount(<SequenceStudio defaultValue={example} />);
+    expect(screen.queryByRole("dialog", { name: "Get started" })).not.toBeInTheDocument();
+  });
+});
+
+describe("multi-state export modal", () => {
+  const dated = validateSequence({
+    version: 1,
+    participants: [
+      { id: "u", label: "User", kind: "actor" },
+      { id: "api", label: "API", kind: "service" },
+    ],
+    messages: [
+      { id: "m1", from: "u", to: "api", label: "call", style: "sync", date: "2026-03-01" },
+      { id: "m2", from: "api", to: "u", label: "reply", style: "reply", date: "2026-09-30" },
+    ],
+    activations: [],
+    fragments: [],
+    notes: [],
+  });
+
+  it("dated sequences get the modal with only a Dates axis", async () => {
+    const user = userEvent.setup();
+    mount(<SequenceStudio defaultValue={dated} />);
+
+    await user.click(screen.getByRole("button", { name: "Export ▾" }));
+    await user.click(screen.getByRole("menuitem", { name: /SVG vector/ }));
+    const dialog = screen.getByRole("dialog", { name: "Export SVG" });
+    // No zone axes in a sequence — the one fieldset is the dates.
+    expect(within(dialog).getAllByRole("group")).toHaveLength(1);
+    expect(within(dialog).getByRole("group", { name: "Dates" })).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("radio", { name: /All states/ }));
+    expect(within(dialog).getByText("2 files → sequence-states.zip")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Export" }));
+    await screen.findByText("Exported 2 states → sequence-states.zip");
+  });
+
+  it("undated sequences export immediately, no modal", async () => {
+    const user = userEvent.setup();
+    mount(<SequenceStudio defaultValue={example} />);
+
+    await user.click(screen.getByRole("button", { name: "Export ▾" }));
+    await user.click(screen.getByRole("menuitem", { name: /SVG vector/ }));
+    expect(screen.queryByRole("dialog", { name: "Export SVG" })).not.toBeInTheDocument();
+    await screen.findByText("Exported sequence.svg");
   });
 });

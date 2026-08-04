@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRegistry as resolveRegistry } from "./create-registry";
-import { kindDef, iconPaths } from "./registry-types";
+import { kindDef, iconPaths, zoneFill, zoneInk } from "./registry-types";
+import { LIGHT_THEME, themeToStyle } from "./theme";
 import {
   emitTemplate,
   renderTemplateToC4Puml,
@@ -11,6 +12,7 @@ import {
 import {
   EXAMPLE_TEMPLATE,
   EXAMPLE_ZONED_TEMPLATE,
+  validateTemplate,
   type DiagramTemplate,
 } from "../contract/schema";
 
@@ -48,7 +50,7 @@ describe("resolveRegistry", () => {
     expect(r.exporters.pdf).toBeUndefined();
   });
 
-  it("keeps built-in kinds before extensions in the inspector order", () => {
+  it("orders kinds: built-ins, then cloud packs, then extensions", () => {
     const r = resolveRegistry({ nodeKinds: { zeta: {}, alpha: {} } });
     expect(r.kindOrder.slice(0, 8)).toEqual([
       "service",
@@ -60,7 +62,9 @@ describe("resolveRegistry", () => {
       "group",
       "text",
     ]);
-    expect(r.kindOrder.slice(8)).toEqual(["zeta", "alpha"]);
+    // The cloud pack kinds sit between built-ins and extensions.
+    expect(r.kindOrder[8]).toBe("aws-lambda");
+    expect(r.kindOrder.slice(-2)).toEqual(["zeta", "alpha"]);
   });
 
   it("registers a container extension so nesting works for it", () => {
@@ -107,6 +111,24 @@ describe("resolveRegistry", () => {
     expect(r.lintRules["min-nodes"].label).toBe("Minimum size");
     expect(r.lintRules["no-orphans"]).toBeUndefined();
     expect(r.lintRules["no-cycles"]).toBeDefined();
+  });
+
+  it("registers the cloud packs as provider-tagged built-ins", () => {
+    const r = resolveRegistry();
+    expect(r.nodeKinds["aws-lambda"]).toMatchObject({ label: "Lambda", provider: "aws" });
+    expect(r.nodeKinds["azure-cosmos"]).toMatchObject({ provider: "azure", shape: "cylinder" });
+    expect(r.nodeKinds["gcp-pubsub"]).toMatchObject({ provider: "gcp", shape: "pipe" });
+    // Generic kinds carry no provider tag — that's what the UI filters on.
+    expect(r.nodeKinds.service.provider).toBeUndefined();
+  });
+
+  it("lets an extension override or remove a cloud kind like any builtin", () => {
+    const r = resolveRegistry({
+      nodeKinds: { "aws-lambda": { label: "λ" }, "gcp-cdn": null },
+    });
+    expect(r.nodeKinds["aws-lambda"]).toMatchObject({ label: "λ", provider: "aws" });
+    expect(r.kindOrder).not.toContain("gcp-cdn");
+    expect("gcp-cdn" in r.nodeKinds).toBe(false);
   });
 
   it("does not mutate the built-in tables across calls", () => {
@@ -213,7 +235,10 @@ describe("text exporters", () => {
     const svg = renderTemplateToSvg(EXAMPLE_ZONED_TEMPLATE, resolveRegistry());
     expect(svg).toContain(">v2.1</text>");
     // Redis is deprecated in the example — the eyebrow spells the stage out.
-    expect(svg).toContain("DATABASE · DEPRECATED");
+    // The eyebrow is now two segments — the kind in the accent, the status
+    // token in salmon — so the two halves assert separately.
+    expect(svg).toContain("DATABASE");
+    expect(svg).toContain("· DEPRECATED");
   });
 
   it("draws a box behind a text note unless it opts out with `plain`", () => {
@@ -238,5 +263,169 @@ describe("text exporters", () => {
     expect(svg.trimEnd()).toMatch(/<\/svg>$/);
     // One arrowhead polygon per edge.
     expect(svg.match(/<polygon/g)).toHaveLength(EXAMPLE_TEMPLATE.edges.length);
+  });
+});
+
+describe("zone styling", () => {
+  const registry = resolveRegistry();
+  const styledDoc = (over: Record<string, unknown>) =>
+    validateTemplate({
+      version: 1,
+      zones: [
+        {
+          id: "z",
+          label: "Z",
+          shape: "rounded",
+          x: 0,
+          y: 0,
+          w: 400,
+          h: 300,
+          providers: ["azure"],
+          provider: "azure",
+          ...over,
+        },
+      ],
+      nodes: [],
+      edges: [],
+    });
+
+  it("zoneInk: the override wins, else the provider, else the fallback grey", () => {
+    expect(zoneInk(registry, { provider: "azure" })).toBe("#0078d4");
+    expect(zoneInk(registry, { provider: "azure", color: "#22c55e" })).toBe("#22c55e");
+    expect(zoneInk(registry, { provider: "no-such-provider" })).toBe("#64748b");
+  });
+
+  it("zoneFill derives the dull tint from the ink", () => {
+    expect(zoneFill(registry, { provider: "azure", opacity: 0.2 })).toBe("rgba(0, 120, 212, 0.2)");
+    expect(zoneFill(registry, { provider: "azure", color: "#22c55e", opacity: 0.5 })).toBe(
+      "rgba(34, 197, 94, 0.5)",
+    );
+    // Default opacity when unset, transparent when the fill is off.
+    expect(zoneFill(registry, { provider: "azure" })).toBe("rgba(0, 120, 212, 0.14)");
+    expect(zoneFill(registry, { provider: "azure", fill: false })).toBe("transparent");
+  });
+
+  it("a colour override reaches the SVG export", () => {
+    const svg = renderTemplateToSvg(styledDoc({ color: "#22c55e" }), registry);
+    // The body strokes and fills with the ink…
+    expect(svg).toContain('stroke="#22c55e"');
+    expect(svg).toContain('fill="#22c55e"');
+    // …while the LEGEND stays the provider's colour — it is an infra key, and
+    // a recoloured zone is still hosted where it is hosted.
+    expect(svg).toContain("#0078d4");
+    expect(svg).not.toContain('stroke="#0078d4" stroke-opacity="0.75"');
+  });
+
+  it("outline styles export as the same dash tables the canvas uses", () => {
+    expect(renderTemplateToSvg(styledDoc({ outline: "dashed" }), registry)).toContain(
+      'stroke-dasharray="8 5"',
+    );
+    expect(renderTemplateToSvg(styledDoc({ outline: "dotted" }), registry)).toContain(
+      'stroke-dasharray="2 4"',
+    );
+  });
+
+  it("outline none exports no stroke; fill false no fill", () => {
+    // The body is identifiable by its exact alpha signature — the header chip
+    // also fills with the ink but at its own 0.22.
+    const noOutline = renderTemplateToSvg(styledDoc({ outline: "none", color: "#22c55e" }), registry);
+    expect(noOutline).not.toContain('stroke="#22c55e" stroke-opacity="0.75"');
+    expect(noOutline).toContain('fill-opacity="0.14"'); // the fill stays
+
+    const noFill = renderTemplateToSvg(styledDoc({ fill: false, color: "#22c55e" }), registry);
+    expect(noFill).not.toContain('fill-opacity="0.14"'); // the body fill is gone
+    expect(noFill).toContain('stroke="#22c55e" stroke-opacity="0.75"'); // the outline stays
+  });
+
+  it("outline none + fill false emits no body path at all", () => {
+    const svg = renderTemplateToSvg(
+      styledDoc({ outline: "none", fill: false, color: "#22c55e" }),
+      registry,
+    );
+    const withBody = renderTemplateToSvg(styledDoc({ color: "#22c55e" }), registry);
+    expect((svg.match(/<path/g) ?? []).length).toBeLessThan(
+      (withBody.match(/<path/g) ?? []).length,
+    );
+    // The header chip still shows where (and what) the region is.
+    expect(svg).toContain("#22c55e");
+  });
+});
+
+describe("lifecycle stage rendering in exports", () => {
+  const registry = resolveRegistry();
+  const statusDoc = (status: string) =>
+    validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "n", label: "N", kind: "service", icon: "box", description: "", parentId: null, status, x: 0, y: 0, w: 170, h: 76 },
+      ],
+      edges: [],
+    });
+
+  it("stubbed draws the heavy construction dash", () => {
+    expect(renderTemplateToSvg(statusDoc("stubbed"), registry)).toContain('stroke-dasharray="10 4"');
+  });
+
+  it("dark draws the black/white hazard ring", () => {
+    const svg = renderTemplateToSvg(statusDoc("dark"), registry);
+    expect(svg).toContain('stroke="#020617"');
+    expect(svg).toMatch(/stroke="#f8fafc"[^/]*stroke-dasharray="6 6"/);
+  });
+
+  it("deprecated's status token exports in salmon", () => {
+    const svg = renderTemplateToSvg(statusDoc("deprecated"), registry);
+    expect(svg).toContain('fill="#fa8072"');
+    expect(svg).toContain("DEPRECATED");
+    // Only deprecated wears it — the other stages keep the accent.
+    expect(renderTemplateToSvg(statusDoc("retired"), registry)).not.toContain("#fa8072");
+  });
+
+  it("an active node draws neither", () => {
+    const svg = renderTemplateToSvg(statusDoc("active"), registry);
+    expect(svg).not.toContain("#020617");
+    expect(svg).not.toContain('stroke-dasharray="10 4"');
+  });
+});
+
+describe("colour theming", () => {
+  const registry = resolveRegistry();
+
+  it("themeToStyle fans the record tokens out to per-entry variables", () => {
+    const style = themeToStyle(LIGHT_THEME) as Record<string, string>;
+    expect(style["--as-edge-sky"]).toBe("#0284c7");
+    expect(style["--as-seq-database"]).toBe("#d97706");
+    expect(style["--as-warn"]).toBe("#e0674f");
+    expect(style["--as-diff-removed"]).toBe("#e11d48");
+  });
+
+  it("light exports darken the edge palette", () => {
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "a", label: "A", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76 },
+        { id: "b", label: "B", kind: "service", icon: "box", description: "", parentId: null, x: 400, y: 0, w: 170, h: 76 },
+      ],
+      edges: [{ id: "e", source: "a", target: "b", label: "", style: "solid", color: "sky" }],
+    });
+    // Edge strokes are the only 1.8-wide strokes — a clean discriminator.
+    expect(renderTemplateToSvg(doc, registry)).toContain('stroke="#38bdf8" stroke-width="1.8"');
+    expect(renderTemplateToSvg(doc, registry, LIGHT_EXPORT_PALETTE)).toContain(
+      'stroke="#0284c7" stroke-width="1.8"',
+    );
+  });
+
+  it("overdue date chips export amber on pre-active elements only", () => {
+    const doc = (status?: string) =>
+      validateTemplate({
+        version: 1,
+        nodes: [
+          { id: "n", label: "N", kind: "service", icon: "box", description: "", parentId: null, ...(status ? { status } : {}), date: "2020-01-01", x: 0, y: 0, w: 170, h: 76 },
+        ],
+        edges: [],
+      });
+    // A 2020 date is permanently past, so this stays deterministic.
+    expect(renderTemplateToSvg(doc("planned"), registry)).toContain('fill="#f59e0b"');
+    // Active with a past date just means "landed" — quiet grey chip.
+    expect(renderTemplateToSvg(doc(), registry)).not.toContain("#f59e0b");
   });
 });

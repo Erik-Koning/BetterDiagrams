@@ -9,10 +9,35 @@
  * the pure-logic tests cannot tell us.
  */
 import { StrictMode, useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ArchitectureStudio } from "./ArchitectureStudio";
+import { clearWelcomeSuppression } from "./WelcomeModal";
+
+// The welcome modal's CodeMirror editor is stubbed with a textarea — typing
+// into a real EditorView is unreliable in jsdom, and its own mounting is
+// covered by JsonCodeEditor.test.tsx.
+vi.mock("./JsonCodeEditor", () => ({
+  JsonCodeEditor: ({
+    value,
+    onChange,
+    placeholder,
+    ariaLabel,
+  }: {
+    value: string;
+    onChange: (text: string) => void;
+    placeholder?: string;
+    ariaLabel?: string;
+  }) => (
+    <textarea
+      aria-label={ariaLabel ?? "Diagram JSON"}
+      placeholder={placeholder}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
+}));
 import { LIGHT_THEME, paletteFromTheme } from "./theme";
 import { copyFragment } from "../contract/clipboard";
 import {
@@ -80,6 +105,8 @@ describe("ArchitectureStudio", () => {
   it("renders an empty diagram without crashing", () => {
     mount(<ArchitectureStudio defaultValue={{ version: 1, nodes: [], edges: [] }} />);
     expect(screen.getByText("arch·studio")).toBeInTheDocument();
+    // A brand-new document also greets with the welcome modal.
+    expect(screen.getByRole("dialog", { name: "Get started" })).toBeInTheDocument();
   });
 
   it("hides editing affordances in readOnly mode", () => {
@@ -956,6 +983,35 @@ describe("ArchitectureStudio", () => {
     expect(expanded.edges).toHaveLength(EXAMPLE_TEMPLATE.edges.length);
   });
 
+  it("reports the canvas selection to the host in template terms", async () => {
+    const onSelectionChange = vi.fn();
+    mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_ZONED_TEMPLATE}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+
+    // The mount itself reports (an empty selection), so a host that remounts
+    // the editor per file never keeps the previous document's selection.
+    expect(onSelectionChange).toHaveBeenCalledWith({ nodes: [], edges: [], zones: [] });
+
+    fireEvent.click(screen.getByText("REST API"));
+    await waitFor(() =>
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ nodes: ["api"], edges: [], zones: [] }),
+    );
+
+    // A zone reports under `zones` with its DOCUMENT id — no canvas prefix.
+    fireEvent.click(screen.getByText("Cloud Region"));
+    await waitFor(() =>
+      expect(onSelectionChange).toHaveBeenLastCalledWith({
+        nodes: [],
+        edges: [],
+        zones: ["region"],
+      }),
+    );
+  });
+
   it("search selects and centres a match on Enter", async () => {
     const user = userEvent.setup();
     const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
@@ -1287,6 +1343,64 @@ describe("ArchitectureStudio", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  // ── Zone styling ──────────────────────────────────────────────────────────
+
+  it("recolours a zone from the inspector's swatch row, and Auto restores", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} onChange={onChange} />);
+
+    // Select the region via its header label to open the zone inspector.
+    fireEvent.click(screen.getByText("Cloud Region"));
+    // The picker chooses the OUTLINE colour; GCP's default is one of the
+    // provider swatches on offer.
+    await user.click(await screen.findByRole("button", { name: "Zone colour GCP" }));
+    await waitFor(() => {
+      const last = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+      expect(last.zones!.find((z) => z.id === "region")?.color).toBe("#4285f4");
+    });
+
+    // Auto clears the override back to the provider's colour.
+    await user.click(screen.getByRole("button", { name: "Auto" }));
+    await waitFor(() => {
+      const last = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+      expect(last.zones!.find((z) => z.id === "region")?.color).toBeUndefined();
+    });
+  });
+
+  it("offers another zone's custom colour as a swatch for easy matching", async () => {
+    const doc = validateTemplate({
+      ...EXAMPLE_ZONED_TEMPLATE,
+      zones: EXAMPLE_ZONED_TEMPLATE.zones!.map((z) =>
+        z.id === "vendor" ? { ...z, color: "#e11d48" } : z,
+      ),
+    });
+    mount(<ArchitectureStudio defaultValue={doc} />);
+    fireEvent.click(screen.getByText("Cloud Region"));
+    // The vendor zone's custom rose shows up in the region's palette.
+    const swatch = await screen.findByRole("button", { name: /Zone colour Custom \(Stripe\)/ });
+    expect(swatch).toHaveStyle({ background: "#e11d48" });
+  });
+
+  it("sets outline style and fill from the inspector", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Cloud Region"));
+    await user.selectOptions(await screen.findByLabelText("Zone outline style"), "dashed");
+    await waitFor(() => {
+      const last = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+      expect(last.zones!.find((z) => z.id === "region")?.outline).toBe("dashed");
+    });
+
+    await user.click(screen.getByLabelText(/Fill$/));
+    await waitFor(() => {
+      const last = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+      expect(last.zones!.find((z) => z.id === "region")?.fill).toBe(false);
+    });
+  });
+
   // ── Timeline mode ─────────────────────────────────────────────────────────
   // Three phases against one undated backdrop: the shape every roadmap has.
   const dated = validateTemplate({
@@ -1300,6 +1414,24 @@ describe("ArchitectureStudio", () => {
       { id: "e1", source: "core", target: "wrk", label: "", style: "solid", color: "slate" },
     ],
   });
+
+  /**
+   * Walk the scrubber to one end. The cursor OPENS on today held inside the
+   * plan's span, so a test that named a slider value would drift as the real
+   * date moves; clicking until the step button gives out cannot.
+   */
+  const scrubToEnd = async (
+    user: ReturnType<typeof userEvent.setup>,
+    which: "Previous" | "Next",
+  ) => {
+    const name = `${which} dated point`;
+    for (let guard = 0; guard < 20; guard++) {
+      const button = screen.getByRole("button", { name });
+      if ((button as HTMLButtonElement).disabled) return;
+      await user.click(button);
+    }
+    throw new Error("scrubber never reached the end of the plan");
+  };
 
   it("renders a node's date as a chip, abbreviated month-and-day", () => {
     mount(<ArchitectureStudio defaultValue={dated} />);
@@ -1323,10 +1455,9 @@ describe("ArchitectureStudio", () => {
     mount(<ArchitectureStudio defaultValue={dated} onChange={onChange} />);
 
     await user.click(screen.getByRole("button", { name: /Timeline/ }));
-    const slider = screen.getByRole("slider", { name: "Scrub to a date" });
     // Everything later is hidden outright rather than greyed.
     await user.click(screen.getByRole("button", { name: "Hide later" }));
-    fireEvent.change(slider, { target: { value: "0" } });
+    await scrubToEnd(user, "Previous");
 
     await waitFor(() => expect(screen.queryByText("Payments")).not.toBeInTheDocument());
     expect(screen.getByText("Core API")).toBeInTheDocument();
@@ -1341,9 +1472,7 @@ describe("ArchitectureStudio", () => {
 
     await user.click(screen.getByRole("button", { name: /Timeline/ }));
     await user.click(screen.getByRole("button", { name: "Hide later" }));
-    fireEvent.change(screen.getByRole("slider", { name: "Scrub to a date" }), {
-      target: { value: "1" },
-    });
+    await scrubToEnd(user, "Next");
 
     await waitFor(() => expect(screen.getByText("Payments")).toBeInTheDocument());
     expect(screen.getByRole("group", { name: "Timeline scrubber" })).toHaveTextContent("all here");
@@ -1354,9 +1483,7 @@ describe("ArchitectureStudio", () => {
     const { container } = mount(<ArchitectureStudio defaultValue={dated} />);
 
     await user.click(screen.getByRole("button", { name: /Timeline/ }));
-    fireEvent.change(screen.getByRole("slider", { name: "Scrub to a date" }), {
-      target: { value: "0" },
-    });
+    await scrubToEnd(user, "Previous");
 
     await waitFor(() => expect(container.querySelector(".as-future")).not.toBeNull());
     // Present, but marked — the difference from "Hide later".
@@ -1370,9 +1497,7 @@ describe("ArchitectureStudio", () => {
 
     await user.click(screen.getByRole("button", { name: /Timeline/ }));
     await user.click(screen.getByRole("button", { name: "Hide later" }));
-    fireEvent.change(screen.getByRole("slider", { name: "Scrub to a date" }), {
-      target: { value: "0" },
-    });
+    await scrubToEnd(user, "Previous");
     await waitFor(() => expect(screen.queryByText("Payments")).not.toBeInTheDocument());
 
     await user.click(screen.getByRole("button", { name: "Exit timeline" }));
@@ -1398,6 +1523,15 @@ describe("ArchitectureStudio", () => {
                 seen.push(template);
               },
             },
+            fullprobe: {
+              label: "Fullprobe",
+              // Declares it carries its own timeline — the HTML exporter's
+              // contract — so the hide-mode slice must not apply to it.
+              fullDocument: true,
+              run: ({ template }) => {
+                seen.push(template);
+              },
+            },
           },
         }}
       />,
@@ -1405,20 +1539,107 @@ describe("ArchitectureStudio", () => {
 
     await user.click(screen.getByRole("button", { name: /Timeline/ }));
     await user.click(screen.getByRole("button", { name: "Hide later" }));
-    fireEvent.change(screen.getByRole("slider", { name: "Scrub to a date" }), {
-      target: { value: "0" },
-    });
+    await scrubToEnd(user, "Previous");
     await fromMenu(user, "Export ▾", "Probe");
 
     // A PNG of the June view must not come back as the finished architecture.
     await waitFor(() => expect(seen).toHaveLength(1));
     expect(seen[0].nodes.map((n) => n.id).sort()).toEqual(["core", "wrk"]);
 
+    // A fullDocument exporter gets everything even while the slice is showing.
+    await fromMenu(user, "Export ▾", "Fullprobe");
+    await waitFor(() => expect(seen).toHaveLength(2));
+    expect(seen[1].nodes).toHaveLength(3);
+
     // Ghost mode shows the whole document, so it exports the whole document.
     await user.click(screen.getByRole("button", { name: "Ghost later" }));
     await fromMenu(user, "Export ▾", "Probe");
-    await waitFor(() => expect(seen).toHaveLength(2));
-    expect(seen[1].nodes).toHaveLength(3);
+    await waitFor(() => expect(seen).toHaveLength(3));
+    expect(seen[2].nodes).toHaveLength(3);
+  });
+
+  it("keeps editing live while scrubbing, without losing hidden elements", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={dated} onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: /Timeline/ }));
+    await user.click(screen.getByRole("button", { name: "Hide later" }));
+    await scrubToEnd(user, "Previous");
+    await waitFor(() => expect(screen.queryByText("Payments")).not.toBeInTheDocument());
+
+    // Insert while the September node is hidden — the commit this causes is
+    // exactly the moment a re-materializing design would delete it.
+    await fromMenu(user, "Insert ▾", /^Node /);
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const last = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(last.nodes.some((n) => n.id === "pay")).toBe(true);
+    expect(last.nodes.length).toBe(dated.nodes.length + 1);
+  });
+
+  it("undoes a delete made while scrubbing, and the view re-hides the future", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={dated} onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: /Timeline/ }));
+    await user.click(screen.getByRole("button", { name: "Hide later" }));
+    await scrubToEnd(user, "Previous");
+
+    fireEvent.click(screen.getByText("Worker"));
+    fireEvent.keyDown(window, { key: "Delete" });
+    await waitFor(() => {
+      const t = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+      expect(t.nodes.some((n) => n.id === "wrk")).toBe(false);
+      // The hidden September node rode through the delete's commit untouched.
+      expect(t.nodes.some((n) => n.id === "pay")).toBe(true);
+    });
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    const t = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(t.nodes).toHaveLength(dated.nodes.length);
+    // Undo re-materializes the canvas; the display pass must reapply on top,
+    // so the restored September node comes back HIDDEN, not revealed.
+    expect(screen.queryByText("Payments")).not.toBeInTheDocument();
+    expect(screen.getByText("Worker")).toBeInTheDocument();
+  });
+
+  it("stamps the scrub cursor onto elements inserted in timeline mode", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={dated} onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: /Timeline/ }));
+    await scrubToEnd(user, "Previous");
+    // The hanging tab says what the insert will inherit. (Located by text —
+    // it is deliberately not a live region, so scrubbing doesn't triple-
+    // announce every tick.)
+    expect(screen.getByText(/New elements dated/)).toBeInTheDocument();
+
+    await fromMenu(user, "Insert ▾", /^Node /);
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const last = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    const added = last.nodes.find((n) => !dated.nodes.some((d) => d.id === n.id));
+    // First stop of the fixture — where scrubToEnd("Previous") lands.
+    expect(added?.date).toBe("2026-06-15");
+  });
+
+  it("jumps to a typed date from the readout, including between stops", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={dated} />);
+
+    await user.click(screen.getByRole("button", { name: /Timeline/ }));
+    await user.click(screen.getByRole("button", { name: "Hide later" }));
+    // The readout is a button; clicking it swaps in a date field.
+    await user.click(screen.getByTitle("Jump to a specific date"));
+    fireEvent.change(screen.getByLabelText("Jump to a date"), {
+      target: { value: "2026-08-01" },
+    });
+
+    // August: June's worker landed, September's payments has not — a view no
+    // stop-index scrubber could reach, since nothing is dated in August.
+    await waitFor(() => expect(screen.queryByText("Payments")).not.toBeInTheDocument());
+    expect(screen.getByText("Worker")).toBeInTheDocument();
   });
 
   it("sets and clears a date from the node inspector", async () => {
@@ -1499,20 +1720,90 @@ describe("ArchitectureStudio", () => {
       />,
     );
 
+    // One title, two homes: the document's own meta.title pushes out to the
+    // host on mount, so the dropdown reflects what exports will print.
+    await waitFor(() => expect(onFileRename).toHaveBeenCalledWith("f1", "Clinic platform"));
+    onFileRename.mockClear();
+
     await user.click(screen.getByRole("button", { name: "Platform ▾" }));
     await user.click(screen.getByRole("button", { name: "Rename Platform" }));
     const input = screen.getByLabelText("File name");
     await user.clear(input);
     await user.type(input, "Core Platform{Enter}");
     expect(onFileRename).toHaveBeenCalledWith("f1", "Core Platform");
+    onFileRename.mockClear();
 
     // Escape cancels without firing.
     await user.click(screen.getByRole("button", { name: "Rename Platform" }));
     await user.type(screen.getByLabelText("File name"), "{Escape}");
-    expect(onFileRename).toHaveBeenCalledTimes(1);
+    expect(onFileRename).not.toHaveBeenCalled();
   });
 
-  it("deletes an EMPTY file immediately, and never offers × for the last file", async () => {
+  it("renaming the active file writes the document's meta.title", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_TEMPLATE}
+        onChange={onChange}
+        files={workspaceFiles}
+        activeFileId="f1"
+        onFileRename={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Rename Platform" }));
+    const input = screen.getByLabelText("File name");
+    await user.clear(input);
+    await user.type(input, "Core Platform{Enter}");
+
+    // The rename is a document edit too — committed, emitted, undoable.
+    await waitFor(() => {
+      const last = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+      expect(last.meta?.title).toBe("Core Platform");
+    });
+  });
+
+  it("adopts a host-side rename as the document's title instead of fighting it", async () => {
+    const onChange = vi.fn();
+    const onFileRename = vi.fn();
+    const filesAt = (name: string) => [{ id: "f1", name, kind: "arch" }];
+    const { rerender } = mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_TEMPLATE}
+        onChange={onChange}
+        files={filesAt("Platform")}
+        activeFileId="f1"
+        onFileRename={onFileRename}
+      />,
+    );
+
+    // Mount: the document names itself ("Clinic platform" pushes out).
+    await waitFor(() => expect(onFileRename).toHaveBeenCalledWith("f1", "Clinic platform"));
+    onFileRename.mockClear();
+
+    // The HOST renames the file — its own UI, another tab, an API sync. The
+    // name moved while the title didn't, so the editor adopts the name as the
+    // title rather than pushing the stale title back.
+    rerender(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_TEMPLATE}
+        onChange={onChange}
+        files={filesAt("Renamed Elsewhere")}
+        activeFileId="f1"
+        onFileRename={onFileRename}
+      />,
+    );
+    await waitFor(() => {
+      const last = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+      expect(last.meta?.title).toBe("Renamed Elsewhere");
+    });
+    // And the old title was never pushed back over the host's rename.
+    expect(onFileRename).not.toHaveBeenCalled();
+  });
+
+  it("deletes an EMPTY file immediately, including the last one", async () => {
     const user = userEvent.setup();
     const onFileDelete = vi.fn();
     const { unmount } = mount(
@@ -1531,6 +1822,8 @@ describe("ArchitectureStudio", () => {
     expect(onFileDelete).toHaveBeenCalledWith("f2");
     unmount();
 
+    // The last file offers × too — deleting it empties the workspace, which
+    // the editor greets with the welcome modal rather than leaving a trap.
     mount(
       <ArchitectureStudio
         defaultValue={EXAMPLE_TEMPLATE}
@@ -1540,7 +1833,7 @@ describe("ArchitectureStudio", () => {
       />,
     );
     await user.click(screen.getByRole("button", { name: "Platform ▾" }));
-    expect(screen.queryByRole("button", { name: "Delete Platform" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete Platform" })).toBeInTheDocument();
   });
 
   it("confirms before deleting a file that still has content", async () => {
@@ -1642,5 +1935,323 @@ describe("ArchitectureStudio", () => {
 
     const afterRedo = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
     expect(afterRedo.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length + 1);
+  });
+});
+
+describe("ArchitectureStudio welcome modal", () => {
+  const BLANK: DiagramTemplate = { version: 1, nodes: [], edges: [] };
+
+  // The hand-off latch is module state; a prior test's dismissal must not
+  // suppress this test's mount.
+  beforeEach(() => clearWelcomeSuppression());
+
+  it("shows over a brand-new document and dismisses via the manual CTA", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={BLANK} />);
+    expect(screen.getByRole("dialog", { name: "Get started" })).toBeInTheDocument();
+    expect(screen.getByText("BetterDiagrams")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Copy Schema & System Prompt/ }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Insert Node Manually/ }));
+    expect(screen.queryByRole("dialog", { name: "Get started" })).not.toBeInTheDocument();
+  });
+
+  it("does not show over a document with content", () => {
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    expect(screen.queryByRole("dialog", { name: "Get started" })).not.toBeInTheDocument();
+  });
+
+  it("treats a zones-only document as content, not blank", () => {
+    mount(
+      <ArchitectureStudio
+        defaultValue={validateTemplate({
+          version: 1,
+          zones: [{ id: "z", label: "Edge", shape: "rounded", x: 0, y: 0, w: 400, h: 300 }],
+          nodes: [],
+          edges: [],
+        })}
+      />,
+    );
+    expect(screen.queryByRole("dialog", { name: "Get started" })).not.toBeInTheDocument();
+  });
+
+  it("stays hidden when readOnly or welcome={false}", () => {
+    const { unmount } = mount(<ArchitectureStudio defaultValue={BLANK} readOnly />);
+    expect(screen.queryByRole("dialog", { name: "Get started" })).not.toBeInTheDocument();
+    unmount();
+
+    mount(<ArchitectureStudio defaultValue={BLANK} welcome={false} />);
+    expect(screen.queryByRole("dialog", { name: "Get started" })).not.toBeInTheDocument();
+  });
+
+  it("in an empty workspace, the manual CTA creates a file to land in", async () => {
+    const user = userEvent.setup();
+    const onFileCreate = vi.fn();
+    mount(<ArchitectureStudio value={BLANK} files={[]} onFileCreate={onFileCreate} />);
+    expect(screen.getByRole("dialog", { name: "Get started" })).toBeInTheDocument();
+    expect(screen.getByLabelText("File name")).toHaveValue("Untitled 1");
+
+    await user.click(screen.getByRole("button", { name: /Insert Node Manually/ }));
+    expect(onFileCreate).toHaveBeenCalledWith({ name: "Untitled 1", kind: "architecture" });
+  });
+
+  it("does not greet the blank file its own dismissal just created", async () => {
+    const user = userEvent.setup();
+    const onFileCreate = vi.fn();
+    const first = mount(<ArchitectureStudio value={BLANK} files={[]} onFileCreate={onFileCreate} />);
+    await user.click(screen.getByRole("button", { name: /Insert Node Manually/ }));
+    expect(onFileCreate).toHaveBeenCalled();
+    first.unmount();
+
+    // The host now remounts the studio on the created (blank) file — the
+    // hand-off latch keeps the modal from greeting all over again.
+    const second = mount(
+      <ArchitectureStudio value={BLANK} files={[{ id: "f1", name: "Untitled 1" }]} activeFileId="f1" />,
+    );
+    expect(screen.queryByRole("dialog", { name: "Get started" })).not.toBeInTheDocument();
+    second.unmount();
+
+    // The latch was cleared on that mount — the next genuinely new blank
+    // file greets as usual.
+    mount(<ArchitectureStudio defaultValue={BLANK} />);
+    expect(screen.getByRole("dialog", { name: "Get started" })).toBeInTheDocument();
+  });
+
+  it("lays out a coordinate-less paste on insert instead of stacking at the origin", async () => {
+    const user = userEvent.setup();
+    const onFileCreate = vi.fn();
+    mount(<ArchitectureStudio value={BLANK} files={[]} onFileCreate={onFileCreate} />);
+
+    await user.click(screen.getByLabelText("Diagram JSON"));
+    await user.paste(
+      '{"version":1,"nodes":[{"id":"a","label":"A"},{"id":"b","label":"B"}],"edges":[]}',
+    );
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+
+    const doc = onFileCreate.mock.calls[0][0].doc as DiagramTemplate;
+    const positions = new Set(doc.nodes.map((n) => `${n.x},${n.y}`));
+    expect(positions.size).toBe(2);
+  });
+
+  it("keeps explicit coordinates untouched on insert", async () => {
+    const user = userEvent.setup();
+    const onFileCreate = vi.fn();
+    mount(<ArchitectureStudio value={BLANK} files={[]} onFileCreate={onFileCreate} />);
+
+    await user.click(screen.getByLabelText("Diagram JSON"));
+    await user.paste(
+      '{"version":1,"nodes":[{"id":"a","label":"A","x":100,"y":50},{"id":"b","label":"B","x":400,"y":50}],"edges":[]}',
+    );
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+
+    const doc = onFileCreate.mock.calls[0][0].doc as DiagramTemplate;
+    expect(doc.nodes.map((n) => [n.x, n.y])).toEqual([
+      [100, 50],
+      [400, 50],
+    ]);
+  });
+
+  it("the file menu's ＋ New file passes NO init — the click event must not leak", async () => {
+    const user = userEvent.setup();
+    const onFileCreate = vi.fn();
+    mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_TEMPLATE}
+        files={[{ id: "f1", name: "One" }]}
+        activeFileId="f1"
+        onFileCreate={onFileCreate}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /One/ }));
+    await user.click(screen.getByRole("menuitem", { name: /New file/ }));
+    expect(onFileCreate).toHaveBeenCalledTimes(1);
+    expect(onFileCreate.mock.calls[0]).toHaveLength(0);
+  });
+});
+
+describe("multi-state export modal", () => {
+  it("opens for a multi-state document, and Current exports directly", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
+
+    await fromMenu(user, "Export ▾", /SVG vector/);
+    const dialog = screen.getByRole("dialog", { name: "Export SVG" });
+    expect(within(dialog).getByRole("radio", { name: /Current state/ })).toBeChecked();
+    // The axes are on display (greyed) even before Custom is chosen.
+    expect(within(dialog).getByRole("group", { name: "Cloud Region" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("group", { name: "Dates" })).toBeInTheDocument();
+    expect(within(dialog).getByText("1 file → architecture.svg")).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Export" }));
+    await screen.findByText("Exported architecture.svg");
+    expect(screen.queryByRole("dialog", { name: "Export SVG" })).not.toBeInTheDocument();
+  });
+
+  it("All states exports one zip of every combination", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
+
+    await fromMenu(user, "Export ▾", /SVG vector/);
+    const dialog = screen.getByRole("dialog", { name: "Export SVG" });
+    await user.click(within(dialog).getByRole("radio", { name: /All states/ }));
+    expect(within(dialog).getByText("9 files → architecture-states.zip")).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Export" }));
+    await screen.findByText("Exported 9 states → architecture-states.zip");
+  });
+
+  it("Custom disables Export when an axis is emptied, and recounts on reselect", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
+
+    await fromMenu(user, "Export ▾", /SVG vector/);
+    const dialog = screen.getByRole("dialog", { name: "Export SVG" });
+    await user.click(within(dialog).getByRole("radio", { name: /Custom/ }));
+
+    const region = within(dialog).getByRole("group", { name: "Cloud Region" });
+    for (const box of within(region).getAllByRole("checkbox")) await user.click(box);
+    expect(within(dialog).getByText(/Select at least one option/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Export" })).toBeDisabled();
+
+    await user.click(within(region).getAllByRole("checkbox")[1]);
+    expect(within(dialog).getByText("3 files → architecture-states.zip")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Export" })).toBeEnabled();
+  });
+
+  it("PDF adds the page-layout choice", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
+
+    await fromMenu(user, "Export ▾", /PDF document/);
+    const dialog = screen.getByRole("dialog", { name: "Export PDF" });
+    await user.click(within(dialog).getByRole("radio", { name: /All states/ }));
+    expect(within(dialog).getByRole("radio", { name: /One PDF, one page/ })).toBeChecked();
+    expect(within(dialog).getByText("9 pages → architecture-states.pdf")).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("radio", { name: /One PDF per state/ }));
+    expect(within(dialog).getByText("9 files → architecture-states.zip")).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Export PDF" })).not.toBeInTheDocument();
+  });
+
+  it("single-state documents skip the modal and export immediately", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+
+    await fromMenu(user, "Export ▾", /SVG vector/);
+    expect(screen.queryByRole("dialog", { name: "Export SVG" })).not.toBeInTheDocument();
+    await screen.findByText("Exported architecture.svg");
+  });
+
+  it("a host-overridden builtin keeps the direct path, no modal", async () => {
+    const user = userEvent.setup();
+    const run = vi.fn().mockReturnValue(undefined);
+    mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_ZONED_TEMPLATE}
+        registry={{ exporters: { svg: { label: "SVG vector", run } } }}
+      />,
+    );
+
+    await fromMenu(user, "Export ▾", /SVG vector/);
+    expect(screen.queryByRole("dialog", { name: "Export SVG" })).not.toBeInTheDocument();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ArchitectureStudio cloud packs", () => {
+  beforeEach(() => clearWelcomeSuppression());
+
+  const AWS_DOC: DiagramTemplate = validateTemplate({
+    version: 1,
+    zones: [
+      { id: "z", label: "AWS", shape: "rounded", x: 0, y: 0, w: 600, h: 400, providers: ["aws"], provider: "aws" },
+    ],
+    nodes: [{ id: "api", label: "API", kind: "service", x: 40, y: 40 }],
+    edges: [],
+  });
+
+  it("lifts referenced clouds in the kind picker and demotes the rest", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={AWS_DOC} />);
+    fireEvent.click(screen.getByText("API"));
+    await user.click(await screen.findByRole("button", { name: "Node kind" }));
+
+    expect(screen.getByRole("option", { name: "Lambda" }).closest(".as-kindmenu__dim")).toBeNull();
+    expect(
+      screen.getByRole("option", { name: "Cosmos DB" }).closest(".as-kindmenu__dim"),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("option", { name: "Cloud Run" }).closest(".as-kindmenu__dim"),
+    ).not.toBeNull();
+  });
+
+  it("retyping to a cloud kind adopts its icon", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={AWS_DOC} onChange={onChange} />);
+    fireEvent.click(screen.getByText("API"));
+    await user.click(await screen.findByRole("button", { name: "Node kind" }));
+    await user.click(screen.getByRole("option", { name: "Lambda" }));
+
+    await waitFor(() => {
+      const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+      const node = latest.nodes.find((n) => n.id === "api")!;
+      expect(node.kind).toBe("aws-lambda");
+      expect(node.icon).toBe("bolt");
+    });
+  });
+
+  it("cloud kinds survive a welcome-modal insert intact", async () => {
+    const user = userEvent.setup();
+    const onFileCreate = vi.fn();
+    mount(
+      <ArchitectureStudio
+        value={{ version: 1, nodes: [], edges: [] }}
+        files={[]}
+        onFileCreate={onFileCreate}
+      />,
+    );
+    await user.click(screen.getByLabelText("Diagram JSON"));
+    await user.paste(
+      '{"version":1,"nodes":[{"id":"f","label":"Checkout Fn","kind":"aws-lambda","x":10,"y":10}],"edges":[]}',
+    );
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+
+    const doc = onFileCreate.mock.calls[0][0].doc as DiagramTemplate;
+    expect(doc.nodes[0].kind).toBe("aws-lambda");
+  });
+});
+
+describe("ArchitectureStudio kind-usage relevance", () => {
+  beforeEach(() => clearWelcomeSuppression());
+
+  it("one cloud-kind node lifts that whole cloud in the picker — no providers needed", async () => {
+    const user = userEvent.setup();
+    // No zones, no providers arrays — the aws-lambda KIND alone is the signal.
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [{ id: "fn", label: "Checkout Fn", kind: "aws-lambda", x: 40, y: 40 }],
+      edges: [],
+    });
+    mount(<ArchitectureStudio defaultValue={doc} />);
+    fireEvent.click(screen.getByText("Checkout Fn"));
+    await user.click(await screen.findByRole("button", { name: "Node kind" }));
+
+    // The whole AWS pack is first-class…
+    expect(
+      screen.getByRole("option", { name: "DynamoDB" }).closest(".as-kindmenu__dim"),
+    ).toBeNull();
+    // …while untouched clouds stay demoted.
+    expect(
+      screen.getByRole("option", { name: "Vertex AI" }).closest(".as-kindmenu__dim"),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("option", { name: "App Service" }).closest(".as-kindmenu__dim"),
+    ).not.toBeNull();
   });
 });

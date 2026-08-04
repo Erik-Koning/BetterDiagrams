@@ -7,6 +7,7 @@
 import type { ExporterDef } from "./registry-types";
 import type { ExportPalette } from "./draw";
 import { emitSequence } from "./sequence-draw";
+import { buildTimelineHtml } from "./html-export";
 import {
   blobToUint8,
   buildSinglePageJpegPdf,
@@ -16,7 +17,7 @@ import {
   type RenderedCanvas,
 } from "./export-helpers";
 import { type SeqFragment, type SequenceTemplate } from "../contract/sequence";
-import { formatDiagramDate } from "../contract/timeline";
+import { formatDiagramDate, sequenceTimeline } from "../contract/timeline";
 
 // ─── Image wrappers ──────────────────────────────────────────────────────────
 
@@ -244,9 +245,26 @@ export const BUILTIN_SEQUENCE_EXPORTERS: Record<string, ExporterDef<SequenceTemp
       return { blob: new Blob([svg], { type: "image/svg+xml" }), filename: `${filename}.svg` };
     },
   },
+  html: {
+    label: "Interactive HTML",
+    hint: "Self-contained page with a timeline scrubber",
+    fullDocument: true,
+    run({ template, filename, palette }) {
+      const page = buildTimelineHtml({
+        svg: renderSequenceToSvg(template, palette),
+        title: String(template.meta?.title ?? filename),
+        stops: sequenceTimeline(template).stops,
+        palette,
+      });
+      return { blob: new Blob([page], { type: "text/html" }), filename: `${filename}.html` };
+    },
+  },
   json: {
     label: "Sequence JSON",
     hint: "The document itself — re-importable",
+    // "Re-importable" is the whole point — a hide-mode slice would re-import
+    // as a document with the future steps genuinely deleted.
+    fullDocument: true,
     run({ template, filename }) {
       return {
         blob: new Blob([JSON.stringify(template, null, 2)], { type: "application/json" }),

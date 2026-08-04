@@ -21,6 +21,7 @@ import type { CSSProperties } from "react";
 import { SvgIcon } from "./icons";
 import { useStudio } from "./context";
 import { DateChip } from "./chrome";
+import { isOverdue } from "../contract/timeline";
 import { kindDef, iconPaths } from "./registry-types";
 import { ZoneNode } from "./ZoneNode";
 import { silhouettePath, teamColor } from "./shapes";
@@ -154,7 +155,7 @@ export const ShapeNode = memo(function ShapeNode({
             {data.label}
           </div>
           {data.description ? <div className="as-node__desc">{data.description}</div> : null}
-          <DateChip date={data.date} prefix="Lands" />
+          <DateChip date={data.date} prefix="Lands" overdue={isOverdue(data.date, data.status)} />
         </div>
         {data.url?.startsWith("file:") ? (
           navigateFile ? (
@@ -259,7 +260,7 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
         >
           {!readOnly ? toggle : <span className="as-group__collapse">▸</span>}
           <span className="as-group-chip__label">{data.label}</span>
-          <DateChip date={data.date} inline prefix="Lands" />
+          <DateChip date={data.date} inline prefix="Lands" overdue={isOverdue(data.date, data.status)} />
           {teamBadge}
         </div>
       </>
@@ -276,8 +277,9 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
       >
         <div className="as-group__label" title={data.label}>
           {!readOnly ? toggle : null}
-          {data.label}
-          <DateChip date={data.date} inline prefix="Lands" />
+          {/* The name owns the truncation so the chips after it stay whole. */}
+          <span className="as-group__name">{data.label}</span>
+          <DateChip date={data.date} inline prefix="Lands" overdue={isOverdue(data.date, data.status)} />
           {teamBadge}
         </div>
       </div>

@@ -182,19 +182,102 @@ export function timelineStop(timeline: Timeline, index: number): DiagramDate | n
   return timeline.stops[i];
 }
 
+// ─── Continuous cursor ───────────────────────────────────────────────────────
+//
+// The stops are where something HAPPENS, not the only places the cursor may
+// stand. Scrubbing is continuous over days, so "what did this look like on the
+// 20th of April" is answerable even though nothing is dated then — the two
+// visibility rules already cover it, since they compare against a date rather
+// than an index.
+//
+// Days are counted in UTC from the epoch so the mapping is exact and
+// timezone-independent: a viewer in Auckland and one in Los Angeles must put
+// the handle in the same place.
+
+const MS_PER_DAY = 86_400_000;
+
+/** Whole days from the epoch. Order-preserving, so arithmetic on it is safe. */
+export function dateToDay(date: DiagramDate): number {
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!parts) return 0;
+  return Math.round(
+    Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3])) / MS_PER_DAY,
+  );
+}
+
+/** The inverse of `dateToDay`. */
+export function dayToDate(day: number): DiagramDate {
+  const d = new Date(Math.round(day) * MS_PER_DAY);
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+}
+
+/** Whole days between two dates, signed. */
+export function daysBetween(from: DiagramDate, to: DiagramDate): number {
+  return dateToDay(to) - dateToDay(from);
+}
+
 /**
- * The stop a document "is at" today: the last one already reached, or the
- * first stop when the whole plan is still ahead. What the scrubber opens on,
- * so entering timeline mode shows the present rather than the origin.
+ * The stop nearest `date`, or null when the closest one is further away than
+ * `withinDays`. This is the whole of snapping: the caller decides what
+ * "within reach" means in its own units (the scrubber converts a pixel
+ * threshold, so the feel is the same whether the plan spans a month or a
+ * decade) and this answers where to land.
  */
-export function currentStopIndex(timeline: Timeline, today?: DiagramDate): number {
-  if (!timeline.stops.length) return 0;
-  const now = today ?? normalizeDate(new Date())!;
-  let index = 0;
-  for (let i = 0; i < timeline.stops.length; i++) {
-    if (timeline.stops[i] <= now) index = i;
+export function nearestStop(
+  timeline: Timeline,
+  date: DiagramDate,
+  withinDays: number,
+): DiagramDate | null {
+  let best: DiagramDate | null = null;
+  let bestGap = Number.POSITIVE_INFINITY;
+  for (const stop of timeline.stops) {
+    const gap = Math.abs(daysBetween(stop, date));
+    if (gap < bestGap) {
+      bestGap = gap;
+      best = stop;
+    }
   }
-  return index;
+  return best !== null && bestGap <= withinDays ? best : null;
+}
+
+/**
+ * Where the scrubber opens: today, held inside the timeline's own span.
+ *
+ * Today is the interesting question — "what changes from here" — but a cursor
+ * past the last stop would open on a view identical to not scrubbing at all,
+ * and one before the first would open on an empty diagram.
+ */
+export function openingCursor(timeline: Timeline, today?: DiagramDate): DiagramDate | null {
+  if (!timeline.stops.length) return null;
+  const now = today ?? normalizeDate(new Date())!;
+  const first = timeline.stops[0];
+  const last = timeline.stops[timeline.stops.length - 1];
+  if (now < first) return first;
+  if (now > last) return last;
+  return now;
+}
+
+// ─── Overdue ─────────────────────────────────────────────────────────────────
+
+/**
+ * The stages that come BEFORE active — an element in one of these has not
+ * landed yet, whatever its date says.
+ */
+export const PRE_ACTIVE_STATUSES: readonly string[] = ["proposed", "planned", "stubbed", "dark"];
+
+/**
+ * A date in the past on an element that has not become active: the plan says
+ * it should have landed, the status says it hasn't. This is the one moment a
+ * date chip needs to be louder than grey. An element with no status is
+ * active, and an active element's past date just means "landed" — not overdue.
+ */
+export function isOverdue(
+  date: DiagramDate | undefined | null,
+  status: string | undefined,
+  today?: DiagramDate,
+): boolean {
+  if (!date || !status || !PRE_ACTIVE_STATUSES.includes(status)) return false;
+  return date < (today ?? normalizeDate(new Date())!);
 }
 
 // ─── Architecture: effective dates and the scrubbed view ─────────────────────

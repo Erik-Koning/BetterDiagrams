@@ -6,16 +6,71 @@
  * bar of captioned sections, and the corner version-tag chip. These live here
  * so the two stay pixel-identical without either importing the other.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { VERSION_TAG_POSITIONS, type VersionTagPosition } from "../contract/schema";
 import {
   TIMELINE_FUTURE_MODES,
+  dateToDay,
+  dayToDate,
   formatDiagramDate,
-  timelineStop,
+  nearestStop,
+  normalizeDate,
   type DiagramDate,
   type Timeline,
   type TimelineFutureMode,
 } from "../contract/timeline";
+
+/**
+ * The BetterDiagrams mark — the repo's logo.svg redrawn in the editor's own
+ * tokens: two nodes on the left converging along horizontal-tangent splines
+ * into one vertically-centred node on the right, everything straddling a
+ * rounded frame and clipping at its perimeter. Inline SVG rather than an
+ * <img> so it recolours with the active theme; each token carries the dark
+ * default as a fallback so the mark also renders outside `.as-root` (a host
+ * page header, say). Strokes are a touch heavier than the standalone logo so
+ * the mark still reads at toolbar size.
+ */
+export function BrandMark({ className }: { className?: string }) {
+  // Two marks render per page (host chrome + welcome modal); the clip id must
+  // not collide or one silently clips with the other's geometry.
+  const clipId = `${useId()}-frame`;
+  const accent = "var(--as-accent, #38bdf8)";
+  const node = "var(--as-surface, #0b1220)";
+  return (
+    <svg className={className} viewBox="0 0 256 256" aria-hidden="true" focusable="false">
+      <defs>
+        <clipPath id={clipId}>
+          <rect x="0" y="0" width="256" height="256" rx="58" />
+        </clipPath>
+      </defs>
+      <rect x="0" y="0" width="256" height="256" rx="58" fill="var(--as-surface-2, #1e293b)" />
+      <g clipPath={`url(#${clipId})`}>
+        {/* Splines: horizontal tangents at both ends, like the canvas edges. */}
+        <path
+          d="M 68 76 C 128 76 128 121 190 121"
+          fill="none"
+          stroke={accent}
+          strokeWidth="10"
+          strokeLinecap="round"
+        />
+        <path
+          d="M 68 180 C 128 180 128 135 190 135"
+          fill="none"
+          stroke={accent}
+          strokeWidth="10"
+          strokeLinecap="round"
+        />
+        {/* Left nodes: a vertical pair, slightly past the left perimeter. */}
+        <rect x="-18" y="48" width="86" height="56" rx="14" fill={node} stroke={accent} strokeWidth="10" />
+        <rect x="-18" y="152" width="86" height="56" rx="14" fill={node} stroke={accent} strokeWidth="10" />
+        {/* Right node: vertically centred, slightly past the right perimeter. */}
+        <rect x="188" y="100" width="86" height="56" rx="14" fill={node} stroke={accent} strokeWidth="10" />
+      </g>
+      {/* The frame outline sits on top, so the cut nodes end cleanly under it. */}
+      <rect x="4" y="4" width="248" height="248" rx="54" fill="none" stroke="var(--as-border, #334155)" strokeWidth="8" />
+    </svg>
+  );
+}
 
 /**
  * The one toolbar dropdown. Every menu — Insert, Arrange, View, Export — is
@@ -150,19 +205,26 @@ export function DateChip({
   date,
   inline = false,
   prefix,
+  overdue = false,
 }: {
   date?: DiagramDate;
   /** Flow beside a label instead of stacking under it. */
   inline?: boolean;
   /** Wording for the tooltip, e.g. "Due". Defaults to a bare date. */
   prefix?: string;
+  /**
+   * The date is past but the element hasn't become active — the one moment
+   * this chip needs to be louder than grey. Compute with `isOverdue`.
+   */
+  overdue?: boolean;
 }) {
   if (!date) return null;
   const full = formatDiagramDate(date, { year: "always" });
+  const label = prefix ? `${prefix} ${full}` : full;
   return (
     <span
-      className={`as-date${inline ? " as-date--inline" : ""}`}
-      title={prefix ? `${prefix} ${full}` : full}
+      className={`as-date${inline ? " as-date--inline" : ""}${overdue ? " as-date--overdue" : ""}`}
+      title={overdue ? `${label} — overdue` : label}
     >
       {formatDiagramDate(date)}
     </span>
@@ -172,40 +234,86 @@ export function DateChip({
 /**
  * The timeline scrubber bar, shared by both editors.
  *
- * The stops ARE the document's distinct dates, so the bar can only ever land
- * on a date something actually happens — dragging never stops between two
- * frames where nothing changes. A buffer bar fills to the cursor and each stop
- * gets a tick, so the shape of the plan (three things in March, nothing until
- * September) is legible without moving the handle.
+ * The cursor is a DATE, not a stop index — scrubbing is continuous over days,
+ * so "what did this look like on the 20th of April" is answerable even though
+ * nothing is dated then. The stops still matter: each gets a tick, and the
+ * handle SNAPS to one whenever it comes within a few pixels, so landing
+ * exactly on a real date stays effortless while the space between them stays
+ * reachable.
+ *
+ * Snapping is specified in pixels and converted to days against the measured
+ * track, so the pull feels identical whether the plan spans a month or a
+ * decade — a fixed day threshold would be unusably sticky on one and useless
+ * on the other.
  *
  * A real `<input type="range">` under a transparent layer does the dragging:
  * pointer capture, arrow keys, Home/End, and screen-reader announcement all
  * come free, and none of it has to be re-implemented.
  */
+
+/** How close, in pixels, the handle must come to a stop before it snaps. */
+const SNAP_PX = 11;
+/** How close the pointer must come to a tick before it previews landing there. */
+const HOVER_PX = 14;
+
 export function TimelineScrubber({
   timeline,
-  index,
-  onIndex,
+  at,
+  onScrub,
   futureMode,
   onFutureMode,
   futureCount,
   onExit,
+  /** Shown in the hanging tab: new elements will be stamped with the cursor. */
+  stampNotice,
 }: {
   timeline: Timeline;
-  index: number;
-  onIndex: (index: number) => void;
+  /** The cursor. May sit between stops, or outside them entirely. */
+  at: DiagramDate;
+  onScrub: (date: DiagramDate) => void;
   futureMode: TimelineFutureMode;
   onFutureMode: (mode: TimelineFutureMode) => void;
   /** Elements still ahead of the cursor, for the "N ahead" readout. */
   futureCount: number;
   onExit: () => void;
+  stampNotice?: boolean;
 }) {
-  const last = Math.max(0, timeline.stops.length - 1);
-  const clamped = Math.max(0, Math.min(last, index));
-  const at = timelineStop(timeline, clamped);
-  // A single-stop timeline has no span to divide by; pin the fill at the end,
-  // which is also true — that one stop is the whole plan.
-  const percent = last === 0 ? 100 : (clamped / last) * 100;
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [hoverStop, setHoverStop] = useState<DiagramDate | null>(null);
+  const [picking, setPicking] = useState(false);
+
+  const stops = timeline.stops;
+  const cursorDay = dateToDay(at);
+  // The domain always contains the cursor: a date typed into the picker may
+  // sit outside the plan entirely, and the handle still has to represent it.
+  const minDay = Math.min(cursorDay, stops.length ? dateToDay(stops[0]) : cursorDay);
+  const maxDay = Math.max(cursorDay, stops.length ? dateToDay(stops[stops.length - 1]) : cursorDay);
+  const span = Math.max(1, maxDay - minDay);
+  const percentOf = (day: number) => ((day - minDay) / span) * 100;
+
+  /** Pixel threshold → days, measured against the track as it is right now. */
+  const daysFor = (px: number) => {
+    const width = trackRef.current?.offsetWidth ?? 0;
+    return width > 0 ? (px * span) / width : 0;
+  };
+
+  const scrubTo = (day: number) => {
+    const raw = dayToDate(day);
+    onScrub(nearestStop(timeline, raw, daysFor(SNAP_PX)) ?? raw);
+  };
+
+  /** Step to the next real stop in a direction — what the arrows are for. */
+  const stepStop = (direction: 1 | -1) => {
+    const next =
+      direction === 1
+        ? stops.find((s) => dateToDay(s) > cursorDay)
+        : [...stops].reverse().find((s) => dateToDay(s) < cursorDay);
+    if (next) onScrub(next);
+  };
+
+  const prevStop = stops.some((s) => dateToDay(s) < cursorDay);
+  const nextStop = stops.some((s) => dateToDay(s) > cursorDay);
+  const onStop = stops.includes(at);
 
   return (
     <div className="as-timeline" role="group" aria-label="Timeline scrubber">
@@ -214,53 +322,97 @@ export function TimelineScrubber({
       <button
         type="button"
         className="as-btn as-btn--icon"
-        onClick={() => onIndex(clamped - 1)}
-        disabled={clamped === 0}
-        title="Previous date"
-        aria-label="Previous date"
+        onClick={() => stepStop(-1)}
+        disabled={!prevStop}
+        title="Previous dated point"
+        aria-label="Previous dated point"
       >
         ◀
       </button>
 
-      <div className="as-timeline__track">
+      <div
+        className="as-timeline__track"
+        ref={trackRef}
+        onPointerMove={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          if (rect.width <= 0) return;
+          const day = minDay + ((event.clientX - rect.left) / rect.width) * span;
+          setHoverStop(nearestStop(timeline, dayToDate(day), daysFor(HOVER_PX)));
+        }}
+        onPointerLeave={() => setHoverStop(null)}
+      >
         <div className="as-timeline__rail" />
-        <div className="as-timeline__buffer" style={{ width: `${percent}%` }} />
-        {timeline.stops.map((stop, i) => (
+        <div className="as-timeline__buffer" style={{ width: `${percentOf(cursorDay)}%` }} />
+        {stops.map((stop) => (
           <div
             key={stop}
-            className={`as-timeline__tick${i <= clamped ? " as-timeline__tick--past" : ""}`}
-            style={{ left: `${last === 0 ? 100 : (i / last) * 100}%` }}
+            className={`as-timeline__tick${dateToDay(stop) <= cursorDay ? " as-timeline__tick--past" : ""}${
+              hoverStop === stop ? " as-timeline__tick--hot" : ""
+            }`}
+            style={{ left: `${percentOf(dateToDay(stop))}%` }}
+            title={formatDiagramDate(stop, { year: "always" })}
           />
         ))}
+        {/* Where the handle would land if released here. Its twin is the
+            `--ghosting` class below, which fades the real handle so the two
+            read as one move rather than two dots. */}
+        {hoverStop && hoverStop !== at ? (
+          <div
+            className="as-timeline__ghostdot"
+            style={{ left: `${percentOf(dateToDay(hoverStop))}%` }}
+            aria-hidden="true"
+          />
+        ) : null}
         <input
-          className="as-timeline__range"
+          className={`as-timeline__range${hoverStop && hoverStop !== at ? " as-timeline__range--ghosting" : ""}`}
           type="range"
-          min={0}
-          max={last}
+          min={minDay}
+          max={maxDay}
           step={1}
-          value={clamped}
-          onChange={(event) => onIndex(Number(event.target.value))}
+          value={cursorDay}
+          onChange={(event) => scrubTo(Number(event.target.value))}
           // The editors bind arrow keys globally; the slider must keep them.
           onKeyDown={(event) => event.stopPropagation()}
           aria-label="Scrub to a date"
-          aria-valuetext={at ? formatDiagramDate(at, { year: "always" }) : ""}
+          aria-valuetext={formatDiagramDate(at, { year: "always" })}
         />
       </div>
 
-      <span className="as-timeline__date" aria-live="polite">
-        {at ? formatDiagramDate(at, { year: "always" }) : "—"}
-      </span>
-      <span className="as-timeline__step">
-        {clamped + 1}/{timeline.stops.length}
-      </span>
+      {picking ? (
+        <input
+          className="as-input as-timeline__picker"
+          type="date"
+          value={at}
+          autoFocus
+          onChange={(event) => {
+            const next = normalizeDate(event.target.value);
+            if (next) onScrub(next);
+          }}
+          onBlur={() => setPicking(false)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === "Escape") setPicking(false);
+            event.stopPropagation();
+          }}
+          aria-label="Jump to a date"
+        />
+      ) : (
+        <button
+          type="button"
+          className={`as-timeline__date${onStop ? " as-timeline__date--onstop" : ""}`}
+          onClick={() => setPicking(true)}
+          title="Jump to a specific date"
+        >
+          {formatDiagramDate(at, { year: "always" })}
+        </button>
+      )}
 
       <button
         type="button"
         className="as-btn as-btn--icon"
-        onClick={() => onIndex(clamped + 1)}
-        disabled={clamped === last}
-        title="Next date"
-        aria-label="Next date"
+        onClick={() => stepStop(1)}
+        disabled={!nextStop}
+        title="Next dated point"
+        aria-label="Next dated point"
       >
         ▶
       </button>
@@ -292,6 +444,17 @@ export function TimelineScrubber({
       <button type="button" className="as-btn" onClick={onExit}>
         Exit timeline
       </button>
+
+      {/* Hangs off the bottom edge of the bar — rounded only where it leaves
+          the bar, so it reads as part of it rather than a floating chip. */}
+      {/* Visually informative, aurally decorative: the slider's aria-valuetext
+          is the one announcer per scrub tick — this repeating the date (and
+          the date button doing so too) made every drag a triple broadcast. */}
+      {stampNotice ? (
+        <span className="as-timeline__stamp">
+          New elements dated {formatDiagramDate(at, { year: "always" })}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -313,17 +476,37 @@ export interface StudioFile {
 }
 
 /**
- * A centred dialog over a dimmed canvas. Escape and a backdrop click both
- * dismiss, so nothing can trap the user behind it.
+ * Optional seed for `onFileCreate`. The "＋ New file" menu item passes nothing;
+ * the welcome modal passes a name and (when JSON was inserted) a validated
+ * document, so a host can create the file already filled in. Every field is
+ * optional and the whole argument may be absent — zero-arg hosts keep working.
+ */
+export interface StudioFileInit {
+  name?: string;
+  /** "architecture" | "sequence" — absent means "same kind as the active file". */
+  kind?: string;
+  /** A validated template/sequence document to seed the file with. */
+  doc?: unknown;
+}
+
+/**
+ * A window-centred dialog over a dimmed canvas. Escape and a backdrop click
+ * both dismiss, so nothing can trap the user behind it.
  */
 export function Modal({
   title,
   onClose,
   children,
+  cardClassName,
+  hideTitle,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  /** Extra class on the card — e.g. the welcome modal's wide variant. */
+  cardClassName?: string;
+  /** Skip the visible heading; `title` still labels the dialog for AT. */
+  hideTitle?: boolean;
 }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -339,13 +522,13 @@ export function Modal({
   return (
     <div className="as-modal" onPointerDown={onClose}>
       <div
-        className="as-modal__card"
+        className={`as-modal__card${cardClassName ? ` ${cardClassName}` : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         onPointerDown={(event) => event.stopPropagation()}
       >
-        <h2 className="as-modal__title">{title}</h2>
+        {hideTitle ? null : <h2 className="as-modal__title">{title}</h2>}
         {children}
       </div>
     </div>
@@ -379,7 +562,7 @@ export function FileMenu({
   open: boolean;
   onToggle: () => void;
   onSelect?: (id: string) => void;
-  onCreate?: () => void;
+  onCreate?: (init?: StudioFileInit) => void;
   onRename?: (id: string, name: string) => void;
   onDelete?: (id: string) => void;
   /** Recently deleted documents the host still holds, newest first. */
@@ -470,7 +653,9 @@ export function FileMenu({
                     ✎
                   </button>
                 ) : null}
-                {onDelete && files.length > 1 ? (
+                {/* Deleting the last file is allowed — the editor greets the
+                    resulting empty workspace with the welcome modal. */}
+                {onDelete ? (
                   <button
                     type="button"
                     className="as-btn as-btn--icon as-filemenu__delete"
@@ -485,7 +670,8 @@ export function FileMenu({
             ),
           )}
           {onCreate ? (
-            <button type="button" role="menuitem" className="as-menu__item" onClick={onCreate}>
+            // Wrapped so the click event doesn't leak into the init argument.
+            <button type="button" role="menuitem" className="as-menu__item" onClick={() => onCreate()}>
               <div className="as-menu__label">＋ New file</div>
             </button>
           ) : null}

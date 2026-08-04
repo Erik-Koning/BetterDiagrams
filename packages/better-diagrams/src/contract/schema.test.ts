@@ -9,6 +9,7 @@ import {
   validateTemplate,
   type DiagramTemplate,
 } from "./schema";
+import { buildSequencePrompt, validateSequence } from "./sequence";
 
 const node = (over: Record<string, unknown> = {}) => ({
   id: "n",
@@ -151,13 +152,20 @@ describe("parseLlmTemplate", () => {
     expect(parseLlmTemplate(reply).nodes).toHaveLength(1);
   });
 
-  it("reports malformed JSON clearly", () => {
-    expect(() => parseLlmTemplate('{"nodes": [}')).toThrow(/malformed JSON/);
+  it("heals lightly damaged JSON instead of rejecting it", () => {
+    expect(parseLlmTemplate('{"nodes": [}').nodes).toHaveLength(0);
   });
 
-  it("distinguishes a truncated reply from a non-JSON one", () => {
-    // A max_tokens cutoff looks like this; the fix is more output tokens.
-    expect(() => parseLlmTemplate('{"version":1,"nodes":[{"id":"a"')).toThrow(/truncated/);
+  it("salvages a reply cut off by max_tokens", () => {
+    // A truncated reply parses to whatever survived — visibly incomplete on
+    // the canvas, which beats an error the user can't act on.
+    expect(parseLlmTemplate('{"version":1,"nodes":[{"id":"a"').nodes[0].id).toBe("a");
+  });
+
+  it("reports unhealable damage with position and cause", () => {
+    expect(() => parseLlmTemplate('{"kind":"client","icon":y React 18+ app"}')).toThrow(
+      /Unreadable JSON at line 1.*re-copy/s,
+    );
   });
 
   it("reports a reply with no JSON at all", () => {
@@ -315,3 +323,46 @@ function hasCycle(t: DiagramTemplate): boolean {
   }
   return false;
 }
+
+describe("lifecycle stages: stubbed and dark", () => {
+  const node = (status: string) => ({
+    id: "n",
+    label: "N",
+    kind: "service",
+    icon: "box",
+    description: "",
+    parentId: null,
+    status,
+    x: 0,
+    y: 0,
+    w: 170,
+    h: 76,
+  });
+
+  it("persists the new stages and still strips active", () => {
+    for (const status of ["stubbed", "dark"]) {
+      const t = validateTemplate({ version: 1, nodes: [node(status)], edges: [] });
+      expect(t.nodes[0].status).toBe(status);
+    }
+    const active = validateTemplate({ version: 1, nodes: [node("active")], edges: [] });
+    expect("status" in active.nodes[0]).toBe(false);
+  });
+
+  it("advertises the full vocabulary in both generated prompts", () => {
+    const expected = "proposed|planned|stubbed|dark|active|deprecated|retired";
+    expect(buildSystemPrompt()).toContain(expected);
+    expect(buildSequencePrompt()).toContain(expected);
+    // And the participant skeleton actually carries the field — the validator
+    // accepted status all along, but the model was never told.
+    expect(buildSequencePrompt()).toContain('"status"');
+  });
+
+  it("round-trips a stubbed participant through sequence validation", () => {
+    const seq = validateSequence({
+      version: 1,
+      participants: [{ id: "p", label: "P", kind: "service", status: "dark" }],
+      messages: [],
+    });
+    expect(seq.participants[0].status).toBe("dark");
+  });
+});

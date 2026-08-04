@@ -22,6 +22,23 @@
   /* Text drawn ON accent-coloured fills (primary buttons, seq badges). */
   --as-accent-ink: #04121f;
   --as-danger: #fb7185;
+  /* Warning + comparison colours. Tokens so a host theme can reach them; the
+     defaults are the values these features shipped with. */
+  --as-diff-added: #34d399;
+  --as-diff-removed: #fb7185;
+  --as-diff-changed: #f59e0b;
+  --as-warn: #fa8072;
+  --as-warn-strong: #ef4444;
+  --as-overdue: #f59e0b;
+  --as-hazard-ink: #020617;
+  --as-hazard-tape: #f8fafc;
+  /* The edge palette, themable per colour (LIGHT_THEME darkens all six). */
+  --as-edge-slate: #64748b;
+  --as-edge-sky: #38bdf8;
+  --as-edge-emerald: #34d399;
+  --as-edge-amber: #f59e0b;
+  --as-edge-rose: #fb7185;
+  --as-edge-violet: #a78bfa;
   --as-radius: 8px;
   /* One height for every toolbar/inspector control. Glyph metrics differ
      between fonts (↺ and ⌐ fall back to different faces than Latin text), so
@@ -90,28 +107,13 @@
   white-space: nowrap;
 }
 
+/* The inline-SVG logo (see BrandMark in chrome.tsx) — it draws its own frame,
+   so the class only sizes it. */
 .as-brand__mark {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1px;
+  display: block;
+  flex: none;
   width: 18px;
   height: 18px;
-  padding: 2px;
-  border: 1px solid var(--as-accent);
-  border-radius: 3px;
-}
-
-.as-brand__mark i {
-  border-radius: 1px;
-  background: var(--as-surface-2);
-}
-
-.as-brand__mark i:first-child {
-  background: color-mix(in srgb, var(--as-accent) 70%, transparent);
-}
-
-.as-brand__mark i:last-child {
-  background: color-mix(in srgb, var(--as-accent) 40%, transparent);
 }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
@@ -451,7 +453,12 @@
   width: 100%;
   height: 100%;
   padding: 6px 12px;
-  overflow: hidden;
+  /* Visible, not hidden: three things deliberately ride this box's edges — the
+     owning-team pill, the ghost badge, and the date chip when a node is too
+     short to hold it under the description. Clipping the card would slice all
+     three in half. The pieces that must not spill (title, description) do
+     their own truncation. */
+  overflow: visible;
   border: 1px solid color-mix(in srgb, var(--as-node-accent) 26%, var(--as-border));
   border-radius: var(--as-radius);
   background: color-mix(in srgb, var(--as-node-accent) 6%, var(--as-surface));
@@ -608,10 +615,13 @@
    labels, annotations, zone headers, and sequence participant headers. */
 .as-date {
   display: inline-block;
-  max-width: 100%;
+  /* Never truncates itself. The whole value is ten characters, and half a date
+     is worse than no date — it would read as a different day. It sits outside
+     its box rather than being cut, which is why the surfaces that carry it let
+     their content overflow. */
+  flex-shrink: 0;
   margin-top: 3px;
   padding: 0 5px;
-  overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--as-text-dim) 40%, transparent);
   border-radius: 4px;
   background: color-mix(in srgb, var(--as-surface) 70%, transparent);
@@ -621,9 +631,16 @@
   font-weight: 500;
   line-height: 15px;
   letter-spacing: 0.04em;
-  text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
+}
+
+/* A past date on an element that never became active: the plan says landed,
+   the status says not — amber, because this is the chip's one loud moment.
+   The parent's hover-vivify carries it to full strength like everything else. */
+.as-date--overdue {
+  border-color: color-mix(in srgb, var(--as-overdue) 65%, transparent);
+  color: var(--as-overdue);
 }
 
 /* In a header row (group label, zone chip, sequence header) the chip flows
@@ -631,7 +648,6 @@
 .as-date--inline {
   margin-top: 0;
   margin-left: 6px;
-  flex-shrink: 0;
   vertical-align: middle;
 }
 
@@ -670,32 +686,78 @@
   pointer-events: none;
 }
 
+/* Outline and fill are INDEPENDENT layers: --as-zone-color is the vivid ink
+   (per-zone override or provider colour), --as-zone-fill the derived dull
+   tint, precomputed as rgba so the editor and the image exporters share one
+   formula. The old element-level `opacity` faded the border with the fill —
+   which also made box zones' borders ~14% while SVG zones stroked at 75%;
+   this is the parity fix as much as the feature. */
 .as-zone__shape--box {
-  border: 1.5px solid var(--as-zone-color);
-  background: var(--as-zone-color);
-  opacity: var(--as-zone-opacity);
+  border: 1.5px solid color-mix(in srgb, var(--as-zone-color) 75%, transparent);
+  background: var(--as-zone-fill);
 }
 
-/* SVG shapes carry their own fill/stroke so the stroke can stay opaque while
-   the fill is tinted — a single `opacity` on the element would fade both. */
 .as-zone__shape polygon,
 .as-zone__shape ellipse {
-  fill: var(--as-zone-color);
-  fill-opacity: var(--as-zone-opacity);
+  fill: var(--as-zone-fill);
   stroke: var(--as-zone-color);
   stroke-width: 1.5px;
   stroke-opacity: 0.75;
 }
 
-.as-zone[data-selected] .as-zone__shape--box,
+/* User-chosen outline styles. Dash patterns match EDGE_DASH so the exporters
+   draw the identical outline. */
+.as-zone[data-outline="dashed"] .as-zone__shape--box {
+  border-style: dashed;
+}
+
+.as-zone[data-outline="dotted"] .as-zone__shape--box {
+  border-style: dotted;
+}
+
+.as-zone[data-outline="none"] .as-zone__shape--box {
+  border: 0;
+}
+
+.as-zone[data-outline="dashed"] .as-zone__shape polygon,
+.as-zone[data-outline="dashed"] .as-zone__shape ellipse {
+  stroke-dasharray: 8 5;
+}
+
+.as-zone[data-outline="dotted"] .as-zone__shape polygon,
+.as-zone[data-outline="dotted"] .as-zone__shape ellipse {
+  stroke-dasharray: 2 4;
+}
+
+.as-zone[data-outline="none"] .as-zone__shape polygon,
+.as-zone[data-outline="none"] .as-zone__shape ellipse {
+  stroke: none;
+}
+
+/* Selection reads as WEIGHT, not dash — a dash here would be indistinguishable
+   from a zone whose author chose a dashed outline. No resize jitter: the shape
+   is border-box and inset: 0, so a thicker border eats inward. */
+.as-zone[data-selected] .as-zone__shape--box {
+  border-width: 2px;
+  border-color: var(--as-zone-color);
+}
+
 .as-zone[data-selected] .as-zone__shape polygon,
 .as-zone[data-selected] .as-zone__shape ellipse {
-  stroke-dasharray: 6 4;
+  stroke-width: 2.5px;
   stroke-opacity: 1;
 }
 
-.as-zone[data-selected] .as-zone__shape--box {
-  border-style: dashed;
+/* An outline-less zone still has to be findable when selected: a faint solid
+   ink line, quieter than a real outline, visible over any fill. */
+.as-zone[data-selected][data-outline="none"] .as-zone__shape--box {
+  border: 1.5px solid color-mix(in srgb, var(--as-zone-color) 45%, transparent);
+}
+
+.as-zone[data-selected][data-outline="none"] .as-zone__shape polygon,
+.as-zone[data-selected][data-outline="none"] .as-zone__shape ellipse {
+  stroke: color-mix(in srgb, var(--as-zone-color) 45%, transparent);
+  stroke-width: 1.5px;
 }
 
 /* The header is the only interactive part, and the drag handle. */
@@ -728,6 +790,9 @@
 }
 
 .as-zone__label {
+  /* See .as-group__name — lets a long region name ellipsise instead of
+     pushing the date chip out of the header. */
+  min-width: 0;
   overflow: hidden;
   font-family: var(--as-mono);
   font-size: 11px;
@@ -928,6 +993,63 @@
   stroke-dasharray: 6 5;
 }
 
+/* stubbed: the scaffolding exists, the implementation doesn't — heavier
+   construction dashes than planned's, over a faint diagonal hatch. The box
+   bits exclude silhouette nodes (`--shaped` zeroes its CSS box; the SVG
+   variant below carries the treatment there instead). */
+.as-node--status-stubbed {
+  opacity: 0.85;
+}
+
+.as-node--status-stubbed:not(.as-node--shaped) {
+  border-style: dashed;
+  border-width: 2px;
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent 0 9px,
+    color-mix(in srgb, var(--as-node-accent, var(--as-text-dim)) 8%, transparent) 9px 12px
+  );
+}
+
+.as-node--status-stubbed .as-node__silhouette-tint {
+  stroke-dasharray: 10 4;
+  stroke-width: 2;
+}
+
+/* dark: built and shipped but not switched on — black/white hazard tape.
+   White dashes over a black underlay confined to the border ring by the
+   two-layer background (padding-box interior, border-box black). Literal
+   black/white on purpose: hazard tape doesn't theme. */
+.as-node--status-dark {
+  opacity: 0.65;
+}
+
+.as-node--status-dark:not(.as-node--shaped) {
+  border: 2px dashed var(--as-hazard-tape);
+  background:
+    linear-gradient(var(--as-surface), var(--as-surface)) padding-box,
+    var(--as-hazard-ink) border-box;
+}
+
+.as-node--status-dark .as-node__silhouette-base {
+  stroke: var(--as-hazard-ink);
+  stroke-width: 3;
+}
+
+.as-node--status-dark .as-node__silhouette-tint {
+  stroke: var(--as-hazard-tape);
+  stroke-width: 1.8;
+  stroke-dasharray: 6 6;
+}
+
+/* Group interiors are translucent, so the two-layer trick would bleed black
+   through the body — dashes plus a black outer ring reads the same. */
+.as-group.as-node--status-dark {
+  border: 2px dashed var(--as-hazard-tape);
+  background: color-mix(in srgb, var(--as-surface-2) 28%, transparent);
+  box-shadow: 0 0 0 2px var(--as-hazard-ink);
+}
+
 .as-node--status-deprecated {
   opacity: 0.55;
 }
@@ -940,9 +1062,70 @@
   text-decoration: line-through;
 }
 
+/* Groups and sequence headers set their own border/background AFTER this
+   block, which would silently beat the single-class rules above — the
+   border-carrying stages are restated here at two-class strength. (Before
+   this, proposed/planned outlines never actually landed on either.) */
+.as-group.as-node--status-proposed,
+.as-seq-head.as-node--status-proposed {
+  border-style: dotted;
+}
+
+.as-seq-head.as-node--status-planned {
+  border-style: dashed;
+}
+
+.as-group.as-node--status-stubbed,
+.as-seq-head.as-node--status-stubbed {
+  border-style: dashed;
+  border-width: 2px;
+}
+
+.as-seq-head.as-node--status-dark {
+  border: 2px dashed var(--as-hazard-tape);
+  background:
+    linear-gradient(var(--as-surface), var(--as-surface)) padding-box,
+    var(--as-hazard-ink) border-box;
+}
+
+/* Every dulled stage must still READ: under the cursor it comes back to full
+   strength, so a faded label is one hover from legible. The outline styling
+   stays — hover clarifies, it doesn't disguise the stage. */
+.as-node--status-stubbed,
+.as-node--status-dark,
+.as-node--status-deprecated,
+.as-node--status-retired {
+  /* The full list, not just opacity — `transition` is a single property, and
+     naming only opacity here would silently drop the card's border/shadow
+     hover transitions. */
+  transition: opacity 120ms, border-color 120ms, box-shadow 120ms;
+}
+
+.as-node--status-stubbed:hover,
+.as-node--status-dark:hover,
+.as-node--status-deprecated:hover,
+.as-node--status-retired:hover {
+  opacity: 1;
+}
+
 .as-node__status {
   color: var(--as-text-dim);
   text-transform: uppercase;
+  transition: color 120ms;
+}
+
+/* Deprecated wears its own warning colour: salmon at rest, sharpening to red
+   under the cursor or when selected — the stage people most need to notice
+   while routinely walking past it. Literal colours, like the hazard tape:
+   a warning doesn't theme. */
+.as-node--status-deprecated .as-node__status {
+  color: var(--as-warn);
+}
+
+.as-node--status-deprecated:hover .as-node__status,
+.as-node--selected.as-node--status-deprecated .as-node__status,
+.as-seq-head--selected.as-node--status-deprecated .as-node__status {
+  color: var(--as-warn-strong);
 }
 
 /* Owning-team tag riding the node's top edge. Its colour derives from the
@@ -990,21 +1173,33 @@
   border-style: solid;
 }
 
+/* A flex row rather than a line of text, so the truncation applies to the
+   NAME alone: the date chip and team pill after it are flex-shrink: 0 and stay
+   whole however long the group is called. */
 .as-group__label {
   position: absolute;
   top: -1px;
   left: -1px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   max-width: 100%;
   padding: 2px 8px;
-  overflow: hidden;
   border: 1px solid var(--as-node-accent);
   border-radius: 10px 0 6px 0;
   background: var(--as-surface-2);
   color: var(--as-text-dim);
   font-family: var(--as-mono);
   font-size: 11px;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* `min-width: 0` is what lets a flex item shrink below its content width —
+   without it the name refuses to ellipsise and pushes the chips out instead. */
+.as-group__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Collapse toggle in the group label, and the collapsed chip. */
@@ -1042,6 +1237,9 @@
 }
 
 .as-group-chip__label {
+  /* See .as-group__name — without min-width: 0 this refuses to shrink and
+     shoves the date chip past the chip's own clipped edge. */
+  min-width: 0;
   overflow: hidden;
   font-family: var(--as-mono);
   font-size: 11px;
@@ -1057,7 +1255,9 @@
   width: 100%;
   height: 100%;
   padding: 4px 6px;
-  overflow: hidden;
+  /* A note is sized to its text, so a date chip appended after it lands past
+     the bottom edge more often than not. Let it show. */
+  overflow: visible;
   border: 1px dashed transparent;
   border-radius: 6px;
   /* Theme text, not the kind def's — annotations must stay legible when the
@@ -1159,19 +1359,24 @@
 
 /* ── Inspector ───────────────────────────────────────────────────────────── */
 
+/* Centered via inset-0 + auto margins, NOT left:50% + translate: shrink-to-fit
+   against a 50% left offset caps the bar at half the canvas, which makes the
+   max-width unreachable and wraps the controls into needless extra rows. */
 .as-inspector {
   position: absolute;
   bottom: 14px;
-  left: 50%;
+  left: 0;
+  right: 0;
   z-index: 45;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 8px;
+  width: fit-content;
   max-width: min(94%, 900px);
+  margin-inline: auto;
   padding: 10px 12px;
-  transform: translateX(-50%);
   border: 1px solid var(--as-border);
   border-radius: 12px;
   background: color-mix(in srgb, var(--as-surface) 97%, transparent);
@@ -1184,34 +1389,38 @@
   width: auto;
 }
 
-.as-inspector__name {
-  width: 160px;
+/* Text fields grow past their basis so each wrapped row fills the bar
+   edge to edge instead of leaving a gutter. */
+.as-inspector .as-inspector__name {
+  flex: 1 1 160px;
 }
 
-.as-inspector__desc {
-  width: 180px;
+.as-inspector .as-inspector__desc {
+  flex: 1 1 180px;
 }
 
-.as-inspector__tech {
-  width: 130px;
+.as-inspector .as-inspector__tech {
+  flex: 1 1 130px;
 }
 
-.as-inspector__seq {
+.as-inspector .as-inspector__seq {
   width: 56px;
+  flex: none;
 }
 
-.as-inspector__url {
-  width: 170px;
+.as-inspector .as-inspector__url {
+  flex: 1 1 170px;
 }
 
-.as-inspector__team {
-  width: 110px;
+.as-inspector .as-inspector__team {
+  flex: 1 1 110px;
 }
 
 /* Wide enough for the native picker's own glyph, which sits inside the field
    and clips the year on a narrower box in Chrome. */
-.as-inspector__date {
+.as-inspector .as-inspector__date {
   width: 138px;
+  flex: none;
 }
 
 /* Inline checkbox inside an inspector section. */
@@ -1239,6 +1448,16 @@
   gap: 6px;
   padding-left: 10px;
   border-left: 1px solid var(--as-border);
+}
+
+/* Sections holding a growable text field absorb their row's leftover width,
+   passing it to the field; fixed-content sections keep their natural size. */
+.as-inspector__section:has(.as-inspector__name),
+.as-inspector__section:has(.as-inspector__desc),
+.as-inspector__section:has(.as-inspector__tech),
+.as-inspector__section:has(.as-inspector__url),
+.as-inspector__section:has(.as-inspector__team) {
+  flex: 1 1 auto;
 }
 
 .as-inspector__section:first-child {
@@ -1350,6 +1569,40 @@
   border-color: var(--as-text);
 }
 
+/* A native colour input dressed as one more swatch, so "any other colour"
+   sits in the same row as the presets instead of being a separate control. */
+.as-swatch--custom {
+  overflow: hidden;
+  background: none;
+  appearance: none;
+}
+
+.as-swatch--custom::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.as-swatch--custom::-webkit-color-swatch {
+  border: 0;
+  border-radius: 50%;
+}
+
+.as-swatch--custom::-moz-color-swatch {
+  border: 0;
+  border-radius: 50%;
+}
+
+/* The zone fill-opacity slider in the inspector. */
+.as-range {
+  width: 90px;
+  height: var(--as-control-h);
+  margin: 0;
+  accent-color: var(--as-accent);
+}
+
+.as-range:disabled {
+  opacity: 0.4;
+}
+
 /* ── Compare mode ────────────────────────────────────────────────────────── */
 
 .as-diffbar {
@@ -1371,15 +1624,15 @@
 }
 
 .as-diffbar__chip--added {
-  color: #34d399;
+  color: var(--as-diff-added);
 }
 
 .as-diffbar__chip--removed {
-  color: #fb7185;
+  color: var(--as-diff-removed);
 }
 
 .as-diffbar__chip--changed {
-  color: #f59e0b;
+  color: var(--as-diff-changed);
 }
 
 .as-diffbar__note {
@@ -1405,12 +1658,12 @@
    node components never learn about diff mode. */
 .react-flow__node.as-diff--added .as-node,
 .react-flow__node.as-diff--added .as-group {
-  border-color: #34d399;
+  border-color: var(--as-diff-added);
   border-style: dashed;
 }
 
 .react-flow__node.as-diff--added .as-node__silhouette-tint {
-  stroke: #34d399;
+  stroke: var(--as-diff-added);
   stroke-dasharray: 6 5;
 }
 
@@ -1420,49 +1673,63 @@
 
 .react-flow__node.as-diff--removed .as-node,
 .react-flow__node.as-diff--removed .as-group {
-  border-color: #fb7185;
+  border-color: var(--as-diff-removed);
   border-style: dashed;
 }
 
 .react-flow__node.as-diff--removed .as-node__silhouette-tint {
-  stroke: #fb7185;
+  stroke: var(--as-diff-removed);
   stroke-dasharray: 6 5;
 }
 
 .react-flow__node.as-diff--changed .as-node,
 .react-flow__node.as-diff--changed .as-group {
-  border-color: #f59e0b;
+  border-color: var(--as-diff-changed);
 }
 
 .react-flow__node.as-diff--changed .as-node__silhouette-tint {
-  stroke: #f59e0b;
+  stroke: var(--as-diff-changed);
 }
 
 .as-edge--removed {
   opacity: 0.55;
 }
 
-/* Selection colour lives in CSS so themes restyle it (a stroke attribute
-   would beat the dark default but lose to this rule — exactly what we want). */
-.as-edge__stroke--selected {
+/* Edge colours resolve through the --as-edge-* variables, overriding the hex
+   the component sets as an attribute fallback — one mechanism for themes to
+   darken the whole palette. Strokes and fills split so the line's own
+   fill="none" survives. */
+.as-edge__stroke.as-edge--c-slate { stroke: var(--as-edge-slate); }
+.as-edge__stroke.as-edge--c-sky { stroke: var(--as-edge-sky); }
+.as-edge__stroke.as-edge--c-emerald { stroke: var(--as-edge-emerald); }
+.as-edge__stroke.as-edge--c-amber { stroke: var(--as-edge-amber); }
+.as-edge__stroke.as-edge--c-rose { stroke: var(--as-edge-rose); }
+.as-edge__stroke.as-edge--c-violet { stroke: var(--as-edge-violet); }
+
+.as-edge__arrow.as-edge--c-slate, .as-edge__seq.as-edge--c-slate { fill: var(--as-edge-slate); }
+.as-edge__arrow.as-edge--c-sky, .as-edge__seq.as-edge--c-sky { fill: var(--as-edge-sky); }
+.as-edge__arrow.as-edge--c-emerald, .as-edge__seq.as-edge--c-emerald { fill: var(--as-edge-emerald); }
+.as-edge__arrow.as-edge--c-amber, .as-edge__seq.as-edge--c-amber { fill: var(--as-edge-amber); }
+.as-edge__arrow.as-edge--c-rose, .as-edge__seq.as-edge--c-rose { fill: var(--as-edge-rose); }
+.as-edge__arrow.as-edge--c-violet, .as-edge__seq.as-edge--c-violet { fill: var(--as-edge-violet); }
+
+/* Compare-mode recolours beat the edge's own colour. */
+.as-edge__stroke.as-edge--added { stroke: var(--as-diff-added); }
+.as-edge__stroke.as-edge--removed { stroke: var(--as-diff-removed); }
+.as-edge__stroke.as-edge--changed { stroke: var(--as-diff-changed); }
+
+.as-edge__arrow.as-edge--added { fill: var(--as-diff-added); }
+.as-edge__arrow.as-edge--removed { fill: var(--as-diff-removed); }
+.as-edge__arrow.as-edge--changed { fill: var(--as-diff-changed); }
+
+/* Selection colour lives in CSS so themes restyle it. Two classes, and last,
+   so it outranks the colour rules above the way it used to outrank a bare
+   stroke attribute. */
+.as-edge__stroke.as-edge__stroke--selected {
   stroke: var(--as-text);
 }
 
 /* ── Timeline mode ───────────────────────────────────────────────────────── */
-
-.as-timelinecanvas {
-  width: 100%;
-  height: 100%;
-}
-
-/* Like compare mode, the scrubbed canvas is a picture: nothing inside a node
-   is reachable, so a date-mode click can never edit what it is showing. */
-.as-canvas--timeline .react-flow__node button,
-.as-canvas--timeline .react-flow__node input,
-.as-canvas--timeline .react-flow__node select,
-.as-canvas--timeline .react-flow__node a {
-  pointer-events: none;
-}
 
 /* Dated after the cursor. The class rides on the React Flow node / edge
    object, so no renderer learns about timeline mode — the same trick the diff
@@ -1472,6 +1739,14 @@
 .as-future {
   opacity: 0.22;
   filter: grayscale(1);
+  transition: opacity 120ms, filter 120ms;
+}
+
+/* Dulled-but-hoverable, like the lifecycle stages and provider ghosts: a
+   future element under the cursor reads at full strength. */
+.as-future:hover {
+  opacity: 1;
+  filter: none;
 }
 
 .react-flow__node.as-future .as-node,
@@ -1483,6 +1758,11 @@
 /* ── Timeline scrubber bar ───────────────────────────────────────────────── */
 
 .as-timeline {
+  position: relative;
+  /* Above the AI panel (40): the stamp tab hangs past this bar's bottom edge
+     into the canvas, where the panel would otherwise paint over it. Below the
+     inspector (45) and the menus (60). */
+  z-index: 41;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1500,13 +1780,16 @@
   color: var(--as-text-dim);
 }
 
-/* The track: a buffer bar filled up to the cursor, with a tick per stop, and
-   a transparent range input laid over the whole thing so the native control
-   still owns dragging, keyboard, and accessibility. */
+/* The track: a buffer bar filled to the cursor, a tick per dated point, and a
+   transparent range input laid over the whole thing so the native control
+   still owns dragging, keyboard, and accessibility.
+
+   Every layer shares one geometry — RAIL_TOP 9px, RAIL_H 4px — so the rail,
+   the ticks, the ghost dot, and the handle all centre on the same line. */
 .as-timeline__track {
   position: relative;
   flex: 1;
-  min-width: 120px;
+  min-width: 140px;
   height: 22px;
 }
 
@@ -1527,7 +1810,6 @@
 
 .as-timeline__buffer {
   background: var(--as-accent);
-  transition: width 120ms ease-out;
 }
 
 .as-timeline__tick {
@@ -1538,6 +1820,7 @@
   margin-left: -1px;
   border-radius: 1px;
   background: color-mix(in srgb, var(--as-text-dim) 60%, transparent);
+  transition: height 90ms, top 90ms, background 90ms;
   pointer-events: none;
 }
 
@@ -1545,11 +1828,32 @@
   background: var(--as-accent);
 }
 
+/* The tick the pointer is close enough to land on. */
+.as-timeline__tick--hot {
+  top: 3px;
+  height: 16px;
+  background: var(--as-accent);
+}
+
+/* Where the handle would land if released here — an outline of the real dot,
+   drawn at the tick under the pointer. */
+.as-timeline__ghostdot {
+  position: absolute;
+  top: 4px;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  border: 2px solid var(--as-accent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--as-accent) 18%, transparent);
+  pointer-events: none;
+}
+
 .as-timeline__range {
   position: absolute;
   inset: 0;
   width: 100%;
-  height: 100%;
+  height: 22px;
   margin: 0;
   background: none;
   appearance: none;
@@ -1557,25 +1861,31 @@
 }
 
 /* The native track is suppressed in both engines — the buffer bar underneath
-   IS the track, and a second one painted over it would double the rail. */
+   IS the track. Giving it the rail's exact height and offset is also what
+   centres the thumb: a thumb is centred on its TRACK, so a full-height track
+   would hang it wherever the engine felt like. */
 .as-timeline__range::-webkit-slider-runnable-track {
-  height: 100%;
+  height: 4px;
+  margin-top: 9px;
   background: none;
 }
 
 .as-timeline__range::-moz-range-track {
-  height: 100%;
+  height: 4px;
   background: none;
 }
 
 .as-timeline__range::-webkit-slider-thumb {
   width: 14px;
   height: 14px;
+  /* (track 4px − thumb 14px) / 2 — the last step of centring on the rail. */
+  margin-top: -5px;
   border: 2px solid var(--as-bg);
   border-radius: 50%;
   background: var(--as-accent);
   appearance: none;
   cursor: grab;
+  transition: opacity 90ms;
 }
 
 .as-timeline__range::-moz-range-thumb {
@@ -1585,6 +1895,17 @@
   border-radius: 50%;
   background: var(--as-accent);
   cursor: grab;
+  transition: opacity 90ms;
+}
+
+/* Hovering a landable tick fades the real handle, so the ghost outline and the
+   handle read as one move rather than two competing dots. */
+.as-timeline__range--ghosting::-webkit-slider-thumb {
+  opacity: 0.3;
+}
+
+.as-timeline__range--ghosting::-moz-range-thumb {
+  opacity: 0.3;
 }
 
 .as-timeline__range:focus-visible {
@@ -1592,17 +1913,36 @@
   outline-offset: 2px;
 }
 
+/* The readout doubles as the jump-to-a-date control. */
 .as-timeline__date {
-  min-width: 92px;
+  min-width: 96px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--as-text);
   font-family: var(--as-mono);
   font-size: 12px;
   font-weight: 600;
   text-align: right;
   white-space: nowrap;
-  color: var(--as-text);
+  cursor: pointer;
 }
 
-.as-timeline__step,
+.as-timeline__date:hover {
+  border-color: var(--as-border);
+  background: var(--as-surface-2);
+}
+
+/* A cursor sitting exactly on a dated point, rather than between two. */
+.as-timeline__date--onstop {
+  color: var(--as-accent);
+}
+
+.as-timeline__picker {
+  width: 138px;
+}
+
 .as-timeline__ahead {
   font-family: var(--as-mono);
   font-size: 10px;
@@ -1610,10 +1950,34 @@
   color: var(--as-text-dim);
 }
 
+/* Hangs off the bottom edge of the bar, centred: rounded only where it leaves
+   the bar, so it reads as part of it rather than as a floating chip. */
+.as-timeline__stamp {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  z-index: 5;
+  padding: 2px 10px 3px;
+  border: 1px solid var(--as-border);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  background: var(--as-surface);
+  color: var(--as-text-dim);
+  font-family: var(--as-mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
 /* ── Modals ──────────────────────────────────────────────────────────────── */
 
+/* Fixed, not absolute: modals render inside whatever component opened them
+   (the file menu's `.as-menu-wrap`, say), so an absolute overlay would centre
+   itself on that button instead of the window. */
 .as-modal {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 100;
   display: grid;
@@ -1678,6 +2042,148 @@
 .as-modal__actions {
   display: flex;
   gap: 8px;
+  justify-content: flex-end;
+}
+
+/* ── Welcome modal ───────────────────────────────────────────────────────── */
+
+.as-modal__card--wide {
+  width: min(680px, 100%);
+}
+
+/* ── Export-states modal ─────────────────────────────────────────────────── */
+
+.as-export-states__modes,
+.as-export-states__pdf {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+/* Indented under the "Custom…" radio it belongs to. */
+.as-export-states__custom {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 12px 22px;
+}
+
+/* Kept mounted in the other modes so the card height never jumps; the inputs
+   inside are genuinely disabled via their fieldsets. */
+.as-export-states__custom--off {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.as-export-states__axis {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.as-export-states__axis-title {
+  padding: 0;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--as-text-dim);
+}
+
+.as-export-states__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.as-export-states__count {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--as-text-dim);
+}
+
+.as-export-states__count--warn {
+  color: var(--as-danger);
+}
+
+.as-welcome {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.as-welcome__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--as-text);
+}
+
+/* The toolbar brand mark, scaled up to headline size. */
+.as-brand__mark.as-welcome__mark {
+  width: 40px;
+  height: 40px;
+}
+
+.as-welcome__wordmark {
+  font-family: var(--as-mono);
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.as-welcome__name {
+  width: 100%;
+  height: 34px;
+  font-size: 13px;
+}
+
+.as-welcome__ctas {
+  display: flex;
+  gap: 10px;
+}
+
+.as-welcome__cta {
+  flex: 1;
+  justify-content: space-between;
+  height: 40px;
+  font-size: 12.5px;
+}
+
+.as-welcome__arrow {
+  transition: transform 160ms ease;
+}
+
+.as-welcome__cta:hover:not(:disabled) .as-welcome__arrow {
+  transform: translateX(5px);
+}
+
+.as-welcome__editor .cm-editor {
+  min-height: 220px;
+  max-height: 320px;
+}
+
+.as-welcome__editor .cm-scroller {
+  overflow: auto;
+}
+
+.as-welcome__error {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--as-danger);
+}
+
+/* The lossy-rescue offer sits with the error it answers. */
+.as-welcome__approx {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.as-welcome__insert-row {
+  display: flex;
   justify-content: flex-end;
 }
 
@@ -1871,6 +2377,10 @@
 }
 
 .as-seq-head__kind {
+  /* The eyebrow carries the kind, the status, and the date chip. The header is
+     a fixed 48px, so this has to stay one line or it pushes the participant's
+     name out of the box. */
+  white-space: nowrap;
   font-family: var(--as-mono);
   font-size: 8px;
   text-transform: uppercase;
@@ -2199,8 +2709,144 @@
   border-color: var(--as-accent);
 }
 
+/* ── Cloud toggle (welcome modal) ────────────────────────────────────────── */
+
+.as-welcome__clouds {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.as-welcome__clouds-label {
+  font-size: 11px;
+  color: var(--as-text-dim);
+  margin-right: 2px;
+}
+
+.as-cloud-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--as-border);
+  border-radius: 999px;
+  background: var(--as-surface-2);
+  color: var(--as-text-dim);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+
+.as-cloud-chip[aria-pressed="true"] {
+  border-color: var(--chip-color, var(--as-accent));
+  background: color-mix(in srgb, var(--chip-color, var(--as-accent)) 18%, transparent);
+  color: var(--as-text);
+}
+
+.as-cloud-chip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--chip-color, var(--as-accent));
+  opacity: 0.55;
+}
+
+.as-cloud-chip[aria-pressed="true"] .as-cloud-chip__dot {
+  opacity: 1;
+}
+
+/* ── Kind picker (relevance-aware node-type dropdown) ────────────────────── */
+
+.as-kindselect {
+  position: relative;
+}
+
+.as-kindselect__button {
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The inspector bar hugs the bottom of the canvas, so the picker drops UP —
+   downward it would clip against the viewport edge. */
+.as-kindselect .as-kindmenu {
+  top: auto;
+  bottom: calc(100% + 6px);
+  max-height: 280px;
+  overflow-y: auto;
+  min-width: 190px;
+}
+
+.as-kindmenu__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px 3px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--as-text-dim);
+}
+
+.as-kindmenu__header--sub {
+  padding-top: 5px;
+  font-weight: 550;
+}
+
+.as-kindmenu__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.as-kindmenu__option {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  background: none;
+  color: var(--as-text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.as-kindmenu__option:hover {
+  background: color-mix(in srgb, var(--as-accent) 14%, transparent);
+}
+
+.as-kindmenu__option--active {
+  color: var(--as-accent);
+  font-weight: 600;
+}
+
+/* The demoted section: clouds this document doesn't reference. Grayed and
+   set on a darker wash — reachable, but visually second-class. */
+.as-kindmenu__dim {
+  margin-top: 4px;
+  border-top: 1px solid var(--as-border);
+  background: color-mix(in srgb, var(--as-surface) 72%, #000);
+}
+
+.as-kindmenu__dim .as-kindmenu__option {
+  color: var(--as-text-dim);
+}
+
+.as-kindmenu__dim .as-kindmenu__dot {
+  opacity: 0.45;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .as-root * {
     transition: none !important;
+  }
+
+  /* Without its transition the arrow slide would still snap on hover. */
+  .as-welcome__cta:hover:not(:disabled) .as-welcome__arrow {
+    transform: none;
   }
 }

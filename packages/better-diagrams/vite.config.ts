@@ -46,8 +46,17 @@ export default defineConfig({
       // copy, and React Flow because it carries its own context and store —
       // two bundled copies would mean two stores and a doubled payload for
       // any host that already uses it. It stays a normal `dependency`, so
-      // npm installs it and the host's bundler dedupes.
-      external: ["react", "react-dom", "react/jsx-runtime", "@xyflow/react"],
+      // npm installs it and the host's bundler dedupes. CodeMirror for the
+      // same reason: @codemirror/state checks extensions by instanceof, so a
+      // bundled second copy breaks hosts that already ship an editor.
+      external: [
+        "react",
+        "react-dom",
+        "react/jsx-runtime",
+        "@xyflow/react",
+        /^@codemirror\//,
+        /^@lezer\//,
+      ],
       output: {
         globals: { react: "React", "react-dom": "ReactDOM" },
         assetFileNames: "better-diagrams.css",

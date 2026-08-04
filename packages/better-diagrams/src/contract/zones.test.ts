@@ -467,3 +467,82 @@ describe("bounds and prompt", () => {
     expect(buildSystemPrompt({ providers: ["fly", "render"] })).toContain("fly");
   });
 });
+
+describe("zone style overrides", () => {
+  const validate = (over: Partial<DiagramZone> | Record<string, unknown>) =>
+    validateTemplate({ version: 1, zones: [zone(over as Partial<DiagramZone>)], nodes: [], edges: [] })
+      .zones![0];
+
+  it("normalises colour to canonical lowercase #rrggbb", () => {
+    expect(validate({ color: "#38BDF8" }).color).toBe("#38bdf8");
+    expect(validate({ color: "#3bf" }).color).toBe("#33bbff");
+    expect(validate({ color: "  #38bdf8  " }).color).toBe("#38bdf8");
+  });
+
+  it("drops a colour that is not a hex colour", () => {
+    for (const bad of ["sky", "rgb(1,2,3)", "#38bdf", "#38bdf8ff00", 42, null, ""]) {
+      expect("color" in validate({ color: bad as never })).toBe(false);
+    }
+  });
+
+  it("folds an alpha carried on the colour into opacity", () => {
+    // /NN percent form.
+    const slash = validate({ color: "#38bdf8/40" });
+    expect(slash.color).toBe("#38bdf8");
+    expect(slash.opacity).toBeCloseTo(0.4);
+    // CSS 8-digit hex form: 0x33 / 255 = 0.2.
+    const eight = validate({ color: "#38bdf833" });
+    expect(eight.color).toBe("#38bdf8");
+    expect(eight.opacity).toBeCloseTo(0.2);
+  });
+
+  it("lets an explicit opacity beat the colour's alpha", () => {
+    const z = validate({ color: "#38bdf8/40", opacity: 0.1 });
+    expect(z.opacity).toBeCloseTo(0.1);
+  });
+
+  it("stores outline only when it differs from solid", () => {
+    expect("outline" in validate({ outline: "solid" })).toBe(false);
+    expect("outline" in validate({ outline: "wavy" as never })).toBe(false);
+    expect(validate({ outline: "dashed" }).outline).toBe("dashed");
+    expect(validate({ outline: "dotted" }).outline).toBe("dotted");
+    expect(validate({ outline: "none" }).outline).toBe("none");
+  });
+
+  it("stores fill only when opted out", () => {
+    expect("fill" in validate({ fill: true })).toBe(false);
+    expect("fill" in validate({ fill: "no" as never })).toBe(false);
+    expect(validate({ fill: false }).fill).toBe(false);
+  });
+
+  it("is idempotent — a canonicalised document validates to itself", () => {
+    // "#38BDF8/40" is deliberately NOT byte-identical (it canonicalises); the
+    // invariant is that a second pass changes nothing further.
+    const raw = { version: 1, zones: [zone({ color: "#38BDF8/40", outline: "dashed", fill: false } as never)], nodes: [], edges: [] };
+    const once = validateTemplate(raw);
+    const twice = validateTemplate(once);
+    expect(JSON.stringify(twice)).toBe(JSON.stringify(once));
+  });
+
+  it("round-trips an already-canonical styled zone byte-identical", () => {
+    const doc = validateTemplate({
+      version: 1,
+      zones: [zone({ color: "#22c55e", outline: "dotted", fill: false, opacity: 0.3 } as never)],
+      nodes: [],
+      edges: [],
+    });
+    expect(JSON.stringify(validateTemplate(doc))).toBe(JSON.stringify(doc));
+    // And through the canvas adapters.
+    const rf = toReactFlow(doc);
+    const back = fromReactFlow(rf.nodes, rf.edges, { base: doc });
+    expect(back.zones![0].color).toBe("#22c55e");
+    expect(back.zones![0].outline).toBe("dotted");
+    expect(back.zones![0].fill).toBe(false);
+  });
+
+  it("advertises colour and outline in the generated prompt", () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('"color":"#38bdf8"');
+    expect(prompt).toContain('"outline":"solid|dashed|dotted|none"');
+  });
+});

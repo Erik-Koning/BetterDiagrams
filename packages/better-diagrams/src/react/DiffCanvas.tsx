@@ -27,6 +27,7 @@ import {
   type Node,
 } from "@xyflow/react";
 import {
+  EDGE_Z_INDEX,
   toReactFlow,
   toZoneNodeId,
   type DiagramNode,
@@ -35,6 +36,10 @@ import {
 import type { DiffState, TemplateDiff } from "../contract/diff";
 import { NODE_TYPES } from "./nodes";
 import { EDGE_TYPES } from "./edges";
+
+// Stable identity — React Flow stores this object. Same layering as the
+// editor's canvas: edges under every node (see EDGE_Z_INDEX).
+const DEFAULT_EDGE_OPTIONS = { zIndex: EDGE_Z_INDEX };
 
 /** Overlay = current document + base's removed elements, renderable as one. */
 function buildOverlay(
@@ -134,6 +139,10 @@ export const DiffCanvas = memo(function DiffCanvas({
           edges={edges}
           nodeTypes={NODE_TYPES}
           edgeTypes={EDGE_TYPES}
+          // Same z policy as the editor: honour per-element zIndex so edges
+          // stay in their own band under the nodes (see EDGE_Z_INDEX).
+          zIndexMode="manual"
+          defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
           // Every handle is declared as a source (see ConnectHandles), so in the
           // default STRICT mode React Flow finds no target handle to resolve an
           // edge against and renders no connections at all.

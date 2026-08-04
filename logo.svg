@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- BetterDiagrams mark: two nodes converging into one — drawn in the editor's
+       own palette. Nodes straddle the frame and clip at the perimeter. -->
+  <defs>
+    <linearGradient id="bd-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16233c"/>
+      <stop offset="1" stop-color="#0b1220"/>
+    </linearGradient>
+    <clipPath id="bd-frame">
+      <rect x="0" y="0" width="256" height="256" rx="58"/>
+    </clipPath>
+  </defs>
+
+  <rect x="0" y="0" width="256" height="256" rx="58" fill="url(#bd-bg)"/>
+
+  <g clip-path="url(#bd-frame)">
+    <!-- Splines: horizontal tangents at both ends, like the canvas edges. -->
+    <path d="M 68 76 C 128 76 128 121 190 121" fill="none" stroke="#38bdf8" stroke-width="7" stroke-linecap="round"/>
+    <path d="M 68 180 C 128 180 128 135 190 135" fill="none" stroke="#38bdf8" stroke-width="7" stroke-linecap="round"/>
+
+    <!-- Left nodes: a vertical pair, slightly past the left perimeter. -->
+    <rect x="-18" y="48" width="86" height="56" rx="14" fill="#1e293b" stroke="#38bdf8" stroke-width="7"/>
+    <rect x="-18" y="152" width="86" height="56" rx="14" fill="#1e293b" stroke="#38bdf8" stroke-width="7"/>
+
+    <!-- Right node: vertically centred, slightly past the right perimeter. -->
+    <rect x="188" y="100" width="86" height="56" rx="14" fill="#1e293b" stroke="#38bdf8" stroke-width="7"/>
+  </g>
+
+  <!-- The frame outline sits on top, so the cut nodes end cleanly under it. -->
+  <rect x="3" y="3" width="250" height="250" rx="55" fill="none" stroke="#334155" stroke-width="6"/>
+</svg>

@@ -10,21 +10,27 @@
  *   - the registry adds node kinds, icons, and an exporter without forking
  *   - AI generation is wired through a server route, so no key is in the browser
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import {
   ArchitectureStudio,
+  BrandMark,
   DARK_THEME,
   EMPTY_SEQUENCE,
+  EMPTY_TEMPLATE,
   EXAMPLE_SEQUENCE,
   EXAMPLE_TEMPLATE,
   EXAMPLE_ZONED_TEMPLATE,
   LIGHT_THEME,
   SequenceStudio,
+  WelcomeModal,
   buildSequencePrompt,
   buildSystemPrompt,
   createProxyGenerator,
+  parseLlmSequence,
+  parseLlmTemplate,
   sequenceFromTemplate,
+  themeToStyle,
   validateSequence,
   validateTemplate,
 } from "@mosphere/better-diagrams";
@@ -56,11 +62,13 @@ function seedWorkspace() {
       localStorage.getItem(WORKSPACE_KEY) ?? localStorage.getItem(LEGACY_WORKSPACE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed.files) && parsed.files.length) {
+      // An empty files array is a real state (the user deleted everything),
+      // not corruption — reseeding the demos over it would resurrect them.
+      if (Array.isArray(parsed.files)) {
         const files = parsed.files.map((f) => ({ ...f, doc: validateDoc(f.kind, f.doc) }));
         const activeId = files.some((f) => f.id === parsed.activeId)
           ? parsed.activeId
-          : files[0].id;
+          : (files[0]?.id ?? null);
         const removed = Array.isArray(parsed.removed)
           ? parsed.removed.map((f) => ({ ...f, doc: validateDoc(f.kind, f.doc) }))
           : [];
@@ -105,6 +113,67 @@ function seedWorkspace() {
  */
 const generate = createProxyGenerator({ endpoint: "/api/diagram" });
 
+/**
+ * The live template, rendered as the exact text of
+ * `JSON.stringify(doc, null, 2)` — but assembled section by section, so the
+ * entries for elements selected on the canvas get a contrasting background.
+ * The editors report selection bucketed by document section (nodes / edges /
+ * zones, participants / messages / …), which is what makes the lookup a
+ * straight `selection[key]`.
+ */
+function HighlightedJson({ doc, selection }) {
+  const ref = useRef(null);
+
+  // A selection made on the canvas may sit anywhere in the document — bring
+  // its first highlighted entry into view.
+  useEffect(() => {
+    ref.current
+      ?.querySelector(".app__json-hit")
+      ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [selection]);
+
+  const parts = [];
+  let run = "{\n"; // plain text accumulated since the last highlight
+  const entries = Object.entries(doc).filter(([, v]) => v !== undefined);
+  entries.forEach(([key, value], i) => {
+    const comma = i === entries.length - 1 ? "" : ",";
+    const hits = new Set(selection?.[key] ?? []);
+    if (Array.isArray(value) && value.length && hits.size) {
+      run += `  ${JSON.stringify(key)}: [\n`;
+      value.forEach((el, j) => {
+        const text =
+          JSON.stringify(el, null, 2)
+            .split("\n")
+            .map((line) => `    ${line}`)
+            .join("\n") + (j === value.length - 1 ? "\n" : ",\n");
+        if (el && hits.has(el.id)) {
+          parts.push(run);
+          parts.push(
+            <span key={`${key}:${el.id}`} className="app__json-hit">
+              {text}
+            </span>,
+          );
+          run = "";
+        } else {
+          run += text;
+        }
+      });
+      run += `  ]${comma}\n`;
+    } else {
+      // Indent every line but the first, which sits after the key.
+      const text = JSON.stringify(value, null, 2).split("\n").join("\n  ");
+      run += `  ${JSON.stringify(key)}: ${text}${comma}\n`;
+    }
+  });
+  parts.push(`${run}}`);
+
+  return (
+    <pre ref={ref} className="app__json">
+      {parts}
+    </pre>
+  );
+}
+
 export default function App() {
   const [workspace, setWorkspace] = useState(seedWorkspace);
   const [savedAt, setSavedAt] = useState(null);
@@ -114,7 +183,15 @@ export default function App() {
   // null = "use the active theme's accent"; set once the user picks a colour.
   const [accent, setAccent] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
-  const [showJson, setShowJson] = useState(true);
+  // The template panel starts collapsed; hovering the handle explains what it is.
+  const [showJson, setShowJson] = useState(false);
+  /** The template-JSON edit modal over the viewer panel. */
+  const [editJsonOpen, setEditJsonOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsRef = useRef(null);
+  // What's selected on the canvas, in document terms. The editors fire this
+  // on mount too, so a file switch (which remounts them) clears it for free.
+  const [selection, setSelection] = useState(null);
 
   const { files, removed } = workspace;
   const active = files.find((f) => f.id === workspace.activeId) ?? files[0];
@@ -170,40 +247,49 @@ export default function App() {
         kind: kind === "sequence" ? "seq" : "arch",
         empty: isBlank(kind, doc),
       })),
-      activeFileId: active.id,
+      activeFileId: active?.id,
       onFileSelect: (id) => updateWorkspace((ws) => ({ ...ws, activeId: id })),
-      onFileCreate: () =>
+      // The menu's "＋ New file" passes nothing; the welcome modal passes a
+      // name and, when JSON was inserted, a document to seed the file with.
+      onFileCreate: (init) =>
         updateWorkspace((ws) => {
           // A new sibling of whatever you're looking at; use → Sequence (or
           // switch to a file of the other kind) to cross kinds.
           const activeFile = ws.files.find((f) => f.id === ws.activeId) ?? ws.files[0];
-          const kind = activeFile.kind;
+          const kind = init?.kind ?? activeFile?.kind ?? "architecture";
           const file = {
             id: nextFileId(),
-            name: `Untitled ${ws.files.length + 1}`,
+            name: init?.name?.trim() || `Untitled ${ws.files.length + 1}`,
             kind,
-            doc:
-              kind === "sequence"
+            doc: init?.doc
+              ? validateDoc(kind, init.doc)
+              : kind === "sequence"
                 ? EMPTY_SEQUENCE
-                : validateTemplate({ version: 1, nodes: [], edges: [] }),
+                : EMPTY_TEMPLATE,
           };
           return { ...ws, files: [...ws.files, file], activeId: file.id };
         }),
       onFileRename: (id, name) =>
         updateWorkspace((ws) => ({
           ...ws,
-          files: ws.files.map((f) => (f.id === id ? { ...f, name } : f)),
+          // The name and the document's meta.title are one title with two
+          // homes. The editor keeps them in sync for the ACTIVE file; doing it
+          // here too covers renames of files the editor isn't holding.
+          files: ws.files.map((f) =>
+            f.id === id ? { ...f, name, doc: { ...f.doc, meta: { ...f.doc.meta, title: name } } } : f,
+          ),
         })),
       // Deleting moves the file to the trash, so it can be recovered from
       // the menu's "Recently removed" modal. Ten deep, newest first.
       onFileDelete: (id) =>
         updateWorkspace((ws) => {
           const rest = ws.files.filter((f) => f.id !== id);
-          if (!rest.length) return ws;
           const gone = ws.files.find((f) => f.id === id);
+          // Deleting the last file is allowed — the editors show the welcome
+          // modal over the empty workspace.
           const activeId =
             ws.activeId === id
-              ? rest[Math.max(0, ws.files.findIndex((f) => f.id === id) - 1)].id
+              ? (rest[Math.max(0, ws.files.findIndex((f) => f.id === id) - 1)]?.id ?? null)
               : ws.activeId;
           return {
             ...ws,
@@ -230,7 +316,7 @@ export default function App() {
           };
         }),
     }),
-    [files, removed, active.id, updateWorkspace],
+    [files, removed, active?.id, updateWorkspace],
   );
 
   /** file: links resolve by id first, then case-insensitive name. */
@@ -252,6 +338,7 @@ export default function App() {
   const deriveSequenceFile = useCallback(() => {
     updateWorkspace((ws) => {
       const activeFile = ws.files.find((f) => f.id === ws.activeId) ?? ws.files[0];
+      if (!activeFile) return ws;
       const file = {
         id: nextFileId(),
         name: `${activeFile.name} — sequence`,
@@ -266,6 +353,7 @@ export default function App() {
   const switchMode = useCallback(() => {
     updateWorkspace((ws) => {
       const activeFile = ws.files.find((f) => f.id === ws.activeId) ?? ws.files[0];
+      if (!activeFile) return ws;
       const nextKind = activeFile.kind === "sequence" ? "architecture" : "sequence";
       const blankDoc =
         nextKind === "sequence"
@@ -292,7 +380,7 @@ export default function App() {
 
   /** Hand the active mode's schema contract to an external AI agent. */
   const copySchema = useCallback(async () => {
-    const isSeq = active.kind === "sequence";
+    const isSeq = active?.kind === "sequence";
     const text = isSeq ? buildSequencePrompt() : buildSystemPrompt();
     try {
       await navigator.clipboard.writeText(text);
@@ -309,7 +397,7 @@ export default function App() {
     toast.success(`Copied the ${isSeq ? "sequence" : "architecture"} schema`, {
       description: "Paste it into your AI agent to have it author this diagram type.",
     });
-  }, [active.kind]);
+  }, [active?.kind]);
 
   // ── Presentation state ────────────────────────────────────────────────────
 
@@ -330,10 +418,14 @@ export default function App() {
       if (event.key === WORKSPACE_KEY && event.newValue) {
         try {
           const parsed = JSON.parse(event.newValue);
-          if (Array.isArray(parsed.files) && parsed.files.length) {
+          // Same rule as seedWorkspace: an empty array is a real state.
+          if (Array.isArray(parsed.files)) {
             setWorkspace({
               files: parsed.files.map((f) => ({ ...f, doc: validateDoc(f.kind, f.doc) })),
-              activeId: parsed.activeId,
+              activeId: parsed.activeId ?? null,
+              removed: Array.isArray(parsed.removed)
+                ? parsed.removed.map((f) => ({ ...f, doc: validateDoc(f.kind, f.doc) }))
+                : [],
             });
           }
         } catch (err) {
@@ -360,20 +452,42 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const isSequence = active.kind === "sequence";
-  const counts = isSequence
-    ? `${active.doc.participants.length} participants · ${active.doc.messages.length} messages`
-    : `${active.doc.nodes.length} nodes · ${active.doc.edges.length} edges`;
+  // The settings dropdown dismisses like any menu: click away or Escape.
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onPointerDown = (event) => {
+      if (!settingsRef.current?.contains(event.target)) setSettingsOpen(false);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setSettingsOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [settingsOpen]);
+
+  const isSequence = active?.kind === "sequence";
+  const counts = !active
+    ? ""
+    : isSequence
+      ? `${active.doc.participants.length} participants · ${active.doc.messages.length} messages`
+      : `${active.doc.nodes.length} nodes · ${active.doc.edges.length} edges`;
 
   return (
     <div className="app" data-theme={mode}>
       <Toaster theme={mode} position="bottom-right" closeButton richColors />
       <header className="app__bar">
-        <div>
-          <h1 className="app__title">BetterDiagrams</h1>
-          <p className="app__sub">
-            A workspace of files · controlled by <code>value</code> / <code>onChange</code>
-          </p>
+        <div className="app__brand">
+          <BrandMark className="app__logo" />
+          <div>
+            <h1 className="app__title">BetterDiagrams</h1>
+            <p className="app__sub">
+              A workspace of files · controlled by <code>value</code> / <code>onChange</code>
+            </p>
+          </div>
         </div>
 
         <div className="app__controls">
@@ -405,56 +519,110 @@ export default function App() {
             Accent
             <input type="color" value={themeAccent} onChange={(e) => setAccent(e.target.value)} />
           </label>
-          {!isSequence ? (
+          {active && !isSequence ? (
+            <button
+              type="button"
+              className="app__btn"
+              onClick={deriveSequenceFile}
+              title="Derive a NEW sequence file from this diagram's numbered flow (edge seq) — deterministic, no AI"
+            >
+              → Sequence
+            </button>
+          ) : null}
+          {active ? (
             <>
               <button
                 type="button"
                 className="app__btn"
-                onClick={() => setActiveDoc(EXAMPLE_ZONED_TEMPLATE)}
-                title="Reset this file to the multi-cloud example"
+                onClick={switchMode}
+                title={
+                  isBlank(active.kind, active.doc)
+                    ? "This file is blank — switch it to the other diagram type"
+                    : "This file has content — open a new blank file of the other type"
+                }
               >
-                Multi-cloud
-              </button>
-              <button type="button" className="app__btn" onClick={() => setActiveDoc(EXAMPLE_TEMPLATE)}>
-                Plain
+                ⇄ {isSequence ? "Architecture" : "Sequence"}
               </button>
               <button
                 type="button"
                 className="app__btn"
-                onClick={deriveSequenceFile}
-                title="Derive a NEW sequence file from this diagram's numbered flow (edge seq) — deterministic, no AI"
+                onClick={copySchema}
+                title="Copy Schema Definition For Diagram — paste it into your AI agent"
               >
-                → Sequence
+                ✦ Copy schema
               </button>
             </>
           ) : null}
-          <button
-            type="button"
-            className="app__btn"
-            onClick={switchMode}
-            title={
-              isBlank(active.kind, active.doc)
-                ? "This file is blank — switch it to the other diagram type"
-                : "This file has content — open a new blank file of the other type"
-            }
-          >
-            ⇄ {isSequence ? "Architecture" : "Sequence"}
-          </button>
-          <button
-            type="button"
-            className="app__btn"
-            onClick={copySchema}
-            title="Copy Schema Definition For Diagram — paste it into your AI agent"
-          >
-            ✦ Copy schema
-          </button>
+          <div className="app__menu" ref={settingsRef}>
+            <button
+              type="button"
+              className="app__btn"
+              onClick={() => setSettingsOpen((on) => !on)}
+              aria-haspopup="menu"
+              aria-expanded={settingsOpen}
+            >
+              ⚙ Settings
+            </button>
+            {settingsOpen ? (
+              <div className="app__dropdown" role="menu" aria-label="Settings">
+                <span className="app__dropdown-caption">Examples</span>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="app__dropdown-item"
+                  disabled={!active || isSequence}
+                  onClick={() => {
+                    setActiveDoc(EXAMPLE_ZONED_TEMPLATE);
+                    setSettingsOpen(false);
+                  }}
+                >
+                  Multi-cloud
+                  <span className="app__dropdown-desc">
+                    Reset this file to the zoned multi-cloud example
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="app__dropdown-item"
+                  disabled={!active || isSequence}
+                  onClick={() => {
+                    setActiveDoc(EXAMPLE_TEMPLATE);
+                    setSettingsOpen(false);
+                  }}
+                >
+                  Plain
+                  <span className="app__dropdown-desc">
+                    Reset this file to the plain example without zones
+                  </span>
+                </button>
+                {isSequence ? (
+                  <span className="app__dropdown-note">
+                    Examples load into architecture files — switch to one to use them.
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </div>
       </header>
 
       <main className={`app__body${showJson ? "" : " app__body--wide"}`}>
         {/* The editor fills whatever box it is given — it never assumes the viewport. */}
         <section className="app__editor">
-          {isSequence ? (
+          {!active ? (
+            // Zero files: mount the editor over an empty document so its
+            // welcome modal offers the ways back in (insert JSON, new file).
+            <ArchitectureStudio
+              key="__empty"
+              value={EMPTY_TEMPLATE}
+              readOnly={readOnly}
+              minimap={minimap}
+              registry={registry}
+              theme={theme}
+              {...fileProps}
+            />
+          ) : isSequence ? (
             <SequenceStudio
               key={active.id}
               value={active.doc}
@@ -464,6 +632,7 @@ export default function App() {
               theme={theme}
               generate={aiEnabled ? generate : undefined}
               filename={active.name}
+              onSelectionChange={setSelection}
               {...fileProps}
             />
           ) : (
@@ -479,12 +648,13 @@ export default function App() {
               generate={aiEnabled ? generate : undefined}
               filename={active.name}
               onNavigateFile={navigateFile}
+              onSelectionChange={setSelection}
               {...fileProps}
             />
           )}
         </section>
 
-        {showJson ? (
+        {showJson && active ? (
           <aside className="app__side">
             <div className="app__side-head">
               <h2>{active.name}</h2>
@@ -502,23 +672,69 @@ export default function App() {
               files. A node url of <code>file:Order flow</code> makes its ↗ jump to that file —
               try the Payments node.
             </p>
-            <pre className="app__json">{JSON.stringify(active.doc, null, 2)}</pre>
+            <div className="app__json-wrap">
+              <HighlightedJson doc={active.doc} selection={selection} />
+              <button
+                type="button"
+                className="app__json-edit"
+                onClick={() => setEditJsonOpen(true)}
+              >
+                ✎ Edit template JSON
+              </button>
+            </div>
           </aside>
         ) : null}
 
         {/* One handle in one place: it flips rather than moving, so the
             control never jumps between the panel header and the screen edge. */}
+        {/* No title when collapsed: the popover card below does the
+            explaining, and a native tooltip on top of it would double up. */}
         <button
           type="button"
           className={`app__side-tab${showJson ? " app__side-tab--open" : ""}`}
           onClick={() => setShowJson((on) => !on)}
-          title={showJson ? "Collapse the live template (⌘L)" : "Show the live template (⌘L)"}
+          title={showJson ? "Collapse the live template (⌘L)" : undefined}
           aria-label={showJson ? "Collapse the live template panel" : "Show the live template panel"}
           aria-expanded={showJson}
         >
           {showJson ? "»" : "«"}
         </button>
+        {/* Hover card for the collapsed handle. Must stay the button's next
+            sibling — CSS `.app__side-tab:hover + .app__side-pop` shows it,
+            with the 200ms delay living in the transition. */}
+        {!showJson ? (
+          <div className="app__side-pop" aria-hidden="true">
+            <strong className="app__side-pop-title">Template viewer</strong>
+            <p className="app__side-pop-text">
+              The live JSON template for this diagram — exactly what <code>onSave</code> hands
+              you. Click to open (⌘L).
+            </p>
+          </div>
+        ) : null}
       </main>
+
+      {editJsonOpen && active ? (
+        // The library modal reads --as-* tokens, which live on the studio
+        // roots — this wrapper carries them without adding a layout box.
+        <div style={{ display: "contents", ...themeToStyle(theme) }}>
+          <WelcomeModal
+            kind={active.kind === "sequence" ? "sequence" : "architecture"}
+            defaultName={active.name}
+            showNameField
+            systemPrompt={active.kind === "sequence" ? buildSequencePrompt() : buildSystemPrompt()}
+            initialText={JSON.stringify(active.doc, null, 2)}
+            parse={(text) =>
+              active.kind === "sequence" ? parseLlmSequence(text) : parseLlmTemplate(text)
+            }
+            onInsert={(doc, name) => {
+              setActiveDoc(doc);
+              if (name && name !== active.name) fileProps.onFileRename(active.id, name);
+              setEditJsonOpen(false);
+            }}
+            onDismiss={() => setEditJsonOpen(false)}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

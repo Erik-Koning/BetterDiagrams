@@ -72,14 +72,69 @@ so it embeds in a panel, a modal, or a split view without fighting your layout.
 | `theme` | `Theme` | Overrides `--as-*` design tokens. `LIGHT_THEME` / `DARK_THEME` are complete presets — `theme={LIGHT_THEME}` flips the whole editor **and** its image exports (the export palette derives from the theme). |
 | `generate` | `DiagramGenerator` | Enables the AI panel. Omitted ⇒ no network code runs. |
 | `minimap` | `boolean` | Default `true`. |
+| `welcome` | `boolean` | Default `true`. Shows the **welcome modal** over a brand-new document — see below. |
 | `legend` | `boolean` | Infra legend in the corner. Default `true`; only renders when zones exist. |
 | `defaultShowHidden` | `boolean` | Start with provider-hidden nodes ghosted rather than omitted. Default `false`. |
 | `diffBase` | `DiagramTemplate` | Baseline to compare against: the canvas becomes a read-only diff view (added/removed/changed) while set. The toolbar's Compare button offers the same via a file picker. |
 | `filename` | `string` | Base name for exports. Default `"architecture"`. |
-| `files` / `activeFileId` / `onFileSelect` / `onFileCreate` / `onFileRename` / `onFileDelete` | `StudioFile[]`, callbacks | When `files` is provided the brand becomes a **file selector** (switch, ＋ new, ✎ rename, × delete). The host owns all storage — the editor only calls back. Both editors take these. Set `StudioFile.empty` and a blank file deletes straight away; anything else asks for confirmation first. |
+| `files` / `activeFileId` / `onFileSelect` / `onFileCreate` / `onFileRename` / `onFileDelete` | `StudioFile[]`, callbacks | When `files` is provided the brand becomes a **file selector** (switch, ＋ new, ✎ rename, × delete). The host owns all storage — the editor only calls back. Both editors take these. **The file name and the document's `meta.title` are one title with two homes**: renaming the active file writes `meta.title` (committed, emitted, undoable), and a document title arriving any other way — AI generation, import, a controlled `value` — is pushed back out through `onFileRename`, so the dropdown always shows what exports will print. The sync is a reconciler, not two blind pushes: on a mismatch, *which side moved since they last agreed* decides — a title edit (including undo) renames the file, while a **host-side rename** (another tab, the host's own UI, a changed `files` prop) is adopted as the document's new title rather than being reverted; when both moved at once, the document wins. The editor can only do this for the document it holds; a host that stores the other documents should mirror renames into them too (the example app does). Set `StudioFile.empty` and a blank file deletes straight away; anything else asks for confirmation first. `onFileCreate` receives an optional `StudioFileInit` (`{ name?, kind?, doc? }`): the menu's ＋ New file passes nothing, the welcome modal passes a name and — when JSON was inserted — a validated document to seed the file with. |
 | `removedFiles` / `onFileRestore` | `StudioFile[]`, `(id) => void` | Deleted documents the host still holds. The menu grows a **Recently removed…** entry opening a recovery modal. |
 | `onNavigateFile` | `(ref) => void` | Fired when a node url with the `file:` prefix (e.g. `file:Order flow`) has its ↗ clicked — resolve by id, then name, and switch documents. |
+| `onSelectionChange` | `(sel) => void` | The canvas selection in **document terms** — ids bucketed by template section (`{ nodes, edges, zones }` here; `{ participants, messages, activations, fragments, notes }` on the sequence editor), so a host can mirror it, e.g. highlight the matching entries of a live JSON view (the example app does exactly this). Fires on mount too, so a host that remounts per file never keeps a stale selection. |
 | `toolbarExtras` / `inspectorExtras` | `ReactNode \| (ctx) => ReactNode` | Slots for your own controls. |
+
+### Starting from blank — the welcome modal
+
+A brand-new document (no nodes, edges, or zones; no participants or messages on the sequence
+editor) — or a workspace with zero files — greets with a centred, branded modal offering three
+ways in:
+
+- **Insert Node Manually** — dismisses the modal to build on the canvas (in an empty workspace
+  it first calls `onFileCreate({ name })` so there is a file to land in).
+- **Copy Schema & System Prompt** — puts the registry-aware system prompt on the clipboard, so
+  an external LLM can author the document.
+- **Paste JSON** — a CodeMirror editor with line numbers, folding, and live JSON linting.
+  Anything `Import` accepts works here too: a template, a raw React Flow export, or fenced LLM
+  output. A name field sets the file's title on insert. Everything the validator repairs
+  *silently* gets a **yellow warning** stating the real consequence — never an error, Insert
+  always proceeds: unknown keys ("ignored"), unknown enum values (`"kind": "spaceship"` →
+  "inserted as \"service\"" — registry-aware, so custom kinds lint clean), dangling references
+  (`"target"` to a missing node → "the whole edge will be dropped"), a zone `provider` outside
+  its own `providers` list, and dates `normalizeDate` can't read. Near misses get a
+  "did you mean". The known-key lists live beside the schema interfaces (`TEMPLATE_KEYS`,
+  `NODE_KEYS`, …), where `Record<keyof T, true>` maps make the compiler keep them in sync with
+  the types. A paste with no coordinates (every node at the origin) is **auto-laid-out** on
+  insert instead of stacking at (0,0); any explicitly placed node disables that.
+
+Escape and a backdrop click behave like the manual CTA — the modal never traps. It reappears
+for each new blank file, closes itself the moment the document gains content, and is suppressed
+by `readOnly`, `diffBase`, or `welcome={false}`.
+
+The editor is powered by `@codemirror/*` packages, which are declared dependencies but
+**externalized** from the bundle (like `@xyflow/react`), so a host that already ships CodeMirror
+keeps a single copy of `@codemirror/state`.
+
+### Cloud provider packs
+
+A curated set of components per big cloud ships as first-class node kinds — AWS (`aws-lambda`,
+`aws-s3`, `aws-dynamodb`, …), Azure (`azure-functions`, `azure-app-service`, `azure-cosmos`,
+`azure-openai`, …), GCP (`gcp-cloud-run`, `gcp-pubsub`, `gcp-bigquery`, `gcp-vertex-ai`, …) —
+each styled in its provider's brand palette with a role-appropriate icon and silhouette
+(databases are cylinders, queues are pipes).
+
+- **Always valid data**: cloud kinds are registered built-ins, so pasting, validation, and the
+  schema lint accept them in any document. Relevance only shapes the UI.
+- **Relevance-aware kind picker**: the node inspector's type dropdown lists core kinds, then
+  the clouds the document actually references — via zone/node/edge `providers`, or simply by
+  **using any of that cloud's kinds** (one `aws-lambda` node makes the whole AWS pack
+  first-class). Every other cloud's components sit in a grayed, darkened **Other clouds**
+  section at the bottom, still selectable.
+- **Adaptive prompts**: the welcome modal grows an AWS/Azure/GCP multi-select under the title;
+  **Copy Schema & System Prompt** appends the selected clouds' component sections after the
+  base prompt (none selected ⇒ the base prompt, with no cloud ids in the kind enum). The AI
+  panel's prompt adapts automatically to the providers the document references.
+- Registry extensions treat cloud kinds like any builtin: override with a partial def, remove
+  with `null`.
 
 ## The schema is the contract
 
@@ -95,6 +150,12 @@ import { buildSystemPrompt, validateTemplate, parseLlmTemplate } from "@mosphere
 duplicate id gets suffixed, an edge to a missing node is dropped, and **parent cycles are broken**
 so every consumer can assume the parent graph is a forest. It throws only when there is no
 `nodes` array at all.
+
+The export surface is curated. Everything importable from the root entry or
+`@mosphere/better-diagrams/contract` — the components, schema types, validators, migrations,
+prompts, adapters, layout, lint, diff, clipboard, and timeline — is a deliberate API we intend
+to keep stable. Layout maths, pixel constants, and id plumbing are intentionally unexported;
+if you need one of them, open an issue rather than vendoring the source.
 
 Text notes render **boxed by default** — a subtle outline and background, on screen and in image
 exports. Set `plain: true` (or untick **Outline** in the inspector) for bare text. Like every
@@ -163,6 +224,35 @@ activeScenario(template);               // "aws" when uniform, null when mixed
 > deleted — toggling a zone and back would permanently destroy every provider-specific node. The
 > component does this for you.
 
+### Zone styling
+
+A zone stores (or inherits) one colour: its **ink** — the vivid outline colour a human actually
+reads. The background fill is **derived** from it as a duller tint (the ink at `opacity`,
+composited over the canvas), which automatically reads darker-dull in dark mode and
+lighter-dull in light mode. `color` is optional canonical `#rrggbb`; validation also accepts
+`#rgb`, CSS 8-digit `#rrggbbaa`, and `#rrggbb/NN` (percent), folding any alpha into the zone's
+`opacity` field (an explicit `opacity` wins). `outline` is `solid` (default, never stored) /
+`dashed` / `dotted` / `none`; `fill: false` turns the background off entirely.
+
+The zone inspector's colour row shows every provider default plus every custom colour already
+used by another zone — matching an existing colour is one click — alongside a native picker for
+anything else, and an **Auto** chip returning to the provider's colour. Selection reads as
+outline *weight*, not dash, so a deliberately dashed zone stays distinguishable from a selected
+one. Exports (PNG/SVG/PDF/interactive HTML) resolve the same `zoneInk`/`zoneFill` formulas the
+canvas uses, so they cannot disagree; the legend deliberately stays grouped by provider — a
+recoloured zone is still hosted where it is hosted.
+
+### Colour tokens
+
+Beyond the base tokens, the `theme` prop reaches the warning and comparison colours
+(`diffAdded/diffRemoved/diffChanged`, `warn`/`warnStrong` for deprecated's salmon→red,
+`overdue`, `hazardInk`/`hazardTape`) and two record tokens — `edgeColors` and `seqAccents` —
+that fan out to per-entry CSS variables (`--as-edge-sky`, `--as-seq-database`).
+**`LIGHT_THEME` now retunes all of them**: the fixed edge and sequence palettes were picked for
+the dark canvas (sky `#38bdf8` sits at ~2.2:1 on a light page) and darken to legible
+counterparts in light mode, on canvas and in every export — the interactive HTML's scrubber
+accent follows the page's luminance too.
+
 ## Extending it
 
 Three plain records, shallow-merged over the built-ins. Omit a key to keep the built-in, pass a
@@ -190,9 +280,9 @@ the model can emit it too. `example/src/extensions.js` demonstrates all of it.
 
 PNG, PDF, SVG, template JSON, React Flow JSON, Mermaid, and C4-PlantUML ship built in. The
 image formats render from one emitter: `emitTemplate(template, registry, palette)` produces a
-backend-neutral command list that `drawToCanvas` and `drawToSvg` both replay — through the
-**same** edge geometry the screen uses — so PNG, PDF, and SVG can never disagree with each
-other or the editor. The `palette` (see `ExportPalette`, `DARK_EXPORT_PALETTE`,
+backend-neutral command list that `renderTemplateToCanvas` and `renderTemplateToSvg` both
+replay — through the **same** edge geometry the screen uses — so PNG, PDF, and SVG can never
+disagree with each other or the editor. The `palette` (see `ExportPalette`, `DARK_EXPORT_PALETTE`,
 `LIGHT_EXPORT_PALETTE`) recolours an export without touching its layout; the editor passes one
 derived from the active `theme`, so a light-mode app exports light images automatically.
 
@@ -241,7 +331,7 @@ The schema and editor cover C4's notational essentials:
 | **Tags + filter** | `node.tags`; the View ▾ tag filter dims non-matching nodes — dim only, never hide, so the filter can't touch what persists |
 | **Doc links** | `node.url` renders an ↗ affix (a real link in read-only) |
 | **Team ownership** | `node.team` renders a tag riding the node's edge, coloured stably per team name (same hue on screen and in image exports); View ▾ → Show team badges toggles them while editing |
-| **Lifecycle status** | `node.status`: `proposed` (dotted) / `planned` (dashed) / `active` (default, never stored) / `deprecated` (dimmed) / `retired` (dimmed + struck through). Same conventions in image exports; C4-PlantUML gets `$tags` |
+| **Lifecycle status** | `node.status`: `proposed` (dotted) / `planned` (dashed) / `stubbed` (heavy construction dashes + faint hatch — scaffolding with no implementation) / `dark` (black/white hazard-tape outline — built and shipped but not yet enabled) / `active` (default, never stored) / `deprecated` (dimmed, salmon status text sharpening to red on hover/selection) / `retired` (dimmed + struck through). Every dulled stage brightens to full strength under the cursor so its label stays readable. Same conventions in image exports; C4-PlantUML gets `$tags` |
 | **Version tag** | `meta.versionTag` ("v2.1", "2026-Q3 draft") renders as a corner notice — `meta.versionTagPosition` picks the corner; click it to edit, View ▾ → Set version tag… to create one. Stamped into image exports |
 | **Lock** | `node.locked` / zone lock pins an element against drags and resizes |
 | **Search** | ⌘K, matches id/label/description/kind/tags, Enter cycles and centres |
@@ -348,14 +438,21 @@ image exports, so a roadmap survives into the shared artefact.
 
 The dates **are** the timeline — there is no separate phases structure to keep in sync with the
 diagram. `templateTimeline(doc)` collects the distinct dates into ascending *stops*, and the
-toolbar's **⏱ Timeline** button appears as soon as one element is dated. Scrubbing walks those
-stops left to right, so the bar can only ever land where something actually changes:
+toolbar's **⏱ Timeline** button appears as soon as one element is dated. The cursor is a
+**date, not a stop index**: scrubbing is continuous over days, so "what did this look like on
+the 20th of April" is answerable even though nothing is dated then. The stops still matter —
+each gets a tick, and the handle **snaps** to one whenever it comes within a few pixels (the
+threshold is converted from pixels to days against the measured track, so the pull feels the
+same whether the plan spans a month or a decade). Hovering near a tick previews the landing: a
+ghost outline appears at the tick and the real handle fades, so the two read as one move.
+Clicking the date readout on the right swaps it for a date field — type any date, on the plan
+or off it. The scrubber opens on **today**, held inside the plan's own span.
 
 - an element dated **on or before** the cursor is present;
-- an element with **no date** is present at every stop — undated means "always been there",
+- an element with **no date** is present at every point — undated means "always been there",
   not "due at the epoch";
-- so the **first** stop shows that date's elements plus the undated backdrop, and the **last**
-  stop — being the latest date in the document — shows everything.
+- so the earliest stop shows that date's elements plus the undated backdrop, and any cursor at
+  or past the last date shows everything.
 
 Dates **cascade down containment**: a node's effective date is the latest in its ancestor chain,
 because a box cannot exist before the boundary drawn around it. An edge is never earlier than
@@ -363,22 +460,48 @@ the two nodes it joins, and a sequence message never earlier than its two partic
 date is its own — `zoneId` is membership, not containment, so a region arriving later says
 nothing about when its members do.
 
-**Ghost later / Hide later** decides what happens to everything ahead of the cursor: greyed out
-and non-interactive, or omitted from the view entirely. In a sequence diagram, hiding really
-does renumber the rows — time is array order there, so a flow with two of its five steps not
-yet built *is* a three-step flow.
+**Ghost later / Hide later** decides what happens to everything ahead of the cursor: greyed out,
+or left out of the render entirely. Rows and columns keep their positions in a sequence diagram,
+so a hidden step leaves a gap where it will land rather than renumbering the flow under the
+cursor.
 
-Exports follow what is on screen: with **Hide later** on, an export while scrubbed produces the
-slice you are looking at, not the finished architecture. **Ghost later** exports the whole
-document, because that is what it is showing. Dates travel into the Mermaid exports as well as
-the image ones; C4-PlantUML has no honest slot for them (`$tags` is a styling hook), so they are
-omitted there.
+Exports split by intent while you are scrubbed with **Hide later** on. Picture and
+communication formats (PNG, PDF, SVG, Mermaid, PlantUML) export the slice you are looking at —
+a PNG of the June view should look like June. **Document formats never slice**: Template
+(.json), React Flow (.json), Sequence JSON, and Interactive HTML all declare
+`fullDocument: true` and receive everything, because "export → save to your database" while
+scrubbed must not silently delete the elements the cursor was hiding. **Ghost later** exports
+the whole document from every format, because that is what it is showing. Dates travel into the
+Mermaid exports as well as the image ones; C4-PlantUML has no honest slot for them (`$tags` is a
+styling hook), so they are omitted there.
 
-Scrubbing is strictly a **view**. Like Compare, it renders through a separate read-only canvas
-(`TimelineCanvas` / `SequenceTimelineCanvas`) and never reaches the editor's own state, so no
-scrub can commit, and exiting restores the diagram exactly. The whole document is framed once on
-entry rather than re-fitted per step, so a box that appears in June appears exactly where it
-will sit in September. `←` / `→` step between stops; `Esc` leaves.
+**Interactive HTML** (Export ▾ → Interactive HTML, both editors) writes one self-contained
+`.html` file — no network requests, no dependencies — with the diagram as inline SVG and the
+timeline scrubber working *inside the file*: continuous over days with snap-to-stop, hover
+landing preview, a click-to-type date readout, ◀ ▶ / arrow-key stop stepping, and an "N ahead"
+count. A ⋯ menu holds the presentation options (Ghost later / Hide later, Fit to window, show or
+hide the timeline bar) and a ⛶ button toggles full screen. It works because the SVG backend
+groups every element's drawing under a `<g data-day>` carrying its **effective** landing day —
+cascade and edge inheritance already resolved by the emitter — so a few lines of inline vanilla
+JS scrub by comparing numbers and toggling classes, never re-rendering. This exporter declares
+`fullDocument: true`, so it receives every element and every date even while you are scrubbed
+with later elements hidden — a slice would leave the file nothing to scrub. An undated document
+exports as a plain viewer (fit + fullscreen, no bar). `buildTimelineHtml` is exported for
+servers and custom exporters.
+
+Timeline mode is **fully editable** — drag, connect, insert, and inspect as normal while
+scrubbed. The cursor is applied as a display pass over the canvas the editor already holds
+(later elements are flagged or hidden on the way into React Flow, never removed from state), so
+a commit while scrubbing can never delete what the cursor is hiding. Anything **inserted** while
+scrubbing inherits the cursor as its `date` — a tab hanging under the bar says so — because a
+box added to the June view belongs to June, and in Hide-later it would otherwise vanish the
+moment it was created. Scrubbing itself never commits, and exiting shows the whole diagram
+again. `←` / `→` step between stops while nothing is selected; `Esc` leaves.
+
+A **past date on a still-pre-active element** (proposed/planned/stubbed/dark) renders its chip
+in amber — the plan says landed, the status says not. Active elements with past dates stay
+quiet: that just means "landed". The predicate is `isOverdue` in the contract, and exports
+carry the amber.
 
 Set a date from the **Date** section of any inspector, or have the model author one — both
 generated prompts describe the field and tell the model to use it only when the request is
@@ -428,7 +551,7 @@ Tags · Link) instead of an unbroken run of inputs.
 
 `⌘Z` undo · `⇧⌘Z` redo · `⌘S` save · `⌘C`/`⌘V`/`⌘D` copy/paste/duplicate · `Delete` remove
 selection (cascades into groups) · `Esc` close panels and leave timeline mode · `←`/`→` step
-between timeline stops while scrubbing. Drag from a node edge to connect. Drop a node onto a
+between timeline stops while scrubbing with nothing selected. Drag from a node edge to connect. Drop a node onto a
 group to nest it, drag it out to un-nest. Drag an edge label to slide it along the curve. Drop a
 `.json` template file on the canvas to load it.
 

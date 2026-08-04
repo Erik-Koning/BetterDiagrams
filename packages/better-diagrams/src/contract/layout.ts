@@ -23,9 +23,9 @@
  * ranking. In practice islands sit in a corner and the collision doesn't
  * arise; when it does, the fix is to drag the island or the node clear.
  */
-import { pointInZone, type DiagramZone } from "./zones";
+import { pointInZone } from "./zones";
 import { visibleElements } from "./schema";
-import type { DiagramEdge, DiagramNode, DiagramTemplate } from "./schema";
+import type { DiagramNode, DiagramTemplate } from "./schema";
 
 export interface LayoutOptions {
   /** Horizontal gap between ranks. */
@@ -356,6 +356,3 @@ export function hasOverlaps(template: DiagramTemplate): boolean {
   }
   return false;
 }
-
-/** Re-exported for tests and for hosts building their own layout controls. */
-export type { DiagramZone, DiagramEdge };

@@ -5,7 +5,12 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTimeline,
-  currentStopIndex,
+  dateToDay,
+  dayToDate,
+  daysBetween,
+  isOverdue,
+  nearestStop,
+  openingCursor,
   effectiveNodeDates,
   formatDiagramDate,
   laterDate,
@@ -162,13 +167,16 @@ describe("buildTimeline", () => {
     expect(timelineStop(buildTimeline([]), 0)).toBeNull();
   });
 
-  it("opens on the last stop already reached", () => {
+  it("opens on today, held inside the plan's own span", () => {
     const t = templateTimeline(roadmap());
-    expect(currentStopIndex(t, "2026-07-01")).toBe(1); // June reached, September not
-    expect(currentStopIndex(t, "2026-09-30")).toBe(2); // on the day itself
-    expect(currentStopIndex(t, "2030-01-01")).toBe(2);
-    // The whole plan still ahead — start at the beginning rather than nowhere.
-    expect(currentStopIndex(t, "2020-01-01")).toBe(0);
+    // Between two stops: today is the answer, not the nearest stop.
+    expect(openingCursor(t, "2026-07-01")).toBe("2026-07-01");
+    expect(openingCursor(t, "2026-09-30")).toBe("2026-09-30");
+    // Past the end, or entirely ahead: clamped, or the view would be identical
+    // to not scrubbing / an empty diagram.
+    expect(openingCursor(t, "2030-01-01")).toBe("2026-09-30");
+    expect(openingCursor(t, "2020-01-01")).toBe("2026-03-02");
+    expect(openingCursor(buildTimeline([]))).toBeNull();
   });
 });
 
@@ -402,5 +410,56 @@ describe("the date field round-trips through validation", () => {
   it("leaves an undated document byte-identical", () => {
     const before = validateTemplate({ version: 1, nodes: [node()], edges: [] });
     expect(JSON.stringify(validateTemplate(before))).toBe(JSON.stringify(before));
+  });
+});
+
+
+describe("the continuous cursor", () => {
+  it("maps dates to days and back, in UTC", () => {
+    expect(dayToDate(dateToDay("2026-03-14"))).toBe("2026-03-14");
+    expect(dayToDate(dateToDay("2024-02-29"))).toBe("2024-02-29");
+    expect(daysBetween("2026-03-01", "2026-03-14")).toBe(13);
+    expect(daysBetween("2026-03-14", "2026-03-01")).toBe(-13);
+    // Ordering by day must agree with ordering by string.
+    expect(dateToDay("2026-12-31")).toBeLessThan(dateToDay("2027-01-01"));
+  });
+
+  it("snaps to the nearest stop only within reach", () => {
+    const t = templateTimeline(roadmap());
+    expect(nearestStop(t, "2026-03-04", 5)).toBe("2026-03-02");
+    expect(nearestStop(t, "2026-06-12", 5)).toBe("2026-06-15");
+    // Halfway between March and June, nothing is within five days.
+    expect(nearestStop(t, "2026-04-20", 5)).toBeNull();
+    // A wide enough reach always finds something.
+    expect(nearestStop(t, "2026-04-20", 400)).toBe("2026-03-02");
+    expect(nearestStop(buildTimeline([]), "2026-04-20", 999)).toBeNull();
+  });
+
+  it("answers for a date no element is on", () => {
+    // The whole point of a continuous cursor: April shows March's work and the
+    // undated backdrop, even though nothing is dated in April.
+    const view = timelineView(roadmap(), "2026-04-20", "hide");
+    expect(view.template.nodes.map((n) => n.id).sort()).toEqual(["a", "plain"]);
+  });
+});
+
+describe("isOverdue", () => {
+  it("is true only for a past date on a pre-active element", () => {
+    for (const status of ["proposed", "planned", "stubbed", "dark"]) {
+      expect(isOverdue("2020-01-01", status, "2026-08-04")).toBe(true);
+      // Not yet due.
+      expect(isOverdue("2030-01-01", status, "2026-08-04")).toBe(false);
+    }
+  });
+
+  it("an active or sunset element is never overdue — its date is history", () => {
+    expect(isOverdue("2020-01-01", undefined, "2026-08-04")).toBe(false);
+    expect(isOverdue("2020-01-01", "deprecated", "2026-08-04")).toBe(false);
+    expect(isOverdue("2020-01-01", "retired", "2026-08-04")).toBe(false);
+    expect(isOverdue(undefined, "planned", "2026-08-04")).toBe(false);
+  });
+
+  it("the due day itself is not overdue", () => {
+    expect(isOverdue("2026-08-04", "planned", "2026-08-04")).toBe(false);
   });
 });
