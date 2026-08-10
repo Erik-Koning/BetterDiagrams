@@ -4,6 +4,7 @@ import {
   buildSystemPrompt,
   fromReactFlow,
   parseLlmTemplate,
+  scaleZoneMembers,
   templateBounds,
   toReactFlow,
   validateTemplate,
@@ -364,5 +365,142 @@ describe("lifecycle stages: stubbed and dark", () => {
       messages: [],
     });
     expect(seq.participants[0].status).toBe("dark");
+  });
+});
+
+describe("scaleZoneMembers", () => {
+  const zone = (over: Record<string, unknown> = {}) => ({
+    id: "z",
+    label: "Zone",
+    shape: "rounded" as const,
+    x: 100,
+    y: 100,
+    w: 400,
+    h: 300,
+    providers: ["aws"],
+    provider: "aws",
+    ...over,
+  });
+  const base = (): DiagramTemplate =>
+    ({
+      version: 1,
+      zones: [zone()],
+      nodes: [
+        node({ id: "a", zoneId: "z", x: 150, y: 150, w: 170, h: 76 }),
+        node({ id: "out", zoneId: null, x: 800, y: 800 }),
+      ],
+      edges: [{ id: "e1", source: "a", target: "out", label: "", style: "solid", color: "sky" }],
+    }) as DiagramTemplate;
+  const before = { x: 100, y: 100, w: 400, h: 300 };
+
+  it("scales member positions and sizes per axis", () => {
+    // Width doubles, height halves.
+    const after = { x: 100, y: 100, w: 800, h: 150 };
+    const out = scaleZoneMembers(base(), "z", before, after);
+    const a = out.nodes.find((n) => n.id === "a")!;
+    expect(a.x).toBe(100 + (150 - 100) * 2);
+    expect(a.y).toBe(100 + (150 - 100) * 0.5);
+    expect(a.w).toBe(340);
+    expect(a.h).toBe(52); // 38 clamped up to the shape minimum
+    expect(out.zones![0]).toMatchObject(after);
+  });
+
+  it("anchors on the new origin when the box moved (left-handle resize)", () => {
+    const after = { x: 0, y: 100, w: 500, h: 300 };
+    const out = scaleZoneMembers(base(), "z", before, after);
+    const a = out.nodes.find((n) => n.id === "a")!;
+    expect(a.x).toBe(0 + (150 - 100) * 1.25);
+    expect(a.y).toBe(150); // y axis untouched
+  });
+
+  it("clamps sizes per kind class, honoring custom kind options", () => {
+    const doc: DiagramTemplate = {
+      ...base(),
+      nodes: [
+        node({ id: "g", kind: "group", zoneId: "z", x: 120, y: 120, w: 320, h: 240 }),
+        node({ id: "t", kind: "text", zoneId: "z", x: 130, y: 130, w: 300, h: 60 }),
+        node({ id: "pod", kind: "pod", zoneId: "z", x: 140, y: 140, w: 200, h: 150 }),
+      ],
+    };
+    const after = { x: 100, y: 100, w: 40, h: 30 }; // 0.1x both axes
+    const out = scaleZoneMembers(doc, "z", before, after, { containerKinds: ["group", "pod"] });
+    const byId = new Map(out.nodes.map((n) => [n.id, n]));
+    expect(byId.get("g")).toMatchObject({ w: 160, h: 120 });
+    expect(byId.get("t")).toMatchObject({ w: 80, h: 28 });
+    expect(byId.get("pod")).toMatchObject({ w: 160, h: 120 }); // custom container kind
+  });
+
+  it("scales descendants' relative offsets without double-shifting", () => {
+    const doc: DiagramTemplate = {
+      ...base(),
+      nodes: [
+        node({ id: "g", kind: "group", zoneId: "z", x: 150, y: 150, w: 320, h: 240 }),
+        node({ id: "child", parentId: "g", x: 40, y: 30, w: 170, h: 76 }),
+        node({ id: "grand", parentId: "child", x: 10, y: 8, w: 170, h: 76 }),
+      ],
+    };
+    const after = { x: 100, y: 100, w: 800, h: 600 }; // 2x both
+    const out = scaleZoneMembers(doc, "z", before, after);
+    const byId = new Map(out.nodes.map((n) => [n.id, n]));
+    expect(byId.get("g")).toMatchObject({ x: 200, y: 200, w: 640, h: 480 });
+    // Children keep parent-relative coords, scaled — not shifted by the zone.
+    expect(byId.get("child")).toMatchObject({ x: 80, y: 60, w: 340, h: 152 });
+    expect(byId.get("grand")).toMatchObject({ x: 20, y: 16 });
+  });
+
+  it("leaves non-members, other zones, and edges untouched; locked members scale", () => {
+    const doc: DiagramTemplate = {
+      ...base(),
+      zones: [zone(), zone({ id: "other", x: 900, y: 900 })],
+      nodes: [
+        node({ id: "a", zoneId: "z", locked: true, x: 150, y: 150 }),
+        node({ id: "out", zoneId: null, x: 800, y: 800 }),
+      ],
+    };
+    const after = { x: 100, y: 100, w: 800, h: 600 };
+    const out = scaleZoneMembers(doc, "z", before, after);
+    expect(out.nodes.find((n) => n.id === "out")).toEqual(doc.nodes[1]);
+    expect(out.zones![1]).toEqual(doc.zones![1]);
+    expect(out.edges).toBe(doc.edges);
+    expect(out.nodes.find((n) => n.id === "a")!.x).toBe(200); // locked scales too
+  });
+
+  it("an explicit memberIds list overrides stale zoneId membership", () => {
+    const doc = base();
+    // Pretend the derive already stripped a's zoneId mid-drag.
+    doc.nodes = doc.nodes.map((n) => (n.id === "a" ? { ...n, zoneId: null } : n));
+    const after = { x: 100, y: 100, w: 800, h: 300 };
+    const out = scaleZoneMembers(doc, "z", before, after, { memberIds: ["a"] });
+    expect(out.nodes.find((n) => n.id === "a")!.x).toBe(200);
+  });
+
+  it("passes a degenerate axis through instead of producing NaN", () => {
+    const out = scaleZoneMembers(base(), "z", { ...before, w: 0 }, { x: 100, y: 100, w: 800, h: 600 });
+    const a = out.nodes.find((n) => n.id === "a")!;
+    expect(a.x).toBe(150); // x axis untouched
+    expect(a.y).toBe(200); // y axis still scales
+    expect(Number.isFinite(a.w)).toBe(true);
+  });
+
+  it("returns the same reference when there is nothing to do", () => {
+    const doc = base();
+    expect(scaleZoneMembers(doc, "nope", before, before)).toBe(doc);
+    const memberless: DiagramTemplate = { ...doc, nodes: [doc.nodes[1]] };
+    expect(scaleZoneMembers(memberless, "z", before, before)).toBe(memberless);
+  });
+
+  it("writes the zone box and keeps polygon points byte-identical", () => {
+    const points: [number, number][] = [
+      [0, 0.25],
+      [0.5, 0],
+      [1, 0.25],
+      [1, 1],
+      [0, 1],
+    ];
+    const doc: DiagramTemplate = { ...base(), zones: [zone({ shape: "polygon", points })] };
+    const after = { x: 50, y: 50, w: 800, h: 600 };
+    const out = scaleZoneMembers(doc, "z", before, after);
+    expect(out.zones![0]).toMatchObject(after);
+    expect(out.zones![0].points).toBe(points);
   });
 });

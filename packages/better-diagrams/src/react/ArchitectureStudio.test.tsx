@@ -2255,3 +2255,48 @@ describe("ArchitectureStudio kind-usage relevance", () => {
     ).not.toBeNull();
   });
 });
+
+describe("welcome modal type picker (cross-kind insert)", () => {
+  const BLANK: DiagramTemplate = { version: 1, nodes: [], edges: [] };
+  const seqJson =
+    '{"version":1,"participants":[{"id":"u","label":"User","kind":"actor"}],"messages":[]}';
+
+  beforeEach(() => clearWelcomeSuppression());
+
+  it("a sequence paste flips the picker and inserts via onFileCreate — even in a populated workspace", async () => {
+    const user = userEvent.setup();
+    const onFileCreate = vi.fn();
+    const onChange = vi.fn();
+    mount(
+      <ArchitectureStudio
+        value={BLANK}
+        onChange={onChange}
+        files={[{ id: "f1", name: "Arch", kind: "architecture" }]}
+        activeFileId="f1"
+        onFileCreate={onFileCreate}
+      />,
+    );
+
+    const editor = screen.getByLabelText("Diagram JSON");
+    await user.click(editor);
+    await user.paste(seqJson);
+    expect(screen.getByRole("button", { name: "Sequence" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    expect(onFileCreate).toHaveBeenCalledTimes(1);
+    const init = onFileCreate.mock.calls[0][0];
+    expect(init.kind).toBe("sequence");
+    expect(init.doc.participants).toHaveLength(1);
+    expect(init.doc.meta.title).toBe("Arch");
+    // The architecture document was never touched.
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("without onFileCreate the sequence option is disabled", () => {
+    mount(<ArchitectureStudio defaultValue={BLANK} />);
+    expect(screen.getByRole("button", { name: "Sequence" })).toBeDisabled();
+  });
+});

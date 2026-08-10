@@ -50,13 +50,12 @@ import {
   NODE_STATUSES,
   activeScenario,
   assignZonesByGeometry,
-  buildSystemPrompt,
   snapNodesIntoZones,
   fromReactFlow,
   fromZoneNodeId,
   isCollapsedEdgeId,
   isZoneNodeId,
-  parseLlmTemplate,
+  scaleZoneMembers,
   setAllZoneProviders,
   templateProviders,
   toReactFlow,
@@ -72,6 +71,7 @@ import {
   type EdgeStyle,
   type NodeStatus,
   type VersionTagPosition,
+  type ZoneBox,
   type ZoneNodeData,
 } from "../contract/schema";
 import {
@@ -117,12 +117,15 @@ import {
 } from "./WelcomeModal";
 import { buildArchitectureLint } from "./schema-lint";
 import { KindSelect } from "./KindSelect";
+import { CLOUD_PROVIDER_IDS } from "../contract/cloud";
 import {
-  CLOUD_PROVIDER_IDS,
-  buildCloudPromptSections,
-  cloudKindIds,
-} from "../contract/cloud";
+  cloudOptionsFor,
+  promptForCloudSelection,
+  referencedProviders,
+} from "./template-prompt";
 import { autoLayout, hasOverlaps } from "../contract/layout";
+import { buildSequencePrompt, parseLlmSequence } from "../contract/sequence";
+import { parseArchitectureText } from "./welcome-parse";
 import {
   copyFragment,
   duplicateWithConnections,
@@ -1383,6 +1386,27 @@ function StudioInner({
 
   // ── Undo / redo ───────────────────────────────────────────────────────────
 
+  /**
+   * Re-materialize the canvas from a document, advancing every ref that marks
+   * a materialization point together — the sequence undo, zone scaling, and
+   * any future document-level transform must all share, because a canvas
+   * rebuilt against half-advanced refs re-judges (and loses) hidden nodes.
+   */
+  const materializeTemplate = useCallback(
+    (doc: DiagramTemplate) => {
+      meta.current = doc.meta;
+      baseRef.current = doc; // materialization point
+      templateRef.current = doc;
+      zoneSignatureRef.current = viewSignatureOf(doc, showHidden);
+      rfIncludesHiddenRef.current = showHidden;
+      const rf = toReactFlow(doc, registryKinds(registry, showHidden));
+      setNodes(rf.nodes as Node[]);
+      setEdges(rf.edges as Edge[]);
+      return rf;
+    },
+    [registry, showHidden, setNodes, setEdges],
+  );
+
   const applySnapshot = useCallback(
     (snapshot: Snapshot) => {
       // Undo restores the DOCUMENT and re-materializes the view from it.
@@ -1392,20 +1416,13 @@ function StudioInner({
       const doc =
         (snapshot.template as DiagramTemplate | undefined) ??
         deriveTemplate(snapshot.nodes, snapshot.edges);
-      meta.current = doc.meta;
-      baseRef.current = doc; // materialization point
-      templateRef.current = doc;
-      zoneSignatureRef.current = viewSignatureOf(doc, showHidden);
-      rfIncludesHiddenRef.current = showHidden;
-      const rf = toReactFlow(doc, registryKinds(registry, showHidden));
-      setNodes(rf.nodes as Node[]);
-      setEdges(rf.edges as Edge[]);
+      materializeTemplate(doc);
       if (onChange) {
         lastEmitted.current = JSON.stringify(doc);
         onChange(doc);
       }
     },
-    [registry, showHidden, setNodes, setEdges, onChange, deriveTemplate],
+    [materializeTemplate, onChange, deriveTemplate],
   );
 
   const doUndo = useCallback(() => {
@@ -1683,35 +1700,14 @@ function StudioInner({
    * which cloud packs count as "relevant": their kinds list un-demoted in the
    * kind picker, and their prompt sections ride along.
    */
-  const referencedProviderSet = useMemo(() => {
-    const out = new Set<string>();
-    for (const zone of template.zones ?? []) for (const p of zone.providers) out.add(p);
-    for (const node of template.nodes) {
-      for (const p of node.providers ?? []) out.add(p);
-      const cloud = registry.nodeKinds[node.kind]?.provider;
-      if (cloud) out.add(cloud);
-    }
-    for (const edge of template.edges) for (const p of edge.providers ?? []) out.add(p);
-    return out;
-  }, [template, registry]);
-
-  /** Kind ids with no cloud tag — what the prompt advertises before clouds. */
-  const baseKinds = useMemo(
-    () => registry.kindOrder.filter((kind) => !registry.nodeKinds[kind]?.provider),
-    [registry],
+  const referencedProviderSet = useMemo(
+    () => referencedProviders(template, registry),
+    [template, registry],
   );
 
   const promptForClouds = useCallback(
-    (clouds: readonly string[]) =>
-      buildSystemPrompt({
-        kinds: [...baseKinds, ...cloudKindIds(clouds)],
-        icons: registry.iconNames,
-        providers: registry.providerOrder,
-        extraRules: [registry.promptExtraRules, buildCloudPromptSections(clouds)]
-          .filter(Boolean)
-          .join("\n"),
-      }),
-    [baseKinds, registry],
+    (clouds: readonly string[]) => promptForCloudSelection(registry, clouds),
+    [registry],
   );
 
   // The AI panel's prompt adapts to the document: the clouds it references
@@ -1777,45 +1773,10 @@ function StudioInner({
 
   // The modal's AWS/Azure/GCP toggle — labels and colors from the registry,
   // skipping any cloud an extension deleted.
-  const welcomeClouds = useMemo(
-    () =>
-      CLOUD_PROVIDER_IDS.filter((p) => p in registry.providers).map((p) => ({
-        id: p,
-        label: registry.providers[p].label,
-        color: registry.providers[p].color,
-      })),
-    [registry],
-  );
+  const welcomeClouds = useMemo(() => cloudOptionsFor(registry), [registry]);
 
   const parseWelcomeJson = useCallback(
-    (text: string) => {
-      // A document with no real coordinates (validation coerces missing x/y
-      // to 0, so every node piles up at the origin) gets laid out instead of
-      // stacked. Any explicitly placed node disables this — the author's
-      // coordinates are truth.
-      const laidOut = (template: DiagramTemplate): DiagramTemplate =>
-        template.nodes.length > 1 && template.nodes.every((n) => n.x === 0 && n.y === 0)
-          ? autoLayout(template)
-          : template;
-      // Accept a raw React Flow export too, exactly like the Import button.
-      // Validated here, not just downstream: on the zero-files path the result
-      // goes straight to the host's onFileCreate, which is promised a
-      // validated document.
-      try {
-        const raw = JSON.parse(text);
-        if (Array.isArray(raw?.nodes) && raw.nodes[0] && "position" in raw.nodes[0]) {
-          return laidOut(
-            validateTemplate(
-              fromReactFlow(raw.nodes, raw.edges ?? [], registryOpts(registry)),
-              registryOpts(registry),
-            ),
-          );
-        }
-      } catch {
-        // Not plain JSON — parseLlmTemplate handles fences and better errors.
-      }
-      return laidOut(parseLlmTemplate(text, registryOpts(registry)));
-    },
+    (text: string) => parseArchitectureText(text, registryOpts(registry)),
     [registry],
   );
 
@@ -1837,6 +1798,25 @@ function StudioInner({
     },
     [zeroFiles, onFileCreate, applyTemplate, activeFile, onFileRename],
   );
+
+  /**
+   * The picker chose "sequence" inside the architecture editor: this studio
+   * cannot render that document, so the HOST gets a new file of the right
+   * kind — unconditionally, not just on the zero-files path.
+   */
+  const handleWelcomeInsertOther = useCallback(
+    (doc: unknown, name: string) => {
+      const incoming = {
+        ...(doc as Record<string, unknown>),
+        meta: { ...((doc as { meta?: Record<string, unknown> })?.meta ?? {}), title: name },
+      };
+      onFileCreate?.({ name, kind: "sequence", doc: incoming });
+      setWelcomeOpen(false);
+    },
+    [onFileCreate],
+  );
+
+  const sequencePromptForCopy = useMemo(() => buildSequencePrompt(), []);
 
   /**
    * The file name and the document's `meta.title` are ONE title with two
@@ -2011,6 +1991,34 @@ function StudioInner({
   const patchZone = useCallback(
     (zoneId: string, patch: Partial<DiagramZone>) => {
       if (readOnly) return;
+      // Geometry patches go through the document so members scale with the
+      // box — including provider-hidden members, which aren't in the store.
+      if (patch.w != null || patch.h != null) {
+        const doc = templateRef.current;
+        const zone = doc.zones?.find((z) => z.id === zoneId);
+        if (!zone) return;
+        const before = { x: zone.x, y: zone.y, w: zone.w, h: zone.h };
+        const after = {
+          x: patch.x ?? zone.x,
+          y: patch.y ?? zone.y,
+          w: patch.w ?? zone.w,
+          h: patch.h ?? zone.h,
+        };
+        const scaled = scaleZoneMembers(doc, zoneId, before, after, {
+          containerKinds: registry.containerKinds,
+          annotationKinds: registry.annotationKinds,
+        });
+        const { x: _x, y: _y, w: _w, h: _h, ...rest } = patch;
+        const next = Object.keys(rest).length
+          ? {
+              ...scaled,
+              zones: (scaled.zones ?? []).map((z) => (z.id === zoneId ? { ...z, ...rest } : z)),
+            }
+          : scaled;
+        const rf = materializeTemplate(next);
+        commit(rf.nodes as Node[], rf.edges as Edge[], next);
+        return;
+      }
       setNodes((current) =>
         current.map((n) => {
           if (n.id !== toZoneNodeId(zoneId)) return n;
@@ -2018,19 +2026,59 @@ function StudioInner({
           return {
             ...n,
             data: { ...n.data, zone } as unknown as Node["data"],
-            ...(patch.w != null || patch.h != null
-              ? {
-                  width: patch.w ?? n.width,
-                  height: patch.h ?? n.height,
-                  style: { width: patch.w ?? zone.w, height: patch.h ?? zone.h },
-                }
-              : {}),
           };
         }),
       );
       commitLater();
     },
-    [readOnly, setNodes, commitLater],
+    [readOnly, setNodes, commitLater, registry, materializeTemplate, commit],
+  );
+
+  // ── Zone resize gesture ───────────────────────────────────────────────────
+  //
+  // Membership is captured at resize START: the per-frame derive re-judges
+  // membership against the mid-drag box, so a shrink would strip the very
+  // members the scale is meant to move, and a grow would enrol bystanders
+  // that must not be scaled by after/before.
+  const zoneScaleRef = useRef<{ zoneId: string; before: ZoneBox; memberIds: string[] } | null>(
+    null,
+  );
+
+  const beginZoneResize = useCallback((zoneId: string, before: ZoneBox) => {
+    const memberIds = templateRef.current.nodes
+      .filter((n) => n.zoneId === zoneId && !n.parentId)
+      .map((n) => n.id);
+    zoneScaleRef.current = { zoneId, before, memberIds };
+  }, []);
+
+  const endZoneResize = useCallback(
+    (zoneId: string, after: ZoneBox) => {
+      const gesture = zoneScaleRef.current;
+      zoneScaleRef.current = null;
+      // Freshest store state, same reason commitLater defers.
+      queueMicrotask(() => {
+        const currentNodes = flow.getNodes();
+        const currentEdges = flow.getEdges();
+        const doc = deriveTemplate(currentNodes, currentEdges);
+        if (!gesture || gesture.zoneId !== zoneId) {
+          commit(currentNodes, currentEdges, doc);
+          return;
+        }
+        const next = scaleZoneMembers(doc, zoneId, gesture.before, after, {
+          memberIds: gesture.memberIds,
+          containerKinds: registry.containerKinds,
+          annotationKinds: registry.annotationKinds,
+        });
+        if (next === doc) {
+          // Memberless zone — today's behavior, one plain commit.
+          commit(currentNodes, currentEdges, doc);
+          return;
+        }
+        const rf = materializeTemplate(next);
+        commit(rf.nodes as Node[], rf.edges as Edge[], next);
+      });
+    },
+    [flow, deriveTemplate, commit, registry, materializeTemplate],
   );
 
   // ── Slots ─────────────────────────────────────────────────────────────────
@@ -2051,9 +2099,11 @@ function StudioInner({
       tagFilter,
       showTeams,
       requestCommit: commitLater,
+      beginZoneResize,
+      endZoneResize,
       navigateFile: onNavigateFile,
     }),
-    [registry, readOnly, tagFilter, showTeams, commitLater, onNavigateFile],
+    [registry, readOnly, tagFilter, showTeams, commitLater, beginZoneResize, endZoneResize, onNavigateFile],
   );
   const rootStyle = { ...themeToStyle(theme), ...style };
 
@@ -2804,8 +2854,12 @@ function StudioInner({
             systemPrompt={systemPrompt}
             cloudProviders={welcomeClouds}
             promptForClouds={promptForClouds}
+            initialClouds={referencedClouds}
             parse={parseWelcomeJson}
             onInsert={handleWelcomeInsert}
+            parseOther={onFileCreate ? parseLlmSequence : undefined}
+            onInsertOther={onFileCreate ? handleWelcomeInsertOther : undefined}
+            systemPromptOther={sequencePromptForCopy}
             onDismiss={handleWelcomeDismiss}
             lint={welcomeLint}
           />

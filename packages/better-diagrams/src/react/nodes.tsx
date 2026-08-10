@@ -25,7 +25,7 @@ import { isOverdue } from "../contract/timeline";
 import { kindDef, iconPaths } from "./registry-types";
 import { ZoneNode } from "./ZoneNode";
 import { silhouettePath, teamColor } from "./shapes";
-import type { DiagramNodeData } from "../contract/schema";
+import { NODE_MIN_SIZE, type DiagramNodeData } from "../contract/schema";
 
 export type ShapeNodeType = Node<DiagramNodeData, "shape">;
 export type GroupNodeType = Node<DiagramNodeData, "group">;
@@ -119,8 +119,8 @@ export const ShapeNode = memo(function ShapeNode({
     <>
       <NodeResizer
         isVisible={!!selected && !readOnly && !data.locked}
-        minWidth={110}
-        minHeight={52}
+        minWidth={NODE_MIN_SIZE.shape.w}
+        minHeight={NODE_MIN_SIZE.shape.h}
         lineClassName="as-resize-line"
         onResizeEnd={requestCommit}
       />
@@ -269,7 +269,7 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
 
   return (
     <>
-      <NodeResizer isVisible={!!selected && !readOnly && !data.locked} minWidth={160} minHeight={120} onResizeEnd={requestCommit} />
+      <NodeResizer isVisible={!!selected && !readOnly && !data.locked} minWidth={NODE_MIN_SIZE.group.w} minHeight={NODE_MIN_SIZE.group.h} onResizeEnd={requestCommit} />
       <ConnectHandles hidden={readOnly} />
       <div
         className={`as-group${selected ? " as-group--selected" : ""}${data.status ? ` as-node--status-${data.status}` : ""}`}
@@ -317,7 +317,7 @@ export const AnnotationNode = memo(function AnnotationNode({
 
   return (
     <>
-      <NodeResizer isVisible={!!selected && !readOnly} minWidth={80} minHeight={28} onResizeEnd={requestCommit} />
+      <NodeResizer isVisible={!!selected && !readOnly} minWidth={NODE_MIN_SIZE.annotation.w} minHeight={NODE_MIN_SIZE.annotation.h} onResizeEnd={requestCommit} />
       <ConnectHandles hidden={readOnly} />
       <div
         className={`as-annotation${data.plain ? "" : " as-annotation--boxed"}${selected ? " as-annotation--selected" : ""}`}

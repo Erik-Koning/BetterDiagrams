@@ -263,3 +263,146 @@ describe("WelcomeModal cloud toggle", () => {
     expect(writeText).toHaveBeenCalledWith("BASE");
   });
 });
+
+describe("type picker", () => {
+  const seqJson = '{"version":1,"participants":[{"id":"u","label":"U"}],"messages":[]}';
+  const rfExport = '{"nodes":[{"id":"a","position":{"x":0,"y":0},"data":{}}],"edges":[]}';
+
+  const stubClipboard = () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    return writeText;
+  };
+
+  it("initial pick follows the studio; the other option is disabled without host support", () => {
+    mountModal();
+    expect(screen.getByRole("button", { name: "Architecture" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const seq = screen.getByRole("button", { name: "Sequence" });
+    expect(seq).toBeDisabled();
+    expect(seq).toHaveAttribute("title", expect.stringContaining("can't create sequence files"));
+  });
+
+  it("auto-flips to the pasted kind; placeholder and cloud chips follow", async () => {
+    const user = userEvent.setup();
+    mountModal({
+      parseOther: (text: string) => JSON.parse(text),
+      onInsertOther: vi.fn(),
+      cloudProviders: [{ id: "aws", label: "AWS", color: "#f90" }],
+    });
+    expect(screen.getByRole("group", { name: "Cloud providers" })).toBeInTheDocument();
+
+    const editor = screen.getByLabelText("Diagram JSON");
+    await user.click(editor);
+    await user.paste(seqJson);
+
+    expect(screen.getByRole("button", { name: "Sequence" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(editor).toHaveAttribute("placeholder", expect.stringContaining('"participants"'));
+    // The clouds row is architecture-only.
+    expect(screen.queryByRole("group", { name: "Cloud providers" })).not.toBeInTheDocument();
+  });
+
+  it("a manual pick wins over auto-detect", async () => {
+    const user = userEvent.setup();
+    mountModal({ parseOther: (text: string) => JSON.parse(text), onInsertOther: vi.fn() });
+    await user.click(screen.getByRole("button", { name: "Architecture" }));
+    const editor = screen.getByLabelText("Diagram JSON");
+    await user.click(editor);
+    await user.paste(seqJson);
+    expect(screen.getByRole("button", { name: "Architecture" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("an RF export flips a sequence modal to architecture", async () => {
+    const user = userEvent.setup();
+    mountModal({
+      kind: "sequence",
+      parseOther: (text: string) => JSON.parse(text),
+      onInsertOther: vi.fn(),
+    });
+    const editor = screen.getByLabelText("Diagram JSON");
+    await user.click(editor);
+    await user.paste(rfExport);
+    expect(screen.getByRole("button", { name: "Architecture" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("cross-kind Insert routes to onInsertOther, not onInsert", async () => {
+    const user = userEvent.setup();
+    const onInsertOther = vi.fn();
+    const props = mountModal({
+      parseOther: (text: string) => JSON.parse(text),
+      onInsertOther,
+    });
+    const editor = screen.getByLabelText("Diagram JSON");
+    await user.click(editor);
+    await user.paste(seqJson);
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    expect(onInsertOther).toHaveBeenCalledWith(JSON.parse(seqJson), "Untitled 1");
+    expect(props.onInsert).not.toHaveBeenCalled();
+  });
+
+  it("copy follows the picked kind", async () => {
+    const user = userEvent.setup();
+    const writeText = stubClipboard();
+    mountModal({
+      parseOther: (text: string) => JSON.parse(text),
+      onInsertOther: vi.fn(),
+      systemPromptOther: "SEQ PROMPT",
+    });
+    const editor = screen.getByLabelText("Diagram JSON");
+    await user.click(editor);
+    await user.paste(seqJson);
+    await user.click(screen.getByRole("button", { name: /Copy Schema & System Prompt/ }));
+    expect(writeText).toHaveBeenCalledWith("SEQ PROMPT");
+  });
+
+  it("initialClouds pre-toggles the chips and seeds the immediate copy", async () => {
+    const user = userEvent.setup();
+    const writeText = stubClipboard();
+    const promptForClouds = vi.fn().mockReturnValue("AWS-TAILORED");
+    mountModal({
+      cloudProviders: [{ id: "aws", label: "AWS", color: "#f90" }],
+      promptForClouds,
+      initialClouds: ["aws"],
+    });
+    expect(screen.getByRole("button", { name: /AWS/ })).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: /Copy Schema & System Prompt/ }));
+    expect(promptForClouds).toHaveBeenCalledWith(["aws"]);
+    expect(writeText).toHaveBeenCalledWith("AWS-TAILORED");
+  });
+
+  it("lockKind pins both options through a cross-kind paste, and the hint survives", async () => {
+    const user = userEvent.setup();
+    mountModal({
+      lockKind: true,
+      parse: () => {
+        throw new Error("missing nodes");
+      },
+      parseOther: (text: string) => JSON.parse(text),
+      onInsertOther: vi.fn(),
+    });
+    expect(screen.getByRole("button", { name: "Architecture" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Sequence" })).toBeDisabled();
+
+    const editor = screen.getByLabelText("Diagram JSON");
+    await user.click(editor);
+    await user.paste(seqJson);
+    // Pinned: no flip.
+    expect(screen.getByRole("button", { name: "Architecture" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/looks like a sequence document/);
+  });
+});

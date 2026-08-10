@@ -67,7 +67,13 @@ import {
   ROW_HEIGHT,
   messageRowAt,
 } from "../../contract/sequence-layout";
-import { NODE_STATUSES, type NodeStatus, type VersionTagPosition } from "../../contract/schema";
+import {
+  DIAGRAM_SYSTEM_PROMPT,
+  NODE_STATUSES,
+  type NodeStatus,
+  type VersionTagPosition,
+} from "../../contract/schema";
+import { parseArchitectureText } from "../welcome-parse";
 import type { DiagramGenerator } from "../../contract/llm";
 import type { DiagramTemplate } from "../../contract/schema";
 import {
@@ -690,6 +696,23 @@ function SequenceInner({
       setWelcomeOpen(false);
     },
     [zeroFiles, onFileCreate, applyTemplate, activeFile, onFileRename],
+  );
+
+  /**
+   * The picker chose "architecture" inside the sequence editor: this studio
+   * cannot render that document, so the HOST gets a new file of the right
+   * kind — unconditionally, not just on the zero-files path.
+   */
+  const handleWelcomeInsertOther = useCallback(
+    (doc: unknown, name: string) => {
+      const incoming = {
+        ...(doc as Record<string, unknown>),
+        meta: { ...((doc as { meta?: Record<string, unknown> })?.meta ?? {}), title: name },
+      };
+      onFileCreate?.({ name, kind: "architecture", doc: incoming });
+      setWelcomeOpen(false);
+    },
+    [onFileCreate],
   );
 
 
@@ -1459,6 +1482,11 @@ function SequenceInner({
             systemPrompt={sequencePrompt}
             parse={parseLlmSequence}
             onInsert={handleWelcomeInsert}
+            parseOther={onFileCreate ? parseArchitectureText : undefined}
+            onInsertOther={onFileCreate ? handleWelcomeInsertOther : undefined}
+            // The sequence studio holds no architecture registry, so the
+            // cross-kind copy is deliberately the base architecture prompt.
+            systemPromptOther={DIAGRAM_SYSTEM_PROMPT}
             onDismiss={handleWelcomeDismiss}
           />
         ) : null}

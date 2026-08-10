@@ -17,7 +17,7 @@
  * with `vector-effect="non-scaling-stroke"` so a wide, short zone doesn't get a
  * squashed outline.
  */
-import { memo, useCallback } from "react";
+import { memo, useCallback, useRef } from "react";
 import { NodeResizer, useReactFlow, type Node, type NodeProps } from "@xyflow/react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { useStudio } from "./context";
@@ -30,7 +30,7 @@ import {
   type DiagramZone,
   type ZonePoint,
 } from "../contract/zones";
-import type { ZoneNodeData } from "../contract/schema";
+import { fromZoneNodeId, type ZoneBox, type ZoneNodeData } from "../contract/schema";
 
 export type ZoneNodeType = Node<ZoneNodeData, "zone">;
 
@@ -38,8 +38,10 @@ export type ZoneNodeType = Node<ZoneNodeData, "zone">;
 const MAX_SEGMENTS = 4;
 
 export const ZoneNode = memo(function ZoneNode({ id, data, selected }: NodeProps<ZoneNodeType>) {
-  const { registry, readOnly, requestCommit } = useStudio();
+  const { registry, readOnly, requestCommit, beginZoneResize, endZoneResize } = useStudio();
   const { setNodes } = useReactFlow();
+  // The box at resize start, so drag-end knows a gesture actually began.
+  const resizeBoxRef = useRef<ZoneBox | null>(null);
   const zone = data.zone;
   const outline = zoneOutline(zone);
   // The ink (a per-zone override, else the provider colour) drives everything:
@@ -120,7 +122,31 @@ export const ZoneNode = memo(function ZoneNode({ id, data, selected }: NodeProps
       data-selected={selected ? "" : undefined}
       data-outline={zone.outline ?? "solid"}
     >
-      <NodeResizer isVisible={!!selected && !readOnly && !zone.locked} minWidth={120} minHeight={100} onResizeEnd={requestCommit} />
+      <NodeResizer
+        isVisible={!!selected && !readOnly && !zone.locked}
+        minWidth={120}
+        minHeight={100}
+        onResizeStart={(_event, params) => {
+          const box = { x: params.x, y: params.y, w: params.width, h: params.height };
+          resizeBoxRef.current = box;
+          beginZoneResize(fromZoneNodeId(id), box);
+        }}
+        onResizeEnd={(_event, params) => {
+          const started = resizeBoxRef.current;
+          resizeBoxRef.current = null;
+          if (started) {
+            endZoneResize(fromZoneNodeId(id), {
+              x: params.x,
+              y: params.y,
+              w: params.width,
+              h: params.height,
+            });
+          } else {
+            // Defensive: an end without a start still records the edit.
+            requestCommit();
+          }
+        }}
+      />
 
       {/* The fill. Never interactive — clicks must reach the nodes above it. */}
       {outline || zone.shape === "ellipse" ? (

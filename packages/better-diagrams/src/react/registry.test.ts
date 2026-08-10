@@ -151,6 +151,27 @@ describe("text exporters", () => {
     expect(out).not.toContain("note[");
   });
 
+  it("exports cloud kinds by their silhouette — DynamoDB is a cylinder, SQS a pipe", () => {
+    const doc = {
+      version: 1 as const,
+      nodes: [
+        { id: "t", label: "Orders", kind: "aws-dynamodb", icon: "database", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76 },
+        { id: "q", label: "Jobs", kind: "aws-sqs", icon: "layers", description: "", parentId: null, x: 200, y: 0, w: 170, h: 76 },
+        { id: "fn", label: "Worker", kind: "aws-lambda", icon: "bolt", description: "", parentId: null, x: 400, y: 0, w: 170, h: 76 },
+      ],
+      edges: [],
+    };
+    const mermaid = renderTemplateToMermaid(doc);
+    expect(mermaid).toContain('t[("Orders")]');
+    expect(mermaid).toContain('q[["Jobs"]]');
+    expect(mermaid).toContain('fn["Worker"]');
+
+    const puml = renderTemplateToC4Puml(doc);
+    expect(puml).toContain('ContainerDb(t, "Orders")');
+    expect(puml).toContain('ContainerQueue(q, "Jobs")');
+    expect(puml).toContain('Container(fn, "Worker")');
+  });
+
   it("escapes quotes in labels so the mermaid stays parseable", () => {
     const out = renderTemplateToMermaid({
       version: 1,

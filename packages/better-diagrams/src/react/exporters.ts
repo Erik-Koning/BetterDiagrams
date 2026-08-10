@@ -17,6 +17,7 @@ import {
   type DiagramTemplate,
 } from "../contract/schema";
 import { formatDiagramDate, templateTimeline } from "../contract/timeline";
+import { CLOUD_NODE_KINDS } from "./cloud-kinds";
 // Imports `./registry-types`, not `./registry` — registry.ts imports
 // BUILTIN_EXPORTERS from here, so depending on it directly would be a cycle.
 import type { ExportContext, ExporterDef, ResolvedRegistry } from "./registry-types";
@@ -101,7 +102,12 @@ export function renderTemplateToC4Puml(template: DiagramTemplate): string {
   }
 
   const emitElement = (n: DiagramNode, indent: string) => {
-    const macro = C4_MACRO[n.kind as string] ?? "Container";
+    // Cloud pack kinds carry their semantics in their shape: aws-dynamodb is
+    // a cylinder, azure-service-bus a pipe — export them as what they are.
+    const cloudShape = CLOUD_NODE_KINDS[n.kind as string]?.shape;
+    const macro =
+      C4_MACRO[n.kind as string] ??
+      (cloudShape === "cylinder" ? "ContainerDb" : cloudShape === "pipe" ? "ContainerQueue" : "Container");
     const tech = n.description ? `, "${q(n.description)}"` : "";
     // Non-default lifecycle stages travel as C4 tags, so a host stylesheet
     // (AddElementTag) can restyle them; harmless when undefined there.
@@ -203,9 +209,11 @@ export function renderTemplateToMermaid(template: DiagramTemplate): string {
       .join(" · ");
     const label = sub ? `${n.label}<br/><small>${sub}</small>` : n.label;
     const text = `"${label.replace(/"/g, "'")}"`;
-    if (n.kind === "database") lines.push(`${indent}${safe(n.id)}[(${text})]`);
+    // Cloud pack kinds export by their silhouette (aws-dynamodb → cylinder).
+    const cloudShape = CLOUD_NODE_KINDS[n.kind as string]?.shape;
+    if (n.kind === "database" || cloudShape === "cylinder") lines.push(`${indent}${safe(n.id)}[(${text})]`);
     else if (n.kind === "client" || n.kind === "external") lines.push(`${indent}${safe(n.id)}([${text}])`);
-    else if (n.kind === "queue") lines.push(`${indent}${safe(n.id)}[[${text}]]`);
+    else if (n.kind === "queue" || cloudShape === "pipe") lines.push(`${indent}${safe(n.id)}[[${text}]]`);
     else lines.push(`${indent}${safe(n.id)}[${text}]`);
   };
 

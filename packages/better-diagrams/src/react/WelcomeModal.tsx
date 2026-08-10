@@ -37,6 +37,8 @@ export interface WelcomeModalProps {
   /**
    * Schema lint for the JSON editor. Absent, a builtin-vocabulary spec for
    * `kind` is used; the architecture studio passes a registry-aware one.
+   * Applies only while the picker sits on the host studio's own kind — it is
+   * registry-aware *for that studio*.
    */
   lint?: JsonDocLint;
   /**
@@ -47,6 +49,28 @@ export interface WelcomeModalProps {
   cloudProviders?: { id: string; label: string; color: string }[];
   /** Builds the prompt for the selected clouds; copy prefers it when present. */
   promptForClouds?: (clouds: string[]) => string;
+  /**
+   * Clouds pre-toggled at mount — the studio passes the ones the open
+   * document already references, so an immediate copy describes the diagram
+   * on screen rather than a cloudless base.
+   */
+  initialClouds?: string[];
+  /**
+   * Parse + validate for the OTHER kind. Together with `onInsertOther` this
+   * enables the type picker's other option; without both, the option renders
+   * disabled with a hint.
+   */
+  parseOther?: (text: string) => unknown;
+  /** Insert routed cross-kind — the host creates a file of the picked kind. */
+  onInsertOther?: (doc: unknown, name: string) => void;
+  /** What "Copy Schema & System Prompt" copies while the other kind is picked. */
+  systemPromptOther?: string;
+  /**
+   * Pin the picker to `kind`, rendered but disabled — for reopening the
+   * modal as a JSON editor over an existing file, whose type must not be
+   * silently rewritten by a paste.
+   */
+  lockKind?: boolean;
 }
 
 /** Clipboard write with the legacy fallback for insecure contexts. */
@@ -112,6 +136,33 @@ function kindHint(kind: WelcomeModalProps["kind"], text: string): string {
   return "";
 }
 
+// The two schemas overlap only on `version` and `meta`; every other top-level
+// key names exactly one of them. A raw React Flow export (nodes with
+// `position`) lands in the architecture bucket via its `nodes` key.
+const SEQUENCE_ONLY_KEYS = ["participants", "messages", "activations", "fragments", "notes"];
+const ARCHITECTURE_ONLY_KEYS = ["nodes", "edges", "zones"];
+
+/**
+ * Which kind pasted text looks like — null when it doesn't clearly say
+ * (ambiguous, empty, or not JSON-shaped enough for the regex fallback).
+ */
+export function sniffKind(text: string): WelcomeModalProps["kind"] | null {
+  try {
+    const raw = JSON.parse(text) as Record<string, unknown> | null;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const seq = SEQUENCE_ONLY_KEYS.some((key) => key in raw);
+    const arch = ARCHITECTURE_ONLY_KEYS.some((key) => key in raw);
+    if (seq === arch) return null;
+    return seq ? "sequence" : "architecture";
+  } catch {
+    // Mid-typing or slightly broken JSON — the keys still tell the story.
+    const seq = /"(participants|messages)"\s*:/.test(text);
+    const arch = /"(nodes|edges|zones)"\s*:/.test(text);
+    if (seq === arch) return null;
+    return seq ? "sequence" : "architecture";
+  }
+}
+
 export function WelcomeModal({
   kind,
   brandLabel = "BetterDiagrams",
@@ -125,16 +176,26 @@ export function WelcomeModal({
   lint,
   cloudProviders,
   promptForClouds,
+  initialClouds,
+  parseOther,
+  onInsertOther,
+  systemPromptOther,
+  lockKind,
 }: WelcomeModalProps) {
   const [name, setName] = useState(defaultName);
-  const [selectedClouds, setSelectedClouds] = useState<string[]>([]);
+  const [selectedClouds, setSelectedClouds] = useState<string[]>(initialClouds ?? []);
   const [text, setText] = useState(initialText ?? "");
   const [error, setError] = useState<string | null>(null);
   /** Lossy rescue for a failed Insert — offered, never applied on its own. */
   const [approxFix, setApproxFix] = useState<{ text: string; sites: number } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [pickedKind, setPickedKind] = useState<WelcomeModalProps["kind"]>(kind);
+  /** A manual pick wins over auto-detect for the rest of the session. */
+  const [kindTouched, setKindTouched] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => () => clearTimeout(copyTimer.current), []);
+
+  const otherEnabled = !!parseOther && !!onInsertOther;
 
   const finalName = () => name.trim() || defaultName;
 
@@ -144,7 +205,11 @@ export function WelcomeModal({
     );
 
   const handleCopy = async () => {
-    const ok = await copyText(promptForClouds?.(selectedClouds) ?? systemPrompt);
+    const prompt =
+      pickedKind === kind
+        ? (promptForClouds?.(selectedClouds) ?? systemPrompt)
+        : (systemPromptOther ?? systemPrompt);
+    const ok = await copyText(prompt);
     if (!ok) {
       setError("Clipboard is blocked in this context — copy from the docs instead.");
       return;
@@ -156,10 +221,14 @@ export function WelcomeModal({
 
   const handleInsert = () => {
     try {
-      onInsert(parse(text), finalName());
+      if (pickedKind === kind) onInsert(parse(text), finalName());
+      else onInsertOther?.(parseOther?.(text), finalName());
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setError(message + kindHint(kind, text));
+      // The hint only nags when the picker COULDN'T solve it — otherwise
+      // auto-detect has already switched and the error is about something else.
+      const hint = lockKind || !otherEnabled ? kindHint(pickedKind, text) : "";
+      setError(message + hint);
       // Real content loss? Offer the lossy rescue next to the error — applying
       // it stays the user's call, so the guesses can be reviewed before Insert.
       const fix = approximateJsonFix(text);
@@ -197,7 +266,35 @@ export function WelcomeModal({
           />
         ) : null}
 
-        {cloudProviders?.length ? (
+        <div className="as-welcome__kind" role="group" aria-label="Diagram type">
+          {(["architecture", "sequence"] as const).map((option) => {
+            const isOther = option !== kind;
+            const disabled = !!lockKind || (isOther && !otherEnabled);
+            const title = lockKind
+              ? "This dialog edits the current file — its type is fixed"
+              : isOther && !otherEnabled
+                ? `This host can't create ${option} files`
+                : undefined;
+            return (
+              <button
+                key={option}
+                type="button"
+                className="as-kind-chip"
+                aria-pressed={pickedKind === option}
+                disabled={disabled}
+                title={title}
+                onClick={() => {
+                  setPickedKind(option);
+                  setKindTouched(true);
+                }}
+              >
+                {option === "architecture" ? "Architecture" : "Sequence"}
+              </button>
+            );
+          })}
+        </div>
+
+        {pickedKind === "architecture" && cloudProviders?.length ? (
           <div className="as-welcome__clouds" role="group" aria-label="Cloud providers">
             <span className="as-welcome__clouds-label">Clouds</span>
             {cloudProviders.map((cloud) => (
@@ -243,10 +340,22 @@ export function WelcomeModal({
               setText(next);
               setError(null);
               setApproxFix(null);
+              // Follow what the paste looks like until the user has picked by
+              // hand. Only flip toward kinds the picker could actually serve.
+              if (!kindTouched && !lockKind) {
+                const sniffed = sniffKind(next);
+                if (sniffed && (sniffed === kind || otherEnabled)) setPickedKind(sniffed);
+              }
             }}
-            placeholder={kind === "sequence" ? SEQ_PLACEHOLDER : ARCH_PLACEHOLDER}
+            placeholder={pickedKind === "sequence" ? SEQ_PLACEHOLDER : ARCH_PLACEHOLDER}
             ariaLabel="Diagram JSON"
-            lint={lint ?? (kind === "sequence" ? SEQUENCE_LINT : DEFAULT_ARCH_LINT)}
+            lint={
+              pickedKind === kind
+                ? (lint ?? (kind === "sequence" ? SEQUENCE_LINT : DEFAULT_ARCH_LINT))
+                : pickedKind === "sequence"
+                  ? SEQUENCE_LINT
+                  : DEFAULT_ARCH_LINT
+            }
           />
         </div>
 

@@ -7,6 +7,7 @@
  */
 import { createContext, useContext } from "react";
 import { createRegistry } from "./create-registry";
+import type { ZoneBox } from "../contract/schema";
 import type { ResolvedRegistry } from "./registry-types";
 
 export interface StudioContextValue {
@@ -33,6 +34,14 @@ export interface StudioContextValue {
    */
   requestCommit: () => void;
   /**
+   * Zone-resize gesture, two-phase because the editor derives the document
+   * every drag frame and re-judges zone membership against the mid-drag box:
+   * `begin` captures the membership to scale, `end` scales those members
+   * proportionally into the new box and commits once.
+   */
+  beginZoneResize: (zoneId: string, box: ZoneBox) => void;
+  endZoneResize: (zoneId: string, box: ZoneBox) => void;
+  /**
    * Present when the host supports cross-file navigation. A node whose `url`
    * uses the `file:` prefix renders its ↗ affix as a jump to that file
    * (resolved by the host — id first, then name) instead of a browser link.
@@ -46,6 +55,8 @@ const FALLBACK: StudioContextValue = {
   tagFilter: [],
   showTeams: true,
   requestCommit: () => {},
+  beginZoneResize: () => {},
+  endZoneResize: () => {},
 };
 
 export const StudioContext = createContext<StudioContextValue>(FALLBACK);

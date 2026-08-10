@@ -7,10 +7,11 @@
  * "far down is later" — so fitView's viewport can't break them.
  */
 import { StrictMode, useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SequenceStudio } from "./SequenceStudio";
+import { clearWelcomeSuppression } from "../WelcomeModal";
 import {
   EXAMPLE_SEQUENCE,
   validateSequence,
@@ -592,5 +593,60 @@ describe("multi-state export modal", () => {
     await user.click(screen.getByRole("menuitem", { name: /SVG vector/ }));
     expect(screen.queryByRole("dialog", { name: "Export SVG" })).not.toBeInTheDocument();
     await screen.findByText("Exported sequence.svg");
+  });
+});
+
+// Typing into a real CodeMirror is unreliable in jsdom; the picker tests only
+// need the modal's contract, so the editor becomes a textarea (hoisted
+// file-wide — no other test in this file touches the editor).
+vi.mock("../JsonCodeEditor", () => ({
+  JsonCodeEditor: ({
+    value,
+    onChange,
+    ariaLabel,
+  }: {
+    value: string;
+    onChange: (text: string) => void;
+    ariaLabel?: string;
+  }) => (
+    <textarea
+      aria-label={ariaLabel ?? "Diagram JSON"}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
+}));
+
+describe("welcome modal type picker (cross-kind insert)", () => {
+  const archJson =
+    '{"version":1,"nodes":[{"id":"a","label":"A","kind":"service","icon":"box","x":10,"y":10,"w":170,"h":76}],"edges":[]}';
+
+  beforeEach(() => clearWelcomeSuppression());
+
+  it("an architecture paste flips the picker and inserts via onFileCreate", async () => {
+    const user = userEvent.setup();
+    const onFileCreate = vi.fn();
+    mount(
+      <SequenceStudio
+        value={validateSequence({ participants: [], messages: [] })}
+        files={[{ id: "f1", name: "Flow", kind: "sequence" }]}
+        activeFileId="f1"
+        onFileCreate={onFileCreate}
+      />,
+    );
+
+    const editor = screen.getByLabelText("Diagram JSON");
+    await user.click(editor);
+    await user.paste(archJson);
+    expect(screen.getByRole("button", { name: "Architecture" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Insert" }));
+    expect(onFileCreate).toHaveBeenCalledTimes(1);
+    const init = onFileCreate.mock.calls[0][0];
+    expect(init.kind).toBe("architecture");
+    expect(init.doc.nodes).toHaveLength(1);
   });
 });

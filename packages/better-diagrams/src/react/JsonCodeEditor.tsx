@@ -48,11 +48,14 @@ const jsonHighlight = HighlightStyle.define([
   { tag: [tags.punctuation, tags.brace, tags.squareBracket], color: "var(--as-text-dim)" },
 ]);
 
+// The surface/border/text vars carry dark fallbacks: this editor renders
+// inside modals that hosts can mount outside .as-root, where the tokens are
+// undefined — without the fallbacks the pane goes transparent over the canvas.
 const editorTheme = EditorView.theme({
   "&": {
-    backgroundColor: "var(--as-surface-2)",
-    color: "var(--as-text)",
-    border: "1px solid var(--as-border)",
+    backgroundColor: "var(--as-surface-2, #1e293b)",
+    color: "var(--as-text, #e2e8f0)",
+    border: "1px solid var(--as-border, #334155)",
     borderRadius: "8px",
     fontSize: "12px",
   },
@@ -67,10 +70,10 @@ const editorTheme = EditorView.theme({
     backgroundColor: "color-mix(in srgb, var(--as-accent) 25%, transparent)",
   },
   ".cm-gutters": {
-    backgroundColor: "var(--as-surface)",
-    color: "var(--as-text-dim)",
+    backgroundColor: "var(--as-surface, #0b1220)",
+    color: "var(--as-text-dim, #94a3b8)",
     border: "none",
-    borderRight: "1px solid var(--as-border)",
+    borderRight: "1px solid var(--as-border, #334155)",
     borderRadius: "8px 0 0 8px",
   },
   ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--as-text)" },
@@ -78,9 +81,9 @@ const editorTheme = EditorView.theme({
   // `pre` keeps the multi-line JSON placeholder's indentation readable.
   ".cm-placeholder": { color: "var(--as-text-dim)", whiteSpace: "pre" },
   ".cm-tooltip": {
-    backgroundColor: "var(--as-surface-2)",
-    border: "1px solid var(--as-border)",
-    color: "var(--as-text)",
+    backgroundColor: "var(--as-surface-2, #1e293b)",
+    border: "1px solid var(--as-border, #334155)",
+    color: "var(--as-text, #e2e8f0)",
     fontFamily: "var(--as-font)",
   },
   ".cm-diagnostic": { fontFamily: "var(--as-font)" },

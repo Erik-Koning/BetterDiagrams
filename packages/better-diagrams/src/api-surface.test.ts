@@ -40,6 +40,7 @@ const CONTRACT_EXPORTS = [
   "visibleElements",
   "assignZonesByGeometry",
   "snapNodesIntoZones",
+  "scaleZoneMembers",
   "setZoneProvider",
   "setAllZoneProviders",
   "templateProviders",
@@ -155,6 +156,8 @@ const REACT_EXPORTS = [
   "DARK_EXPORT_PALETTE",
   "LIGHT_EXPORT_PALETTE",
   "buildTimelineHtml",
+  "buildTemplateSystemPrompt",
+  "templatePromptContext",
   "silhouettePath",
   // theme
   "themeToStyle",

@@ -25,11 +25,12 @@ import {
   SequenceStudio,
   WelcomeModal,
   buildSequencePrompt,
-  buildSystemPrompt,
+  buildTemplateSystemPrompt,
   createProxyGenerator,
   parseLlmSequence,
   parseLlmTemplate,
   sequenceFromTemplate,
+  templatePromptContext,
   themeToStyle,
   validateSequence,
   validateTemplate,
@@ -381,7 +382,12 @@ export default function App() {
   /** Hand the active mode's schema contract to an external AI agent. */
   const copySchema = useCallback(async () => {
     const isSeq = active?.kind === "sequence";
-    const text = isSeq ? buildSequencePrompt() : buildSystemPrompt();
+    // The architecture prompt follows the OPEN document: the clouds its zones
+    // and nodes reference contribute their component sections. Sequence has
+    // no provider vocabulary, so its prompt has nothing to tailor.
+    const text = isSeq
+      ? buildSequencePrompt()
+      : buildTemplateSystemPrompt(active?.doc ?? EMPTY_TEMPLATE, registry);
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -397,7 +403,7 @@ export default function App() {
     toast.success(`Copied the ${isSeq ? "sequence" : "architecture"} schema`, {
       description: "Paste it into your AI agent to have it author this diagram type.",
     });
-  }, [active?.kind]);
+  }, [active]);
 
   // ── Presentation state ────────────────────────────────────────────────────
 
@@ -410,7 +416,29 @@ export default function App() {
     }),
     [mode, accent],
   );
+  // The Edit-JSON modal renders OUTSIDE the studio roots, so its wrapper must
+  // carry a COMPLETE token set — the empty-dark shorthand above would leave
+  // every --as-* variable undefined out there, and the modal renders
+  // transparent over the live canvas.
+  const modalTheme = useMemo(
+    () => ({
+      ...(mode === "light" ? LIGHT_THEME : DARK_THEME),
+      ...(accent ? { accent } : {}),
+    }),
+    [mode, accent],
+  );
   const themeAccent = accent ?? (mode === "light" ? LIGHT_THEME.accent : DARK_THEME.accent);
+
+  // Prompt context for the Edit-JSON modal, computed from the LIVE document
+  // at open time — a copy taken after edits always describes what's on
+  // screen, clouds included. Sequence files have no provider vocabulary.
+  const editPromptCtx = useMemo(
+    () =>
+      editJsonOpen && active && active.kind !== "sequence"
+        ? templatePromptContext(active.doc, registry)
+        : null,
+    [editJsonOpen, active],
+  );
 
   // Guard against a stale-looking UI if another tab saves the workspace.
   useEffect(() => {
@@ -715,13 +743,20 @@ export default function App() {
 
       {editJsonOpen && active ? (
         // The library modal reads --as-* tokens, which live on the studio
-        // roots — this wrapper carries them without adding a layout box.
-        <div style={{ display: "contents", ...themeToStyle(theme) }}>
+        // roots — this wrapper carries a complete set without adding a
+        // layout box.
+        <div style={{ display: "contents", ...themeToStyle(modalTheme) }}>
           <WelcomeModal
             kind={active.kind === "sequence" ? "sequence" : "architecture"}
+            // This dialog edits the CURRENT file — a paste must not silently
+            // retype it, so the picker is pinned.
+            lockKind
             defaultName={active.name}
             showNameField
-            systemPrompt={active.kind === "sequence" ? buildSequencePrompt() : buildSystemPrompt()}
+            systemPrompt={editPromptCtx ? editPromptCtx.systemPrompt : buildSequencePrompt()}
+            cloudProviders={editPromptCtx?.cloudOptions}
+            promptForClouds={editPromptCtx?.promptForClouds}
+            initialClouds={editPromptCtx?.referencedClouds}
             initialText={JSON.stringify(active.doc, null, 2)}
             parse={(text) =>
               active.kind === "sequence" ? parseLlmSequence(text) : parseLlmTemplate(text)

@@ -911,6 +911,136 @@ export function snapNodesIntoZones(template: DiagramTemplate): DiagramTemplate {
   return assignZonesByGeometry(changed ? { ...template, nodes } : template);
 }
 
+/**
+ * Minimum node sizes by kind class. These mirror the editor's resize-handle
+ * minima (react/nodes.tsx), which read this table — one source of truth for
+ * "how small can it get" whether the user drags a corner or a zone scales it.
+ */
+export const NODE_MIN_SIZE = {
+  shape: { w: 110, h: 52 },
+  group: { w: 160, h: 120 },
+  annotation: { w: 80, h: 28 },
+} as const;
+
+/** A zone's bounding box, absolute canvas coordinates. */
+export interface ZoneBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface ScaleZoneOptions {
+  /**
+   * Root-level member ids captured BEFORE the gesture. Defaults to nodes with
+   * `zoneId === zoneId` and no parent — pass explicitly when membership may
+   * have been re-judged mid-gesture (the editor derives the document every
+   * frame of a resize drag, and `assignZonesByGeometry` re-judges membership
+   * against the mid-drag box).
+   */
+  memberIds?: readonly string[];
+  /** Kinds that clamp to the group minimum. Defaults to CONTAINER_KINDS. */
+  containerKinds?: readonly string[];
+  /** Kinds that clamp to the annotation minimum. Defaults to ANNOTATION_KINDS. */
+  annotationKinds?: readonly string[];
+}
+
+/**
+ * Move a zone's box from `before` to `after` and scale its members with it —
+ * positions relative to the box and node sizes, per axis, so the layout
+ * inside the zone keeps its proportions.
+ *
+ * Only root-level members transform directly; descendants follow by having
+ * their parent-relative offsets and sizes scaled by the same factors, so a
+ * group's inner layout tracks the group (offsetting them absolutely would
+ * double the shift — see the same rule in clipboard.ts's pasteFragment).
+ * Locked nodes scale too: `locked` guards individual gestures, and this is a
+ * zone-level transform of everything the zone contains. Sizes clamp to the
+ * per-kind minima, so extreme shrinks trade strict proportionality for
+ * legibility. Polygon points are untouched — they are normalised 0..1, so the
+ * silhouette rides the box for free.
+ *
+ * Degenerate axes pass through: a `before` width/height of zero scales that
+ * axis by 1 rather than producing NaN. Returns the SAME template reference
+ * when there is nothing to do (unknown zone, or no members and the box
+ * already at `after`), so callers can skip re-materialising.
+ */
+export function scaleZoneMembers(
+  template: DiagramTemplate,
+  zoneId: string,
+  before: ZoneBox,
+  after: ZoneBox,
+  opts: ScaleZoneOptions = {},
+): DiagramTemplate {
+  const zone = (template.zones ?? []).find((z) => z.id === zoneId);
+  if (!zone) return template;
+
+  const rawSx = after.w / before.w;
+  const rawSy = after.h / before.h;
+  const sx = before.w > 0 && Number.isFinite(rawSx) ? rawSx : 1;
+  const sy = before.h > 0 && Number.isFinite(rawSy) ? rawSy : 1;
+
+  const memberSet = new Set(
+    opts.memberIds ??
+      template.nodes.filter((n) => n.zoneId === zoneId && !n.parentId).map((n) => n.id),
+  );
+
+  const boxUnchanged =
+    zone.x === after.x && zone.y === after.y && zone.w === after.w && zone.h === after.h;
+  if (!memberSet.size && boxUnchanged) return template;
+
+  const containerSet = new Set(opts.containerKinds ?? CONTAINER_KINDS);
+  const annotationSet = new Set(opts.annotationKinds ?? ANNOTATION_KINDS);
+  const minFor = (kind: string) =>
+    containerSet.has(kind)
+      ? NODE_MIN_SIZE.group
+      : annotationSet.has(kind)
+        ? NODE_MIN_SIZE.annotation
+        : NODE_MIN_SIZE.shape;
+
+  const byId = new Map(template.nodes.map((n) => [n.id, n]));
+  const descendsFromMember = (node: DiagramNode): boolean => {
+    // Parent cycles are broken at validation time, but guard anyway.
+    let parentId = node.parentId;
+    let guard = 0;
+    while (parentId && guard++ < 10_000) {
+      if (memberSet.has(parentId)) return true;
+      parentId = byId.get(parentId)?.parentId ?? null;
+    }
+    return false;
+  };
+
+  const nodes = template.nodes.map((node) => {
+    const min = minFor(node.kind);
+    if (memberSet.has(node.id) && !node.parentId) {
+      return {
+        ...node,
+        x: after.x + (node.x - before.x) * sx,
+        y: after.y + (node.y - before.y) * sy,
+        w: Math.max(min.w, node.w * sx),
+        h: Math.max(min.h, node.h * sy),
+      };
+    }
+    if (node.parentId && descendsFromMember(node)) {
+      // Parent-relative: scaling the offset keeps the child at the same
+      // fraction of its container.
+      return {
+        ...node,
+        x: node.x * sx,
+        y: node.y * sy,
+        w: Math.max(min.w, node.w * sx),
+        h: Math.max(min.h, node.h * sy),
+      };
+    }
+    return node;
+  });
+
+  const zones = (template.zones ?? []).map((z) =>
+    z.id === zoneId ? { ...z, x: after.x, y: after.y, w: after.w, h: after.h } : z,
+  );
+  return { ...template, nodes, zones };
+}
+
 /** Set one zone's active provider, ignoring providers it doesn't offer. */
 export function setZoneProvider(
   template: DiagramTemplate,

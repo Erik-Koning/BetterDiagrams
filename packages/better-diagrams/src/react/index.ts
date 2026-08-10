@@ -60,6 +60,8 @@ export {
 } from "./exporters";
 export type { ExportPalette, DrawCmd, DrawTag, Emitted } from "./draw";
 export { buildTimelineHtml } from "./html-export";
+export { buildTemplateSystemPrompt, templatePromptContext } from "./template-prompt";
+export type { CloudOption, TemplatePromptContext } from "./template-prompt";
 export type { TimelineHtmlOptions } from "./html-export";
 export { silhouettePath } from "./shapes";
 export type { Silhouette } from "./shapes";

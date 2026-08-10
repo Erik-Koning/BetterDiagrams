@@ -1976,6 +1976,12 @@
 /* Fixed, not absolute: modals render inside whatever component opened them
    (the file menu's `.as-menu-wrap`, say), so an absolute overlay would centre
    itself on that button instead of the window. */
+/* Modal-critical vars carry explicit dark fallbacks: a host can mount the
+   modal OUTSIDE .as-root (the example's Edit-JSON dialog does), where the
+   tokens are undefined — falling back to the dark defaults degrades
+   gracefully instead of rendering a transparent card over the live canvas.
+   Backdrop opacity/blur match the AI panel: over a dense diagram, 62%/2px
+   read as broken rather than dimmed. */
 .as-modal {
   position: fixed;
   inset: 0;
@@ -1983,8 +1989,8 @@
   display: grid;
   place-items: center;
   padding: 24px;
-  background: color-mix(in srgb, var(--as-bg) 62%, transparent);
-  backdrop-filter: blur(2px);
+  background: color-mix(in srgb, var(--as-bg, #0f172a) 92%, transparent);
+  backdrop-filter: blur(8px);
 }
 
 .as-modal__card {
@@ -1992,9 +1998,9 @@
   max-height: 80%;
   overflow-y: auto;
   padding: 18px 20px;
-  border: 1px solid var(--as-border);
+  border: 1px solid var(--as-border, #334155);
   border-radius: 12px;
-  background: var(--as-surface);
+  background: var(--as-surface, #0b1220);
   box-shadow: 0 18px 48px rgb(0 0 0 / 45%);
 }
 
@@ -2002,14 +2008,14 @@
   margin: 0 0 10px;
   font-size: 14px;
   font-weight: 650;
-  color: var(--as-text);
+  color: var(--as-text, #e2e8f0);
 }
 
 .as-modal__body {
   margin: 0 0 16px;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--as-text-dim);
+  color: var(--as-text-dim, #94a3b8);
 }
 
 .as-modal__list {
@@ -2710,6 +2716,40 @@
 }
 
 /* ── Cloud toggle (welcome modal) ────────────────────────────────────────── */
+
+/* The type picker — same chip language as the clouds row below it. */
+.as-welcome__kind {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.as-kind-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 14px;
+  border: 1px solid var(--as-border);
+  border-radius: 999px;
+  background: var(--as-surface-2);
+  color: var(--as-text-dim);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+
+.as-kind-chip[aria-pressed="true"] {
+  border-color: var(--as-accent);
+  background: color-mix(in srgb, var(--as-accent) 18%, transparent);
+  color: var(--as-text);
+}
+
+.as-kind-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 .as-welcome__clouds {
   display: flex;
