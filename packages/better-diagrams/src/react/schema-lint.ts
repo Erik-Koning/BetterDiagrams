@@ -33,7 +33,9 @@ import {
   EDGE_KEYS,
   EDGE_ROUTINGS,
   EDGE_STYLES,
+  FIELD_KEYS,
   ICON_NAMES,
+  NODE_FIELD_KEYS,
   NODE_KEYS,
   NODE_KINDS,
   NODE_STATUSES,
@@ -85,7 +87,7 @@ interface ValueRule {
 interface RefRule {
   path: string;
   key: string;
-  pool: "node" | "zone" | "participant" | "message";
+  pool: "node" | "zone" | "field" | "participant" | "message";
   /** null / "" / absent are legal (lost/found messages, unparented nodes). */
   optional?: boolean;
   noun: string;
@@ -118,6 +120,8 @@ const architectureKeyLookup: KeyLookup = (path) => {
       return TEMPLATE_KEYS;
     case "nodes.*":
       return NODE_KEYS;
+    case "nodes.*.fields.*":
+      return NODE_FIELD_KEYS;
     case "edges.*":
       return EDGE_KEYS;
     case "zones.*":
@@ -171,14 +175,30 @@ function architecturePools(parsed: unknown): Record<string, ReadonlySet<string>>
   const doc = parsed as { nodes?: unknown; zones?: unknown };
   const node = new Set(rawIds(doc?.nodes));
   const zone = new Set(rawIds(doc?.zones));
+  // Every field id in the document, not just the ones on this edge's own
+  // endpoints. A pool is global by construction, so this catches the typo it
+  // can catch and stays quiet about the rest — a warning that fires on a valid
+  // reference would be worse than one that misses an invalid one.
+  const field = new Set<string>();
+  for (const n of Array.isArray(doc?.nodes) ? doc.nodes : []) {
+    for (const f of Array.isArray((n as { fields?: unknown })?.fields)
+      ? ((n as { fields: unknown[] }).fields)
+      : []) {
+      const id = (f as { id?: unknown })?.id;
+      if (typeof id === "string" && id) field.add(id);
+    }
+  }
   try {
     const validated = validateTemplate(parsed);
-    for (const n of validated.nodes) node.add(n.id);
+    for (const n of validated.nodes) {
+      node.add(n.id);
+      for (const f of n.fields ?? []) field.add(f.id);
+    }
     for (const z of validated.zones ?? []) zone.add(z.id);
   } catch {
     // Unvalidatable doc — the raw pools still serve.
   }
-  return { node, zone };
+  return { node, zone, field };
 }
 
 function sequencePools(parsed: unknown): Record<string, ReadonlySet<string>> {
@@ -235,6 +255,7 @@ export function buildArchitectureLint(
       { path: "nodes.*", key: "kind", allowed: kinds, noun: "kind", describe: "a node kind", consequence: 'It will be inserted as "service".' },
       { path: "nodes.*", key: "icon", allowed: icons, noun: "icon", describe: "an icon", consequence: 'It will be inserted as "none".' },
       { path: "nodes.*", key: "status", allowed: setOf(NODE_STATUSES), noun: "status", describe: "a status", consequence: "It will be ignored." },
+      { path: "nodes.*.fields.*", key: "key", allowed: setOf(FIELD_KEYS), noun: "field key", describe: "a key role", consequence: "It will be ignored (the row renders without a key badge)." },
       { path: "edges.*", key: "style", allowed: setOf(EDGE_STYLES), noun: "edge style", describe: "an edge style", consequence: 'It will be inserted as "solid".' },
       { path: "edges.*", key: "color", allowed: setOf(EDGE_COLORS), noun: "edge color", describe: "an edge color", consequence: 'It will be inserted as "slate".' },
       { path: "edges.*", key: "direction", allowed: setOf(EDGE_DIRECTIONS), noun: "direction", describe: "a direction", consequence: "It will be ignored (the edge defaults to forward)." },
@@ -250,6 +271,8 @@ export function buildArchitectureLint(
       { path: "edges.*", key: "target", pool: "node", noun: "node id", consequence: "The whole edge will be dropped on insert." },
       { path: "nodes.*", key: "parentId", pool: "node", optional: true, noun: "node id", consequence: "It will be cleared on insert." },
       { path: "nodes.*", key: "zoneId", pool: "zone", optional: true, noun: "zone id", consequence: "It will be cleared on insert." },
+      { path: "edges.*", key: "startField", pool: "field", optional: true, noun: "field id", consequence: "It will be cleared on insert (the line attaches to the box)." },
+      { path: "edges.*", key: "endField", pool: "field", optional: true, noun: "field id", consequence: "It will be cleared on insert (the line attaches to the box)." },
     ],
     dates: [
       { path: "nodes.*", key: "date" },

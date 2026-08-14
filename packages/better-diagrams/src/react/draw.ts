@@ -26,13 +26,24 @@ import {
   DEFAULT_ZONE_OPACITY,
   EDGE_COLOR_HEX,
   EDGE_DASH,
+  FIELD_ROW_H,
+  fieldAnchors,
+  fieldListTop,
   type DiagramEdge,
   type DiagramNode,
   type DiagramTemplate,
 } from "../contract/schema";
 import { zoneOutline, type DiagramZone } from "../contract/zones";
 import { dateToDay, effectiveNodeDates, formatDiagramDate, isOverdue, laterDate } from "../contract/timeline";
-import { edgeGeometryFor, startAngle, type Box } from "../contract/geometry";
+import {
+  cardinalityMarker,
+  crowsFootPath,
+  edgeGeometryFor,
+  endLabelInset,
+  startAngle,
+  tAtDistance,
+  type Box,
+} from "../contract/geometry";
 import { seqBadgeOffset, silhouettePath, teamColor } from "./shapes";
 import { kindDef, iconPaths, providerDef, zoneInk, type ResolvedRegistry } from "./registry-types";
 
@@ -248,9 +259,9 @@ interface Layout {
   legend: Array<{ provider: string; count: number }>;
 }
 
-function layout(template: DiagramTemplate): Layout {
+function layout(template: DiagramTemplate, containerKinds?: readonly string[]): Layout {
   const visible = visibleElements(template);
-  const collapseHidden = hiddenByCollapse(template);
+  const collapseHidden = hiddenByCollapse(template, { containerKinds });
   const nodeById = new Map(template.nodes.map((n) => [n.id, n]));
 
   const placed = template.nodes
@@ -282,7 +293,21 @@ function layout(template: DiagramTemplate): Layout {
         const key = `${source}→${target}`;
         if (rerouteSeen.has(key)) return [];
         rerouteSeen.add(key);
-        return [{ ...e, source, target, label: "", tech: undefined, seq: undefined }];
+        // Anchors/waypoints describe the ORIGINAL endpoints' boxes — the
+        // canvas drops them on re-route (toReactFlow), so exports must too.
+        return [
+          {
+            ...e,
+            source,
+            target,
+            label: "",
+            tech: undefined,
+            seq: undefined,
+            start: undefined,
+            end: undefined,
+            points: undefined,
+          },
+        ];
       }
       return [e];
     });
@@ -327,8 +352,8 @@ export function emitTemplate(
   // Fixed-hex palettes re-resolve per theme: a light export darkens the edge
   // colours the same way the canvas's CSS variables do.
   const edgeHex = { ...EDGE_COLOR_HEX, ...paletteRecord(palette.edgeColors) };
-  const { placed, byId, zones, edges, legend } = layout(template);
-  const b = templateBounds(template, { onlyVisible: true });
+  const { placed, byId, zones, edges, legend } = layout(template, registry.containerKinds);
+  const b = templateBounds(template, { onlyVisible: true, containerKinds: registry.containerKinds });
   const width = Math.max(1, b.maxX - b.minX + PAD * 2);
   const height = Math.max(1, b.maxY - b.minY + PAD * 2);
   const cmds: DrawCmd[] = [];
@@ -481,17 +506,39 @@ export function emitTemplate(
     const s = byId.get(edge.source);
     const t = byId.get(edge.target);
     if (!s || !t) continue;
-    const geo = edgeGeometryFor(edge.routing ?? defaultRouting, s.box, t.box, edge.labelT ?? 0.5);
+    // Field references resolve to row anchors here exactly as they do on the
+    // canvas — same function, so a foreign-key line lands on the same column
+    // in the PNG as it does on screen.
+    const anchorNode = ({ node, box }: Placed) => ({
+      fields: node.fields,
+      description: node.description,
+      h: box.height,
+      centerX: box.x + box.width / 2,
+    });
+    const geo = edgeGeometryFor(edge.routing ?? defaultRouting, s.box, t.box, edge.labelT ?? 0.5, {
+      ...fieldAnchors(edge, anchorNode(s), anchorNode(t)),
+      points: edge.points,
+    });
     const color = edgeHex[edge.color] ?? edgeHex.slate;
     const direction = edge.direction ?? "forward";
 
     cmds.push({ op: "path", d: geo.path, stroke: color, strokeWidth: 1.8, dash: EDGE_DASH[edge.style] });
-    if (direction !== "none") {
+    // An end stating its cardinality draws the crow's-foot symbol instead of
+    // an arrowhead — the same rule the canvas applies, from the same parser.
+    const startMarker = cardinalityMarker(edge.startLabel);
+    const endMarker = cardinalityMarker(edge.endLabel);
+    if (direction !== "none" && !endMarker) {
       cmds.push({ op: "poly", points: ARROW_POINTS, fill: color, tx: geo.tip.x, ty: geo.tip.y, rotateDeg: (geo.angle * 180) / Math.PI });
     }
-    if (direction === "both") {
+    if (direction === "both" && !startMarker) {
       const origin = geo.at(0);
       cmds.push({ op: "poly", points: ARROW_POINTS, fill: color, tx: origin.x, ty: origin.y, rotateDeg: (startAngle(geo) * 180) / Math.PI });
+    }
+    if (endMarker) {
+      cmds.push({ op: "path", d: crowsFootPath(endMarker, geo.tip, geo.angle), stroke: color, strokeWidth: 1.8, round: true });
+    }
+    if (startMarker) {
+      cmds.push({ op: "path", d: crowsFootPath(startMarker, geo.at(0), startAngle(geo)), stroke: color, strokeWidth: 1.8, round: true });
     }
 
     if (edge.seq) {
@@ -524,6 +571,27 @@ export function emitTemplate(
         alpha: 0.8,
         anchor: "middle",
         knockout: { color: palette.bg, padX: 3, height: 11 },
+      });
+    }
+    // Cardinality, a fixed distance in from each box — near the end it
+    // describes rather than wherever the middle label sits.
+    for (const [text, fromEnd, marker] of [
+      [edge.startLabel, false, startMarker],
+      [edge.endLabel, true, endMarker],
+    ] as const) {
+      if (!text) continue;
+      const at = geo.at(tAtDistance(geo, endLabelInset(marker), fromEnd));
+      cmds.push({
+        op: "text",
+        x: at.x,
+        y: at.y - 4,
+        text,
+        size: 10,
+        font: "mono",
+        weight: 600,
+        color: palette.text,
+        anchor: "middle",
+        knockout: { color: palette.bg, padX: 3, height: 13 },
       });
     }
     if (edge.date) {
@@ -700,15 +768,92 @@ export function emitTemplate(
       const strikeW = approxTextWidth(title, 13, "sans");
       cmds.push({ op: "path", d: `M ${textX} ${box.y + cTop + 26.5} L ${textX + strikeW} ${box.y + cTop + 26.5}`, stroke: palette.text, strokeAlpha: dim, strokeWidth: 1 });
     }
-    const descLines = node.description ? wrapText(node.description, 10.5, "sans", textW, 2) : [];
+    // A node with rows holds its description to ONE line: the rows below are
+    // placed by a shared formula, and a second line would shift every one of
+    // them out from under its edge anchor.
+    const rows = node.fields ?? [];
+    const descLines = node.description
+      ? wrapText(node.description, 10.5, "sans", textW, rows.length ? 1 : 2)
+      : [];
     descLines.forEach((line, i) =>
       cmds.push({ op: "text", x: textX, y: box.y + cTop + 45 + i * 13, text: line, size: 10.5, font: "sans", color: palette.textDim, ...(dim < 1 ? { alpha: dim } : {}) }),
     );
+
+    // Field rows — the same list the canvas draws, from the same metrics.
+    const listTop = box.y + fieldListTop(!!node.description);
+    if (rows.length) {
+      const rightEdge = box.x + box.width - 10;
+      cmds.push({
+        op: "path",
+        d: `M ${textX} ${listTop - 4} L ${rightEdge} ${listTop - 4}`,
+        stroke: palette.border,
+        strokeWidth: 1,
+        strokeAlpha: dim,
+      });
+      rows.forEach((field, i) => {
+        const rowTop = listTop + i * FIELD_ROW_H;
+        let nameX = textX;
+        if (field.key) {
+          const badge = field.key.toUpperCase();
+          const badgeW = Math.max(20, approxTextWidth(badge, 8, "mono") + 6);
+          const d = roundedRectPath(textX, rowTop + 3.5, badgeW, 12, 3);
+          // A primary key identifies the record and carries the tint; a
+          // foreign key only points elsewhere, so it stays an outline —
+          // matching .as-node__fieldkey--pk in the stylesheet.
+          if (field.key !== "fk") {
+            cmds.push({ op: "path", d, fill: def.accent, fillAlpha: 0.18 * dim });
+          }
+          cmds.push({ op: "path", d, stroke: def.accent, strokeAlpha: 0.45 * dim, strokeWidth: 1 });
+          cmds.push({
+            op: "text",
+            x: textX + (badgeW - approxTextWidth(badge, 8, "mono")) / 2,
+            y: rowTop + 12.5,
+            text: badge,
+            size: 8,
+            font: "mono",
+            weight: 700,
+            color: def.accent,
+            ...(dim < 1 ? { alpha: dim } : {}),
+          });
+          nameX = textX + badgeW + 6;
+        }
+        // The type takes the right edge; the name gets whatever is left, so a
+        // long column name ellipsises rather than running under its own type.
+        const typeText = field.type ?? "";
+        const typeW = typeText ? approxTextWidth(typeText, 9.5, "mono") : 0;
+        const nameW = rightEdge - nameX - (typeW ? typeW + 8 : 0);
+        cmds.push({
+          op: "text",
+          x: nameX,
+          y: rowTop + 13,
+          text: ellipsise(`${field.name}${field.required ? "*" : ""}`, 10.5, "mono", nameW),
+          size: 10.5,
+          font: "mono",
+          color: palette.text,
+          ...(dim < 1 ? { alpha: dim } : {}),
+        });
+        if (typeText) {
+          cmds.push({
+            op: "text",
+            x: rightEdge - typeW,
+            y: rowTop + 13,
+            text: typeText,
+            size: 9.5,
+            font: "mono",
+            color: palette.textFaint,
+            ...(dim < 1 ? { alpha: dim } : {}),
+          });
+        }
+      });
+    }
+
     if (node.date) {
       // Stacked under whatever text the node ended up with, then clamped
       // inside the box — a two-line description on a default-height node
       // leaves no room, and the chip must not escape the silhouette.
-      const below = box.y + cTop + 36 + descLines.length * 13;
+      const below = rows.length
+        ? listTop + rows.length * FIELD_ROW_H + 2
+        : box.y + cTop + 36 + descLines.length * 13;
       pushDateChip(node.date, textX, Math.min(below, box.y + box.height - 19), isOverdue(node.date, node.status));
     }
     // Bottom-right, riding the edge — mirrors the editor's placement.
@@ -866,7 +1011,10 @@ export function drawToCanvas(ctx: CanvasRenderingContext2D, cmds: DrawCmd[]): vo
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-export function drawToSvg(cmds: DrawCmd[]): string {
+export function drawToSvg(cmds: DrawCmd[], opts: { gridId?: string } = {}): string {
+  // Several SVGs inlined into ONE page (the multi-view HTML export) must not
+  // share a <pattern> id — the browser resolves url(#…) document-wide.
+  const gridId = opts.gridId ?? "as-grid";
   const out: string[] = [];
   // Consecutive commands stamped with one tag render inside one group, so a
   // whole element can be shown, dimmed, or hidden by touching a single <g>.
@@ -890,8 +1038,8 @@ export function drawToSvg(cmds: DrawCmd[]): string {
       case "grid": {
         // A pattern keeps the SVG small where canvas just loops.
         out.push(
-          `<defs><pattern id="as-grid" width="${cmd.step}" height="${cmd.step}" patternUnits="userSpaceOnUse" x="${cmd.x}" y="${cmd.y}"><rect width="1.2" height="1.2" fill="${cmd.color}"/></pattern></defs>`,
-          `<rect x="${cmd.x}" y="${cmd.y}" width="${cmd.w}" height="${cmd.h}" fill="url(#as-grid)"/>`,
+          `<defs><pattern id="${gridId}" width="${cmd.step}" height="${cmd.step}" patternUnits="userSpaceOnUse" x="${cmd.x}" y="${cmd.y}"><rect width="1.2" height="1.2" fill="${cmd.color}"/></pattern></defs>`,
+          `<rect x="${cmd.x}" y="${cmd.y}" width="${cmd.w}" height="${cmd.h}" fill="url(#${gridId})"/>`,
         );
         break;
       }

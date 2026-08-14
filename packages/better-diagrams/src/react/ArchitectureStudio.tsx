@@ -39,21 +39,30 @@ import {
 } from "@xyflow/react";
 
 import {
+  BOUNDARY_NODE_PREFIX,
   COLLAPSED_EDGE_PREFIX,
   DEFAULT_ZONE_OPACITY,
   EDGE_COLORS,
   EDGE_Z_INDEX,
+  EDGE_ANCHOR_SIDES,
   EDGE_COLOR_HEX,
   EDGE_DASH,
   EDGE_STYLES,
   EMPTY_TEMPLATE,
+  FIELD_KEYS,
+  MAX_NODE_FIELDS,
   NODE_STATUSES,
+  fieldsBoxHeight,
   activeScenario,
   assignZonesByGeometry,
   snapNodesIntoZones,
   fromReactFlow,
   fromZoneNodeId,
+  ghostSourceId,
+  isBoundaryNodeId,
   isCollapsedEdgeId,
+  isGhostEdgeId,
+  isGhostNodeId,
   isZoneNodeId,
   scaleZoneMembers,
   setAllZoneProviders,
@@ -66,9 +75,12 @@ import {
   type DiagramNodeData,
   type DiagramTemplate,
   type EdgeColor,
+  type EdgeAnchorSide,
   type EdgeDirection,
   type EdgeRouting,
   type EdgeStyle,
+  type FieldKey,
+  type NodeField,
   type NodeStatus,
   type VersionTagPosition,
   type ZoneBox,
@@ -99,11 +111,14 @@ import {
   materializeCombo,
   templateStateAxes,
 } from "../contract/states";
+import { focusPath, liftScopedReactFlow, scopedView } from "../contract/scope";
 import { DiffCanvas } from "./DiffCanvas";
 import {
   FileMenu,
+  Breadcrumbs,
   InspectorSection,
   TimelineScrubber,
+  levelLabel,
   ToolbarMenu,
   VersionTagChip,
   type StudioFile,
@@ -124,8 +139,14 @@ import {
   referencedProviders,
 } from "./template-prompt";
 import { autoLayout, hasOverlaps } from "../contract/layout";
+import {
+  PRESENTATION_FORMAT,
+  mergeTemplate,
+  splitTemplate,
+  validatePresentation,
+} from "../contract/presentation";
 import { buildSequencePrompt, parseLlmSequence } from "../contract/sequence";
-import { parseArchitectureText } from "./welcome-parse";
+import { layoutIfUnpositioned, parseArchitectureText } from "./welcome-parse";
 import {
   copyFragment,
   duplicateWithConnections,
@@ -327,7 +348,13 @@ function StudioInner({
   const flow = useReactFlow();
 
   const initialTemplate = useMemo(
-    () => validateTemplate(value ?? defaultValue ?? EMPTY_TEMPLATE, registryOpts(registry)),
+    // layoutIfUnpositioned keeps the split contract at the host door too: a
+    // CONTENT doc handed as value/defaultValue lays itself out instead of
+    // piling every node at the origin. No-op for placed documents.
+    () =>
+      layoutIfUnpositioned(
+        validateTemplate(value ?? defaultValue ?? EMPTY_TEMPLATE, registryOpts(registry)),
+      ),
     // Only for first mount; `value` changes are handled by the sync effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
@@ -413,6 +440,20 @@ function StudioInner({
    */
   const rfIncludesHiddenRef = useRef(defaultShowHidden);
 
+  /**
+   * The drill-in stack: [] = the root level (C1), each entry one level
+   * deeper. Pure view state, like the timeline cursor — drilling never enters
+   * undo and never reaches the host. The INTENT ref feeds event handlers; the
+   * FACT ref (`rfFocusRef`) records which focus the React Flow state was
+   * actually materialized under, following the `rfIncludesHiddenRef` doctrine:
+   * between a drill and the rebuild, deriving with the intent would judge the
+   * previous canvas against the wrong view and corrupt the document.
+   */
+  const [focusStack, setFocusStack] = useState<string[]>([]);
+  const focusId = focusStack.at(-1) ?? null;
+  const focusStackRef = useRef<string[]>([]);
+  const rfFocusRef = useRef<string | null>(null);
+
   /** `color` tints the toast like its subject — e.g. the zone a node moved into. */
   const showToast = useCallback((message: string, color?: string) => {
     setToast({ message, color });
@@ -457,18 +498,29 @@ function StudioInner({
   const timelineAtRef = useRef<DiagramDate | null>(null);
 
   const deriveTemplate = useCallback(
-    (n: Node[], e: Edge[]): DiagramTemplate =>
+    (n: Node[], e: Edge[]): DiagramTemplate => {
+      // A focused canvas is a scoped view: lift it back into the FULL
+      // document (derived elements dropped, everything off-level carried from
+      // the base). Branches on the FACT ref — what the RF state actually is.
+      const focus = rfFocusRef.current;
+      const lifted = focus
+        ? liftScopedReactFlow(n, e, focus, {
+            ...registryOpts(registry),
+            meta: meta.current,
+            base: baseRef.current,
+          })
+        : fromReactFlow(n, e, {
+            ...registryOpts(registry),
+            meta: meta.current,
+            base: baseRef.current,
+            allNodesPresent: rfIncludesHiddenRef.current,
+          });
       // Geometry is truth in the editor: the user just dragged something, so a
       // node's zone is whichever zone it now sits in. This is what makes
-      // dragging a *zone* over some nodes actually enrol them.
-      assignZonesByGeometry(
-        fromReactFlow(n, e, {
-          ...registryOpts(registry),
-          meta: meta.current,
-          base: baseRef.current,
-          allNodesPresent: rfIncludesHiddenRef.current,
-        }),
-      ),
+      // dragging a *zone* over some nodes actually enrol them. (Drill-hidden
+      // nodes keep their declared membership — their coords aren't root-space.)
+      return assignZonesByGeometry(lifted, { containerKinds: registry.containerKinds });
+    },
     [registry],
   );
 
@@ -506,6 +558,43 @@ function StudioInner({
     queueMicrotask(() => commit(flow.getNodes(), flow.getEdges()));
   }, [commit, flow]);
 
+  // ── Materialization: the ONE way a document becomes a canvas ──────────────
+
+  /**
+   * Re-materialize the canvas from a document, advancing every ref that marks
+   * a materialization point together — the controlled sync, the rebuild
+   * effect, applyTemplate, undo, and any future document-level transform all
+   * share this, because a canvas rebuilt against half-advanced refs re-judges
+   * (and loses) hidden nodes. Focus-aware: while drilled in, the canvas shows
+   * `scopedView(doc, focus)` and the FACT ref records that; a focus whose
+   * node vanished (undo, AI edit, controlled swap) prunes automatically.
+   */
+  const materializeTemplate = useCallback(
+    (doc: DiagramTemplate) => {
+      const stack = pruneFocusStack(doc, focusStackRef.current);
+      const top = stack.at(-1) ?? null;
+      if (stack.length !== focusStackRef.current.length) {
+        focusStackRef.current = stack;
+        setFocusStack(stack);
+      }
+      meta.current = doc.meta;
+      baseRef.current = doc; // materialization point
+      templateRef.current = doc;
+      zoneSignatureRef.current = viewSignatureOf(doc, showHidden, top);
+      rfIncludesHiddenRef.current = showHidden;
+      rfFocusRef.current = top;
+      const viewDoc = top
+        ? scopedView(doc, top, { containerKinds: registry.containerKinds })
+        : doc;
+      const rf = toReactFlow(viewDoc, registryKinds(registry, showHidden));
+      const rfNodes = top ? decorateScopedNodes(rf.nodes as Node[]) : (rf.nodes as Node[]);
+      setNodes(rfNodes);
+      setEdges(rf.edges as Edge[]);
+      return { nodes: rfNodes, edges: rf.edges as Edge[] };
+    },
+    [registry, showHidden, setNodes, setEdges],
+  );
+
   // ── Controlled mode: adopt external value changes ─────────────────────────
 
   useEffect(() => {
@@ -513,27 +602,22 @@ function StudioInner({
     // Compare the VALIDATED form on both sides. Comparing the raw prop against
     // the validated JSON never matches — validation fills in defaults such as
     // `fontSize`, so the guard would fail and this effect would re-sync on
-    // every render.
-    const validated = validateTemplate(value, registryOpts(registry));
+    // every render. layoutIfUnpositioned is a no-op on anything this editor
+    // ever emitted (always placed), so the echo guard is unaffected; it only
+    // fires when the host swaps in a CONTENT doc, which lays itself out.
+    const validated = layoutIfUnpositioned(validateTemplate(value, registryOpts(registry)));
     const json = JSON.stringify(validated);
     if (json === lastEmitted.current) return; // the echo of our own onChange
 
-    const next = toReactFlow(validated, registryKinds(registry, showHidden));
-    meta.current = validated.meta;
     lastEmitted.current = json;
-    baseRef.current = validated; // materialization point: frame follows the canvas
-    templateRef.current = validated;
-    zoneSignatureRef.current = viewSignatureOf(validated, showHidden);
-    rfIncludesHiddenRef.current = showHidden;
-    setNodes(next.nodes as Node[]);
-    setEdges(next.edges as Edge[]);
+    const next = materializeTemplate(validated);
     resetHistory({
-      nodes: next.nodes as Node[],
-      edges: next.edges as Edge[],
+      nodes: next.nodes,
+      edges: next.edges,
       meta: meta.current,
       template: validated,
     });
-  }, [value, registry, showHidden, setNodes, setEdges, resetHistory]);
+  }, [value, registry, materializeTemplate, resetHistory]);
 
   /**
    * Re-render the canvas when a zone's provider changes.
@@ -544,25 +628,17 @@ function StudioInner({
    * the full template is what actually makes the toggle do anything.
    */
   useEffect(() => {
-    const signature = viewSignatureOf(template, showHidden);
+    const signature = viewSignatureOf(template, showHidden, focusId);
     if (signature === zoneSignatureRef.current) return;
     // The document part alone decides whether this rebuild is an EDIT
     // (provider switch, collapse — belongs in undo, host must hear) or a pure
-    // VIEW change (ghost toggle — committing it would put a do-nothing entry
-    // in the undo stack and burn a ⌘Z press on it).
+    // VIEW change (ghost toggle, drill in/out — committing it would put a
+    // do-nothing entry in the undo stack and burn a ⌘Z press on it).
     const docChanged =
       signature.split("|hidden:")[0] !== zoneSignatureRef.current.split("|hidden:")[0];
-    zoneSignatureRef.current = signature;
-
-    // Materialization point: the canvas is rebuilt from `template`, so
-    // `template` becomes the frame later derivations are judged against.
-    baseRef.current = template;
-    const next = toReactFlow(template, registryKinds(registry, showHidden));
-    rfIncludesHiddenRef.current = showHidden;
-    setNodes(next.nodes as Node[]);
-    setEdges(next.edges as Edge[]);
-    if (docChanged) commit(next.nodes as Node[], next.edges as Edge[], template);
-  }, [template, registry, showHidden, setNodes, setEdges, commit]);
+    const next = materializeTemplate(template);
+    if (docChanged) commit(next.nodes, next.edges, template);
+  }, [template, focusId, materializeTemplate, showHidden, commit]);
 
   // ── Replace the whole document ────────────────────────────────────────────
 
@@ -571,18 +647,13 @@ function StudioInner({
       // The declaration is truth on import: a generated document usually gets
       // membership right and coordinates approximately right, so move the node
       // to match its declared zone rather than dropping the membership.
-      const validated = snapNodesIntoZones(validateTemplate(incoming, registryOpts(registry)));
-      const next = toReactFlow(validated, registryKinds(registry, showHidden));
-      meta.current = validated.meta;
-      baseRef.current = validated; // materialization point
-      templateRef.current = validated;
-      zoneSignatureRef.current = viewSignatureOf(validated, showHidden);
-      rfIncludesHiddenRef.current = showHidden;
-      setNodes(next.nodes as Node[]);
-      setEdges(next.edges as Edge[]);
+      const validated = snapNodesIntoZones(validateTemplate(incoming, registryOpts(registry)), {
+        containerKinds: registry.containerKinds,
+      });
+      const next = materializeTemplate(validated);
       commitHistory({
-        nodes: next.nodes as Node[],
-        edges: next.edges as Edge[],
+        nodes: next.nodes,
+        edges: next.edges,
         meta: meta.current,
         template: validated,
       });
@@ -593,7 +664,7 @@ function StudioInner({
       }
       if (fit) window.setTimeout(() => flow.fitView({ padding: 0.15, duration: 300 }), 50);
     },
-    [registry, setNodes, setEdges, history, onChange, flow],
+    [registry, materializeTemplate, commitHistory, onChange, flow],
   );
 
   // ── Node / edge mutations ─────────────────────────────────────────────────
@@ -603,11 +674,18 @@ function StudioInner({
       if (readOnly) return;
       const def = kindDef(registry, kind);
       const type = def.container ? "group" : def.annotation ? "annotation" : "shape";
+      // A record node starts with its key row, so the box arrives as a table
+      // rather than as an empty card the user has to discover the rows on.
+      const fields = def.record
+        ? [{ id: "id", name: "id", type: "uuid", key: "pk" as const, required: true }]
+        : undefined;
       const size = def.container
         ? { w: 320, h: 240 }
         : def.annotation
           ? { w: 280, h: 56 }
-          : { w: 170, h: 76 };
+          : def.record
+            ? { w: 230, h: fieldsBoxHeight(fields!.length) }
+            : { w: 170, h: 76 };
 
       // Drop the new node at the centre of the *canvas element*, not the
       // window — this component is often embedded in a panel, so the viewport
@@ -632,6 +710,7 @@ function StudioInner({
           kind,
           icon: def.icon,
           description: "",
+          ...(fields ? { fields } : {}),
           fontSize: 13,
           // Inserted while scrubbing: the new box belongs to the moment being
           // looked at, or it would appear to have existed all along — and in
@@ -692,7 +771,19 @@ function StudioInner({
       const { template: next, newNodeIds, newZoneIds } = pasteFragment(templateRef.current, source, {
         ...registryOpts(registry),
       });
-      applyTemplate(next, { fit: false });
+      // Pasting while drilled in pastes INTO the level: fragment roots become
+      // children of the focus (their nested structure comes along untouched).
+      const focus = rfFocusRef.current;
+      const rooted =
+        focus && newNodeIds.length
+          ? {
+              ...next,
+              nodes: next.nodes.map((n) =>
+                newNodeIds.includes(n.id) && !n.parentId ? { ...n, parentId: focus } : n,
+              ),
+            }
+          : next;
+      applyTemplate(rooted, { fit: false });
       // Select the pasted copy, so it can be dragged away immediately.
       window.setTimeout(() => {
         setNodes((current) =>
@@ -737,22 +828,26 @@ function StudioInner({
 
   // ── Search ────────────────────────────────────────────────────────────────
 
-  /** Nodes currently on the canvas that match the query. Zones excluded. */
+  /**
+   * DOCUMENT nodes that match the query — not just the canvas's. While
+   * drilled in, most of the architecture lives on other levels; a search that
+   * couldn't see them would read as data loss.
+   */
   const searchMatches = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return [];
-    return nodes.filter((n) => {
-      if (isZoneNodeId(n.id)) return false;
-      const d = n.data as DiagramNodeData;
-      return (
+    return template.nodes.filter(
+      (n) =>
         n.id.toLowerCase().includes(q) ||
-        d.label?.toLowerCase().includes(q) ||
-        d.description?.toLowerCase().includes(q) ||
-        String(d.kind).toLowerCase().includes(q) ||
-        d.tags?.some((t) => t.toLowerCase().includes(q))
-      );
-    });
-  }, [nodes, searchQuery]);
+        n.label?.toLowerCase().includes(q) ||
+        n.description?.toLowerCase().includes(q) ||
+        String(n.kind).toLowerCase().includes(q) ||
+        n.tags?.some((t) => t.toLowerCase().includes(q)),
+    );
+  }, [template, searchQuery]);
+
+  /** Declared later (needs the drill machinery); the search jumps through it. */
+  const navigateToNodeRef = useRef<(id: string) => void>(() => {});
 
   /** Select + centre one match. Enter cycles through them. */
   const jumpToMatch = useCallback(
@@ -760,9 +855,14 @@ function StudioInner({
       const match = searchMatches[((index % searchMatches.length) + searchMatches.length) % searchMatches.length];
       if (!match) return;
       const internal = flow.getInternalNode(match.id);
-      const abs = internal?.internals.positionAbsolute ?? match.position;
-      const w = match.width ?? (internal?.measured?.width as number) ?? 170;
-      const h = match.height ?? (internal?.measured?.height as number) ?? 76;
+      if (!internal) {
+        // The match lives on another level (or is hidden) — drill to it.
+        navigateToNodeRef.current(match.id);
+        return;
+      }
+      const abs = internal.internals.positionAbsolute;
+      const w = (internal.measured?.width as number) ?? match.w;
+      const h = (internal.measured?.height as number) ?? match.h;
       setNodes((current) => current.map((n) => ({ ...n, selected: n.id === match.id })));
       void flow.setCenter(abs.x + w / 2, abs.y + h / 2, {
         zoom: Math.max(flow.getViewport().zoom, 0.9),
@@ -930,7 +1030,9 @@ function StudioInner({
     async (file: File) => {
       try {
         const raw = JSON.parse(await file.text());
-        setCompareTemplate(validateTemplate(raw, registryOpts(registry)));
+        // A content doc as the baseline lays itself out — its removed nodes
+        // render in the diff overlay, and the origin pile-up is not a layout.
+        setCompareTemplate(layoutIfUnpositioned(validateTemplate(raw, registryOpts(registry))));
         // Compare takes over the canvas; leaving the scrubber "on" underneath
         // would make the toolbar claim a mode the canvas is not in.
         setTimelineCursor(null);
@@ -1062,9 +1164,19 @@ function StudioInner({
 
   const tidy = useCallback(() => {
     if (readOnly) return;
-    applyTemplate(autoLayout(templateRef.current), { fit: true });
-    showToast("Tidied");
-  }, [readOnly, applyTemplate, showToast]);
+    // Tidy arranges the level you are looking at — the focused component's
+    // own canvas while drilled in, the root canvas otherwise. Either way the
+    // levels you can't see are left exactly as you left them.
+    const focus = rfFocusRef.current;
+    applyTemplate(
+      autoLayout(templateRef.current, {
+        containerKinds: registry.containerKinds,
+        ...(focus ? { frames: { drill: focus } } : {}),
+      }),
+      { fit: true },
+    );
+    showToast(focus ? "Tidied this level" : "Tidied");
+  }, [readOnly, applyTemplate, showToast, registry]);
 
   const addZone = useCallback(() => {
     if (readOnly) return;
@@ -1156,10 +1268,53 @@ function StudioInner({
 
   const deleteSelection = useCallback(() => {
     if (readOnly) return;
-    if (!selectedNodeIds.length && !selectedEdgeIds.length) return;
+
+    // Derived view elements are not deletable — a ghost is edited at its own
+    // level, and its stand-in edges are just projections of real ones.
+    const nodeIds = selectedNodeIds.filter(
+      (id) => !isGhostNodeId(id) && !isBoundaryNodeId(id),
+    );
+    const edgeIds = selectedEdgeIds.filter((id) => !isGhostEdgeId(id));
+    if (!nodeIds.length && !edgeIds.length) {
+      if (selectedNodeIds.length || selectedEdgeIds.length) {
+        showToast("External elements are edited at their own level");
+      }
+      return;
+    }
+
+    if (rfFocusRef.current) {
+      // Route through the DOCUMENT: the canvas cascade below cannot see the
+      // hidden grandchildren of a deleted child, and the carry-through would
+      // resurrect them as orphans.
+      const doc = templateRef.current;
+      const doomed = new Set(nodeIds);
+      let grewDoc = true;
+      while (grewDoc) {
+        grewDoc = false;
+        for (const n of doc.nodes) {
+          if (n.parentId && doomed.has(n.parentId) && !doomed.has(n.id)) {
+            doomed.add(n.id);
+            grewDoc = true;
+          }
+        }
+      }
+      const next = validateTemplate(
+        {
+          ...doc,
+          nodes: doc.nodes.filter((n) => !doomed.has(n.id)),
+          edges: doc.edges.filter(
+            (e) => !edgeIds.includes(e.id) && !doomed.has(e.source) && !doomed.has(e.target),
+          ),
+        },
+        registryOpts(registry),
+      );
+      const rf = materializeTemplate(next);
+      commit(rf.nodes, rf.edges, next);
+      return;
+    }
 
     // Deleting a container deletes everything nested inside it.
-    const doomed = new Set(selectedNodeIds);
+    const doomed = new Set(nodeIds);
     let grew = true;
     while (grew) {
       grew = false;
@@ -1174,11 +1329,11 @@ function StudioInner({
     setNodes((current) => current.filter((n) => !doomed.has(n.id)));
     setEdges((current) =>
       current.filter(
-        (e) => !selectedEdgeIds.includes(e.id) && !doomed.has(e.source) && !doomed.has(e.target),
+        (e) => !edgeIds.includes(e.id) && !doomed.has(e.source) && !doomed.has(e.target),
       ),
     );
     commitLater();
-  }, [readOnly, selectedNodeIds, selectedEdgeIds, flow, setNodes, setEdges, commitLater]);
+  }, [readOnly, selectedNodeIds, selectedEdgeIds, flow, setNodes, setEdges, commitLater, showToast, registry, materializeTemplate, commit]);
 
   const patchNode = useCallback(
     (id: string, patch: Partial<DiagramNodeData>) => {
@@ -1217,9 +1372,9 @@ function StudioInner({
           if (e.id !== id) return e;
           const data = { ...(e.data as DiagramEdgeData), ...patch };
           // A spread keeps keys explicitly set to undefined; delete them so
-          // "routing: default" and a cleared seq or date genuinely unset the
-          // field.
-          for (const key of ["routing", "seq", "direction", "date"] as const) {
+          // "routing: default" and a cleared seq, date, anchor, or route
+          // genuinely unset the field.
+          for (const key of ["routing", "seq", "direction", "date", "start", "end", "points"] as const) {
             if (key in patch && patch[key] === undefined) delete data[key];
           }
           // The edge's own routing changed (or was cleared) — recompute what
@@ -1290,15 +1445,25 @@ function StudioInner({
         return depth;
       };
 
-      const zones = templateRef.current.zones ?? [];
+      // In a focused view the zone boxes live in root space while the canvas
+      // shows drill space — judging one against the other would enrol nodes
+      // in zones they never touched. Zones simply don't apply on this canvas.
+      const zones = rfFocusRef.current ? [] : (templateRef.current.zones ?? []);
       const updates = new Map<
         string,
         { parentId?: string; position: { x: number; y: number }; zoneId?: string | null }
       >();
+      /** Ghost drags land in `meta.views`, not in the node's own geometry. */
+      const ghostMoves = new Map<string, { x: number; y: number; w: number; h: number }>();
 
       for (const node of dragged) {
         // Dragging a zone moves the backdrop; it has no parent and no zone.
-        if (isZoneNodeId(node.id)) continue;
+        if (isZoneNodeId(node.id) || isBoundaryNodeId(node.id)) continue;
+        if (isGhostNodeId(node.id)) {
+          const { w, h } = sizeOf(node);
+          ghostMoves.set(node.id, { x: node.position.x, y: node.position.y, w, h });
+          continue;
+        }
         const abs = absOf(node.id);
         if (!abs) continue;
         const { w, h } = sizeOf(node);
@@ -1310,6 +1475,9 @@ function StudioInner({
         let targetDepth = -1;
         for (const candidate of all) {
           if (excluded.has(candidate.id)) continue;
+          // The boundary frame is scenery, and a ghost standing for a group
+          // still isn't a drop target — neither exists in the document.
+          if (isBoundaryNodeId(candidate.id) || isGhostNodeId(candidate.id)) continue;
           const def = kindDef(registry, (candidate.data as DiagramNodeData).kind);
           if (!def.container) continue;
           const cAbs = absOf(candidate.id);
@@ -1379,33 +1547,35 @@ function StudioInner({
           return sortByDepth(next);
         });
       }
+      if (ghostMoves.size && rfFocusRef.current) {
+        // A ghost's place is per-view presentation: write it into the
+        // document's `meta.views[focus]` record. Document write → undoable,
+        // and the next materialization renders the ghost where it was left.
+        const focus = rfFocusRef.current;
+        queueMicrotask(() => {
+          const lifted = deriveTemplate(flow.getNodes() as Node[], flow.getEdges() as Edge[]);
+          const views = { ...(lifted.meta?.views ?? {}) };
+          const rec = {
+            ...(views[focus] ?? {}),
+            nodes: { ...(views[focus]?.nodes ?? {}) },
+          };
+          for (const [id, box] of ghostMoves) rec.nodes[id] = box;
+          views[focus] = rec;
+          const next = validateTemplate(
+            { ...lifted, meta: { ...(lifted.meta ?? {}), views } },
+            registryOpts(registry),
+          );
+          const rf = materializeTemplate(next);
+          commit(rf.nodes, rf.edges, next);
+        });
+        return;
+      }
       commitLater();
     },
-    [readOnly, flow, registry, setNodes, showToast, commitLater],
+    [readOnly, flow, registry, setNodes, showToast, commitLater, deriveTemplate, materializeTemplate, commit],
   );
 
   // ── Undo / redo ───────────────────────────────────────────────────────────
-
-  /**
-   * Re-materialize the canvas from a document, advancing every ref that marks
-   * a materialization point together — the sequence undo, zone scaling, and
-   * any future document-level transform must all share, because a canvas
-   * rebuilt against half-advanced refs re-judges (and loses) hidden nodes.
-   */
-  const materializeTemplate = useCallback(
-    (doc: DiagramTemplate) => {
-      meta.current = doc.meta;
-      baseRef.current = doc; // materialization point
-      templateRef.current = doc;
-      zoneSignatureRef.current = viewSignatureOf(doc, showHidden);
-      rfIncludesHiddenRef.current = showHidden;
-      const rf = toReactFlow(doc, registryKinds(registry, showHidden));
-      setNodes(rf.nodes as Node[]);
-      setEdges(rf.edges as Edge[]);
-      return rf;
-    },
-    [registry, showHidden, setNodes, setEdges],
-  );
 
   const applySnapshot = useCallback(
     (snapshot: Snapshot) => {
@@ -1434,6 +1604,106 @@ function StudioInner({
     const snapshot = redoHistory();
     if (snapshot) applySnapshot(snapshot);
   }, [redoHistory, applySnapshot]);
+
+  // ── Drill navigation (C4 levels) ──────────────────────────────────────────
+
+  /** Set the whole focus stack — the one write path for drill state. */
+  const drillTo = useCallback((stack: string[]) => {
+    focusStackRef.current = stack;
+    setFocusStack(stack);
+  }, []);
+
+  /**
+   * Step one level into a node. Zoom toward its box first when motion is
+   * welcome; the swap itself is timer-driven so correctness never depends on
+   * the tween (jsdom, reduced-motion, node off-canvas all skip it).
+   */
+  const drillInto = useCallback(
+    (id: string) => {
+      if (activeDiffBase) return; // compare mode owns the canvas
+      const internal = flow.getInternalNode(id);
+      const reduced =
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const swap = () => {
+        // The document may have changed mid-tween (an AI reply landing) —
+        // a vanished target must not throw inside a timer callback.
+        if (!templateRef.current.nodes.some((n) => n.id === id)) return;
+        drillTo([...focusStackRef.current, id]);
+        canvasRef.current?.classList.remove("as-canvas--refocus");
+        window.setTimeout(
+          () => flow.fitView({ padding: 0.15, duration: reduced ? 0 : 250 }),
+          60,
+        );
+      };
+      if (internal && !reduced) {
+        const abs = internal.internals.positionAbsolute;
+        canvasRef.current?.classList.add("as-canvas--refocus");
+        void flow.fitBounds(
+          {
+            x: abs.x,
+            y: abs.y,
+            width: (internal.measured?.width as number) ?? 170,
+            height: (internal.measured?.height as number) ?? 76,
+          },
+          { duration: 200, padding: 0.3 },
+        );
+        window.setTimeout(swap, 210);
+      } else {
+        swap();
+      }
+    },
+    [activeDiffBase, flow, drillTo],
+  );
+
+  /** Step one level out. Esc's "clean" press and the breadcrumbs share this. */
+  const drillOut = useCallback(() => {
+    if (!focusStackRef.current.length) return;
+    drillTo(focusStackRef.current.slice(0, -1));
+    canvasRef.current?.classList.add("as-canvas--refocus");
+    window.setTimeout(() => {
+      canvasRef.current?.classList.remove("as-canvas--refocus");
+      void flow.fitView({ padding: 0.15, duration: 250 });
+    }, 60);
+  }, [drillTo, flow]);
+
+  /**
+   * Jump to the level that shows a node, then select and centre it — the
+   * search's cross-level fallback and a ghost's "go to definition".
+   */
+  const navigateToNode = useCallback(
+    (id: string) => {
+      const doc = templateRef.current;
+      if (!doc.nodes.some((n) => n.id === id)) return;
+      drillTo(focusPath(doc, id));
+      // Post-materialize timer, the applyTemplate precedent: the rebuild
+      // effect must run before the node exists to select.
+      window.setTimeout(() => {
+        setNodes((current) => current.map((n) => ({ ...n, selected: n.id === id })));
+        const internal = flow.getInternalNode(id);
+        if (internal) {
+          const abs = internal.internals.positionAbsolute;
+          void flow.setCenter(
+            abs.x + ((internal.measured?.width as number) ?? 170) / 2,
+            abs.y + ((internal.measured?.height as number) ?? 76) / 2,
+            { zoom: Math.max(flow.getViewport().zoom, 0.9), duration: 300 },
+          );
+        } else {
+          void flow.fitView({ padding: 0.15, duration: 250 });
+        }
+      }, 80);
+    },
+    [drillTo, flow, setNodes],
+  );
+
+  useEffect(() => {
+    navigateToNodeRef.current = navigateToNode;
+  }, [navigateToNode]);
+
+  // Compare mode owns the whole canvas — entering it exits any drill.
+  useEffect(() => {
+    if (activeDiffBase && focusStackRef.current.length) drillTo([]);
+  }, [activeDiffBase, drillTo]);
 
   // ── Keyboard ──────────────────────────────────────────────────────────────
 
@@ -1510,15 +1780,19 @@ function StudioInner({
         return;
       }
       if (event.key === "Escape") {
+        // Two-stage: the first press clears open chrome exactly as before;
+        // a "clean" press with nothing open steps one drill level out.
+        const hadChrome = openMenu !== null || panelOpen || timelineCursor !== null;
         setOpenMenu(null);
         setPanelOpen(false);
         setTimelineCursor(null);
+        if (!hadChrome && focusStackRef.current.length) drillOut();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds]);
+  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, timelineCursor, drillOut]);
 
   const toggleMenu = useCallback(
     (id: "files" | "insert" | "arrange" | "view" | "checks" | "export") =>
@@ -1555,10 +1829,17 @@ function StudioInner({
         // document because that is what it is showing — and so does an
         // exporter that carries its own timeline (`fullDocument`), which needs
         // the elements a hide-mode slice would strip.
-        const subject =
+        let subject =
           timelineActive && timelineFuture === "hide" && !exporter.fullDocument
             ? timelineView(template, timelineAt, "hide").template
             : template;
+        // Same rule for drill focus: a picture exporter renders the level on
+        // screen. Document exporters stay untouched — the drill never leaks
+        // into a saved file. (A slice can have removed the focus node; fall
+        // back to the whole picture rather than throwing mid-export.)
+        if (focusId && !exporter.fullDocument && subject.nodes.some((n) => n.id === focusId)) {
+          subject = scopedView(subject, focusId, { containerKinds: registry.containerKinds });
+        }
         const result = await exporter.run({ template: subject, registry, filename, palette: exportPalette });
         if (result) {
           download(result.blob, result.filename);
@@ -1569,7 +1850,7 @@ function StudioInner({
         setPanelOpen(true);
       }
     },
-    [registry, template, filename, exportPalette, showToast, timelineActive, timelineAt, timelineFuture],
+    [registry, template, filename, exportPalette, showToast, timelineActive, timelineAt, timelineFuture, focusId],
   );
 
   const stateAxes = useMemo(() => templateStateAxes(template), [template]);
@@ -1612,7 +1893,15 @@ function StudioInner({
           axes: stateAxes,
           combos: choice.combos,
           pdfLayout: choice.pdfLayout,
-          materialize: (combo) => materializeCombo(template, combo),
+          materialize: (combo) => {
+            const doc = materializeCombo(template, combo);
+            // While drilled in, each state pictures the focused level — but a
+            // slice can have removed the focus node; fall back to the whole
+            // picture rather than throwing mid-run.
+            return focusId && doc.nodes.some((n) => n.id === focusId)
+              ? scopedView(doc, focusId, { containerKinds: registry.containerKinds })
+              : doc;
+          },
           renderSvg: (doc) => renderTemplateToSvg(doc, registry, exportPalette),
           renderCanvas: (doc) => renderTemplateToCanvas(doc, registry, 2, exportPalette),
         });
@@ -1627,7 +1916,7 @@ function StudioInner({
         setPanelOpen(true);
       }
     },
-    [pendingExport, runDirectExport, filename, stateAxes, template, registry, exportPalette, showToast],
+    [pendingExport, runDirectExport, filename, stateAxes, template, registry, exportPalette, showToast, focusId],
   );
 
   const loadFile = useCallback(
@@ -1635,12 +1924,37 @@ function StudioInner({
       try {
         const text = await file.text();
         const raw = JSON.parse(text);
+        // A layout file re-dresses the CURRENT document — it carries no
+        // architecture of its own.
+        if (raw?.format === PRESENTATION_FORMAT) {
+          const pres = validatePresentation(raw);
+          const current = templateRef.current;
+          const nodeIds = new Set(current.nodes.map((n) => n.id));
+          const edgeIds = new Set(current.edges.map((e) => e.id));
+          const records = [
+            ...Object.keys(pres.nodes ?? {}).map((id) => nodeIds.has(id)),
+            ...Object.keys(pres.edges ?? {}).map((id) => edgeIds.has(id)),
+          ];
+          const applied = records.filter(Boolean).length;
+          const unmatched = records.length - applied;
+          applyTemplate(mergeTemplate(current, pres, registryOpts(registry)), { fit: false });
+          setError("");
+          // A layout exported from a DIFFERENT diagram merges nothing; the
+          // counts are what stop that reading as success.
+          showToast(
+            `Applied layout to ${applied} element${applied === 1 ? "" : "s"}` +
+              (unmatched ? ` · ${unmatched} unmatched` : ""),
+          );
+          return;
+        }
         // Accept both our template shape and a raw React Flow export.
         const isReactFlow = Array.isArray(raw?.nodes) && raw.nodes[0] && "position" in raw.nodes[0];
         const incoming: DiagramTemplate = isReactFlow
           ? fromReactFlow(raw.nodes, raw.edges ?? [], registryOpts(registry))
           : raw;
-        applyTemplate(incoming);
+        // A content doc (or any never-placed JSON) lays itself out, exactly
+        // like the welcome modal's paste path.
+        applyTemplate(layoutIfUnpositioned(validateTemplate(incoming, registryOpts(registry))));
         setError("");
         showToast(`Loaded ${file.name}`);
       } catch (err) {
@@ -1706,7 +2020,8 @@ function StudioInner({
   );
 
   const promptForClouds = useCallback(
-    (clouds: readonly string[]) => promptForCloudSelection(registry, clouds),
+    (clouds: readonly string[], opts?: { geometry?: boolean }) =>
+      promptForCloudSelection(registry, clouds, opts),
     [registry],
   );
 
@@ -1719,6 +2034,12 @@ function StudioInner({
   const systemPrompt = useMemo(
     () => promptForClouds(referencedClouds),
     [promptForClouds, referencedClouds],
+  );
+  // Refine speaks the CONTENT form: the same vocabulary minus geometry, plus
+  // "keep ids stable" — the model never sees coordinates it could mangle.
+  const refineSystemPrompt = useMemo(
+    () => promptForCloudSelection(registry, referencedClouds, { geometry: false }),
+    [registry, referencedClouds],
   );
 
   // ── Welcome modal ─────────────────────────────────────────────────────────
@@ -1901,24 +2222,95 @@ function StudioInner({
       setError("");
 
       try {
+        const rOpts = registryOpts(registry);
+        // Refine sends the content form and keeps the layout at home: the
+        // reply is merged with the CURRENT document's presentation, so every
+        // surviving element keeps its exact place and only genuinely new ones
+        // get positions (stacked into their container, nothing else moves).
+        const split = mode === "refine" ? splitTemplate(template, rOpts) : null;
+        // While drilled in, refine works INSIDE the focused component — the
+        // whole content doc still travels (ids stay stable), the model is
+        // just told where the user is looking.
+        const focusNode =
+          split && rfFocusRef.current
+            ? template.nodes.find((n) => n.id === rfFocusRef.current)
+            : undefined;
+        const focusScope = focusNode ? { id: focusNode.id, label: focusNode.label } : undefined;
         const result = await generate(
           {
             mode,
-            input: mode === "refine" ? buildRefineMessage(template, input) : input,
-            systemPrompt,
-            ...(mode === "refine" ? { current: template } : {}),
+            input: split
+              ? buildRefineMessage(split.content, input, { focus: focusScope })
+              : input,
+            systemPrompt: mode === "refine" ? refineSystemPrompt : systemPrompt,
+            ...(split ? { current: split.content } : {}),
           },
           controller.signal,
         );
-        let next = coerceGeneratorResult(result, registryOpts(registry));
-        // Models are good at topology and bad at coordinates. Tidy only when
-        // the output is actually a mess, so a well-placed diagram — or one the
-        // user is refining — keeps the arrangement it was given.
-        if (hasOverlaps(next)) next = autoLayout(next);
+        let next = coerceGeneratorResult(result, rOpts);
+        if (split) {
+          // Whatever geometry the model emitted anyway is stripped by the
+          // split; the document's own presentation is the only layout source —
+          // taken from the LIVE document, not the request-time snapshot, so a
+          // node dragged while the model was thinking keeps its new place.
+          next = mergeTemplate(
+            splitTemplate(next, rOpts).content,
+            splitTemplate(templateRef.current, rOpts).presentation,
+            rOpts,
+          );
+        } else if (hasOverlaps(next, { containerKinds: registry.containerKinds })) {
+          // Models are good at topology and bad at coordinates. Tidy only when
+          // the output is actually a mess, so a well-placed generated diagram
+          // keeps the arrangement it was given. A fresh generation has no
+          // arrangement to protect on ANY level, so every frame is fair game.
+          next = autoLayout(next, {
+            containerKinds: registry.containerKinds,
+            frames: "all",
+          });
+        }
+        // Count what the reply touched OUTSIDE the focused subtree before the
+        // canvas re-materializes — a scoped refine that spilled over should
+        // say so rather than change levels silently.
+        let outsideChanges = 0;
+        if (focusScope) {
+          const inSubtree = (doc: DiagramTemplate, rootId: string) => {
+            const ids = new Set([rootId]);
+            let grew = true;
+            while (grew) {
+              grew = false;
+              for (const n of doc.nodes) {
+                if (!ids.has(n.id) && n.parentId && ids.has(n.parentId)) {
+                  ids.add(n.id);
+                  grew = true;
+                }
+              }
+            }
+            return ids;
+          };
+          const beforeIds = inSubtree(templateRef.current, focusScope.id);
+          const afterIds = inSubtree(next, focusScope.id);
+          const outsideDiff = diffTemplates(
+            {
+              ...templateRef.current,
+              nodes: templateRef.current.nodes.filter((n) => !beforeIds.has(n.id)),
+            },
+            { ...next, nodes: next.nodes.filter((n) => !afterIds.has(n.id)) },
+          );
+          outsideChanges = outsideDiff.summary.added + outsideDiff.summary.removed + outsideDiff.summary.changed;
+        }
+        const focusRemoved = focusScope && !next.nodes.some((n) => n.id === focusScope.id);
         applyTemplate(next);
         if (mode === "refine") setRefineInput("");
         setPanelOpen(false);
-        showToast(mode === "create" ? "Diagram generated" : "Refinement applied");
+        showToast(
+          mode === "create"
+            ? "Diagram generated"
+            : focusRemoved
+              ? "Refinement removed the focused element — returned to overview"
+              : outsideChanges > 0
+                ? `Refinement applied · ${outsideChanges} change${outsideChanges === 1 ? "" : "s"} outside this level`
+                : "Refinement applied",
+        );
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         setError((err as Error).message || "Generation failed — try a shorter input.");
@@ -1927,7 +2319,7 @@ function StudioInner({
         abortRef.current = null;
       }
     },
-    [generate, busy, createInput, refineInput, template, systemPrompt, registry, applyTemplate, showToast],
+    [generate, busy, createInput, refineInput, template, systemPrompt, refineSystemPrompt, registry, applyTemplate, showToast],
   );
 
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -1940,19 +2332,31 @@ function StudioInner({
   }, []);
 
   // Report the selection to the host in template terms: zone nodes drop their
-  // canvas prefix, and a collapse-rerouted edge resolves to the document edge
-  // it stands in for (deduped — several hidden edges can share one stand-in).
-  // Keyed by content, not array identity, so hosts aren't re-rendered by the
-  // no-op selection events React Flow emits while dragging.
+  // canvas prefix, a collapse-rerouted edge resolves to the document edge it
+  // stands in for (deduped — several hidden edges can share one stand-in),
+  // a ghost resolves to the document element it projects, and the boundary
+  // frame is nothing at all. Keyed by content, not array identity, so hosts
+  // aren't re-rendered by the no-op selection events React Flow emits while
+  // dragging.
   const lastReported = useRef("");
   useEffect(() => {
     if (!onHostSelectionChange) return;
     const selection: StudioSelection = {
-      nodes: selectedNodeIds.filter((id) => !isZoneNodeId(id)),
+      nodes: [
+        ...new Set(
+          selectedNodeIds
+            .filter((id) => !isZoneNodeId(id) && !isBoundaryNodeId(id))
+            .map((id) => (isGhostNodeId(id) ? ghostSourceId(id) : id)),
+        ),
+      ],
       edges: [
         ...new Set(
           selectedEdgeIds.map((id) =>
-            isCollapsedEdgeId(id) ? id.slice(COLLAPSED_EDGE_PREFIX.length) : id,
+            isCollapsedEdgeId(id)
+              ? id.slice(COLLAPSED_EDGE_PREFIX.length)
+              : isGhostEdgeId(id)
+                ? ghostSourceId(id)
+                : id,
           ),
         ),
       ],
@@ -1970,6 +2374,10 @@ function StudioInner({
   const selectedZoneNode = singleSelected && isZoneNodeId(singleSelected.id) ? singleSelected : undefined;
   const selectedNode = singleSelected && !isZoneNodeId(singleSelected.id) ? singleSelected : undefined;
   const selectedEdge = selectedEdgeIds.length === 1 ? edges.find((e) => e.id === selectedEdgeIds[0]) : undefined;
+  // The rows the selected edge's ends could attach to. Read off the canvas,
+  // so a field added a moment ago is already offered.
+  const edgeEndFields = (endId: string | undefined): readonly NodeField[] =>
+    (endId ? (nodes.find((n) => n.id === endId)?.data as DiagramNodeData | undefined)?.fields : undefined) ?? [];
 
   // ── Zones ─────────────────────────────────────────────────────────────────
 
@@ -2092,6 +2500,27 @@ function StudioInner({
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  // Direct-child counts, identity-stabilized on the parent LINKS rather than
+  // the template object — a drag that changes only coordinates must not
+  // re-render every memoized node card.
+  const childCountsSig = useMemo(
+    () => template.nodes.map((n) => `${n.id}→${n.parentId ?? ""}`).join("|"),
+    [template],
+  );
+  const childCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const part of childCountsSig ? childCountsSig.split("|") : []) {
+      const parent = part.slice(part.indexOf("→") + 1);
+      if (parent) counts.set(parent, (counts.get(parent) ?? 0) + 1);
+    }
+    return counts;
+  }, [childCountsSig]);
+
+  const focusContext = useMemo(
+    () => (focusId ? { id: focusId, depth: focusStack.length } : null),
+    [focusId, focusStack.length],
+  );
+
   const studioContext = useMemo(
     () => ({
       registry,
@@ -2102,8 +2531,12 @@ function StudioInner({
       beginZoneResize,
       endZoneResize,
       navigateFile: onNavigateFile,
+      focus: focusContext,
+      drillInto,
+      navigateToNode,
+      childCounts,
     }),
-    [registry, readOnly, tagFilter, showTeams, commitLater, beginZoneResize, endZoneResize, onNavigateFile],
+    [registry, readOnly, tagFilter, showTeams, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts],
   );
   const rootStyle = { ...themeToStyle(theme), ...style };
 
@@ -2161,6 +2594,18 @@ function StudioInner({
                 >
                   <div className="as-menu__label">Node</div>
                   <div className="as-menu__hint">A service box — retype it in the inspector</div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  onClick={() => {
+                    addNode("table");
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">Table</div>
+                  <div className="as-menu__hint">An entity with columns — for data models</div>
                 </button>
                 <button
                   type="button"
@@ -2624,6 +3069,20 @@ function StudioInner({
           />
         ) : null}
 
+        {focusStack.length > 0 && !activeDiffBase ? (
+          <Breadcrumbs
+            path={[
+              { id: null, label: String(template.meta?.title ?? "Overview") },
+              ...focusStack.map((id) => ({
+                id,
+                label: template.nodes.find((n) => n.id === id)?.label ?? id,
+              })),
+            ]}
+            onNavigate={(index) => drillTo(focusStack.slice(0, index))}
+            onExit={() => drillTo([])}
+          />
+        ) : null}
+
         <div
           ref={canvasRef}
           className={`as-canvas${dropActive ? " as-canvas--dropping" : ""}${activeDiffBase ? " as-canvas--diff" : ""}`}
@@ -2645,28 +3104,53 @@ function StudioInner({
                 </button>
               </div>
 
-              <textarea
-                className="as-textarea"
-                value={createInput}
-                onChange={(event) => setCreateInput(event.target.value)}
-                placeholder="Paste requirements, source code, or plain English…"
-              />
-              <button
-                type="button"
-                className="as-btn as-btn--primary"
-                onClick={() => void runGenerate("create")}
-                disabled={busy || !createInput.trim()}
-              >
-                {busy ? "Designing…" : "Generate diagram"}
-              </button>
+              {focusId ? (
+                // Generate replaces the WHOLE document — the one thing nobody
+                // means while staring at one component's internals.
+                <p className="as-panel__scopednote">
+                  Generate replaces the whole diagram —{" "}
+                  <button type="button" className="as-panel__exitlink" onClick={() => drillTo([])}>
+                    Exit focus
+                  </button>{" "}
+                  to use it.
+                </p>
+              ) : (
+                <>
+                  <textarea
+                    className="as-textarea"
+                    value={createInput}
+                    onChange={(event) => setCreateInput(event.target.value)}
+                    placeholder="Paste requirements, source code, or plain English…"
+                  />
+                  <button
+                    type="button"
+                    className="as-btn as-btn--primary"
+                    onClick={() => void runGenerate("create")}
+                    disabled={busy || !createInput.trim()}
+                  >
+                    {busy ? "Designing…" : "Generate diagram"}
+                  </button>
+                </>
+              )}
 
               <div className="as-panel__section">
                 <h3 className="as-panel__label">Refine current diagram</h3>
+                {focusId ? (
+                  <p className="as-panel__scopechip">
+                    Refining inside: “
+                    {template.nodes.find((n) => n.id === focusId)?.label ?? focusId}” ·{" "}
+                    {levelLabel(focusStack.length)}
+                  </p>
+                ) : null}
                 <input
                   className="as-input"
                   value={refineInput}
                   onChange={(event) => setRefineInput(event.target.value)}
-                  placeholder={'"make the queue edges dotted" · "add a CDN"'}
+                  placeholder={
+                    focusId
+                      ? '"add a cache between these" · "split the parser"'
+                      : '"make the queue edges dotted" · "add a CDN"'
+                  }
                   onKeyDown={(event) => {
                     if (event.key === "Enter") void runGenerate("refine");
                   }}
@@ -2717,6 +3201,11 @@ function StudioInner({
             elementsSelectable
             // The component owns Delete/Backspace so it can cascade to children.
             deleteKeyCode={null}
+            // Double-click means DRILL now (nodes.tsx) — pane zoom on the same
+            // gesture would fight it, and React Flow's dblclick-zoom plumbing
+            // swallows the event before node handlers see it on
+            // non-draggable (readOnly) nodes.
+            zoomOnDoubleClick={false}
             selectionOnDrag
             panOnDrag={[1, 2]}
             panOnScroll
@@ -2794,7 +3283,22 @@ function StudioInner({
                   onPatch={patchZone}
                 />
               ) : null}
-              {selectedNode ? (
+              {selectedNode && isGhostNodeId(selectedNode.id) ? (
+                // A ghost is a projection of an element on another level —
+                // its edit form lives there, so this card only points the way.
+                <InspectorSection caption="External">
+                  <span className="as-inspector__ghostnote">
+                    “{(selectedNode.data as DiagramNodeData).label}” lives outside this level.
+                  </span>
+                  <button
+                    type="button"
+                    className="as-btn"
+                    onClick={() => navigateToNode(ghostSourceId(selectedNode.id))}
+                  >
+                    Go to definition
+                  </button>
+                </InspectorSection>
+              ) : selectedNode ? (
                 <NodeInspector
                   node={selectedNode}
                   registry={registry}
@@ -2807,9 +3311,23 @@ function StudioInner({
                   onPatch={patchNode}
                 />
               ) : null}
-              {selectedEdge ? <EdgeInspector edge={selectedEdge} onPatch={patchEdge} /> : null}
+              {selectedEdge && isGhostEdgeId(selectedEdge.id) ? (
+                <InspectorSection caption="External connection">
+                  <span className="as-inspector__ghostnote">
+                    Stands in for a connection crossing this level — edit it where both ends are
+                    visible.
+                  </span>
+                </InspectorSection>
+              ) : selectedEdge ? (
+                <EdgeInspector
+                  edge={selectedEdge}
+                  sourceFields={edgeEndFields(selectedEdge.source)}
+                  targetFields={edgeEndFields(selectedEdge.target)}
+                  onPatch={patchEdge}
+                />
+              ) : null}
               {renderSlot(inspectorExtras)}
-              {selectedNode || selectedZoneNode ? (
+              {(selectedNode && !isGhostNodeId(selectedNode.id)) || selectedZoneNode ? (
                 <button
                   type="button"
                   className="as-btn as-btn--icon"
@@ -2827,6 +3345,40 @@ function StudioInner({
               <button type="button" className="as-btn as-btn--danger" onClick={deleteSelection}>
                 Delete
               </button>
+            </div>
+          ) : null}
+
+          {focusId &&
+          !activeDiffBase &&
+          !nodes.some(
+            (n) => !isZoneNodeId(n.id) && !isBoundaryNodeId(n.id) && !isGhostNodeId(n.id),
+          ) ? (
+            <div className="as-focus-empty" role="status">
+              <div className="as-focus-empty__card">
+                <p className="as-focus-empty__title">
+                  “{template.nodes.find((n) => n.id === focusId)?.label ?? focusId}” has no
+                  internals yet.
+                </p>
+                <p className="as-focus-empty__hint">
+                  Anything you add here becomes its next C4 level.
+                </p>
+                {!readOnly ? (
+                  <div className="as-focus-empty__actions">
+                    <button type="button" className="as-btn" onClick={() => addNode("service")}>
+                      ＋ Add node
+                    </button>
+                    {generate ? (
+                      <button
+                        type="button"
+                        className="as-btn as-btn--primary"
+                        onClick={() => setPanelOpen(true)}
+                      >
+                        ✦ Draft with AI
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
             </div>
           ) : null}
 
@@ -2852,6 +3404,9 @@ function StudioInner({
             defaultName={welcomeName}
             showNameField={zeroFiles ? !!onFileCreate : !!(activeFile && onFileRename)}
             systemPrompt={systemPrompt}
+            // Refine's content-form prompt doubles as the "elements only"
+            // option in the copy button's hover menu.
+            systemPromptContent={refineSystemPrompt}
             cloudProviders={welcomeClouds}
             promptForClouds={promptForClouds}
             initialClouds={referencedClouds}
@@ -3384,6 +3939,16 @@ function NodeInspector({
         </span>
       ) : null}
 
+      {/* Rows, for the kinds whose substance is rows — plus any node that
+          already has some, so a document that arrived with fields on a
+          "service" can still be edited rather than only viewed. */}
+      {def.record || data.fields?.length ? (
+        <FieldsEditor
+          fields={data.fields ?? []}
+          onChange={(fields) => onPatch(node.id, { fields })}
+        />
+      ) : null}
+
       {!def.annotation ? (
         <ChipListEditor
           caption="Tags"
@@ -3457,11 +4022,131 @@ function NodeInspector({
   );
 }
 
+/**
+ * The row editor for a record node — a table's columns, a class's properties.
+ *
+ * Rows are ordered, and the order is visible: it decides where each one sits
+ * in the box and therefore where a foreign-key line lands, so the list offers
+ * a move-up rather than making the user retype a column to re-place it.
+ */
+function FieldsEditor({
+  fields,
+  onChange,
+}: {
+  fields: readonly NodeField[];
+  onChange: (fields: NodeField[] | undefined) => void;
+}) {
+  /** An id nothing else in this node uses — edges reference rows by id. */
+  const freshId = () => {
+    const taken = new Set(fields.map((f) => f.id));
+    let n = fields.length + 1;
+    while (taken.has(`field_${n}`)) n++;
+    return `field_${n}`;
+  };
+
+  const replace = (next: NodeField[]) => onChange(next.length ? next : undefined);
+  const patch = (index: number, part: Partial<NodeField>) =>
+    replace(fields.map((f, i) => (i === index ? { ...f, ...part } : f)));
+
+  return (
+    <span className="as-inspector__section as-fields" role="group" aria-label="Fields">
+      <span className="as-inspector__caption">Fields</span>
+      <span className="as-fields__list">
+        {fields.map((field, index) => (
+          <span className="as-fieldrow" key={field.id}>
+            <select
+              className="as-select as-fieldrow__key"
+              value={field.key ?? ""}
+              onChange={(event) =>
+                patch(index, { key: (event.target.value || undefined) as FieldKey | undefined })
+              }
+              aria-label={`Key role of ${field.name || "field"}`}
+              title="Key role — primary, foreign, or both"
+            >
+              <option value="">—</option>
+              {FIELD_KEYS.map((key) => (
+                <option key={key} value={key}>
+                  {key}
+                </option>
+              ))}
+            </select>
+            <input
+              className="as-input as-fieldrow__name"
+              value={field.name}
+              placeholder="column"
+              onChange={(event) => patch(index, { name: event.target.value })}
+              aria-label={`Field ${index + 1} name`}
+            />
+            <input
+              className="as-input as-fieldrow__type"
+              value={field.type ?? ""}
+              placeholder="type"
+              onChange={(event) => patch(index, { type: event.target.value || undefined })}
+              aria-label={`Field ${index + 1} type`}
+            />
+            <button
+              type="button"
+              className={`as-btn as-btn--icon${field.required ? " as-btn--on" : ""}`}
+              onClick={() => patch(index, { required: field.required ? undefined : true })}
+              aria-pressed={!!field.required}
+              aria-label={`${field.required ? "Optional" : "Required"}: ${field.name || `field ${index + 1}`}`}
+              title={field.required ? "Required — click to make optional" : "Optional — click to require"}
+            >
+              *
+            </button>
+            <button
+              type="button"
+              className="as-btn as-btn--icon"
+              disabled={index === 0}
+              onClick={() => {
+                const next = [...fields];
+                [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                replace(next);
+              }}
+              aria-label={`Move ${field.name || `field ${index + 1}`} up`}
+              title="Move up"
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              className="as-btn as-btn--icon"
+              onClick={() => replace(fields.filter((_, i) => i !== index))}
+              aria-label={`Remove ${field.name || `field ${index + 1}`}`}
+              title="Remove this field"
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </span>
+      <button
+        type="button"
+        className="as-btn"
+        disabled={fields.length >= MAX_NODE_FIELDS}
+        onClick={() => replace([...fields, { id: freshId(), name: "" }])}
+        title={
+          fields.length >= MAX_NODE_FIELDS
+            ? `A node holds at most ${MAX_NODE_FIELDS} fields`
+            : "Add a field"
+        }
+      >
+        + field
+      </button>
+    </span>
+  );
+}
+
 function EdgeInspector({
   edge,
+  sourceFields,
+  targetFields,
   onPatch,
 }: {
   edge: Edge;
+  /** Rows of the endpoint nodes — what an end may attach to. */
+  sourceFields: readonly NodeField[];
+  targetFields: readonly NodeField[];
   onPatch: (id: string, patch: Partial<DiagramEdgeData>) => void;
 }) {
   const data = (edge.data ?? {}) as DiagramEdgeData;
@@ -3511,6 +4196,62 @@ function EdgeInspector({
         />
       </InspectorSection>
 
+      {/* Cardinality and the rows each end attaches to. Offered where it means
+          something — either endpoint has rows, or this edge already carries
+          end labels — rather than on every architecture connection. */}
+      {sourceFields.length || targetFields.length || data.startLabel || data.endLabel ? (
+        <InspectorSection caption="Ends">
+          <input
+            className="as-input as-inspector__end"
+            value={data.startLabel ?? ""}
+            placeholder="1"
+            onChange={(event) => onPatch(edge.id, { startLabel: event.target.value || undefined })}
+            aria-label="Cardinality at the source end"
+            title="Cardinality at the source end — 1, 0..1, 0..*, 1..*"
+          />
+          {sourceFields.length ? (
+            <select
+              className="as-select"
+              value={data.startField ?? ""}
+              onChange={(event) => onPatch(edge.id, { startField: event.target.value || undefined })}
+              aria-label="Source field"
+              title="Which row of the source this line leaves from"
+            >
+              <option value="">from: box</option>
+              {sourceFields.map((field) => (
+                <option key={field.id} value={field.id}>
+                  {field.name || field.id}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {targetFields.length ? (
+            <select
+              className="as-select"
+              value={data.endField ?? ""}
+              onChange={(event) => onPatch(edge.id, { endField: event.target.value || undefined })}
+              aria-label="Target field"
+              title="Which row of the target this line lands on"
+            >
+              <option value="">to: box</option>
+              {targetFields.map((field) => (
+                <option key={field.id} value={field.id}>
+                  {field.name || field.id}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          <input
+            className="as-input as-inspector__end"
+            value={data.endLabel ?? ""}
+            placeholder="0..*"
+            onChange={(event) => onPatch(edge.id, { endLabel: event.target.value || undefined })}
+            aria-label="Cardinality at the target end"
+            title="Cardinality at the target end — 1, 0..1, 0..*, 1..*"
+          />
+        </InspectorSection>
+      ) : null}
+
       <DateSection
         date={data.date}
         what="Edge"
@@ -3545,6 +4286,56 @@ function EdgeInspector({
           <option value="curved">curved</option>
           <option value="orthogonal">orthogonal</option>
         </select>
+        <select
+          className="as-select"
+          value={data.start?.side ?? "auto"}
+          onChange={(event) => {
+            const value = event.target.value;
+            // Choosing a side drops any stored fraction: the picker pins the
+            // centre of that side; drag the line itself for finer routing.
+            onPatch(edge.id, {
+              start: value === "auto" ? undefined : { side: value as EdgeAnchorSide },
+            });
+          }}
+          aria-label="Start anchor"
+          title="Which side of the source box the line leaves — auto faces wherever it's going"
+        >
+          <option value="auto">start: auto</option>
+          {EDGE_ANCHOR_SIDES.map((side) => (
+            <option key={side} value={side}>
+              start: {side}
+            </option>
+          ))}
+        </select>
+        <select
+          className="as-select"
+          value={data.end?.side ?? "auto"}
+          onChange={(event) => {
+            const value = event.target.value;
+            onPatch(edge.id, {
+              end: value === "auto" ? undefined : { side: value as EdgeAnchorSide },
+            });
+          }}
+          aria-label="End anchor"
+          title="Which side of the target box the line arrives at"
+        >
+          <option value="auto">end: auto</option>
+          {EDGE_ANCHOR_SIDES.map((side) => (
+            <option key={side} value={side}>
+              end: {side}
+            </option>
+          ))}
+        </select>
+        {data.points?.length ? (
+          <button
+            type="button"
+            className="as-btn"
+            onClick={() => onPatch(edge.id, { points: undefined })}
+            title="Remove the waypoints this line bends through (double-click the line to add one)"
+          >
+            Clear route ({data.points.length})
+          </button>
+        ) : null}
         <div className="as-swatches">
           {EDGE_COLORS.map((color) => (
             <button
@@ -3598,16 +4389,50 @@ function registryKinds(registry: ResolvedRegistry, showHidden = false) {
  * differently from the one the effect compares against, the effect would fire
  * on mount and record a spurious undo entry before the user touched anything.
  */
-function viewSignatureOf(template: DiagramTemplate, showHidden: boolean): string {
+function viewSignatureOf(
+  template: DiagramTemplate,
+  showHidden: boolean,
+  focusId: string | null = null,
+): string {
   const zones = (template.zones ?? []).map((z) => `${z.id}:${z.provider}`).join("|");
   const collapsed = template.nodes
     .filter((n) => n.collapsed)
     .map((n) => n.id)
     .join(",");
-  // `hidden:` MUST come last: the rebuild effect splits on it to separate the
-  // document part (zones + collapse → commit) from the view part (ghost
-  // toggle → no undo entry). Collapse after it would silently stop committing.
-  return `${zones}|collapsed:${collapsed}|hidden:${showHidden}`;
+  // The DOCUMENT part is everything before `|hidden:` — the rebuild effect
+  // splits on it to separate edits (provider switch, collapse → commit) from
+  // pure view changes (ghost toggle, drill focus → no undo entry). Anything
+  // document-derived added later must go BEFORE that marker; view state after.
+  return `${zones}|collapsed:${collapsed}|hidden:${showHidden}|focus:${focusId ?? ""}`;
+}
+
+/** The longest prefix of the focus stack whose nodes still exist in `doc`. */
+function pruneFocusStack(doc: DiagramTemplate, stack: readonly string[]): string[] {
+  const ids = new Set(doc.nodes.map((n) => n.id));
+  const out: string[] = [];
+  for (const id of stack) {
+    if (!ids.has(id)) break;
+    out.push(id);
+  }
+  return out;
+}
+
+/**
+ * View-only affordance pass over a scoped canvas: the boundary frame is
+ * scenery (locked already stops drags; selection would put a dead-end in the
+ * inspector), and ghosts move only to be tidied — their drags land in
+ * `meta.views`, handled by drag-stop, not by the ordinary commit path.
+ */
+function decorateScopedNodes(nodes: Node[]): Node[] {
+  return nodes.map((n) =>
+    isBoundaryNodeId(n.id)
+      ? // Not selectable (its inspector would be a dead end) and not
+        // draggable (the frame is derived from what it wraps) — but very
+        // much CONNECTABLE: an edge drawn to the frame is an edge to the
+        // component itself, which is how you wire this level to its parent.
+        { ...n, selectable: false, draggable: false }
+      : n,
+  );
 }
 
 /**
@@ -3626,10 +4451,17 @@ function applyTimelineView(
 ): { nodes: Node[]; edges: Edge[] } {
   if (!future) return { nodes, edges };
 
-  // Zones share the node array under a prefixed id, so the future sets — keyed
-  // by DOCUMENT id — are consulted through that prefix.
+  // Zones share the node array under a prefixed id, and a scoped view's
+  // derived elements stand in for real ones — the future sets are keyed by
+  // DOCUMENT id, so every synthetic id is consulted through its real one.
   const nodeIsFuture = (id: string) =>
-    isZoneNodeId(id) ? future.zones.has(fromZoneNodeId(id)) : future.nodes.has(id);
+    isZoneNodeId(id)
+      ? future.zones.has(fromZoneNodeId(id))
+      : isBoundaryNodeId(id)
+        ? future.nodes.has(id.slice(BOUNDARY_NODE_PREFIX.length))
+        : isGhostNodeId(id)
+          ? future.nodes.has(ghostSourceId(id))
+          : future.nodes.has(id);
 
   function mark<T extends { className?: string; hidden?: boolean; selected?: boolean }>(
     item: T,

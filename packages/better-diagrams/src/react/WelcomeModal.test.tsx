@@ -366,6 +366,59 @@ describe("type picker", () => {
     expect(writeText).toHaveBeenCalledWith("SEQ PROMPT");
   });
 
+  it("offers no schema-form menu when the host supplies no content prompt", () => {
+    mountModal();
+    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
+  });
+
+  it("the menu's Elements only copies the content form; the button keeps the full form", async () => {
+    const user = userEvent.setup();
+    const writeText = stubClipboard();
+    mountModal({ systemPromptContent: "CONTENT PROMPT" });
+    await user.click(screen.getByRole("menuitem", { name: /Elements only/ }));
+    expect(writeText).toHaveBeenLastCalledWith("CONTENT PROMPT");
+    await user.click(screen.getByRole("button", { name: /Copy Schema & System Prompt/ }));
+    expect(writeText).toHaveBeenLastCalledWith("THE PROMPT");
+    // "Copied ✓" holds the clicked item's label for 1.5s; wait it out.
+    await user.click(await screen.findByRole("menuitem", { name: /Full schema/ }, { timeout: 2500 }));
+    expect(writeText).toHaveBeenLastCalledWith("THE PROMPT");
+  });
+
+  it("cloud tailoring reaches the content form through the geometry option", async () => {
+    const user = userEvent.setup();
+    const writeText = stubClipboard();
+    const promptForClouds = vi.fn(
+      (clouds: string[], opts?: { geometry?: boolean }) =>
+        `P(${clouds.join("+")},${opts?.geometry === false ? "content" : "full"})`,
+    );
+    mountModal({
+      cloudProviders: [{ id: "aws", label: "AWS", color: "#f90" }],
+      promptForClouds,
+      initialClouds: ["aws"],
+      systemPromptContent: "CONTENT PROMPT",
+    });
+    await user.click(screen.getByRole("menuitem", { name: /Elements only/ }));
+    expect(writeText).toHaveBeenLastCalledWith("P(aws,content)");
+    await user.click(screen.getByRole("menuitem", { name: /Full schema/ }));
+    expect(writeText).toHaveBeenLastCalledWith("P(aws,full)");
+  });
+
+  it("the schema-form menu follows the picked kind", async () => {
+    const user = userEvent.setup();
+    const writeText = stubClipboard();
+    mountModal({
+      parseOther: (text: string) => JSON.parse(text),
+      onInsertOther: vi.fn(),
+      systemPromptOther: "SEQ PROMPT",
+      systemPromptOtherContent: "SEQ CONTENT PROMPT",
+    });
+    // Architecture is picked and has no content prompt — no menu.
+    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Sequence" }));
+    await user.click(screen.getByRole("menuitem", { name: /Elements only/ }));
+    expect(writeText).toHaveBeenLastCalledWith("SEQ CONTENT PROMPT");
+  });
+
   it("initialClouds pre-toggles the chips and seeds the immediate copy", async () => {
     const user = userEvent.setup();
     const writeText = stubClipboard();

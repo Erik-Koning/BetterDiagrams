@@ -24,7 +24,7 @@
  * arise; when it does, the fix is to drag the island or the node clear.
  */
 import { pointInZone } from "./zones";
-import { visibleElements } from "./schema";
+import { CONTAINER_KINDS, visibleElements } from "./schema";
 import type { DiagramNode, DiagramTemplate } from "./schema";
 
 export interface LayoutOptions {
@@ -36,9 +36,74 @@ export interface LayoutOptions {
   padding?: number;
   /** Extra top inset, clearing a zone or group's header chip. */
   headerGap?: number;
+  /**
+   * Kinds that render as open containers. A parent of any OTHER kind is a
+   * card whose children are drill-in detail: layout never moves them, never
+   * resizes the card, and never mixes their local coords into root space.
+   */
+  containerKinds?: readonly string[];
+  /**
+   * Which coordinate frames to arrange. A card's children live in their own
+   * drilled canvas, so "the layout" is really one layout per frame:
+   *
+   *   "root" (default) — the visible canvas only, leaving drill spaces alone
+   *                      so a Tidy never rearranges a level you cannot see
+   *   "all"            — every frame; for a document with no layout yet (a
+   *                      bare content doc, a fresh generation), where the
+   *                      alternative is each drill space piled at its origin
+   *   { drill: id }    — only that card's drilled canvas (Tidy while focused)
+   */
+  frames?: "root" | "all" | { drill: string };
 }
 
 const DEFAULTS = { rankGap: 90, nodeGap: 28, padding: 28, headerGap: 52 } as const;
+
+/** The numeric knobs — what the pure placement routines consume. */
+type LayoutMetrics = Required<Omit<LayoutOptions, "containerKinds" | "frames">>;
+
+/** Ids of the parents whose children are drill-in detail, not inline content. */
+function cardParentIdsOf(
+  template: DiagramTemplate,
+  containerKinds?: readonly string[],
+): Set<string> {
+  const containerSet = new Set(containerKinds ?? CONTAINER_KINDS);
+  const parents = new Set(template.nodes.map((n) => n.parentId).filter((p): p is string => !!p));
+  return new Set(
+    template.nodes
+      .filter((n) => parents.has(n.id) && !containerSet.has(n.kind as string))
+      .map((n) => n.id),
+  );
+}
+
+/**
+ * Which drilled canvas a node is positioned in — the nearest card ancestor,
+ * or null for the visible root canvas. Coordinates only ever mean something
+ * relative to their own frame, so every geometric comparison starts here.
+ */
+function frameResolver(
+  template: DiagramTemplate,
+  cardParents: ReadonlySet<string>,
+): (id: string) => string | null {
+  const byId = new Map(template.nodes.map((n) => [n.id, n]));
+  const cache = new Map<string, string | null>();
+  return (id: string) => {
+    const hit = cache.get(id);
+    if (hit !== undefined) return hit;
+    let cursor = byId.get(id)?.parentId ?? null;
+    const guard = new Set<string>([id]);
+    let frame: string | null = null;
+    while (cursor && !guard.has(cursor)) {
+      guard.add(cursor);
+      if (cardParents.has(cursor)) {
+        frame = cursor;
+        break;
+      }
+      cursor = byId.get(cursor)?.parentId ?? null;
+    }
+    cache.set(id, frame);
+    return frame;
+  };
+}
 
 interface Placed {
   id: string;
@@ -58,7 +123,7 @@ interface Placed {
 function layoutGroup(
   items: Array<{ id: string; w: number; h: number }>,
   edges: ReadonlyArray<{ source: string; target: string }>,
-  opts: Required<LayoutOptions>,
+  opts: LayoutMetrics,
 ): { placed: Placed[]; width: number; height: number } {
   if (!items.length) return { placed: [], width: 0, height: 0 };
 
@@ -174,8 +239,24 @@ function layoutGroup(
 export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {}): DiagramTemplate {
   const opts = { ...DEFAULTS, ...options };
   const zones = template.zones ?? [];
+  // A card's children live in their own drilled canvas, so a tidy arranges
+  // one FRAME — by default the visible one, never a level you can't see.
+  const cardParents = cardParentIdsOf(template, options.containerKinds);
+  const frameOf = frameResolver(template, cardParents);
+  const frames = options.frames ?? "root";
+  const inScope = (frame: string | null) =>
+    frames === "all" ? true : frames === "root" ? frame === null : frame === frames.drill;
+  const rootInScope = inScope(null);
   const containerIds = new Set(
-    template.nodes.filter((n) => template.nodes.some((c) => c.parentId === n.id)).map((n) => n.id),
+    template.nodes
+      .filter(
+        (n) =>
+          template.nodes.some((c) => c.parentId === n.id) &&
+          // A card is never resized: its contents render on another level.
+          !cardParents.has(n.id) &&
+          inScope(frameOf(n.id)),
+      )
+      .map((n) => n.id),
   );
 
   // Bucket every node by the container that positions it.
@@ -215,8 +296,11 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
     return d;
   };
 
+  /** A group's members sit in its own drilled canvas when it IS a card. */
+  const frameOfGroup = (gid: string) => (cardParents.has(gid) ? gid : frameOf(gid));
+
   const groupKeys = [...buckets.keys()]
-    .filter((k) => k.startsWith("group:"))
+    .filter((k) => k.startsWith("group:") && inScope(frameOfGroup(k.slice(6))))
     .sort((a, b) => groupDepth(b.slice(6)) - groupDepth(a.slice(6)));
 
   for (const key of groupKeys) {
@@ -230,17 +314,23 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
       // Group children are positioned relative to the group's own top-left.
       positions.set(p.id, { x: opts.padding + p.x, y: opts.headerGap + p.y });
     }
-    // Grow the group so its contents fit.
+    // Grow the group so its contents fit — but never a card: its drill
+    // contents render on their own level, so its rank-mates must keep
+    // spacing against the card's REAL footprint.
     const groupId = key.slice(6);
-    sizes.set(groupId, {
-      w: Math.max(160, result.width + opts.padding * 2),
-      h: Math.max(120, result.height + opts.headerGap + opts.padding),
-    });
+    if (!cardParents.has(groupId)) {
+      sizes.set(groupId, {
+        w: Math.max(160, result.width + opts.padding * 2),
+        h: Math.max(120, result.height + opts.headerGap + opts.padding),
+      });
+    }
   }
 
   // Zones: lay members out inside the zone box, growing the zone if needed.
+  // Zones and the root flow belong to the visible canvas, so a drill-scoped
+  // tidy leaves both exactly as they were.
   const grownZones = zones.map((zone) => {
-    const members = buckets.get(`zone:${zone.id}`) ?? [];
+    const members = rootInScope ? (buckets.get(`zone:${zone.id}`) ?? []) : [];
     if (!members.length) return zone;
     const result = layoutGroup(
       members.map((n) => ({ id: n.id, ...sizes.get(n.id)! })),
@@ -266,7 +356,7 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
   });
 
   // Root: everything not in a group or zone, placed clear of the zones.
-  const rootMembers = buckets.get("root") ?? [];
+  const rootMembers = rootInScope ? (buckets.get("root") ?? []) : [];
   if (rootMembers.length) {
     const result = layoutGroup(
       rootMembers.map((n) => ({ id: n.id, ...sizes.get(n.id)! })),
@@ -294,11 +384,152 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
     };
   });
 
+  // A tidy re-ranks everything, so hand-placed edge waypoints are stale by
+  // definition — clear them rather than leave routes bending toward where the
+  // nodes used to be. Pinned anchors survive: which side an edge attaches to
+  // is intent, not a position.
+  const edges = template.edges.some((e) => e.points)
+    ? template.edges.map((e) => {
+        if (!e.points) return e;
+        // A route is only stale if this tidy actually re-ranked one of its
+        // ends: waypoints in a frame nobody touched still describe reality.
+        if (!inScope(frameOf(e.source)) && !inScope(frameOf(e.target))) return e;
+        const { points: _stale, ...rest } = e;
+        return rest;
+      })
+    : template.edges;
+
   return {
     ...template,
     nodes,
+    edges,
     ...(grownZones.length ? { zones: grownZones } : {}),
   };
+}
+
+/**
+ * Give positions to just the named nodes, moving NOTHING that already has one.
+ *
+ * The counterpart to `autoLayout` for incremental arrivals — a merged content
+ * edit, a presentation record lost to reparenting. A full re-layout would
+ * rearrange the exact hand-made arrangement the caller is trying to preserve,
+ * so this stacks each newcomer below the occupied area of its own container
+ * (group, zone, or the root canvas) and only ever GROWS containers to fit —
+ * growth is additive; existing nodes stay where they are.
+ *
+ * Deepest containers first, like `autoLayout`: a pending group has its final
+ * grown size before the group itself is placed.
+ */
+export function placeUnpositioned(
+  template: DiagramTemplate,
+  ids: readonly string[],
+  options: LayoutOptions = {},
+): DiagramTemplate {
+  const opts = { ...DEFAULTS, ...options };
+  const wanted = new Set(ids);
+  if (!wanted.size || !template.nodes.some((n) => wanted.has(n.id))) return template;
+
+  const nodes = template.nodes.map((n) => ({ ...n }));
+  const nById = new Map(nodes.map((n) => [n.id, n]));
+  const zones = (template.zones ?? []).map((z) => ({ ...z }));
+  const zById = new Map(zones.map((z) => [z.id, z]));
+  const pending = new Set([...wanted].filter((id) => nById.has(id)));
+
+  const depthOf = (n: DiagramNode): number => {
+    let d = 0;
+    let cursor: DiagramNode | undefined = n;
+    const guard = new Set<string>([n.id]);
+    while (cursor?.parentId && !guard.has(cursor.parentId)) {
+      guard.add(cursor.parentId);
+      d++;
+      cursor = nById.get(cursor.parentId);
+    }
+    return d;
+  };
+
+  // Ensure every ancestor is big enough to contain the child, and the zone big
+  // enough to contain the topmost node. Only w/h ever change. The walk stops
+  // at a card parent: its children live in its own drilled canvas, so the
+  // card's rendered size owes them nothing.
+  const containerSet = new Set(options.containerKinds ?? CONTAINER_KINDS);
+  const growAround = (id: string) => {
+    let child = nById.get(id);
+    while (child?.parentId) {
+      const parent = nById.get(child.parentId);
+      if (!parent || !containerSet.has(parent.kind as string)) break;
+      parent.w = Math.max(parent.w, child.x + child.w + opts.padding);
+      parent.h = Math.max(parent.h, child.y + child.h + opts.padding);
+      child = parent;
+    }
+    // Zone growth only makes sense in root space — a walk that stopped at a
+    // card parent left `child` holding drill-space coordinates.
+    const zone = child?.zoneId ? zById.get(child.zoneId) : undefined;
+    if (zone && child && !child.parentId) {
+      zone.w = Math.max(zone.w, child.x + child.w + opts.padding - zone.x);
+      zone.h = Math.max(zone.h, child.y + child.h + opts.padding - zone.y);
+    }
+  };
+
+  const bucketOf = (n: DiagramNode): string => {
+    if (n.parentId && nById.has(n.parentId)) return `group:${n.parentId}`;
+    if (n.zoneId && zById.has(n.zoneId)) return `zone:${n.zoneId}`;
+    return "root";
+  };
+
+  // Deepest first, insertion order preserved by the Map.
+  const arrivals = nodes.filter((n) => pending.has(n.id)).sort((a, b) => depthOf(b) - depthOf(a));
+  const buckets = new Map<string, DiagramNode[]>();
+  for (const n of arrivals) {
+    const key = bucketOf(n);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(n);
+  }
+
+  const bottomOf = (list: DiagramNode[], fallback: number) =>
+    list.length ? Math.max(...list.map((s) => s.y + s.h)) + opts.nodeGap : fallback;
+
+  for (const [key, members] of buckets) {
+    if (key.startsWith("group:")) {
+      const gid = key.slice(6);
+      // Positioned siblings, in the group's parent-relative space.
+      const siblings = nodes.filter((n) => n.parentId === gid && !pending.has(n.id));
+      let y = bottomOf(siblings, opts.headerGap);
+      for (const m of members) {
+        m.x = opts.padding;
+        m.y = y;
+        y += m.h + opts.nodeGap;
+        pending.delete(m.id);
+        growAround(m.id);
+      }
+    } else if (key.startsWith("zone:")) {
+      const zone = zById.get(key.slice(5))!;
+      const siblings = nodes.filter((n) => !n.parentId && n.zoneId === zone.id && !pending.has(n.id));
+      let y = bottomOf(siblings, zone.y + opts.headerGap);
+      for (const m of members) {
+        m.x = zone.x + opts.padding;
+        m.y = y;
+        y += m.h + opts.nodeGap;
+        pending.delete(m.id);
+        growAround(m.id);
+      }
+    } else {
+      // Root: below everything already on the canvas.
+      const placedRoots = nodes.filter((n) => !n.parentId && !pending.has(n.id));
+      const bottoms = [...placedRoots.map((n) => n.y + n.h), ...zones.map((z) => z.y + z.h)];
+      const lefts = [...placedRoots.map((n) => n.x), ...zones.map((z) => z.x)];
+      let y = bottoms.length ? Math.max(...bottoms) + opts.rankGap : 0;
+      const x = lefts.length ? Math.min(...lefts) : 0;
+      for (const m of members) {
+        m.x = x;
+        m.y = y;
+        y += m.h + opts.nodeGap;
+        pending.delete(m.id);
+        growAround(m.id);
+      }
+    }
+  }
+
+  return { ...template, nodes, ...(zones.length ? { zones } : {}) };
 }
 
 /**
@@ -308,19 +539,33 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
  * hand-arranged one. True when any two nodes in the same container overlap —
  * the failure mode LLM output actually has.
  */
-export function hasOverlaps(template: DiagramTemplate): boolean {
+export function hasOverlaps(
+  template: DiagramTemplate,
+  opts: { containerKinds?: readonly string[] } = {},
+): boolean {
   const zones = template.zones ?? [];
   const byId = new Map(template.nodes.map((n) => [n.id, n]));
+  const containerSet = new Set(opts.containerKinds ?? CONTAINER_KINDS);
+  const cardParents = cardParentIdsOf(template, opts.containerKinds);
+  const frameOf = frameResolver(template, cardParents);
+  /**
+   * Position within the node's OWN frame — the walk stops at a card, whose
+   * position belongs to the frame outside. Mixing the two would compare a
+   * drilled canvas's local coordinates against the root canvas's.
+   */
   const abs = (n: DiagramNode) => {
     let x = n.x;
     let y = n.y;
-    let parent = n.parentId ? byId.get(n.parentId) : undefined;
+    let parent = n.parentId && !cardParents.has(n.parentId) ? byId.get(n.parentId) : undefined;
     const guard = new Set<string>([n.id]);
     while (parent && !guard.has(parent.id)) {
       guard.add(parent.id);
       x += parent.x;
       y += parent.y;
-      parent = parent.parentId ? byId.get(parent.parentId) : undefined;
+      parent =
+        parent.parentId && !cardParents.has(parent.parentId)
+          ? byId.get(parent.parentId)
+          : undefined;
     }
     return { x, y };
   };
@@ -331,20 +576,33 @@ export function hasOverlaps(template: DiagramTemplate): boolean {
   // "this slot, per provider", not something to tidy apart.
   const visible = visibleElements(template).nodes;
 
-  // Containers legitimately overlap their own children, so compare leaves only.
+  // Open containers legitimately overlap their own children, so skip them —
+  // but a CARD parent's children render elsewhere entirely, making the card
+  // an ordinary box whose overlaps are as real as any leaf's.
   const leaves = template.nodes.filter(
     (n) =>
       visible.has(n.id) &&
-      !template.nodes.some((c) => c.parentId === n.id) &&
+      (!template.nodes.some((c) => c.parentId === n.id) || !containerSet.has(n.kind as string)) &&
       n.kind !== "text",
   );
-  const boxes = leaves.map((n) => ({ ...abs(n), w: n.w, h: n.h }));
 
-  for (let i = 0; i < boxes.length; i++) {
-    for (let j = i + 1; j < boxes.length; j++) {
-      const a = boxes[i];
-      const b = boxes[j];
-      if (a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y) return true;
+  // Compare only boxes that share a frame: a drilled canvas is its own
+  // picture, and a model that piled one at the origin needs tidying just as
+  // much as a messy root — but the two never overlap each other.
+  const byFrame = new Map<string, Array<{ x: number; y: number; w: number; h: number }>>();
+  for (const n of leaves) {
+    const key = frameOf(n.id) ?? "";
+    if (!byFrame.has(key)) byFrame.set(key, []);
+    byFrame.get(key)!.push({ ...abs(n), w: n.w, h: n.h });
+  }
+
+  for (const boxes of byFrame.values()) {
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i];
+        const b = boxes[j];
+        if (a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y) return true;
+      }
     }
   }
 

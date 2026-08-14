@@ -41,6 +41,7 @@ export const NODE_KINDS = [
   "gateway",
   "client",
   "external",
+  "table", // data-model entity — its columns live in `fields`
   "group", // container / boundary — other nodes nest inside via parentId
   "text", // free-floating annotation; the text lives in `label`
 ] as const;
@@ -91,6 +92,78 @@ export type EdgeDirection = (typeof EDGE_DIRECTIONS)[number];
 export const EDGE_ROUTINGS = ["curved", "orthogonal"] as const;
 export type EdgeRouting = (typeof EDGE_ROUTINGS)[number];
 
+/** Sides of a node box an edge endpoint can be pinned to. */
+export const EDGE_ANCHOR_SIDES = ["top", "right", "bottom", "left"] as const;
+export type EdgeAnchorSide = (typeof EDGE_ANCHOR_SIDES)[number];
+
+/**
+ * A pinned attachment point on a node box: `side` picks the face, `t` slides
+ * along it (0 → the top/left corner, 1 → the other one). An edge without an
+ * anchor floats — it attaches to whichever side faces the other end, exactly
+ * as every edge did before anchors existed.
+ */
+export interface EdgeAnchor {
+  side: EdgeAnchorSide;
+  /** Fraction along the side, 0–1. 0.5 (the centre) is the default and never stored. */
+  t?: number;
+}
+
+/** Key role of a field: primary key, foreign key, or both. */
+export const FIELD_KEYS = ["pk", "fk", "pfk"] as const;
+export type FieldKey = (typeof FIELD_KEYS)[number];
+
+/**
+ * One row inside a node's body — a table column, a class property, a struct
+ * member. This is what makes a data model expressible in the same document as
+ * an architecture diagram: a table is a node whose substance is its rows.
+ *
+ * Fields are CONTENT, not presentation. `splitTemplate` leaves them in the
+ * content half, so an elements-only AI edit owns them and a layout file never
+ * mentions them — the same division that keeps node x/y out of the model's
+ * reach.
+ */
+export interface NodeField {
+  /** Unique within its node. An edge's `startField`/`endField` names this. */
+  id: string;
+  /** Column / attribute name. */
+  name: string;
+  /** Data type or signature ("uuid", "varchar(255)"). Omitted when unset. */
+  type?: string;
+  /** Key role — renders as a leading PK/FK badge. Omit for a plain attribute. */
+  key?: FieldKey;
+  /** Required / NOT NULL — renders as a trailing marker. */
+  required?: boolean;
+}
+
+/**
+ * Field-list metrics, in node-local pixels. Three things must agree on where
+ * row N sits: the canvas renderer (through matching values in styles.css), the
+ * export emitter, and the row-anchor maths below that lands a foreign-key line
+ * on its column. They agree because all three derive from these constants —
+ * change one here and the line, the screen, and the PNG move together.
+ */
+export const FIELD_ROW_H = 19;
+/** Kind caption + title + the list's own top rule, above the first row. */
+const FIELD_HEAD_H = 40;
+/**
+ * The band a description takes when the node has one. A node with rows shows
+ * its description on ONE line (both renderers ellipsise it) — a second line
+ * would shift every row below it and put the anchors off their columns.
+ */
+const FIELD_DESC_H = 14;
+/** Breathing room under the last row. */
+const FIELD_LIST_PAD = 8;
+
+/** Distance from a node's top edge to the top of its first field row. */
+export function fieldListTop(hasDescription: boolean): number {
+  return FIELD_HEAD_H + (hasDescription ? FIELD_DESC_H : 0);
+}
+
+/** The height a node needs to show `count` rows without clipping any. */
+export function fieldsBoxHeight(count: number, hasDescription = false): number {
+  return fieldListTop(hasDescription) + count * FIELD_ROW_H + FIELD_LIST_PAD;
+}
+
 /**
  * Lifecycle stage of a node. `active` is the default and is never stored —
  * validation strips it so pre-status documents stay byte-identical.
@@ -138,6 +211,9 @@ export const EDGE_DASH: Record<EdgeStyle, number[]> = {
 export const KIND_DEFAULT_SIZE: Record<string, { w: number; h: number }> = {
   group: { w: 320, h: 240 },
   text: { w: 300, h: 60 },
+  // Wider than a service box: a column line is "name  type", two words that
+  // must not ellipsise. The height is a floor — a table with rows grows.
+  table: { w: 230, h: 96 },
   default: { w: 170, h: 76 },
 };
 
@@ -153,6 +229,12 @@ export interface DiagramNode {
   icon: IconName;
   /** One short line of tech detail rendered under the label. "" to omit. */
   description: string;
+  /**
+   * The node's rows — a table's columns, a class's properties. Absent on an
+   * ordinary architecture box; a node that has them renders them as a list and
+   * is grown tall enough to show every one (see `fieldsBoxHeight`).
+   */
+  fields?: NodeField[];
   /** id of the enclosing container, or null for canvas root */
   parentId: string | null;
   /** Position — RELATIVE to the parent container's top-left when parentId is set */
@@ -244,6 +326,34 @@ export interface DiagramEdge {
   seq?: number;
   /** Routing override for this edge. Unset inherits `meta.routing`. */
   routing?: EdgeRouting;
+  /** Pin the line's start to a side of the source box. Absent = floating. */
+  start?: EdgeAnchor;
+  /** Pin the line's end to a side of the target box. Absent = floating. */
+  end?: EdgeAnchor;
+  /**
+   * Cardinality (or any role text) at each end: "1", "0..*", "owns". Rendered
+   * just inside the endpoint, unlike `label` which rides the middle of the line.
+   */
+  startLabel?: string;
+  endLabel?: string;
+  /**
+   * The FIELD each end attaches to — a foreign key points at the column it
+   * references, not merely at the table. Semantic, so it lives here in content
+   * rather than in the layout file: the line re-aims itself when rows are
+   * reordered, and degrades to the box when the row isn't on screen (a
+   * collapsed group, another drill-in level). Dropped on validation if it
+   * names no field of that endpoint.
+   */
+  startField?: string;
+  endField?: string;
+  /**
+   * Waypoints the line routes through, in ABSOLUTE canvas coordinates —
+   * unlike a zone's `points`, which are normalised into its box. Presentation,
+   * not architecture: they stay put when a node is dragged (the endpoints
+   * remain attached; only the interior route holds still) and a Tidy discards
+   * them as stale.
+   */
+  points?: Array<[number, number]>;
   /**
    * When this connection lands, `YYYY-MM-DD`. On the timeline an edge is never
    * earlier than the boxes it joins, so this only ever pushes it later — use it
@@ -266,6 +376,12 @@ export interface DiagramTemplate {
     versionTag?: string;
     /** Which corner the notice sits in. Default "top-left" (legend owns top-right). */
     versionTagPosition?: VersionTagPosition;
+    /**
+     * Per-view presentation overrides for drill-in views, keyed by the
+     * focused node's id. Presentation data living inline, like node x/y —
+     * `splitTemplate` moves it to the layout document.
+     */
+    views?: Record<string, ViewRecord>;
     [key: string]: unknown;
   };
   /**
@@ -304,6 +420,7 @@ const NODE_KEY_MAP: Record<keyof DiagramNode, true> = {
   kind: true,
   icon: true,
   description: true,
+  fields: true,
   parentId: true,
   x: true,
   y: true,
@@ -336,9 +453,26 @@ const EDGE_KEY_MAP: Record<keyof DiagramEdge, true> = {
   direction: true,
   seq: true,
   routing: true,
+  start: true,
+  end: true,
+  startLabel: true,
+  endLabel: true,
+  startField: true,
+  endField: true,
+  points: true,
   date: true,
 };
 export const EDGE_KEYS: readonly string[] = Object.keys(EDGE_KEY_MAP);
+
+/** The known keys of one `NodeField`, for the JSON editor's key lint. */
+const FIELD_KEY_MAP: Record<keyof NodeField, true> = {
+  id: true,
+  name: true,
+  type: true,
+  key: true,
+  required: true,
+};
+export const NODE_FIELD_KEYS: readonly string[] = Object.keys(FIELD_KEY_MAP);
 
 // ─── Versioning ──────────────────────────────────────────────────────────────
 
@@ -404,6 +538,15 @@ export interface PromptOptions {
   providers?: readonly string[];
   /** Appended verbatim — domain rules like "always place the CDN left of the ALB". */
   extraRules?: string;
+  /**
+   * When false, the prompt describes the CONTENT form: no node x/y/w/h, no
+   * labelT, and layout rules replaced by "never emit geometry, keep ids
+   * stable". Used for refine flows that merge the reply with the document's
+   * own presentation — the model cannot mangle a layout it never sees.
+   * Zone boxes stay in the skeleton either way: zone geometry is membership,
+   * not presentation. Default true (the full inline form).
+   */
+  geometry?: boolean;
 }
 
 /**
@@ -419,26 +562,32 @@ export function buildSystemPrompt(opts: PromptOptions = {}): string {
   const styles = EDGE_STYLES.join("|");
   const colors = EDGE_COLORS.join("|");
   const shapes = ZONE_SHAPES.join("|");
+  const geo = opts.geometry !== false;
 
   return `You convert software requirements, source code, or natural-language descriptions into an architecture diagram template. Respond with ONLY compact valid JSON (no markdown fences, no commentary) matching:
-{"version":1,"meta":{"title":"Name","routing":"curved|orthogonal","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${PROVIDER_IDS[0]}"],"provider":"${PROVIDER_IDS[0]}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false,"x":0,"y":0,"w":170,"h":76,"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":"","labelT":0.5,"style":"${styles}","color":"${colors}","direction":"forward|both|none","seq":0,"date":"YYYY-MM-DD"}]}
+{"version":1,"meta":{"title":"Name","routing":"curved|orthogonal","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${PROVIDER_IDS[0]}"],"provider":"${PROVIDER_IDS[0]}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":"","date":"YYYY-MM-DD"}]}
 Rules:
-- "group" = boundary (VPC, cluster, tier, bounded context). Children set parentId; child x/y are RELATIVE to the group's top-left. Size groups to contain all children (+24px sides, +48px top).
-- "text" = free annotation; put the sentence in label, fontSize 12-16, w~300 h~60, no edges.
-- Regular nodes: w 160-200, h 64-84. Pick a fitting icon. description is an optional one-line tech detail (C4 style, e.g. "Node.js / Express").
-- Edge style semantics: dashed = async/event-driven, dotted = cache/optional/telemetry, solid = synchronous. Vary color by concern (e.g. amber = data, violet = messaging). labelT (0.15-0.85) slides the label along the arrow to avoid collisions.
+- "group" = boundary (VPC, cluster, tier, bounded context). Children set parentId${geo ? "; child x/y are RELATIVE to the group's top-left. Size groups to contain all children (+24px sides, +48px top). Children of a NON-group parent use small local coordinates starting near 0,0 (their own drilled canvas); never size the parent to contain them." : "."}
+- "text" = free annotation; put the sentence in label, fontSize 12-16${geo ? ", w~300 h~60" : ""}, no edges.
+- ${geo ? "Regular nodes: w 160-200, h 64-84. Pick" : "Pick"} a fitting icon. description is an optional one-line tech detail (C4 style, e.g. "Node.js / Express").
+- Edge style semantics: dashed = async/event-driven, dotted = cache/optional/telemetry, solid = synchronous. Vary color by concern (e.g. amber = data, violet = messaging).${geo ? " labelT (0.15-0.85) slides the label along the arrow to avoid collisions." : ""}
 - Edge "tech" = protocol/format, C4 style ("JSON/HTTPS", "gRPC", "SQL"); omit when obvious. "direction":"both" for genuinely bidirectional links, "none" for plain association; omit for normal flow. When the user asks for a request flow or sequence, number the participating edges with "seq":1,2,3… in traversal order; omit seq otherwise.
 - meta.routing "orthogonal" gives right-angle connectors (formal/dense diagrams); omit for curved. meta.title names the diagram. meta.versionTag labels the revision ("v2.1", "2026-Q3 draft") when the user gives one; omit otherwise.
 - Node "tags" = short lowercase labels for cross-cutting concerns the user mentions ("pci","gdpr","deprecated","planned"); omit when none. Node "url" = deep link to docs/repo if the user supplies one; omit otherwise. Node "team" = the owning or contact team when the user names one ("Payments", "Platform"); omit otherwise. Node "status" = lifecycle stage when stated: "planned" for future work, "stubbed" for scaffolding that exists but does nothing yet, "dark" for built-and-shipped but not yet enabled, "deprecated" for being sunset; omit for normal active components. Text notes draw a subtle box by default; set "plain":true only when the user wants bare text with no outline.
 - Node/edge/zone "date" = when that piece lands or landed, as "YYYY-MM-DD". Set it ONLY when the user gives a roadmap, phases, quarters, or a migration order; omit it everywhere else. Undated elements are treated as always present, so a phased plan dates the new pieces and leaves today's system undated. A node inside a group is never shown before the group, so date the group with its earliest phase.
-- parentId must reference a container node that exists. Never create a parent cycle.
+- parentId may reference ANY existing node. A child of a "group" renders inside its frame. A child of any other node is that component's INTERNAL decomposition (the next C4 level) — shown only when the user drills into that component, never on the parent's own diagram. Do NOT decompose a component into children unless the user explicitly asks for its internal detail. Never create a parent cycle.
+- DATA MODELS: an entity/table is a node of kind "table" whose columns are "fields" — {id, name, type, key:"pk"/"fk"/"pfk", required}. Field ids are unique within their node.${geo ? " Give a table w 200-260; the editor grows its height to fit the rows, so h is only a hint." : ""} A relationship is an ordinary edge between the two tables: name the columns it joins with "startField"/"endField" (field ids on the source and target), and put cardinality in "startLabel"/"endLabel" ("1", "0..1", "0..*", "1..*") — these render as crow's-foot symbols, so write real cardinalities there rather than prose. Use "fields" ONLY for data modelling — an ordinary architecture node omits the key entirely. Subject areas are "group" parents, exactly as elsewhere.
 - ZONES are infra backgrounds, drawn behind everything, in ABSOLUTE canvas coordinates (never relative). Provider ids: ${providers}. Omit the "zones" key entirely unless the request actually involves infrastructure or hosting.
 - Zone "color" (optional) is the OUTLINE hex; the background derives from it automatically. It may carry "/NN" percent alpha for fill strength ("#38bdf8/22"). Omit for the provider's default colour. Zone "outline" (optional): dashed for logical/planned boundaries, dotted for soft groupings, none for a pure background wash; omit for solid.
 - A zone's "providers" lists every provider it could run on; "provider" is the one shown. Use a higher "z" for a small zone that sits on top of a bigger one (e.g. a third-party SaaS island inside a cloud region).
-- Nodes reference a zone with "zoneId" — this is INDEPENDENT of parentId, so a node can be in a zone and a group at once. Position them so they fall inside the zone's box.
+- Nodes reference a zone with "zoneId" — this is INDEPENDENT of parentId, so a node can be in a zone and a group at once.${geo ? " Position them so they fall inside the zone's box." : ""}
 - A node's "providers" lists which providers it exists on; it is hidden when the zone shows anything else. Omit it (or use []) for nodes present in every deployment. Use it to show provider-specific services, e.g. a node with providers:["aws"] for RDS alongside one with providers:["azure"] for Azure SQL.
 - Use "shape":"polygon" with normalised "points":[[0,0],[1,0],[1,1]] (0..1 within the zone box) only for genuinely irregular regions; prefer "rounded".
-- Lay out left-to-right by request flow, spread vertically, no overlapping nodes. 6-14 nodes total. fontSize only on text nodes. Keep JSON compact.${
+- ${
+    geo
+      ? "Lay out left-to-right by request flow, spread vertically, no overlapping nodes. 6-14 nodes per level (a component's children form their own level with their own budget)."
+      : "NEVER emit x/y/w/h on nodes or labelT on edges — placement is managed outside this document and is preserved across your edits. KEEP EVERY EXISTING ID EXACTLY as given (ids are how elements keep their places); give new elements new ids. Array order = rough left-to-right flow. 6-14 nodes per level (a component's children form their own level with their own budget)."
+  } fontSize only on text nodes. Keep JSON compact.${
     opts.extraRules ? `\n${opts.extraRules}` : ""
   }`;
 }
@@ -528,13 +677,16 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
       // timeline orders by string comparison, and one malformed value would
       // sort somewhere arbitrary instead of failing visibly.
       const date = normalizeDate(n.date);
+      const fields = validateFields(n.fields);
+      const description = n.description ? String(n.description) : "";
 
       return {
         id,
         label: String(n.label ?? id),
         kind,
         icon: iconSet.has(n.icon as string) ? n.icon : "none",
-        description: n.description ? String(n.description) : "",
+        description,
+        ...(fields ? { fields } : {}),
         parentId: n.parentId ? String(n.parentId) : null,
         zoneId: n.zoneId && zoneIds.has(String(n.zoneId)) ? String(n.zoneId) : null,
         ...(providers && providers.length ? { providers } : {}),
@@ -560,7 +712,13 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         x: num(n.x, 0),
         y: num(n.y, 0),
         w: positive(n.w, size.w),
-        h: positive(n.h, size.h),
+        // A node never renders fewer rows than it carries: whatever height the
+        // model (or an old document written before a column was added) asks
+        // for, it grows to fit the list. Rows are content; clipping them would
+        // silently drop meaning, unlike clipping a description.
+        h: fields
+          ? Math.max(positive(n.h, size.h), fieldsBoxHeight(fields.length, !!description))
+          : positive(n.h, size.h),
         fontSize: positive(n.fontSize, 13),
       };
     });
@@ -568,11 +726,14 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
   const byId = new Map(nodes.map((n) => [n.id, n]));
 
   // Repair parent references, in three passes so each rule is independent.
+  // ANY node may parent: a child of a container kind renders inside its frame;
+  // a child of any other kind is that node's drill-in detail (its next C4
+  // level), hidden inline and shown only in a scoped view. Only missing
+  // parents and self-parents are repaired here.
   for (const n of nodes) {
     if (!n.parentId) continue;
     const parent = byId.get(n.parentId);
-    // Missing parent, self-parent, or a parent that isn't a container.
-    if (!parent || parent.id === n.id || !containerSet.has(parent.kind as string)) {
+    if (!parent || parent.id === n.id) {
       n.parentId = null;
     }
   }
@@ -590,6 +751,17 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
       const tech = typeof e.tech === "string" ? e.tech.trim() : "";
       const seq = Math.floor(num(e.seq, 0));
       const date = normalizeDate(e.date);
+      const start = validateAnchor(e.start);
+      const end = validateAnchor(e.end);
+      const points = validateEdgePoints(e.points);
+      const startLabel = typeof e.startLabel === "string" ? e.startLabel.trim() : "";
+      const endLabel = typeof e.endLabel === "string" ? e.endLabel.trim() : "";
+      // A field reference is only meaningful if that endpoint actually has the
+      // row. A dangling one is dropped rather than kept: the line would attach
+      // to a phantom position, and the same repair-don't-throw rule already
+      // governs every other reference in this document.
+      const startField = fieldIdOn(byId.get(String(e.source)), e.startField);
+      const endField = fieldIdOn(byId.get(String(e.target)), e.endField);
       return {
         id: e.id ? String(e.id) : `e${i}`,
         source: String(e.source),
@@ -608,6 +780,13 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         ...((EDGE_ROUTINGS as readonly string[]).includes(e.routing as string)
           ? { routing: e.routing }
           : {}),
+        ...(start ? { start } : {}),
+        ...(end ? { end } : {}),
+        ...(startLabel ? { startLabel } : {}),
+        ...(endLabel ? { endLabel } : {}),
+        ...(startField ? { startField } : {}),
+        ...(endField ? { endField } : {}),
+        ...(points ? { points } : {}),
       };
     });
 
@@ -633,6 +812,11 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
     if (!VERSION_TAG_POSITIONS.includes(meta.versionTagPosition as VersionTagPosition)) {
       delete meta.versionTagPosition;
     }
+    // Repaired and re-appended LAST — a canonical key position, so the
+    // split/merge round-trip stays byte-identical.
+    const views = validateViewRecords(meta.views);
+    delete meta.views;
+    if (views) meta.views = views;
     out.meta = meta;
   }
   return out;
@@ -718,23 +902,233 @@ function validatePolygon(raw: unknown): ZonePoint[] | undefined {
   return points.length >= 3 ? points : [...DEFAULT_POLYGON_POINTS];
 }
 
+/**
+ * How many rows one node may carry. A model asked for "the schema" can emit a
+ * hundred columns for one table; past this the node is a wall of text rather
+ * than a diagram, and the excess is dropped instead of rendered off-box.
+ */
+export const MAX_NODE_FIELDS = 40;
+
+/**
+ * Coerce a node's rows. Repairs in the house style: an entry with no usable
+ * name is dropped, a missing id is derived from the name, duplicates are
+ * suffixed (an edge references a row BY id, so two rows sharing one would
+ * silently re-aim a foreign key), and an unknown key role is simply forgotten.
+ * Returns undefined for "no rows", so a node without them round-trips
+ * byte-identical to what it was before fields existed.
+ */
+function validateFields(raw: unknown): NodeField[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const seen = new Set<string>();
+  const out: NodeField[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const f = entry as Partial<NodeField>;
+    const name = typeof f.name === "string" ? f.name.trim() : "";
+    const rawId = typeof f.id === "string" ? f.id.trim() : "";
+    if (!name && !rawId) continue;
+    let id = rawId || slugifyFieldId(name);
+    let bump = 2;
+    while (seen.has(id)) id = `${rawId || slugifyFieldId(name)}_${bump++}`;
+    seen.add(id);
+    const type = typeof f.type === "string" ? f.type.trim() : "";
+    out.push({
+      id,
+      name: name || id,
+      ...(type ? { type } : {}),
+      ...((FIELD_KEYS as readonly string[]).includes(f.key as string)
+        ? { key: f.key as FieldKey }
+        : {}),
+      ...(f.required === true ? { required: true } : {}),
+    });
+    if (out.length === MAX_NODE_FIELDS) break;
+  }
+  return out.length ? out : undefined;
+}
+
+/** A URL-ish id from a column name: "User ID" → "user_id". */
+function slugifyFieldId(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return slug || "field";
+}
+
+/** The field id if that node really has it, else undefined. */
+function fieldIdOn(node: DiagramNode | undefined, fieldId: unknown): string | undefined {
+  if (typeof fieldId !== "string" || !fieldId) return undefined;
+  return node?.fields?.some((f) => f.id === fieldId) ? fieldId : undefined;
+}
+
+/** Where a row's centre sits as a fraction of the node's height, or nothing. */
+export function fieldRowT(
+  node: { fields?: readonly NodeField[]; description?: string; h: number },
+  fieldId: string | undefined,
+): number | undefined {
+  if (!fieldId || !node.fields?.length || !(node.h > 0)) return undefined;
+  const index = node.fields.findIndex((f) => f.id === fieldId);
+  if (index < 0) return undefined;
+  const y = fieldListTop(!!node.description) + index * FIELD_ROW_H + FIELD_ROW_H / 2;
+  return clamp(y / node.h, 0, 1);
+}
+
+/** A node as the row-anchor maths needs to see it: its rows and its box. */
+export interface FieldAnchorNode {
+  fields?: readonly NodeField[];
+  description?: string;
+  h: number;
+  /** Absolute centre x — decides which face the line leaves through. */
+  centerX: number;
+}
+
+/**
+ * Resolve an edge's stored anchors with its field references applied, so a
+ * foreign key lands on the row it references rather than the middle of the
+ * table.
+ *
+ * The side is the user's if they pinned one and the rows are vertical there
+ * (left/right); otherwise it's the face looking at the other box. A pin to top
+ * or bottom wins outright — a row fraction along a horizontal face points at a
+ * column of the box, which is not what a row means. Everything else falls
+ * through untouched, so an edge with no field references routes exactly as it
+ * always did.
+ *
+ * Both the canvas and the exporters call this, which is what keeps a PNG's
+ * foreign-key lines on the same rows as the screen's.
+ */
+export function fieldAnchors(
+  edge: Pick<DiagramEdge, "start" | "end" | "startField" | "endField">,
+  source: FieldAnchorNode,
+  target: FieldAnchorNode,
+): { start?: EdgeAnchor; end?: EdgeAnchor } {
+  const resolve = (
+    anchor: EdgeAnchor | undefined,
+    fieldId: string | undefined,
+    self: FieldAnchorNode,
+    other: FieldAnchorNode,
+  ): EdgeAnchor | undefined => {
+    if (!fieldId) return anchor;
+    if (anchor && (anchor.side === "top" || anchor.side === "bottom")) return anchor;
+    const t = fieldRowT({ fields: self.fields, description: self.description, h: self.h }, fieldId);
+    if (t === undefined) return anchor;
+    const side: EdgeAnchorSide = anchor?.side ?? (other.centerX >= self.centerX ? "right" : "left");
+    return { side, t };
+  };
+  const start = resolve(edge.start, edge.startField, source, target);
+  const end = resolve(edge.end, edge.endField, target, source);
+  return { ...(start ? { start } : {}), ...(end ? { end } : {}) };
+}
+
+/**
+ * An edge anchor, or nothing. Repair rules: an unknown side drops the whole
+ * anchor (there is no sensible fallback side), `t` clamps into 0..1, and a
+ * centred `t` is stripped so the default is never stored.
+ */
+function validateAnchor(raw: unknown): EdgeAnchor | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const side = (raw as { side?: unknown }).side;
+  if (!(EDGE_ANCHOR_SIDES as readonly string[]).includes(side as string)) return undefined;
+  const t = clamp(num((raw as { t?: unknown }).t, 0.5), 0, 1);
+  return t === 0.5 ? { side: side as EdgeAnchorSide } : { side: side as EdgeAnchorSide, t };
+}
+
+/**
+ * Edge waypoints — NOT `validatePolygon`, which clamps into a zone's
+ * normalised 0..1 box; these are absolute canvas coordinates. Rounded to
+ * whole pixels, capped so a runaway document can't smuggle in thousands.
+ */
+const MAX_EDGE_POINTS = 16;
+function validateEdgePoints(raw: unknown): Array<[number, number]> | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const points = raw
+    .filter(
+      (p): p is [unknown, unknown] =>
+        Array.isArray(p) && p.length >= 2 && Number.isFinite(Number(p[0])) && Number.isFinite(Number(p[1])),
+    )
+    .slice(0, MAX_EDGE_POINTS)
+    .map(([x, y]): [number, number] => [Math.round(Number(x)), Math.round(Number(y))]);
+  return points.length ? points : undefined;
+}
+
+// ─── Per-view records ────────────────────────────────────────────────────────
+
+/**
+ * Presentation overrides for ONE drill-in view (`meta.views[focusId]`).
+ *
+ * Records are keyed by DERIVED ids only — a ghost stand-in's placement, a
+ * ghost edge's route. Real children need no record: their document x/y ARE
+ * their placement in the focused view (coordinate identity).
+ */
+export interface ViewRecord {
+  /** Placement overrides for `ghost:` nodes in this view. */
+  nodes?: Record<string, { x: number; y: number; w: number; h: number }>;
+  /** Route overrides for `ghost:` edges in this view. */
+  edges?: Record<
+    string,
+    { labelT?: number; start?: EdgeAnchor; end?: EdgeAnchor; points?: Array<[number, number]> }
+  >;
+}
+
+/**
+ * Repair a `views` map the same way `validatePresentation` repairs its
+ * records: broken geometry dropped, defaults stripped, empty layers removed.
+ * Returns undefined when nothing survives, so the key is default-absent.
+ * Stale focus ids are KEPT — validation cannot know which content edit made
+ * them stale, and they are bytes, not behavior.
+ */
+export function validateViewRecords(raw: unknown): Record<string, ViewRecord> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, ViewRecord> = {};
+  for (const [focusId, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (!focusId || !entry || typeof entry !== "object") continue;
+    const view: ViewRecord = {};
+
+    const rawNodes = (entry as { nodes?: unknown }).nodes;
+    if (rawNodes && typeof rawNodes === "object" && !Array.isArray(rawNodes)) {
+      const nodes: NonNullable<ViewRecord["nodes"]> = {};
+      for (const [id, rec] of Object.entries(rawNodes as Record<string, unknown>)) {
+        if (!id || !rec || typeof rec !== "object") continue;
+        const { x, y, w, h } = rec as Record<string, unknown>;
+        if (![x, y, w, h].every((v) => Number.isFinite(Number(v)))) continue;
+        if (Number(w) <= 0 || Number(h) <= 0) continue;
+        nodes[id] = { x: Number(x), y: Number(y), w: Number(w), h: Number(h) };
+      }
+      if (Object.keys(nodes).length) view.nodes = nodes;
+    }
+
+    const rawEdges = (entry as { edges?: unknown }).edges;
+    if (rawEdges && typeof rawEdges === "object" && !Array.isArray(rawEdges)) {
+      const edges: NonNullable<ViewRecord["edges"]> = {};
+      for (const [id, rec] of Object.entries(rawEdges as Record<string, unknown>)) {
+        if (!id || !rec || typeof rec !== "object") continue;
+        const route: NonNullable<ViewRecord["edges"]>[string] = {};
+        const labelT = clamp(num((rec as { labelT?: unknown }).labelT, 0.5), 0.15, 0.85);
+        if (labelT !== 0.5) route.labelT = labelT;
+        const start = validateAnchor((rec as { start?: unknown }).start);
+        if (start) route.start = start;
+        const end = validateAnchor((rec as { end?: unknown }).end);
+        if (end) route.end = end;
+        const points = validateEdgePoints((rec as { points?: unknown }).points);
+        if (points) route.points = points;
+        if (Object.keys(route).length) edges[id] = route;
+      }
+      if (Object.keys(edges).length) view.edges = edges;
+    }
+
+    if (view.nodes || view.edges) out[focusId] = view;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 // ─── Collapse ────────────────────────────────────────────────────────────────
 
 /** Rendered size of a collapsed container chip. Stored w/h keep the expanded size. */
 export const COLLAPSED_SIZE = { w: 180, h: 44 } as const;
 
-/**
- * Every node hidden because an ancestor container is collapsed.
- *
- * The collapsed container itself stays visible (it renders as the chip); its
- * descendants disappear. Shared by `toReactFlow` and `fromReactFlow` so both
- * sides agree on what "was hidden" means — if they disagreed, an edit while a
- * group is collapsed would judge its children as user-deleted and destroy
- * them, the same data-loss class as the provider-toggle bugs.
- */
-export function hiddenByCollapse(t: DiagramTemplate): Set<string> {
-  const collapsed = new Set(t.nodes.filter((n) => n.collapsed).map((n) => n.id));
-  if (!collapsed.size) return new Set();
+/** Ids of nodes whose descendants are hidden below them (they render closed). */
+function hiddenBelow(t: DiagramTemplate, closed: ReadonlySet<string>): Set<string> {
+  if (!closed.size) return new Set();
 
   const hidden = new Set<string>();
   let grew = true;
@@ -742,13 +1136,54 @@ export function hiddenByCollapse(t: DiagramTemplate): Set<string> {
     grew = false;
     for (const node of t.nodes) {
       if (!node.parentId || hidden.has(node.id)) continue;
-      if (collapsed.has(node.parentId) || hidden.has(node.parentId)) {
+      if (closed.has(node.parentId) || hidden.has(node.parentId)) {
         hidden.add(node.id);
         grew = true;
       }
     }
   }
   return hidden;
+}
+
+/** Parents whose kind is not a container: their children are drill-in detail. */
+function cardParentIds(t: DiagramTemplate, containerKinds?: readonly string[]): Set<string> {
+  const containerSet = new Set(containerKinds ?? CONTAINER_KINDS);
+  const parentIds = new Set(t.nodes.map((n) => n.parentId).filter((p): p is string => !!p));
+  return new Set(
+    t.nodes.filter((n) => parentIds.has(n.id) && !containerSet.has(n.kind as string)).map((n) => n.id),
+  );
+}
+
+/**
+ * Every node hidden because an ancestor renders closed — a collapsed container
+ * or a non-container parent (whose children are drill-in detail, its next C4
+ * level, never shown inline).
+ *
+ * The closed node itself stays visible (chip or card); its descendants
+ * disappear. Shared by `toReactFlow` and `fromReactFlow` so both sides agree
+ * on what "was hidden" means — if they disagreed, an edit while a group is
+ * collapsed would judge its children as user-deleted and destroy them, the
+ * same data-loss class as the provider-toggle bugs.
+ */
+export function hiddenByCollapse(
+  t: DiagramTemplate,
+  opts: { containerKinds?: readonly string[] } = {},
+): Set<string> {
+  const closed = new Set(t.nodes.filter((n) => n.collapsed).map((n) => n.id));
+  for (const id of cardParentIds(t, opts.containerKinds)) closed.add(id);
+  return hiddenBelow(t, closed);
+}
+
+/**
+ * Only the nodes hidden inline by non-container parents — transient collapse
+ * flags deliberately ignored. This is the set view derivation keys on: which
+ * level a node belongs to must not change when the user collapses a group.
+ */
+export function hiddenInline(
+  t: DiagramTemplate,
+  containerKinds?: readonly string[],
+): Set<string> {
+  return hiddenBelow(t, cardParentIds(t, containerKinds));
 }
 
 /**
@@ -774,6 +1209,24 @@ export function visibleAnchor(
 /** Synthetic id marker for edges re-routed to a collapsed chip. */
 export const COLLAPSED_EDGE_PREFIX = "collapsed:";
 export const isCollapsedEdgeId = (id: string) => id.startsWith(COLLAPSED_EDGE_PREFIX);
+
+/**
+ * Synthetic id markers for elements a scoped view derives (see scope.ts): the
+ * boundary frame standing for the focused node, and ghost stand-ins for
+ * elements outside the focused level. Like `collapsed:` and the React Flow
+ * `zone:` prefix, these are RESERVED — a document element whose own id starts
+ * with one of them would be stripped as a view artifact on the next canvas
+ * round-trip.
+ */
+export const BOUNDARY_NODE_PREFIX = "boundary:";
+export const GHOST_NODE_PREFIX = "ghost:";
+/** Ghost EDGES share the "ghost:" string — node and edge ids never mix. */
+export const GHOST_EDGE_PREFIX = "ghost:";
+export const isBoundaryNodeId = (id: string) => id.startsWith(BOUNDARY_NODE_PREFIX);
+export const isGhostNodeId = (id: string) => id.startsWith(GHOST_NODE_PREFIX);
+export const isGhostEdgeId = (id: string) => id.startsWith(GHOST_EDGE_PREFIX);
+/** The document id a ghost stands in for — the target of click-to-navigate. */
+export const ghostSourceId = (id: string) => id.slice(GHOST_NODE_PREFIX.length);
 
 // ─── Provider-driven visibility ──────────────────────────────────────────────
 
@@ -854,8 +1307,16 @@ export function visibleElements(template: DiagramTemplate): Visibility {
  *
  * Uses the node's centre and shape-aware containment, so an L-shaped zone's
  * notch does not enrol anything. Call after any change to zone geometry.
+ *
+ * Nodes hidden inline under a non-container parent are SKIPPED: their
+ * coordinates live in that parent's drilled canvas, so their absolute centre
+ * is meaningless against root-space zone boxes — the declared membership
+ * passes through verbatim.
  */
-export function assignZonesByGeometry(template: DiagramTemplate): DiagramTemplate {
+export function assignZonesByGeometry(
+  template: DiagramTemplate,
+  opts: { containerKinds?: readonly string[] } = {},
+): DiagramTemplate {
   const zones = template.zones ?? [];
   if (!zones.length) {
     // No zones left — clear stale ids rather than leaving dangling references.
@@ -864,9 +1325,11 @@ export function assignZonesByGeometry(template: DiagramTemplate): DiagramTemplat
   }
 
   const byId = new Map(template.nodes.map((n) => [n.id, n]));
+  const drillHidden = hiddenInline(template, opts.containerKinds);
   let changed = false;
 
   const nodes = template.nodes.map((node) => {
+    if (drillHidden.has(node.id)) return node;
     const { x, y } = absolutePosition(node, byId);
     const zone = zoneAt(zones, x + node.w / 2, y + node.h / 2);
     const zoneId = zone?.id ?? null;
@@ -889,7 +1352,10 @@ export function assignZonesByGeometry(template: DiagramTemplate): DiagramTemplat
  * to that group, so moving it would fight the group's own layout. Its zone is
  * corrected by geometry instead.
  */
-export function snapNodesIntoZones(template: DiagramTemplate): DiagramTemplate {
+export function snapNodesIntoZones(
+  template: DiagramTemplate,
+  opts: { containerKinds?: readonly string[] } = {},
+): DiagramTemplate {
   const zones = template.zones ?? [];
   if (!zones.length) return template;
   const zoneById = new Map(zones.map((z) => [z.id, z]));
@@ -908,7 +1374,7 @@ export function snapNodesIntoZones(template: DiagramTemplate): DiagramTemplate {
 
   // Nodes the snap could not fix (nested, or in a zone that no longer exists)
   // still need their membership to match reality.
-  return assignZonesByGeometry(changed ? { ...template, nodes } : template);
+  return assignZonesByGeometry(changed ? { ...template, nodes } : template, opts);
 }
 
 /**
@@ -1038,7 +1504,35 @@ export function scaleZoneMembers(
   const zones = (template.zones ?? []).map((z) =>
     z.id === zoneId ? { ...z, x: after.x, y: after.y, w: after.w, h: after.h } : z,
   );
-  return { ...template, nodes, zones };
+
+  // Waypoints are canvas-absolute, so a route between two transformed nodes
+  // must ride the same transform or it would stay behind at the old location.
+  // An edge with only one end inside keeps its points: half a transform would
+  // bend it unpredictably, and the untouched route still ends where the
+  // outside node still is.
+  const moved = new Set<string>();
+  for (const node of template.nodes) {
+    if ((memberSet.has(node.id) && !node.parentId) || (node.parentId && descendsFromMember(node))) {
+      moved.add(node.id);
+    }
+  }
+  const needsRouteScale = template.edges.some(
+    (e) => e.points && moved.has(e.source) && moved.has(e.target),
+  );
+  const edges = needsRouteScale
+    ? template.edges.map((e) => {
+        if (!e.points || !moved.has(e.source) || !moved.has(e.target)) return e;
+        return {
+          ...e,
+          points: e.points.map(([px, py]): [number, number] => [
+            Math.round(after.x + (px - before.x) * sx),
+            Math.round(after.y + (py - before.y) * sy),
+          ]),
+        };
+      })
+    : template.edges;
+
+  return { ...template, nodes, zones, edges };
 }
 
 /** Set one zone's active provider, ignoring providers it doesn't offer. */
@@ -1232,11 +1726,17 @@ export function depthOf(node: DiagramNode, byId: Map<string, DiagramNode>): numb
  */
 export function templateBounds(
   t: DiagramTemplate,
-  opts: { onlyVisible?: boolean } = {},
+  opts: { onlyVisible?: boolean; containerKinds?: readonly string[] } = {},
 ): { minX: number; minY: number; maxX: number; maxY: number } {
   const zones = t.zones ?? [];
   const visible = opts.onlyVisible ? visibleElements(t).nodes : null;
-  const nodes = visible ? t.nodes.filter((n) => visible.has(n.id)) : t.nodes;
+  // Children of non-container parents live in that parent's drilled canvas —
+  // summing their local coords into root space would inflate the box with
+  // phantom area no renderer draws.
+  const drillHidden = hiddenInline(t, opts.containerKinds);
+  const nodes = t.nodes.filter(
+    (n) => !drillHidden.has(n.id) && (!visible || visible.has(n.id)),
+  );
   if (!nodes.length && !zones.length) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
 
   const byId = new Map(t.nodes.map((n) => [n.id, n]));
@@ -1270,6 +1770,8 @@ export type DiagramNodeData = {
   kind: NodeKind;
   icon: IconName;
   description: string;
+  /** The node's rows — a table's columns. Absent on an ordinary box. */
+  fields?: NodeField[];
   fontSize?: number;
   zoneId?: string | null;
   providers?: string[];
@@ -1319,6 +1821,18 @@ export type DiagramEdgeData = {
   routing?: EdgeRouting;
   /** routing ?? meta.routing ?? "curved" — what renderers/exporters draw. */
   routingResolved: EdgeRouting;
+  /** Pinned attachment on the source box. Absent = floating. */
+  start?: EdgeAnchor;
+  /** Pinned attachment on the target box. Absent = floating. */
+  end?: EdgeAnchor;
+  /** Cardinality / role text rendered just inside each endpoint. */
+  startLabel?: string;
+  endLabel?: string;
+  /** The row each end attaches to, when the endpoint has fields. */
+  startField?: string;
+  endField?: string;
+  /** Absolute-canvas waypoints the line routes through. */
+  points?: Array<[number, number]>;
   /**
    * Set only by the read-only DiffCanvas overlay — recolours the edge by its
    * comparison state. View-only, like a node's `ghost`; never persisted
@@ -1448,7 +1962,7 @@ export function toReactFlow(
   const showHidden = opts.showHidden === true;
   // Collapse hides regardless of ghost mode — ghosts reveal provider-hidden
   // nodes for editing, but a collapsed group is intentional viewing state.
-  const collapseHidden = hiddenByCollapse(t);
+  const collapseHidden = hiddenByCollapse(t, { containerKinds: opts.containerKinds });
 
   const diagramNodes: RFNode[] = [...t.nodes]
     .filter((n) => !collapseHidden.has(n.id) && (!visible || showHidden || visible.nodes.has(n.id)))
@@ -1470,6 +1984,7 @@ export function toReactFlow(
           kind: n.kind,
           icon: n.icon,
           description: n.description,
+          ...(n.fields?.length ? { fields: n.fields } : {}),
           fontSize: n.fontSize,
           zoneId: n.zoneId ?? null,
           ...(n.providers?.length ? { providers: n.providers } : {}),
@@ -1559,6 +2074,18 @@ export function toReactFlow(
             ...(e.direction ? { direction: e.direction } : {}),
             ...(!rerouted && e.seq ? { seq: e.seq } : {}),
             ...(e.routing ? { routing: e.routing } : {}),
+            // Anchors/waypoints describe the ORIGINAL endpoints' boxes; a
+            // re-routed edge connects different boxes, so they don't apply.
+            ...(!rerouted && e.start ? { start: e.start } : {}),
+            ...(!rerouted && e.end ? { end: e.end } : {}),
+            // Cardinality and row anchors name the ORIGINAL endpoints: "0..*"
+            // against a chip standing in for six hidden tables is a claim
+            // about none of them.
+            ...(!rerouted && e.startLabel ? { startLabel: e.startLabel } : {}),
+            ...(!rerouted && e.endLabel ? { endLabel: e.endLabel } : {}),
+            ...(!rerouted && e.startField ? { startField: e.startField } : {}),
+            ...(!rerouted && e.endField ? { endField: e.endField } : {}),
+            ...(!rerouted && e.points ? { points: e.points } : {}),
             routingResolved: e.routing ?? defaultRouting,
           },
           style: {
@@ -1601,10 +2128,27 @@ export function fromReactFlow(
      * Without this, deleting a ghosted node would silently resurrect it.
      */
     allNodesPresent?: boolean;
+    /**
+     * The exact set of base elements the current VIEW hides (a scoped
+     * drill-in canvas shows one level only). When provided it REPLACES the
+     * collapse-derived hidden set: the view knows better — elements it shows
+     * that collapse would call hidden are genuinely editable there, so their
+     * absence means deletion, not hiding.
+     */
+    viewHidden?: { nodes: ReadonlySet<string>; edges: ReadonlySet<string> };
+    /**
+     * The canvas holding no zone nodes is a view artifact (scoped views never
+     * render zones), not a deletion — keep the base document's zones.
+     */
+    carryZones?: boolean;
   } = {},
 ): DiagramTemplate {
   const zoneNodes = nodes.filter((n) => isZoneNodeId(n.id));
-  const diagramNodes = nodes.filter((n) => !isZoneNodeId(n.id));
+  // Boundary frames and ghost stand-ins are scoped-view artifacts, never
+  // document content — same rule as `collapsed:` edges below.
+  const diagramNodes = nodes.filter(
+    (n) => !isZoneNodeId(n.id) && !isBoundaryNodeId(n.id) && !isGhostNodeId(n.id),
+  );
   const baseNodeById = new Map((opts.base?.nodes ?? []).map((n) => [n.id, n]));
 
   const zones: DiagramZone[] = zoneNodes.map((n) => {
@@ -1633,6 +2177,7 @@ export function fromReactFlow(
       kind: n.data?.kind ?? (n.type === "group" ? "group" : "service"),
       icon: n.data?.icon ?? "none",
       description: n.data?.description ?? "",
+      fields: n.data?.fields,
       parentId: n.parentId ?? null,
       zoneId: n.data?.zoneId ?? null,
       providers: n.data?.providers,
@@ -1657,9 +2202,10 @@ export function fromReactFlow(
   });
 
   const builtEdges = edges
-    // Re-routed collapse edges are a view artifact; the originals they stand
-    // in for come back via the carry-through below.
-    .filter((e) => !isCollapsedEdgeId(e.id))
+    // Re-routed collapse edges and scoped-view ghost edges are view
+    // artifacts; the originals they stand in for come back via the
+    // carry-through below.
+    .filter((e) => !isCollapsedEdgeId(e.id) && !isGhostEdgeId(e.id))
     .map((e) => ({
       id: e.id,
       source: e.source,
@@ -1676,6 +2222,13 @@ export function fromReactFlow(
       // The edge's OWN routing — never routingResolved, which would bake the
       // diagram default onto every edge.
       routing: e.data?.routing,
+      start: e.data?.start,
+      end: e.data?.end,
+      startLabel: e.data?.startLabel,
+      endLabel: e.data?.endLabel,
+      startField: e.data?.startField,
+      endField: e.data?.endField,
+      points: e.data?.points,
     }));
 
   // Carry through whatever was hidden, and only that.
@@ -1700,12 +2253,14 @@ export function fromReactFlow(
     // not — collapsed children are off the canvas in every mode, so they are
     // always carried.
     const before = visibleElements(opts.base);
-    const beforeCollapse = hiddenByCollapse(opts.base);
+    const beforeCollapse = hiddenByCollapse(opts.base, { containerKinds: opts.containerKinds });
     const wasNodeHidden = (id: string) =>
-      beforeCollapse.has(id) || (!opts.allNodesPresent && !before.nodes.has(id));
+      (opts.viewHidden ? opts.viewHidden.nodes.has(id) : beforeCollapse.has(id)) ||
+      (!opts.allNodesPresent && !before.nodes.has(id));
     const wasEdgeHidden = (e: DiagramEdge) =>
-      beforeCollapse.has(e.source) ||
-      beforeCollapse.has(e.target) ||
+      (opts.viewHidden
+        ? opts.viewHidden.edges.has(e.id)
+        : beforeCollapse.has(e.source) || beforeCollapse.has(e.target)) ||
       (!opts.allNodesPresent && !before.edges.has(e.id));
 
     for (const node of opts.base.nodes) {
@@ -1724,11 +2279,16 @@ export function fromReactFlow(
     }
   }
 
+  const carriedZones = zones.length
+    ? zones
+    : opts.carryZones && opts.base?.zones?.length
+      ? opts.base.zones
+      : [];
   return validateTemplate(
     {
       version: 1,
       meta: opts.meta,
-      ...(zones.length ? { zones } : {}),
+      ...(carriedZones.length ? { zones: carriedZones } : {}),
       nodes: built,
       edges: builtEdges,
     },

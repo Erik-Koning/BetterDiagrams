@@ -70,6 +70,7 @@ import {
 import {
   DIAGRAM_SYSTEM_PROMPT,
   NODE_STATUSES,
+  buildSystemPrompt,
   type NodeStatus,
   type VersionTagPosition,
 } from "../../contract/schema";
@@ -117,6 +118,10 @@ import { ExportStatesModal, type ExportStatesChoice } from "../ExportStatesModal
 import { runStateExport, type StateExportFormat } from "../state-export";
 import { createRegistry } from "../create-registry";
 import { paletteFromTheme, themeToStyle, type Theme } from "../theme";
+
+// The base architecture prompt in its CONTENT form (elements, no geometry) —
+// the "elements only" option of the welcome modal's cross-kind copy menu.
+const ARCHITECTURE_CONTENT_PROMPT = buildSystemPrompt({ geometry: false });
 
 /**
  * The canvas selection in DOCUMENT terms — ids bucketed by the template
@@ -1487,6 +1492,7 @@ function SequenceInner({
             // The sequence studio holds no architecture registry, so the
             // cross-kind copy is deliberately the base architecture prompt.
             systemPromptOther={DIAGRAM_SYSTEM_PROMPT}
+            systemPromptOtherContent={ARCHITECTURE_CONTENT_PROMPT}
             onDismiss={handleWelcomeDismiss}
           />
         ) : null}

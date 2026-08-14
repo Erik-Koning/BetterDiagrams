@@ -14,6 +14,7 @@
  * See `docs/server.md` for a ~20-line reference route.
  */
 import { parseLlmTemplate, type DiagramTemplate, type ValidateOptions } from "./schema";
+import type { DiagramContent } from "./presentation";
 
 export interface GenerateRequest {
   /** `create` replaces the diagram; `refine` edits the one in `current`. */
@@ -22,8 +23,13 @@ export interface GenerateRequest {
   input: string;
   /** The schema contract, generated from the live registry. Send as the system prompt. */
   systemPrompt: string;
-  /** The diagram being refined. Present only when `mode === "refine"`. */
-  current?: DiagramTemplate;
+  /**
+   * The diagram being refined. Present only when `mode === "refine"`.
+   * The editor sends the CONTENT form (no geometry) — the model edits the
+   * architecture and the layout is merged back from the live document, so a
+   * refine can never scramble a hand-made arrangement.
+   */
+  current?: DiagramTemplate | DiagramContent;
 }
 
 /**
@@ -105,10 +111,31 @@ export function coerceGeneratorResult(
 }
 
 /** Build the user-turn message for a refine request. */
-export function buildRefineMessage(current: DiagramTemplate, instruction: string): string {
+export function buildRefineMessage(
+  current: DiagramTemplate | DiagramContent,
+  instruction: string,
+  opts: {
+    /**
+     * The drill-in scope: the user is looking INSIDE this node, so the
+     * instruction applies to its internal decomposition, not the whole
+     * document. The full document still travels — ids stay stable and the
+     * merge machinery is unchanged — the model is just told where to work.
+     */
+    focus?: { id: string; label: string };
+  } = {},
+): string {
   return [
     "CURRENT DIAGRAM TEMPLATE:",
     JSON.stringify(current),
+    ...(opts.focus
+      ? [
+          "",
+          `The user is drilled into "${opts.focus.label}" (node id "${opts.focus.id}"). ` +
+            `Apply the instruction INSIDE that component only: add, edit, or remove nodes whose parentId chain leads to "${opts.focus.id}" ` +
+            `(new internal parts get parentId "${opts.focus.id}") and edges among them or from them to existing outside nodes. ` +
+            `Leave everything outside it untouched and keep every existing id.`,
+        ]
+      : []),
     "",
     "Apply this instruction and return the FULL updated template JSON:",
     instruction,

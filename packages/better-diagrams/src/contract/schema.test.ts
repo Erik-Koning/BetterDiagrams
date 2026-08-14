@@ -58,11 +58,13 @@ describe("validateTemplate", () => {
     expect(t.nodes[0].parentId).toBeNull();
   });
 
-  it("nulls a parentId that points at a non-container", () => {
+  // Inverted from the original rule: any node may parent. A child of a
+  // non-container kind is that node's drill-in detail (its next C4 level).
+  it("keeps a parentId that points at a non-container", () => {
     const t = validateTemplate({
       nodes: [node({ id: "svc", kind: "service" }), node({ id: "b", parentId: "svc" })],
     });
-    expect(t.nodes.find((n) => n.id === "b")!.parentId).toBeNull();
+    expect(t.nodes.find((n) => n.id === "b")!.parentId).toBe("svc");
   });
 
   it("nulls a self-parent", () => {

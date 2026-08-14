@@ -17,14 +17,28 @@ import {
   type ValidateOptions,
 } from "../contract/schema";
 
+/**
+ * Lay out a document that arrived with no real coordinates — a CONTENT doc,
+ * or any JSON whose author never placed anything. Validation coerces missing
+ * x/y to 0, so "every node at the origin" is the reliable signature; a single
+ * explicitly placed node disables the layout, because the author's
+ * coordinates are truth. Shared by the welcome-modal paste path and the
+ * Import button so the two doors agree.
+ */
+export function layoutIfUnpositioned(template: DiagramTemplate): DiagramTemplate {
+  return template.nodes.length > 1 && template.nodes.every((n) => n.x === 0 && n.y === 0)
+    ? // Every frame, not just the visible one: a nested document arrives with
+      // each drilled canvas unplaced too, and a level nobody arranged would
+      // otherwise open onto a single pile at its origin.
+      autoLayout(template, { frames: "all" })
+    : template;
+}
+
 export function parseArchitectureText(
   text: string,
   opts: ValidateOptions = {},
 ): DiagramTemplate {
-  const laidOut = (template: DiagramTemplate): DiagramTemplate =>
-    template.nodes.length > 1 && template.nodes.every((n) => n.x === 0 && n.y === 0)
-      ? autoLayout(template)
-      : template;
+  const laidOut = layoutIfUnpositioned;
   // Validated here, not just downstream: on the zero-files path the result
   // goes straight to the host's onFileCreate, which is promised a validated
   // document.

@@ -75,6 +75,7 @@ export const BUILTIN_NODE_KINDS: Record<string, NodeKindDef> = {
   gateway: { label: "Gateway", fill: "#022c22", accent: "#34d399", text: "#a7f3d0", icon: "shield" },
   client: { label: "Client", fill: "#1e293b", accent: "#94a3b8", text: "#e2e8f0", icon: "user", shape: "person" },
   external: { label: "External", fill: "#0f172a", accent: "#64748b", text: "#cbd5e1", icon: "globe" },
+  table: { label: "Table", fill: "#042f2e", accent: "#2dd4bf", text: "#99f6e4", icon: "none", record: true },
   group: { label: "Group", fill: "transparent", accent: "#475569", text: "#94a3b8", icon: "none", container: true },
   text: { label: "Text", fill: "transparent", accent: "#38bdf8", text: "#e2e8f0", icon: "none", annotation: true },
 };
@@ -87,6 +88,7 @@ const BUILTIN_KIND_ORDER = [
   "gateway",
   "client",
   "external",
+  "table",
   "group",
   "text",
 ];

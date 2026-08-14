@@ -31,12 +31,12 @@ export function emittedToCanvas(emitted: Emitted, scale = 2): RenderedCanvas {
 }
 
 /** Replay an emitted command list as a standalone SVG document. */
-export function emittedToSvg(emitted: Emitted): string {
+export function emittedToSvg(emitted: Emitted, opts: { gridId?: string } = {}): string {
   const { cmds, width, height, originX, originY } = emitted;
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
     `<g transform="translate(${originX} ${originY})">`,
-    drawToSvg(cmds),
+    drawToSvg(cmds, opts),
     `</g></svg>`,
   ].join("\n");
 }

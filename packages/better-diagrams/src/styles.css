@@ -607,6 +607,91 @@
   -webkit-line-clamp: 2;
 }
 
+/* ── Field rows ──────────────────────────────────────────────────────────── */
+/* A node's columns/properties. The row height is 19px because the contract's
+   FIELD_ROW_H is 19: a field-anchored edge and the PNG exporter both compute a
+   row's position from that number, so changing the height here alone would
+   leave foreign-key lines pointing between columns. Change both together. */
+
+/* Rows are placed by a formula (fieldListTop + n × FIELD_ROW_H) that the
+   exporter and every field-anchored edge share, so a record node's content
+   starts at a fixed offset from its top edge instead of being centred like an
+   ordinary card's — and its description is held to one line, since a second
+   would shift every row below it out from under its anchor. */
+.as-node--record {
+  align-items: flex-start;
+}
+
+.as-node--record .as-node__desc {
+  -webkit-line-clamp: 1;
+}
+
+.as-node__fields {
+  display: flex;
+  flex-direction: column;
+  margin: 3px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--as-border);
+}
+
+.as-node__field {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  height: 19px;
+  overflow: hidden;
+  font-size: 10.5px;
+  line-height: 19px;
+  white-space: nowrap;
+}
+
+.as-node__fieldkey {
+  flex: 0 0 auto;
+  min-width: 20px;
+  font-family: var(--as-mono);
+  font-size: 8px;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--as-node-accent);
+  border: 1px solid color-mix(in srgb, var(--as-node-accent) 45%, transparent);
+  border-radius: 3px;
+  padding: 0 3px;
+  line-height: 12px;
+}
+
+/* A primary key is the row that identifies the record — it carries the tint;
+   a foreign key only points elsewhere, so it stays an outline. */
+.as-node__fieldkey--pk,
+.as-node__fieldkey--pfk {
+  background: color-mix(in srgb, var(--as-node-accent) 18%, transparent);
+}
+
+.as-node__fieldname {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--as-mono);
+  color: var(--as-text);
+}
+
+.as-node__fieldreq {
+  color: var(--as-node-accent);
+}
+
+.as-node__fieldtype {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--as-mono);
+  font-size: 9.5px;
+  color: var(--as-text-faint, var(--as-text-dim));
+}
+
 /* ── Date chip ───────────────────────────────────────────────────────────── */
 /* When an element lands. A subtitle-weight grey inside a hairline outline, so
    it reads as metadata rather than as part of the name — and so it stays
@@ -1343,6 +1428,36 @@
   user-select: none;
 }
 
+/* Cardinality at each end ("1", "0..*"). Brighter than the middle label: it is
+   read against its own box rather than scanned along the line, and it is the
+   part of a data model people check first. */
+.as-edge__endlabel {
+  font-family: var(--as-mono);
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--as-text);
+  paint-order: stroke;
+  stroke: var(--as-bg);
+  stroke-width: 3.5px;
+  user-select: none;
+}
+
+/* Waypoint handles on a selected edge: drag to bend, double-click to remove.
+   Filled with the canvas colour so the dot reads as a hole in the line. */
+.as-edge__waypoint {
+  fill: var(--as-bg);
+  cursor: grab;
+  pointer-events: all;
+}
+
+.as-edge__waypoint:hover {
+  stroke-width: 2.6;
+}
+
+.as-edge__waypoint:active {
+  cursor: grabbing;
+}
+
 /* Sequence badge for dynamic (numbered-flow) diagrams. */
 .as-edge__seq {
   stroke: var(--as-bg);
@@ -1421,6 +1536,54 @@
 .as-inspector .as-inspector__date {
   width: 138px;
   flex: none;
+}
+
+.as-inspector .as-inspector__end {
+  width: 60px;
+  flex: none;
+}
+
+/* The row editor. Unlike every other section this one stacks: a table's
+   columns are an ordered list, and the order is what decides where each row
+   sits in the box — so it reads top-to-bottom, and takes its own line in the
+   wrapping bar. It scrolls rather than growing without limit; a forty-column
+   table must not push the canvas off the screen. */
+.as-fields {
+  align-items: flex-start;
+  flex: 1 1 100%;
+}
+
+.as-fields__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 216px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.as-fieldrow {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.as-inspector .as-fieldrow__key {
+  width: 62px;
+  flex: none;
+}
+
+.as-inspector .as-fieldrow__name {
+  flex: 1 1 120px;
+  min-width: 0;
+  font-family: var(--as-mono);
+}
+
+.as-inspector .as-fieldrow__type {
+  flex: 1 1 90px;
+  min-width: 0;
+  font-family: var(--as-mono);
 }
 
 /* Inline checkbox inside an inspector section. */
@@ -1603,6 +1766,184 @@
   opacity: 0.4;
 }
 
+/* ── Drill focus (C4 levels) ────────────────────────────────────────────── */
+
+.as-focusbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--as-border);
+  background: var(--as-surface);
+  z-index: 41;
+}
+
+.as-focusbar__crumbwrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.as-focusbar__sep {
+  color: var(--as-text-dim);
+  font-size: 12px;
+}
+
+.as-focusbar__crumb {
+  max-width: 200px;
+  overflow: hidden;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--as-text-dim);
+  font: inherit;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.as-focusbar__crumb:hover:not(:disabled) {
+  background: var(--as-surface-2);
+  color: var(--as-text);
+}
+
+.as-focusbar__crumb--here {
+  color: var(--as-text);
+  font-weight: 600;
+  cursor: default;
+}
+
+.as-focusbar__level {
+  margin-left: 6px;
+  padding: 2px 8px;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  color: var(--as-accent);
+  font-family: var(--as-mono);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.as-focusbar__spacer {
+  flex: 1;
+}
+
+/* The blink between levels: the canvas dips while the swap lands. */
+.as-canvas--refocus .react-flow {
+  opacity: 0.4;
+}
+
+.as-canvas .react-flow {
+  transition: opacity 140ms;
+}
+
+/* "N inside" rides the element's meta line — the card's corners are already
+   spoken for (↗ link, 🔒 lock, team pill), and a count reads as metadata
+   anyway, like the "· planned" status beside it. */
+.as-node__drill {
+  flex: 0 0 auto;
+  margin-left: 5px;
+  padding: 0 5px;
+  border: 1px solid var(--as-border);
+  border-radius: 999px;
+  background: var(--as-surface-2);
+  color: var(--as-text-dim);
+  font: inherit;
+  letter-spacing: 0;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+
+.as-node__drill:hover {
+  border-color: var(--as-node-accent, var(--as-accent));
+  color: var(--as-text);
+}
+
+/* A scoped view's stand-in for an element on another level. */
+.as-node--scope-ghost {
+  border-style: dashed;
+}
+
+.as-focus-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.as-focus-empty__card {
+  max-width: 340px;
+  padding: 18px 22px;
+  border: 1px solid var(--as-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--as-surface) 97%, transparent);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 45%);
+  backdrop-filter: blur(8px);
+  text-align: center;
+  pointer-events: auto;
+}
+
+.as-focus-empty__title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.as-focus-empty__hint {
+  margin: 0 0 12px;
+  color: var(--as-text-dim);
+  font-size: 12px;
+}
+
+.as-focus-empty__actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.as-inspector__ghostnote {
+  max-width: 200px;
+  color: var(--as-text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* The AI panel while drilled in: scope chip + the generate hand-off note. */
+.as-panel__scopechip {
+  margin: 0 0 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--as-border);
+  border-radius: 999px;
+  color: var(--as-accent);
+  font-family: var(--as-mono);
+  font-size: 11px;
+}
+
+.as-panel__scopednote {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--as-border);
+  border-radius: 8px;
+  color: var(--as-text-dim);
+  font-size: 12px;
+}
+
+.as-panel__exitlink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--as-accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* ── Compare mode ────────────────────────────────────────────────────────── */
 
 .as-diffbar {
@@ -1699,12 +2040,24 @@
    the component sets as an attribute fallback — one mechanism for themes to
    darken the whole palette. Strokes and fills split so the line's own
    fill="none" survives. */
-.as-edge__stroke.as-edge--c-slate { stroke: var(--as-edge-slate); }
-.as-edge__stroke.as-edge--c-sky { stroke: var(--as-edge-sky); }
-.as-edge__stroke.as-edge--c-emerald { stroke: var(--as-edge-emerald); }
-.as-edge__stroke.as-edge--c-amber { stroke: var(--as-edge-amber); }
-.as-edge__stroke.as-edge--c-rose { stroke: var(--as-edge-rose); }
-.as-edge__stroke.as-edge--c-violet { stroke: var(--as-edge-violet); }
+.as-edge__stroke.as-edge--c-slate, .as-edge__crow.as-edge--c-slate { stroke: var(--as-edge-slate); }
+.as-edge__stroke.as-edge--c-sky, .as-edge__crow.as-edge--c-sky { stroke: var(--as-edge-sky); }
+.as-edge__stroke.as-edge--c-emerald, .as-edge__crow.as-edge--c-emerald { stroke: var(--as-edge-emerald); }
+.as-edge__stroke.as-edge--c-amber, .as-edge__crow.as-edge--c-amber { stroke: var(--as-edge-amber); }
+.as-edge__stroke.as-edge--c-rose, .as-edge__crow.as-edge--c-rose { stroke: var(--as-edge-rose); }
+.as-edge__stroke.as-edge--c-violet, .as-edge__crow.as-edge--c-violet { stroke: var(--as-edge-violet); }
+
+/* Cardinality symbols: stroked, never filled, with round joins so the foot's
+   three prongs meet cleanly at their apex. */
+.as-edge__crow {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.as-edge__crow.as-edge--added { stroke: var(--as-diff-added); }
+.as-edge__crow.as-edge--removed { stroke: var(--as-diff-removed); }
+.as-edge__crow.as-edge--changed { stroke: var(--as-diff-changed); }
 
 .as-edge__arrow.as-edge--c-slate, .as-edge__seq.as-edge--c-slate { fill: var(--as-edge-slate); }
 .as-edge__arrow.as-edge--c-sky, .as-edge__seq.as-edge--c-sky { fill: var(--as-edge-sky); }
@@ -2164,6 +2517,32 @@
 
 .as-welcome__cta:hover:not(:disabled) .as-welcome__arrow {
   transform: translateX(5px);
+}
+
+/* The copy CTA's wrapper shares the row with its sibling button, so it takes
+   over the flex slot and the button fills it. */
+.as-welcome__copy {
+  display: flex;
+  flex: 1;
+}
+
+.as-welcome__copy .as-welcome__cta {
+  width: 100%;
+}
+
+/* Schema-form picker: hidden until the pointer or keyboard reaches the copy
+   button, then held open while either is inside. The 2px overlap keeps the
+   pointer's path to the menu unbroken. */
+.as-welcome__copy-menu {
+  display: none;
+  top: calc(100% - 2px);
+  width: 100%;
+  min-width: 240px;
+}
+
+.as-welcome__copy:hover .as-welcome__copy-menu,
+.as-welcome__copy:focus-within .as-welcome__copy-menu {
+  display: block;
 }
 
 .as-welcome__editor .cm-editor {

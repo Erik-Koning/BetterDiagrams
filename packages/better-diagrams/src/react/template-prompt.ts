@@ -30,12 +30,17 @@ export interface CloudOption {
 export interface TemplatePromptContext {
   /** The prompt tailored to the clouds the document references. */
   systemPrompt: string;
+  /**
+   * The same prompt in the CONTENT form — elements only, no geometry. Hand
+   * this to an AI when the editor (not the model) owns the layout.
+   */
+  systemPromptContent: string;
   /** Which clouds those are — pack order, subset of CLOUD_PROVIDER_IDS. */
   referencedClouds: string[];
   /** Chip list for a cloud toggle UI (skips clouds an extension deleted). */
   cloudOptions: CloudOption[];
-  /** Re-tailor for a manual cloud selection. */
-  promptForClouds: (clouds: readonly string[]) => string;
+  /** Re-tailor for a manual cloud selection; `geometry: false` = content form. */
+  promptForClouds: (clouds: readonly string[], opts?: { geometry?: boolean }) => string;
 }
 
 /**
@@ -78,6 +83,7 @@ export function referencedCloudIds(
 export function promptForCloudSelection(
   registry: ResolvedRegistry,
   clouds: readonly string[],
+  opts?: { geometry?: boolean },
 ): string {
   return buildSystemPrompt({
     kinds: registry.kindOrder.filter((kind) => {
@@ -89,6 +95,7 @@ export function promptForCloudSelection(
     extraRules: [registry.promptExtraRules, buildCloudPromptSections(clouds)]
       .filter(Boolean)
       .join("\n"),
+    ...(opts?.geometry === false ? { geometry: false } : {}),
   });
 }
 
@@ -113,9 +120,10 @@ export function templatePromptContext(
   const referencedClouds = referencedCloudIds(template, registry);
   return {
     systemPrompt: promptForCloudSelection(registry, referencedClouds),
+    systemPromptContent: promptForCloudSelection(registry, referencedClouds, { geometry: false }),
     referencedClouds,
     cloudOptions: cloudOptionsFor(registry),
-    promptForClouds: (clouds) => promptForCloudSelection(registry, clouds),
+    promptForClouds: (clouds, opts) => promptForCloudSelection(registry, clouds, opts),
   };
 }
 

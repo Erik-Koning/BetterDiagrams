@@ -367,3 +367,188 @@ ${js}
 </html>
 `;
 }
+
+// ─── Multi-view: one page, one section per C4 level ──────────────────────────
+
+/** One drill level in the exported page. */
+export interface ViewEntry {
+  /** The focused node's id; "" is the root (C1) view. */
+  key: string;
+  /** Crumb trail, root first, ending in this view. */
+  crumb: Array<{ key: string; label: string }>;
+  /** "C1 · Context" … shown as the level pill. */
+  levelLabel: string;
+  /** Parent view's key for Esc/drill-out; null on the root. */
+  parent: string | null;
+  /** The level's standalone SVG (give each view a distinct gridId). */
+  svg: string;
+  /** data-el attribute → view key: which group opens what on click. */
+  drills: Record<string, string>;
+}
+
+export interface MultiViewHtmlOptions {
+  /** [0] must be the root view. */
+  views: ViewEntry[];
+  title: string;
+  stops: string[];
+  palette?: Partial<ExportPalette>;
+  accent?: string;
+}
+
+/**
+ * The drill-down page: every level pre-rendered, a breadcrumb bar, hash
+ * routing (`#/pay/workers` — display only; the embedded map is the source of
+ * truth), Esc/Back navigation, and the SAME timeline player scrubbing every
+ * view in sync (elements carry the same `data-el`/`data-day` on each level
+ * they appear on).
+ *
+ * Composed THROUGH `buildTimelineHtml` at three stable seams — the stage
+ * content, the `</style>` close, and the `</body>` close — so the pinned
+ * single-view page stays byte-identical and there is exactly one copy of the
+ * player.
+ */
+export function buildMultiViewHtml(opts: MultiViewHtmlOptions): string {
+  const palette: ExportPalette = { ...DARK_EXPORT_PALETTE, ...opts.palette };
+  const accent = opts.accent ?? (isLightHex(palette.bg) ? "#0284c7" : "#38bdf8");
+
+  const sections = opts.views
+    .map(
+      (view, i) =>
+        `<section class="bd-view" data-view="${esc(view.key)}"${i === 0 ? "" : " hidden"}>\n${view.svg}\n</section>`,
+    )
+    .join("\n");
+
+  const navCss = `
+  .bd-crumbbar {
+    display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
+    padding: 6px 14px; border-bottom: 1px solid ${palette.border}; background: ${palette.surface};
+  }
+  .bd-crumb {
+    max-width: 200px; overflow: hidden; padding: 2px 6px; border: 0; border-radius: 5px;
+    background: none; color: ${palette.textDim}; font: inherit; font-size: 12px;
+    text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+  }
+  .bd-crumb:hover:not(:disabled) { background: ${palette.surface2}; color: ${palette.text}; }
+  .bd-crumb--here { color: ${palette.text}; font-weight: 600; cursor: default; }
+  .bd-crumbsep { color: ${palette.textDim}; font-size: 12px; }
+  .bd-levelpill {
+    margin-left: 6px; padding: 2px 8px; border: 1px solid currentcolor; border-radius: 999px;
+    color: ${accent}; font-family: ui-monospace, Menlo, monospace; font-size: 11px; font-weight: 600;
+    white-space: nowrap;
+  }
+  .bd-view[hidden] { display: none; }
+  [data-drill] { cursor: pointer; }
+  [data-drill]:hover { opacity: 0.85; }
+  @media (prefers-reduced-motion: no-preference) {
+    .bd-view { transition: transform 200ms ease, opacity 200ms ease; }
+    .bd-view.bd-view--enter { transform: scale(0.94); opacity: 0; }
+  }
+  `;
+
+  const crumbBar = `  <nav class="bd-crumbbar" id="bd-crumbbar" aria-label="Diagram level"></nav>
+`;
+
+  // Labels are user text: JSON is embedded in a <script>, so every "<" is
+  // escaped to keep a hostile label from closing it.
+  const viewsJson = JSON.stringify(
+    Object.fromEntries(
+      opts.views.map((v) => [
+        v.key,
+        { crumb: v.crumb, level: v.levelLabel, parent: v.parent, drills: v.drills },
+      ]),
+    ),
+  ).replace(/</g, "\\u003c");
+
+  const navJs = `
+  "use strict";
+  var VIEWS = ${viewsJson};
+  var crumbbar = document.getElementById("bd-crumbbar");
+  var sections = [].slice.call(document.querySelectorAll(".bd-view"));
+  var current = "";
+  function sectionOf(key) {
+    for (var i = 0; i < sections.length; i++) {
+      if (sections[i].getAttribute("data-view") === key) return sections[i];
+    }
+    return null;
+  }
+  function hashOf(key) {
+    return "#/" + VIEWS[key].crumb.slice(1).map(function (c) { return encodeURIComponent(c.key); }).join("/");
+  }
+  var byHash = {};
+  Object.keys(VIEWS).forEach(function (key) { byHash[hashOf(key)] = key; });
+  function renderCrumbs() {
+    var view = VIEWS[current];
+    crumbbar.textContent = "";
+    view.crumb.forEach(function (entry, i) {
+      if (i > 0) {
+        var sep = document.createElement("span");
+        sep.className = "bd-crumbsep"; sep.textContent = "\\u203a";
+        crumbbar.appendChild(sep);
+      }
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "bd-crumb" + (i === view.crumb.length - 1 ? " bd-crumb--here" : "");
+      btn.disabled = i === view.crumb.length - 1;
+      btn.textContent = entry.label;
+      btn.addEventListener("click", function () { show(entry.key); });
+      crumbbar.appendChild(btn);
+    });
+    var pill = document.createElement("span");
+    pill.className = "bd-levelpill"; pill.textContent = view.level;
+    crumbbar.appendChild(pill);
+  }
+  function show(key, fromHash) {
+    if (!(key in VIEWS) || key === current) return;
+    var inc = sectionOf(key);
+    if (!inc) return;
+    var out = sectionOf(current);
+    if (out) out.hidden = true;
+    inc.hidden = false;
+    inc.classList.add("bd-view--enter");
+    requestAnimationFrame(function () { inc.classList.remove("bd-view--enter"); });
+    current = key;
+    renderCrumbs();
+    if (!fromHash && location.hash !== hashOf(key)) location.hash = hashOf(key);
+  }
+  window.addEventListener("hashchange", function () {
+    var key = byHash[location.hash];
+    if (key !== undefined) show(key, true);
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.target && /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+    if (e.key === "Escape") {
+      var parent = VIEWS[current].parent;
+      if (parent !== null) show(parent);
+    }
+  });
+  sections.forEach(function (section) {
+    var key = section.getAttribute("data-view");
+    var drills = (VIEWS[key] || {}).drills || {};
+    [].slice.call(section.querySelectorAll("[data-el]")).forEach(function (g) {
+      var el = g.getAttribute("data-el");
+      if (el in drills) {
+        g.setAttribute("data-drill", "");
+        g.addEventListener("click", function () { show(drills[el]); });
+      }
+    });
+  });
+  renderCrumbs();
+  if (byHash[location.hash] !== undefined) show(byHash[location.hash], true);
+  `;
+
+  const page = buildTimelineHtml({
+    svg: sections,
+    title: opts.title,
+    stops: opts.stops,
+    palette: opts.palette,
+    accent: opts.accent,
+  });
+
+  return page
+    .replace("</style>", `${navCss}</style>`)
+    .replace('  <main class="bd-stage fit" id="bd-stage">', `${crumbBar}  <main class="bd-stage fit" id="bd-stage">`)
+    .replace(
+      "</body>",
+      `<script>\n(function () {\n${navJs}\n})();\n</script>\n</body>`,
+    );
+}

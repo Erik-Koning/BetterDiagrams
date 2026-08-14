@@ -19,7 +19,7 @@
  *   - AUXILIARY refs (activation.to, fragment else markers, note.at/across)
  *     dangling → the field degrades (deleted), the construct survives.
  */
-import { NODE_STATUSES, VERSION_TAG_POSITIONS } from "./schema";
+import { NODE_STATUSES, VERSION_TAG_POSITIONS, hiddenInline, visibleAnchor } from "./schema";
 import type { DiagramTemplate, Migration, NodeStatus, VersionTagPosition } from "./schema";
 import { normalizeDate, type DiagramDate } from "./timeline";
 import { parseLlmJson } from "./json-repair";
@@ -690,10 +690,25 @@ const ARCH_KIND_TO_PARTICIPANT: Record<string, ParticipantKind> = {
  * interpretation.
  */
 export function sequenceFromTemplate(arch: DiagramTemplate): SequenceTemplate {
-  const numbered = arch.edges.filter((e) => typeof e.seq === "number" && e.seq > 0);
+  // Drill-in detail stays behind its card here too: a crossing call reads as
+  // the CARD doing the talking (the actor a root-level sequence knows), and
+  // wiring wholly inside one card is not part of this level's story.
+  const drillHidden = hiddenInline(arch);
+  const rawById = new Map(arch.nodes.map((n) => [n.id, n]));
+  const edges = drillHidden.size
+    ? arch.edges.flatMap((e) => {
+        const source = visibleAnchor(e.source, rawById, drillHidden);
+        const target = visibleAnchor(e.target, rawById, drillHidden);
+        if (source === target) return [];
+        if (source === e.source && target === e.target) return [e];
+        return [{ ...e, source, target }];
+      })
+    : arch.edges;
+
+  const numbered = edges.filter((e) => typeof e.seq === "number" && e.seq > 0);
   const flow = numbered.length
     ? [...numbered].sort((a, b) => a.seq! - b.seq!)
-    : arch.edges;
+    : edges;
 
   const nodeById = new Map(arch.nodes.map((n) => [n.id, n]));
   const participants: SeqParticipant[] = [];

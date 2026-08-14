@@ -8,7 +8,12 @@ import { describe, expect, it } from "vitest";
 import { emitTemplate, drawToSvg } from "./draw";
 import { emitSequence } from "./sequence-draw";
 import { buildTimelineHtml } from "./html-export";
-import { BUILTIN_EXPORTERS } from "./exporters";
+import {
+  BUILTIN_EXPORTERS,
+  renderTemplateToC4Puml,
+  renderTemplateToMermaid,
+  renderTemplateToSvg,
+} from "./exporters";
 import { BUILTIN_SEQUENCE_EXPORTERS } from "./sequence-exporters";
 import { createRegistry } from "./create-registry";
 import { EXAMPLE_TEMPLATE, EXAMPLE_ZONED_TEMPLATE, validateTemplate } from "../contract/schema";
@@ -158,7 +163,7 @@ describe("the html exporter", () => {
     }
     // Round-trip formats never slice: "export → save to database" while
     // scrubbed must not silently delete everything the cursor was hiding.
-    for (const key of ["html", "template", "reactflow"]) {
+    for (const key of ["html", "template", "reactflow", "content", "layout"]) {
       expect(BUILTIN_EXPORTERS[key].fullDocument, key).toBe(true);
     }
     for (const key of ["html", "json"]) {
@@ -187,5 +192,76 @@ describe("the html exporter", () => {
     });
     const text = await result!.blob.text();
     expect(text).not.toContain('id="bd-timeline"');
+  });
+});
+
+describe("buildMultiViewHtml — the drill-down page", () => {
+  const registry = createRegistry();
+
+  /** Card parent with detail + an outsider — two views plus the root. */
+  const DOC = validateTemplate({
+    version: 1,
+    meta: { title: "Drill export" },
+    nodes: [
+      { id: "web", label: "Storefront", kind: "service", icon: "globe", description: "", parentId: null, x: 100, y: 100, w: 170, h: 76 },
+      { id: "pay", label: "Payments", kind: "service", icon: "box", description: "", parentId: null, x: 500, y: 100, w: 170, h: 76 },
+      { id: "api", label: "Pay API", kind: "service", icon: "box", description: "", parentId: "pay", x: 28, y: 52, w: 170, h: 76 },
+    ],
+    edges: [{ id: "buys", source: "web", target: "api", label: "buys", style: "solid", color: "sky" }],
+  });
+
+  it("emits one section per level with distinct grid ids and nav plumbing", async () => {
+    const result = await BUILTIN_EXPORTERS.html.run({
+      template: DOC,
+      registry,
+      filename: "drill",
+    });
+    const text = await result!.blob.text();
+
+    // One section per view: the root plus the one drillable parent.
+    expect(text.match(/<section class="bd-view"/g)).toHaveLength(2);
+    expect(text).toContain('data-view=""');
+    expect(text).toContain('data-view="pay"');
+    // Every inlined SVG keeps its own dot-grid pattern.
+    expect(text).toContain('id="as-grid-v0"');
+    expect(text).toContain('id="as-grid-v1"');
+    expect(text.match(/id="as-grid-v0"/g)).toHaveLength(1);
+    // Crumb bar, drill map, hash router, and the derived elements.
+    expect(text).toContain('id="bd-crumbbar"');
+    expect(text).toContain('"drills"');
+    expect(text).toContain("hashchange");
+    expect(text).toContain("node:boundary:pay");
+    expect(text).toContain("node:ghost:web");
+    // Still fully self-contained.
+    expect(text).not.toMatch(/src="http|href="http|@import/);
+  });
+
+  it("keeps the flat-document page byte-identical to the single-view builder", async () => {
+    const flat = validateTemplate({
+      version: 1,
+      meta: { title: "Flat" },
+      nodes: [
+        { id: "a", label: "A", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76 },
+      ],
+      edges: [],
+    });
+    const result = await BUILTIN_EXPORTERS.html.run({ template: flat, registry, filename: "flat" });
+    const text = await result!.blob.text();
+    const direct = buildTimelineHtml({
+      svg: renderTemplateToSvg(flat, registry, {}),
+      title: "Flat",
+      stops: [],
+    });
+    expect(text).toBe(direct);
+    expect(text).not.toContain("bd-crumbbar");
+  });
+
+  it("mermaid and c4puml project drill detail onto its card", () => {
+    const mermaid = renderTemplateToMermaid(DOC);
+    expect(mermaid).not.toContain("Pay API");
+    expect(mermaid).toContain("web --> pay");
+    const puml = renderTemplateToC4Puml(DOC);
+    expect(puml).not.toContain("Pay API");
+    expect(puml).toContain("Rel(web, pay");
   });
 });

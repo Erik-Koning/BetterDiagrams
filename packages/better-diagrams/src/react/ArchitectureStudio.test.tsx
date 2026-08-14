@@ -40,6 +40,7 @@ vi.mock("./JsonCodeEditor", () => ({
 }));
 import { LIGHT_THEME, paletteFromTheme } from "./theme";
 import { copyFragment } from "../contract/clipboard";
+import { PRESENTATION_FORMAT, splitTemplate } from "../contract/presentation";
 import {
   EXAMPLE_TEMPLATE,
   EXAMPLE_ZONED_TEMPLATE,
@@ -2298,5 +2299,538 @@ describe("welcome modal type picker (cross-kind insert)", () => {
   it("without onFileCreate the sequence option is disabled", () => {
     mount(<ArchitectureStudio defaultValue={BLANK} />);
     expect(screen.getByRole("button", { name: "Sequence" })).toBeDisabled();
+  });
+});
+
+describe("content/presentation split", () => {
+  it("imports a layout file by re-dressing the current document", async () => {
+    const onChange = vi.fn();
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />,
+    );
+
+    const { presentation } = splitTemplate(EXAMPLE_TEMPLATE);
+    presentation.nodes!.u = { ...presentation.nodes!.u, x: 777, y: 555 };
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: {
+        files: [
+          new File([JSON.stringify(presentation)], "d.layout.json", { type: "application/json" }),
+        ],
+      },
+    });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "u")?.x).toBe(777);
+    // Everything else kept its place — a layout file is not a shuffle.
+    expect(latest.nodes.find((n) => n.id === "db")?.x).toBe(1030);
+    expect(screen.getByText(/Applied layout to 9 elements/)).toBeInTheDocument();
+  });
+
+  it("counts unmatched records so a wrong-diagram layout can't read as success", async () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    const layout = {
+      version: 1,
+      format: PRESENTATION_FORMAT,
+      nodes: {
+        u: { x: 300, y: 300, w: 180, h: 76 },
+        ghost: { x: 1, y: 2, w: 100, h: 50 },
+      },
+    };
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: {
+        files: [new File([JSON.stringify(layout)], "other.layout.json", { type: "application/json" })],
+      },
+    });
+    await waitFor(() =>
+      expect(screen.getByText("Applied layout to 1 element · 1 unmatched")).toBeInTheDocument(),
+    );
+  });
+
+  it("lays out an imported content file — a document that was never placed", async () => {
+    const onChange = vi.fn();
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={{ version: 1, nodes: [], edges: [] }} welcome={false} onChange={onChange} />,
+    );
+
+    const { content } = splitTemplate(EXAMPLE_TEMPLATE);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, {
+      target: {
+        files: [new File([JSON.stringify(content)], "d.content.json", { type: "application/json" })],
+      },
+    });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length);
+    // autoLayout ran: the nodes are not piled at the origin.
+    expect(latest.nodes.some((n) => n.x !== 0 || n.y !== 0)).toBe(true);
+  });
+
+  it("a content doc handed to the host door (defaultValue) lays itself out", () => {
+    const { content } = splitTemplate(EXAMPLE_TEMPLATE);
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={content as unknown as DiagramTemplate} welcome={false} />,
+    );
+    // Zones keep their boxes in content, so only real nodes prove the layout.
+    const transforms = [...container.querySelectorAll(".react-flow__node-shape")].map(
+      (el) => (el as HTMLElement).style.transform,
+    );
+    expect(transforms.length).toBeGreaterThan(0);
+    expect(transforms.some((t) => t && t !== "translate(0px, 0px)")).toBe(true);
+  });
+
+  it("a content doc swapped in through the controlled value lays itself out", () => {
+    const { content } = splitTemplate(EXAMPLE_TEMPLATE);
+    const { container, rerender } = mount(
+      <ArchitectureStudio value={EXAMPLE_TEMPLATE} onChange={vi.fn()} welcome={false} />,
+    );
+    rerender(
+      <ArchitectureStudio
+        value={content as unknown as DiagramTemplate}
+        onChange={vi.fn()}
+        welcome={false}
+      />,
+    );
+    const transforms = [...container.querySelectorAll(".react-flow__node-shape")].map(
+      (el) => (el as HTMLElement).style.transform,
+    );
+    expect(transforms.length).toBeGreaterThan(0);
+    expect(transforms.some((t) => t && t !== "translate(0px, 0px)")).toBe(true);
+  });
+
+  it("refines through the content form and preserves the layout exactly", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { content } = splitTemplate(EXAMPLE_TEMPLATE);
+    // The "model" renames the API, adds a metrics service, and wires it up —
+    // pure content edits, no geometry anywhere.
+    const reply = {
+      ...content,
+      nodes: [
+        ...content.nodes.map((n) => (n.id === "api" ? { ...n, label: "REST API v2" } : n)),
+        { id: "metrics", label: "Metrics", kind: "service", icon: "box", description: "", parentId: null },
+      ],
+      edges: [
+        ...content.edges,
+        { id: "e8", source: "api", target: "metrics", label: "", style: "dotted", color: "slate" },
+      ],
+    };
+    const generate = vi.fn().mockResolvedValue(reply);
+    mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} generate={generate} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "✦ AI" }));
+    await user.type(
+      screen.getByPlaceholderText('"make the queue edges dotted" · "add a CDN"'),
+      "add metrics",
+    );
+    await user.click(screen.getByRole("button", { name: "Apply refinement" }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+
+    // The request spoke the content form: no coordinates offered, none asked for.
+    const req = generate.mock.calls[0][0];
+    expect(req.mode).toBe("refine");
+    expect(JSON.stringify(req.current)).not.toContain('"x"');
+    expect(req.systemPrompt).toContain("NEVER emit x/y/w/h");
+    // Node geometry gone from the skeleton (zone boxes stay — they are content).
+    expect(req.systemPrompt).not.toContain('"w":170,"h":76');
+    expect(req.systemPrompt).not.toContain('"labelT":0.5');
+
+    // Every surviving element kept its exact place…
+    const api = latest.nodes.find((n) => n.id === "api")!;
+    expect(api.label).toBe("REST API v2");
+    expect([api.x, api.y]).toEqual([30, 60]);
+    const vpc = latest.nodes.find((n) => n.id === "vpc")!;
+    expect([vpc.x, vpc.y, vpc.w, vpc.h]).toEqual([520, 40, 440, 380]);
+    expect(latest.nodes.find((n) => n.id === "db")?.x).toBe(1030);
+    // …and only the newcomer was placed, below the existing canvas.
+    const metrics = latest.nodes.find((n) => n.id === "metrics")!;
+    expect(metrics.y).toBeGreaterThan(500);
+    expect(latest.edges.some((e) => e.id === "e8")).toBe(true);
+  });
+});
+
+describe("drill-down (C4 levels)", () => {
+  /** A card parent with two levels of detail, an outsider, and crossing edges. */
+  const DRILL_DOC: DiagramTemplate = validateTemplate({
+    version: 1,
+    meta: { title: "Shop" },
+    nodes: [
+      { id: "web", label: "Storefront", kind: "service", icon: "globe", description: "", parentId: null, x: 100, y: 100, w: 170, h: 76 },
+      { id: "pay", label: "Payments Core", kind: "service", icon: "box", description: "", parentId: null, x: 500, y: 100, w: 170, h: 76 },
+      { id: "api", label: "Pay API", kind: "service", icon: "box", description: "", parentId: "pay", x: 28, y: 52, w: 170, h: 76 },
+      { id: "guard", label: "Auth Guard", kind: "service", icon: "shield", description: "", parentId: "pay", x: 28, y: 180, w: 170, h: 76 },
+      { id: "jobs", label: "Job Workers", kind: "group", icon: "none", description: "", parentId: "pay", x: 260, y: 52, w: 300, h: 200 },
+      { id: "retry", label: "Retry Worker", kind: "worker", icon: "gear", description: "", parentId: "jobs", x: 20, y: 60, w: 170, h: 76 },
+    ],
+    edges: [
+      { id: "buys", source: "web", target: "api", label: "buys", style: "solid", color: "sky" },
+      { id: "wires", source: "api", target: "guard", label: "verifies", style: "solid", color: "slate" },
+    ],
+  });
+
+  /** Double-click a node body and wait for the focus bar to appear. */
+  async function drillIntoLabel(label: string) {
+    fireEvent.doubleClick(screen.getByText(label));
+    await waitFor(
+      () => expect(screen.getByRole("navigation", { name: "Diagram level" })).toBeInTheDocument(),
+      { timeout: 2000 },
+    );
+  }
+
+  it("double-click drills in: focus chrome, children, ghosts", async () => {
+    mount(<ArchitectureStudio defaultValue={DRILL_DOC} />);
+    await drillIntoLabel("Payments Core");
+
+    // Breadcrumbs: root › focus, with the C4 level chip and the way out.
+    const bar = screen.getByRole("navigation", { name: "Diagram level" });
+    expect(within(bar).getByText("Shop")).toBeInTheDocument();
+    expect(within(bar).getByText("Payments Core")).toBeInTheDocument();
+    expect(within(bar).getByText("C2 · Containers")).toBeInTheDocument();
+    expect(within(bar).getByRole("button", { name: "Exit focus" })).toBeInTheDocument();
+
+    // The level: children visible, group child as a chip, outsider as ghost.
+    expect(screen.getByText("Pay API")).toBeInTheDocument();
+    expect(screen.getByText("Job Workers")).toBeInTheDocument();
+    expect(screen.queryByText("Retry Worker")).not.toBeInTheDocument();
+    expect(screen.getByTitle("External to this view — double-click to visit")).toBeInTheDocument();
+  });
+
+  it("drilling is a view change — no onChange, nothing to undo", async () => {
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={DRILL_DOC} onChange={onChange} />);
+    await drillIntoLabel("Payments Core");
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
+  it("edits inside a level write through; everything else stays byte-identical", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={DRILL_DOC} onChange={onChange} />);
+    await drillIntoLabel("Payments Core");
+
+    await fromMenu(user, "Insert ▾", /^Node /);
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const emitted = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+
+    const oldIds = new Set(DRILL_DOC.nodes.map((n) => n.id));
+    const added = emitted.nodes.filter((n) => !oldIds.has(n.id));
+    expect(added).toHaveLength(1);
+    expect(added[0].parentId).toBe("pay");
+
+    const kept = emitted.nodes.filter((n) => oldIds.has(n.id));
+    expect(JSON.stringify(kept)).toBe(JSON.stringify(DRILL_DOC.nodes));
+    expect(JSON.stringify(emitted.edges)).toBe(JSON.stringify(DRILL_DOC.edges));
+  });
+
+  it("ghosts cannot be deleted and report their real id to the host", async () => {
+    const onChange = vi.fn();
+    const onSelectionChange = vi.fn();
+    mount(
+      <ArchitectureStudio
+        defaultValue={DRILL_DOC}
+        onChange={onChange}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+    await drillIntoLabel("Payments Core");
+
+    const ghost = screen.getByTitle("External to this view — double-click to visit");
+    fireEvent.click(ghost);
+    await waitFor(() =>
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ nodes: ["web"], edges: [], zones: [] }),
+    );
+
+    fireEvent.keyDown(window, { key: "Delete" });
+    await screen.findByText("External elements are edited at their own level");
+    expect(onChange).not.toHaveBeenCalled();
+    // The ghost inspector is a signpost, not an edit form.
+    expect(screen.getByRole("button", { name: "Go to definition" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Node label")).not.toBeInTheDocument();
+  });
+
+  it("Escape clears chrome first, then drills out", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={DRILL_DOC} />);
+    await drillIntoLabel("Payments Core");
+
+    await user.click(screen.getByRole("button", { name: "Insert ▾" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Diagram level" })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("Storefront")).toBeInTheDocument();
+  });
+
+  it("breadcrumbs navigate across two levels", async () => {
+    mount(<ArchitectureStudio defaultValue={DRILL_DOC} />);
+    await drillIntoLabel("Payments Core");
+    await drillIntoLabel("Job Workers");
+
+    // The second drill swaps on a timer — wait for the deeper level chip.
+    await waitFor(
+      () =>
+        expect(
+          within(screen.getByRole("navigation", { name: "Diagram level" })).getByText(
+            "C3 · Components",
+          ),
+        ).toBeInTheDocument(),
+      { timeout: 2000 },
+    );
+    const bar = screen.getByRole("navigation", { name: "Diagram level" });
+    expect(screen.getByText("Retry Worker")).toBeInTheDocument();
+
+    // The root crumb exits everything.
+    fireEvent.click(within(bar).getByRole("button", { name: /Shop/ }));
+    await waitFor(() =>
+      expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("Storefront")).toBeInTheDocument();
+  });
+
+  it("a leaf drill lands in the empty-boundary state", async () => {
+    mount(<ArchitectureStudio defaultValue={DRILL_DOC} />);
+    await drillIntoLabel("Storefront");
+    expect(screen.getByText(/has no internals yet/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "＋ Add node" })).toBeInTheDocument();
+    // Its external contracts still show: the card it talks to stands in.
+    expect(screen.getByTitle("External to this view — double-click to visit")).toBeInTheDocument();
+  });
+
+  it("saving while focused hands the host the FULL document", async () => {
+    const onSave = vi.fn();
+    mount(<ArchitectureStudio defaultValue={DRILL_DOC} onSave={onSave} />);
+    await drillIntoLabel("Payments Core");
+
+    fireEvent.click(screen.getByRole("button", { name: /Save/ }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    const saved = onSave.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(saved.nodes.map((n) => n.id).sort()).toEqual(
+      [...DRILL_DOC.nodes.map((n) => n.id)].sort(),
+    );
+  });
+
+  it("compare mode exits the drill", async () => {
+    const { rerender } = mount(<ArchitectureStudio defaultValue={DRILL_DOC} />);
+    await drillIntoLabel("Payments Core");
+
+    rerender(<ArchitectureStudio defaultValue={DRILL_DOC} diffBase={EXAMPLE_TEMPLATE} />);
+    await waitFor(() =>
+      expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("a controlled swap that removes the focus node prunes to the root", async () => {
+    function Host() {
+      const [value, setValue] = useState<DiagramTemplate>(DRILL_DOC);
+      return (
+        <>
+          <button type="button" onClick={() => setValue(EXAMPLE_TEMPLATE)}>
+            swap-doc
+          </button>
+          <ArchitectureStudio value={value} onChange={setValue} />
+        </>
+      );
+    }
+    mount(<Host />);
+    await drillIntoLabel("Payments Core");
+
+    fireEvent.click(screen.getByText("swap-doc"));
+    await waitFor(() =>
+      expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+  });
+
+  it("the drill badge counts children and single-click opens the level", async () => {
+    mount(<ArchitectureStudio defaultValue={DRILL_DOC} />);
+    const badge = screen.getByRole("button", { name: "Open Payments Core — 3 inside" });
+    expect(badge).toHaveTextContent("⊞ 3");
+    fireEvent.click(badge);
+    await waitFor(
+      () => expect(screen.getByRole("navigation", { name: "Diagram level" })).toBeInTheDocument(),
+      { timeout: 2000 },
+    );
+  });
+
+  it("readOnly can drill into detail but not into empty leaves", async () => {
+    mount(<ArchitectureStudio defaultValue={DRILL_DOC} readOnly />);
+    await drillIntoLabel("Payments Core");
+    expect(screen.getByText("Pay API")).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument(),
+    );
+    // A leaf has nothing to show a viewer: double-click stays put.
+    fireEvent.doubleClick(screen.getByText("Storefront"));
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument();
+  });
+});
+
+describe("drill-down AI scope", () => {
+  const DRILL_DOC: DiagramTemplate = validateTemplate({
+    version: 1,
+    meta: { title: "Shop" },
+    nodes: [
+      { id: "web", label: "Storefront", kind: "service", icon: "globe", description: "", parentId: null, x: 100, y: 100, w: 170, h: 76 },
+      { id: "pay", label: "Payments Core", kind: "service", icon: "box", description: "", parentId: null, x: 500, y: 100, w: 170, h: 76 },
+      { id: "api", label: "Pay API", kind: "service", icon: "box", description: "", parentId: "pay", x: 28, y: 52, w: 170, h: 76 },
+    ],
+    edges: [{ id: "buys", source: "web", target: "api", label: "buys", style: "solid", color: "sky" }],
+  });
+
+  it("focused refine frames the scope; generate steps aside", async () => {
+    const user = userEvent.setup();
+    const { content } = splitTemplate(DRILL_DOC);
+    const reply = {
+      ...content,
+      nodes: [
+        ...content.nodes,
+        { id: "ledger", label: "Ledger", kind: "database", icon: "database", description: "", parentId: "pay" },
+      ],
+    };
+    const generate = vi.fn().mockResolvedValue(reply);
+    mount(<ArchitectureStudio defaultValue={DRILL_DOC} generate={generate} />);
+
+    fireEvent.doubleClick(screen.getByText("Payments Core"));
+    await waitFor(
+      () => expect(screen.getByRole("navigation", { name: "Diagram level" })).toBeInTheDocument(),
+      { timeout: 2000 },
+    );
+
+    await user.click(screen.getByRole("button", { name: "✦ AI" }));
+    // Generate is unavailable while focused — the panel hands the way out.
+    expect(screen.queryByPlaceholderText(/Paste requirements/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Generate replaces the whole diagram/)).toBeInTheDocument();
+    // The refine section says exactly where it will work.
+    expect(screen.getByText(/Refining inside: “Payments Core” · C2 · Containers/)).toBeInTheDocument();
+
+    await user.type(
+      screen.getByPlaceholderText('"add a cache between these" · "split the parser"'),
+      "add a ledger",
+    );
+    await user.click(screen.getByRole("button", { name: "Apply refinement" }));
+
+    await waitFor(() => expect(generate).toHaveBeenCalled());
+    const req = generate.mock.calls[0][0];
+    expect(req.input).toContain('drilled into "Payments Core" (node id "pay")');
+    expect(req.input).toContain("add a ledger");
+
+    // The reply lands, the focus survives, and the new part joins the level.
+    await waitFor(() => expect(screen.getByText("Ledger")).toBeInTheDocument(), { timeout: 2000 });
+    expect(screen.getByRole("navigation", { name: "Diagram level" })).toBeInTheDocument();
+  });
+});
+
+describe("drill-down under StrictMode + controlled mode", () => {
+  // The example app's exact wiring. StrictMode double-invokes render, which
+  // is how half-advanced materialization refs have destroyed data before —
+  // the drill's focus refs ride the same choreography, so prove the loop:
+  // drill in, edit, and the controlled round-trip must lose nothing.
+  it("drills, edits, and round-trips losslessly", async () => {
+    const user = userEvent.setup();
+    const DOC: DiagramTemplate = validateTemplate({
+      version: 1,
+      meta: { title: "Strict" },
+      nodes: [
+        { id: "web", label: "Storefront", kind: "service", icon: "globe", description: "", parentId: null, x: 100, y: 100, w: 170, h: 76 },
+        { id: "pay", label: "Payments Core", kind: "service", icon: "box", description: "", parentId: null, x: 500, y: 100, w: 170, h: 76 },
+        { id: "api", label: "Pay API", kind: "service", icon: "box", description: "", parentId: "pay", x: 28, y: 52, w: 170, h: 76 },
+      ],
+      edges: [{ id: "buys", source: "web", target: "api", label: "buys", style: "solid", color: "sky" }],
+    });
+
+    function Host() {
+      const [value, setValue] = useState<DiagramTemplate>(DOC);
+      return <ArchitectureStudio value={value} onChange={setValue} />;
+    }
+    mount(
+      <StrictMode>
+        <Host />
+      </StrictMode>,
+    );
+
+    fireEvent.doubleClick(screen.getByText("Payments Core"));
+    await waitFor(
+      () => expect(screen.getByRole("navigation", { name: "Diagram level" })).toBeInTheDocument(),
+      { timeout: 2000 },
+    );
+
+    // Edit inside the level, then leave it.
+    await fromMenu(user, "Insert ▾", /^Node /);
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument(),
+    );
+
+    // Nothing was eaten by the double-invoked choreography: the outsider,
+    // the card, its detail, and the crossing edge are all still on the doc.
+    fireEvent.doubleClick(screen.getByText("Payments Core"));
+    await waitFor(
+      () => expect(screen.getByText("Pay API")).toBeInTheDocument(),
+      { timeout: 2000 },
+    );
+    expect(
+      screen.getByTitle("External to this view — double-click to visit"),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("Tidy respects the level you are looking at", () => {
+  it("arranges the focused level and leaves the visible canvas alone", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    // Two children piled at the same spot inside the card.
+    const DOC: DiagramTemplate = validateTemplate({
+      version: 1,
+      meta: { title: "Shop" },
+      nodes: [
+        { id: "web", label: "Storefront", kind: "service", icon: "globe", description: "", parentId: null, x: 100, y: 100, w: 170, h: 76 },
+        { id: "pay", label: "Payments Core", kind: "service", icon: "box", description: "", parentId: null, x: 500, y: 100, w: 170, h: 76 },
+        { id: "api", label: "Pay API", kind: "service", icon: "box", description: "", parentId: "pay", x: 20, y: 20, w: 170, h: 76 },
+        { id: "guard", label: "Auth Guard", kind: "service", icon: "shield", description: "", parentId: "pay", x: 20, y: 20, w: 170, h: 76 },
+      ],
+      edges: [{ id: "wires", source: "api", target: "guard", label: "", style: "solid", color: "slate" }],
+    });
+
+    mount(<ArchitectureStudio defaultValue={DOC} onChange={onChange} />);
+    fireEvent.doubleClick(screen.getByText("Payments Core"));
+    await waitFor(
+      () => expect(screen.getByRole("navigation", { name: "Diagram level" })).toBeInTheDocument(),
+      { timeout: 2000 },
+    );
+
+    await fromMenu(user, "Arrange ▾", /^Tidy/);
+    await screen.findByText("Tidied this level");
+
+    const emitted = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    const api = emitted.nodes.find((n) => n.id === "api")!;
+    const guard = emitted.nodes.find((n) => n.id === "guard")!;
+    // The pile was separated, in the card's own local coordinates…
+    expect([api.x, api.y]).not.toEqual([guard.x, guard.y]);
+    // …the card kept its own footprint on the level above…
+    expect(emitted.nodes.find((n) => n.id === "pay")).toMatchObject({
+      x: 500,
+      y: 100,
+      w: 170,
+      h: 76,
+    });
+    // …and nothing on the visible canvas moved.
+    expect(emitted.nodes.find((n) => n.id === "web")).toMatchObject({ x: 100, y: 100 });
   });
 });

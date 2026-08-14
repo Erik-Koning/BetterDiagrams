@@ -25,6 +25,13 @@ export interface WelcomeModalProps {
   /** What "Copy Schema & System Prompt" puts on the clipboard. */
   systemPrompt: string;
   /**
+   * The CONTENT-form prompt for `kind` — elements only, no geometry.
+   * Providing it puts a hover menu on the copy button offering both forms:
+   * elements-only for documents whose layout the editor manages, and the
+   * full schema when the AI should place everything itself.
+   */
+  systemPromptContent?: string;
+  /**
    * Prefill for the JSON editor. The modal's usual job is greeting a blank
    * document, but with this a host can reopen it over an existing diagram as
    * a JSON editor — same parsing, healing, and insert flow.
@@ -47,8 +54,9 @@ export interface WelcomeModalProps {
    * Absent (the sequence editor) ⇒ no toggle row.
    */
   cloudProviders?: { id: string; label: string; color: string }[];
-  /** Builds the prompt for the selected clouds; copy prefers it when present. */
-  promptForClouds?: (clouds: string[]) => string;
+  /** Builds the prompt for the selected clouds; copy prefers it when present.
+   *  `geometry: false` asks for the content form (see `systemPromptContent`). */
+  promptForClouds?: (clouds: string[], opts?: { geometry?: boolean }) => string;
   /**
    * Clouds pre-toggled at mount — the studio passes the ones the open
    * document already references, so an immediate copy describes the diagram
@@ -65,6 +73,8 @@ export interface WelcomeModalProps {
   onInsertOther?: (doc: unknown, name: string) => void;
   /** What "Copy Schema & System Prompt" copies while the other kind is picked. */
   systemPromptOther?: string;
+  /** Content-form prompt for the other kind — same menu, other side of the picker. */
+  systemPromptOtherContent?: string;
   /**
    * Pin the picker to `kind`, rendered but disabled — for reopening the
    * modal as a JSON editor over an existing file, whose type must not be
@@ -169,6 +179,7 @@ export function WelcomeModal({
   defaultName,
   showNameField,
   systemPrompt,
+  systemPromptContent,
   initialText,
   parse,
   onInsert,
@@ -180,6 +191,7 @@ export function WelcomeModal({
   parseOther,
   onInsertOther,
   systemPromptOther,
+  systemPromptOtherContent,
   lockKind,
 }: WelcomeModalProps) {
   const [name, setName] = useState(defaultName);
@@ -188,7 +200,7 @@ export function WelcomeModal({
   const [error, setError] = useState<string | null>(null);
   /** Lossy rescue for a failed Insert — offered, never applied on its own. */
   const [approxFix, setApproxFix] = useState<{ text: string; sites: number } | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<null | "full" | "content">(null);
   const [pickedKind, setPickedKind] = useState<WelcomeModalProps["kind"]>(kind);
   /** A manual pick wins over auto-detect for the rest of the session. */
   const [kindTouched, setKindTouched] = useState(false);
@@ -204,19 +216,27 @@ export function WelcomeModal({
       current.includes(id) ? current.filter((c) => c !== id) : [...current, id],
     );
 
-  const handleCopy = async () => {
+  // The content form exists only when the host supplied it — that presence
+  // is what turns the copy button into a two-option hover menu.
+  const contentPromptAvailable = !!(pickedKind === kind ? systemPromptContent : systemPromptOtherContent);
+
+  const handleCopy = async (form: "full" | "content" = "full") => {
     const prompt =
       pickedKind === kind
-        ? (promptForClouds?.(selectedClouds) ?? systemPrompt)
-        : (systemPromptOther ?? systemPrompt);
+        ? form === "content"
+          ? (promptForClouds?.(selectedClouds, { geometry: false }) ?? systemPromptContent ?? systemPrompt)
+          : (promptForClouds?.(selectedClouds) ?? systemPrompt)
+        : form === "content"
+          ? (systemPromptOtherContent ?? systemPromptOther ?? systemPrompt)
+          : (systemPromptOther ?? systemPrompt);
     const ok = await copyText(prompt);
     if (!ok) {
       setError("Clipboard is blocked in this context — copy from the docs instead.");
       return;
     }
-    setCopied(true);
+    setCopied(form);
     clearTimeout(copyTimer.current);
-    copyTimer.current = setTimeout(() => setCopied(false), 1500);
+    copyTimer.current = setTimeout(() => setCopied(null), 1500);
   };
 
   const handleInsert = () => {
@@ -325,12 +345,46 @@ export function WelcomeModal({
               →
             </span>
           </button>
-          <button type="button" className="as-btn as-welcome__cta" onClick={handleCopy}>
-            <span>{copied ? "Copied ✓" : "Copy Schema & System Prompt"}</span>
-            <span className="as-welcome__arrow" aria-hidden="true">
-              →
-            </span>
-          </button>
+          {/* Hover (or keyboard focus) reveals the form picker; a plain click
+              keeps the historical behaviour and copies the full schema. */}
+          <div className={`as-welcome__copy${contentPromptAvailable ? " as-menu-wrap" : ""}`}>
+            <button type="button" className="as-btn as-welcome__cta" onClick={() => handleCopy("full")}>
+              <span>{copied === "full" ? "Copied ✓" : "Copy Schema & System Prompt"}</span>
+              <span className="as-welcome__arrow" aria-hidden="true">
+                →
+              </span>
+            </button>
+            {contentPromptAvailable ? (
+              <div className="as-menu as-menu--left as-welcome__copy-menu" role="menu">
+                <button
+                  type="button"
+                  className="as-menu__item"
+                  role="menuitem"
+                  onClick={() => handleCopy("content")}
+                >
+                  <div className="as-menu__label">
+                    {copied === "content" ? "Copied ✓" : "Elements only"}
+                  </div>
+                  <div className="as-menu__hint">
+                    No positions — you or the editor keep the layout; best for complex diagrams
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  className="as-menu__item"
+                  role="menuitem"
+                  onClick={() => handleCopy("full")}
+                >
+                  <div className="as-menu__label">
+                    {copied === "full" ? "Copied ✓" : "Full schema"}
+                  </div>
+                  <div className="as-menu__hint">
+                    Elements and positioning — the AI lays out the whole diagram
+                  </div>
+                </button>
+              </div>
+            ) : null}
+          </div>
         </div>
 
         <div className="as-welcome__editor">

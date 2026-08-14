@@ -52,18 +52,19 @@ describe("resolveRegistry", () => {
 
   it("orders kinds: built-ins, then cloud packs, then extensions", () => {
     const r = resolveRegistry({ nodeKinds: { zeta: {}, alpha: {} } });
-    expect(r.kindOrder.slice(0, 8)).toEqual([
+    expect(r.kindOrder.slice(0, 9)).toEqual([
       "service",
       "database",
       "queue",
       "gateway",
       "client",
       "external",
+      "table",
       "group",
       "text",
     ]);
     // The cloud pack kinds sit between built-ins and extensions.
-    expect(r.kindOrder[8]).toBe("aws-lambda");
+    expect(r.kindOrder[9]).toBe("aws-lambda");
     expect(r.kindOrder.slice(-2)).toEqual(["zeta", "alpha"]);
   });
 
@@ -448,5 +449,53 @@ describe("colour theming", () => {
     expect(renderTemplateToSvg(doc("planned"), registry)).toContain('fill="#f59e0b"');
     // Active with a past date just means "landed" — quiet grey chip.
     expect(renderTemplateToSvg(doc(), registry)).not.toContain("#f59e0b");
+  });
+});
+
+describe("edge route export parity", () => {
+  const registry = resolveRegistry();
+  const routed = validateTemplate({
+    version: 1,
+    nodes: [
+      { id: "a", label: "A", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 100, h: 50 },
+      { id: "b", label: "B", kind: "service", icon: "box", description: "", parentId: null, x: 400, y: 0, w: 100, h: 50 },
+    ],
+    edges: [
+      {
+        id: "e1", source: "a", target: "b", label: "", style: "solid", color: "slate",
+        start: { side: "bottom" }, points: [[250, 300]],
+      },
+    ],
+  });
+
+  it("draws the anchored, waypointed path in SVG exactly as the canvas would", () => {
+    const svg = renderTemplateToSvg(routed, registry);
+    // Leaves the bottom of A (its centre-bottom is 50,50) — the M of the edge path.
+    expect(svg).toContain("M 50 50");
+    // And the curve passes through the waypoint's x territory: the spline is
+    // emitted as chained cubics, one knot exactly at the waypoint.
+    expect(svg).toMatch(/C [^"]*250 300/);
+  });
+
+  it("strips the route from collapse-rerouted edges in exports too", () => {
+    const collapsed = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "g", label: "G", kind: "group", icon: "none", description: "", parentId: null, collapsed: true, x: 0, y: 0, w: 400, h: 300 },
+        { id: "inner", label: "I", kind: "service", icon: "box", description: "", parentId: "g", x: 30, y: 60, w: 170, h: 76 },
+        { id: "out", label: "O", kind: "service", icon: "box", description: "", parentId: null, x: 600, y: 400, w: 170, h: 76 },
+      ],
+      edges: [
+        {
+          id: "e1", source: "inner", target: "out", label: "", style: "solid", color: "slate",
+          start: { side: "top" }, points: [[900, -500]],
+        },
+      ],
+    });
+    const { cmds } = emitTemplate(collapsed, registry);
+    const edgePath = cmds.find((c) => c.op === "path" && c.stroke && !c.fill);
+    // The waypoint (and the anchor on the hidden box) must not leak into the
+    // chip-rerouted line — no command reaches toward the stale route.
+    expect(JSON.stringify(edgePath)).not.toContain("-500");
   });
 });

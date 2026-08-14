@@ -25,7 +25,14 @@ import { isOverdue } from "../contract/timeline";
 import { kindDef, iconPaths } from "./registry-types";
 import { ZoneNode } from "./ZoneNode";
 import { silhouettePath, teamColor } from "./shapes";
-import { NODE_MIN_SIZE, type DiagramNodeData } from "../contract/schema";
+import {
+  NODE_MIN_SIZE,
+  ghostSourceId,
+  isBoundaryNodeId,
+  isGhostNodeId,
+  type DiagramNodeData,
+  type NodeField,
+} from "../contract/schema";
 
 export type ShapeNodeType = Node<DiagramNodeData, "shape">;
 export type GroupNodeType = Node<DiagramNodeData, "group">;
@@ -75,16 +82,63 @@ export function ConnectHandles({ hidden }: { hidden: boolean }) {
 
 // ─── Shape ───────────────────────────────────────────────────────────────────
 
+/**
+ * A node's rows — a table's columns, a class's properties.
+ *
+ * The rendered row height must stay equal to the contract's `FIELD_ROW_H`
+ * (styles.css pins it, with the same warning). That constant is what a
+ * field-anchored edge and the PNG exporter both compute a row's position from,
+ * so a row that renders taller here would leave foreign-key lines pointing
+ * between columns on screen while landing correctly in the export.
+ */
+function FieldList({ fields }: { fields: readonly NodeField[] }) {
+  return (
+    <ul className="as-node__fields">
+      {fields.map((field) => (
+        <li key={field.id} className="as-node__field" data-field-id={field.id}>
+          {field.key ? (
+            <span className={`as-node__fieldkey as-node__fieldkey--${field.key}`}>{field.key}</span>
+          ) : null}
+          <span className="as-node__fieldname" title={field.name}>
+            {field.name}
+            {field.required ? (
+              <span className="as-node__fieldreq" title="Required">
+                *
+              </span>
+            ) : null}
+          </span>
+          {field.type ? (
+            <span className="as-node__fieldtype" title={field.type}>
+              {field.type}
+            </span>
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export const ShapeNode = memo(function ShapeNode({
+  id,
   data,
   selected,
   width,
   height,
 }: NodeProps<ShapeNodeType>) {
-  const { registry, readOnly, tagFilter, showTeams, requestCommit, navigateFile } = useStudio();
+  const { registry, readOnly, tagFilter, showTeams, requestCommit, navigateFile, drillInto, navigateToNode, childCounts } = useStudio();
   const def = kindDef(registry, data.kind);
   const paths = iconPaths(registry, data.icon);
   const shape = def.shape ?? "card";
+
+  // A scoped view's ghost stands in for an element on another level: it
+  // renders dimmed-and-dashed, and its double-click visits the real thing.
+  const scopeGhost = isGhostNodeId(id);
+  const childCount = scopeGhost ? 0 : (childCounts.get(id) ?? 0);
+  const onDoubleClick = scopeGhost
+    ? () => navigateToNode(ghostSourceId(id))
+    : childCount > 0 || !readOnly
+      ? () => drillInto(id)
+      : undefined;
 
   const w = width ?? 170;
   const h = height ?? 76;
@@ -107,8 +161,10 @@ export const ShapeNode = memo(function ShapeNode({
   const className = [
     "as-node",
     shape !== "card" ? `as-node--shaped as-node--${shape}` : "",
+    data.fields?.length ? "as-node--record" : "",
     selected ? "as-node--selected" : "",
-    data.ghost ? "as-ghost" : "",
+    data.ghost || scopeGhost ? "as-ghost" : "",
+    scopeGhost ? "as-node--scope-ghost" : "",
     dimmed ? "as-node--dimmed" : "",
     data.status ? `as-node--status-${data.status}` : "",
   ]
@@ -118,7 +174,7 @@ export const ShapeNode = memo(function ShapeNode({
   return (
     <>
       <NodeResizer
-        isVisible={!!selected && !readOnly && !data.locked}
+        isVisible={!!selected && !readOnly && !data.locked && !scopeGhost}
         minWidth={NODE_MIN_SIZE.shape.w}
         minHeight={NODE_MIN_SIZE.shape.h}
         lineClassName="as-resize-line"
@@ -128,10 +184,13 @@ export const ShapeNode = memo(function ShapeNode({
       <div
         className={className}
         style={style}
+        onDoubleClick={onDoubleClick}
         title={
-          data.ghost
-            ? `Hidden by the current provider selection — visible on ${data.providers?.join(", ")}`
-            : undefined
+          scopeGhost
+            ? "External to this view — double-click to visit"
+            : data.ghost
+              ? `Hidden by the current provider selection — visible on ${data.providers?.join(", ")}`
+              : undefined
         }
       >
         {sil ? (
@@ -150,11 +209,27 @@ export const ShapeNode = memo(function ShapeNode({
           <div className="as-node__kind">
             {def.label}
             {data.status ? <span className="as-node__status"> · {data.status}</span> : null}
+            {childCount > 0 ? (
+              <button
+                type="button"
+                className="as-node__drill nodrag"
+                title={`${childCount} inside — open this level`}
+                aria-label={`Open ${data.label} — ${childCount} inside`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  drillInto(id);
+                }}
+              >
+                ⊞ {childCount}
+              </button>
+            ) : null}
           </div>
           <div className="as-node__title" title={data.label}>
             {data.label}
           </div>
           {data.description ? <div className="as-node__desc">{data.description}</div> : null}
+          {data.fields?.length ? <FieldList fields={data.fields} /> : null}
           <DateChip date={data.date} prefix="Lands" overdue={isOverdue(data.date, data.status)} />
         </div>
         {data.url?.startsWith("file:") ? (
@@ -210,9 +285,38 @@ export const ShapeNode = memo(function ShapeNode({
 // ─── Group ───────────────────────────────────────────────────────────────────
 
 export const GroupNode = memo(function GroupNode({ id, data, selected }: NodeProps<GroupNodeType>) {
-  const { registry, readOnly, showTeams, requestCommit } = useStudio();
+  const { registry, readOnly, showTeams, requestCommit, focus, drillInto, navigateToNode, childCounts } = useStudio();
   const { updateNodeData } = useReactFlow();
   const def = kindDef(registry, data.kind);
+
+  // In a scoped view every group child renders as a chip BY FORCE — expanding
+  // one there would write the chip's 180×44 over the stored size. The toggle
+  // disappears while drilled in; double-click drills instead.
+  const scopeGhost = isGhostNodeId(id);
+  const isBoundary = isBoundaryNodeId(id);
+  const inScopedView = focus !== null;
+  const childCount = scopeGhost || isBoundary ? 0 : (childCounts.get(id) ?? 0);
+  const onDoubleClick = isBoundary
+    ? undefined
+    : scopeGhost
+      ? () => navigateToNode(ghostSourceId(id))
+      : () => drillInto(id);
+  const drillBadge =
+    childCount > 0 ? (
+      <button
+        type="button"
+        className="as-node__drill nodrag"
+        title={`${childCount} inside — open this level`}
+        aria-label={`Open ${data.label} — ${childCount} inside`}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          drillInto(id);
+        }}
+      >
+        ⊞ {childCount}
+      </button>
+    ) : null;
 
   const style = { "--as-node-accent": def.accent } as CSSProperties;
   const teamBadge =
@@ -254,12 +358,22 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
       <>
         <ConnectHandles hidden={readOnly} />
         <div
-          className={`as-group-chip${selected ? " as-group-chip--selected" : ""}`}
+          className={`as-group-chip${selected ? " as-group-chip--selected" : ""}${scopeGhost ? " as-ghost as-node--scope-ghost" : ""}`}
           style={style}
-          title={`${data.label} — collapsed`}
+          onDoubleClick={onDoubleClick}
+          title={
+            scopeGhost
+              ? "External to this view — double-click to visit"
+              : `${data.label} — collapsed · double-click to open`
+          }
         >
-          {!readOnly ? toggle : <span className="as-group__collapse">▸</span>}
+          {!readOnly && !inScopedView && !scopeGhost ? (
+            toggle
+          ) : (
+            <span className="as-group__collapse">▸</span>
+          )}
           <span className="as-group-chip__label">{data.label}</span>
+          {!scopeGhost ? drillBadge : null}
           <DateChip date={data.date} inline prefix="Lands" overdue={isOverdue(data.date, data.status)} />
           {teamBadge}
         </div>
@@ -275,10 +389,11 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
         className={`as-group${selected ? " as-group--selected" : ""}${data.status ? ` as-node--status-${data.status}` : ""}`}
         style={style}
       >
-        <div className="as-group__label" title={data.label}>
-          {!readOnly ? toggle : null}
+        <div className="as-group__label" title={data.label} onDoubleClick={onDoubleClick}>
+          {!readOnly && !inScopedView ? toggle : null}
           {/* The name owns the truncation so the chips after it stay whole. */}
           <span className="as-group__name">{data.label}</span>
+          {drillBadge}
           <DateChip date={data.date} inline prefix="Lands" overdue={isOverdue(data.date, data.status)} />
           {teamBadge}
         </div>

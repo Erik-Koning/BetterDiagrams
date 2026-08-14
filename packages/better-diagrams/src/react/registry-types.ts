@@ -38,6 +38,16 @@ export interface NodeKindDef {
   /** Rendered as bare text with no box or icon. */
   annotation?: boolean;
   /**
+   * This kind's substance is its rows (`node.fields`) — a database table, a
+   * class, a message schema. It gets the field editor in the inspector, and
+   * an icon would only crowd the list, so it renders without one.
+   *
+   * A flag rather than a hard-coded kind list, so a host or cloud pack can
+   * declare its own record-bearing kinds — the same escape the `container`
+   * and `annotation` flags give.
+   */
+  record?: boolean;
+  /**
    * Cloud pack tag ("aws" | "azure" | "gcp" | …). Registry-level metadata:
    * the UI groups the kind under its provider and demotes it when the
    * document doesn't reference that provider. Documents never store it.

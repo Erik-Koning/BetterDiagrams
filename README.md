@@ -161,6 +161,159 @@ Text notes render **boxed by default** — a subtle outline and background, on s
 exports. Set `plain: true` (or untick **Outline** in the inspector) for bare text. Like every
 default, it is stored only when it differs, so pre-existing documents round-trip byte-identical.
 
+## Drill-down: C1–C4 levels in one document
+
+A node's children (`parentId`) are its next C4 level — any kind can have them, not just
+groups. A `group` still renders its children inline inside its frame; a **card of any other
+kind keeps its normal look** and its children live behind it, visible only by drilling in.
+Double-click a node (or its `⊞ n` badge) to slide into its level: the focused node becomes an
+open boundary frame, its direct children render at their stored coordinates, and everything
+they talk to outside appears as dashed **ghost** stand-ins — double-click a ghost to visit the
+real thing. Breadcrumbs, a `C2 · Containers`-style level pill, and `Esc` step you back out.
+
+Levels are **views, never copies**: every derivation comes from `scopedView(template, focusId)`
+and every edit inside a level writes straight back to the one document (a child's stored
+parent-relative x/y *are* its coordinates in the focused view). Cross-level consistency is
+derived rather than maintained — an edge from a grandchild to an outsider automatically appears
+on every level between them, rerouted to whatever box represents each end. Deleting a ghost is
+refused (it lives on another level); dragging one to tidy a view is saved per-view under
+`meta.views` and never counts as an architecture change in `diffTemplates`.
+
+The AI knows the convention but is told to keep levels flat unless you ask: refine while
+drilled in and the request is scoped to that component ("split the parser" decomposes the
+focused card, everything outside is untouched). The **Interactive HTML export** pre-renders
+every level into one self-contained page — click boxes to drill, breadcrumbs and `Esc` to come
+back, deep-linkable via `#/pay/workers`, with the timeline scrubber acting on every level at
+once. Flat documents keep the exact single-view page they always had. Mermaid / C4-PlantUML /
+sequence derivations project drill detail onto its card, so flat formats stay flat.
+
+```ts
+import { scopedView, liftScopedReactFlow, drillableIds, focusPath } from "@mosphere/better-diagrams";
+
+const level = scopedView(template, "payments");   // an ordinary DiagramTemplate — render it anywhere
+drillableIds(template);                            // every node with internal detail
+focusPath(template, "retry-worker");               // ["payments", "workers"] — the stack that shows it
+```
+
+## Content and layout: the split document
+
+A diagram is really two documents living in one JSON: the **architecture** (nodes, edges,
+containment, statuses, dates — what an AI should edit) and the **presentation** (where things
+sit and how lines travel — what a human arranged and wants left alone). The split makes that
+boundary literal, and both forms are first-class: the inline template keeps working exactly as
+before, and any template can be split into a content doc plus a layout doc and merged back
+byte-for-byte.
+
+```ts
+import { splitTemplate, mergeTemplate, validatePresentation } from "@mosphere/better-diagrams";
+
+const { content, presentation } = splitTemplate(template);
+// content   → nodes without x/y/w/h, edges without labelT/anchors/waypoints
+// presentation → { version, format: "better-diagrams/presentation",
+//                  nodes: { api: { x, y, w, h, parent: "vpc" } },
+//                  edges: { e1: { source, target, labelT, start, end, points } } }
+mergeTemplate(content, presentation); // ≡ template, byte-identical
+```
+
+The merge is defensive where content edits and stale layouts collide:
+
+- A node record remembers the `parent` and `zone` it was captured under. If a content edit
+  reparented or re-zoned the node, its old coordinates are meaningless — the position is
+  discarded (the size survives) and the node is **re-placed** instead of materialising somewhere
+  that only made sense in its old home.
+- Elements with no record (new ones) are placed by `placeUnpositioned`: stacked below the
+  occupied area of their own container, which only ever **grows** — nothing that already has a
+  position moves. A content doc with no layout at all goes through the full `autoLayout` instead.
+- An edge record carries its captured `(source, target)`, so a model that renumbered edge ids
+  doesn't silently lose every hand-drawn route — the record is matched back by endpoints.
+
+One deliberate boundary: **zone boxes stay in content.** In this editor zone geometry *is*
+meaning — membership (`zoneId`) is derived from who sits inside the box — so a layout file that
+moved zones could silently rewrite the architecture. Presentation covers node boxes and edge
+routes only. (Sequence diagrams already store no coordinates at all — order is the layout — so
+they are the split's precedent, not a new case.)
+
+### Edge routes: anchors and waypoints
+
+Presentation now includes how a line travels, not just where boxes sit. An edge may pin its
+`start`/`end` to a side of the node box (`{ "side": "left", "t": 0.25 }` — `t` slides along the
+side, centre by default) and carry `points`, absolute-canvas waypoints the line bends through.
+Both routings honour them: curved threads a smooth spline through every waypoint; orthogonal
+keeps every segment axis-aligned and always leaves/arrives square to a pinned side. The same
+geometry function drives the screen and every image export, so a routed edge exports exactly as
+drawn.
+
+In the editor: the edge inspector picks the anchors (`start: auto` follows wherever the line is
+going, exactly the old behaviour) and **double-click a selected edge** to add a waypoint — drag
+it to bend the line, double-click the dot to remove it, or *Clear route* in the inspector.
+Waypoints are deliberately canvas-absolute: dragging a node re-aims the endpoints but leaves the
+route in place, a **Tidy** discards all waypoints as stale (pinned anchors survive — sides are
+intent), pasting a fragment translates them with it, and zone scaling carries the routes whose
+endpoints both scaled.
+
+### The split at the toolbar and the API boundary
+
+Two exporters join the menu: **Content (.json)** ("hand this to an AI") and **Layout (.json)**.
+Importing them is asymmetric on purpose — a content file is a whole document, so it loads and
+lays itself out; a layout file carries no architecture, so it **re-dresses the current
+document** and reports what it touched ("Applied layout to 12 elements · 3 unmatched" — the
+counts are what stop a wrong-diagram layout from reading as success).
+
+AI **refine** now speaks the content form end to end: the request's `current` and the inline
+JSON are the content doc, the system prompt omits geometry and demands stable ids, and the reply
+is merged with the live document's own presentation. A refine can rename, rewire, add, and
+remove — and every surviving element keeps its exact place; only genuinely new elements get
+positions. The trade-off is explicit: spatial instructions to the model ("make this node wider")
+are no-ops, zones excepted, since their boxes are content. Generate mode is unchanged — a fresh
+document has no layout to protect.
+
+## Data models: rows, keys, and cardinality
+
+A node can carry **rows**. `kind: "table"` renders its `fields` as a column list — name, type,
+a `pk`/`fk`/`pfk` key badge, and a required marker — which is all an ER diagram is: entities
+whose substance is their columns, joined by relationships that name the columns they join.
+
+```ts
+{ "id": "orders", "label": "orders", "kind": "table",
+  "fields": [{ "id": "id",      "name": "id",      "type": "uuid", "key": "pk", "required": true },
+             { "id": "user_id", "name": "user_id", "type": "uuid", "key": "fk" }] }
+
+{ "id": "fk1", "source": "orders", "target": "users",
+  "startField": "user_id", "endField": "id",     // the columns, not just the tables
+  "startLabel": "0..*",    "endLabel": "1" }     // cardinality, at the end it describes
+```
+
+An end label that reads as a cardinality draws its **crow's-foot symbol** at the box — one bar
+for exactly-one, a ring for optional, three prongs for many — and that end drops its arrowhead,
+since a relationship reads by its notation. The parser is deliberately strict: `endLabel: "owns"`
+is role text and keeps the plain arrow it always had, so no existing diagram sprouts symbols.
+The text still renders alongside the symbol, pushed clear of it, for readers who don't speak
+crow's foot.
+
+`startField`/`endField` are **semantic, not geometric**: the line re-aims itself when rows are
+reordered, and degrades to the box when the row isn't on screen — inside a collapsed group, or
+one drill-in level away. Both the canvas and the image exporters resolve them through the same
+`fieldAnchors`, so a PNG's foreign keys land on the same columns the screen shows. A node is
+grown to fit every row it carries rather than clipping any, and a dangling field reference is
+dropped on validation like any other bad reference.
+
+Rows and cardinality are **content**, so they ride the split with the architecture: an
+elements-only prompt owns them, a layout file never mentions a column, and an AI refine can add
+a column without touching your layout. Everything else composes as usual — drill into a bounded
+context to get a subject-area view of one domain with ghost stand-ins for cross-domain
+references, put tables in a `group` to draw a subject-area boundary, date a table to watch a
+migration land on the timeline.
+
+`table` is a registry kind, and `record: true` is what marks a kind as row-bearing — declare it
+on your own kinds (a class, a message schema, an API resource) and they get the same list and
+the same inspector. **Insert ▸ Table** starts one with its `id` primary key already in place.
+
+The Mermaid export follows the document: when every visible box carries rows it emits an
+`erDiagram` with the columns, their `PK`/`FK` markers, and crow's-foot cardinality — read
+through the *same parser* the canvas draws its symbols from, so the two can't disagree. A mixed
+document stays a `flowchart`, because half the entities having no columns would make an ER
+diagram claim something false about them.
+
 ## Infrastructure zones
 
 A **zone** is a shaped background region tagged to an infra provider. Zones are deliberately *not*
@@ -278,7 +431,8 @@ the model can emit it too. `example/src/extensions.js` demonstrates all of it.
 
 ## Exports
 
-PNG, PDF, SVG, template JSON, React Flow JSON, Mermaid, and C4-PlantUML ship built in. The
+PNG, PDF, SVG, template JSON, Content/Layout JSON (the split — see above), React Flow JSON,
+Mermaid, and C4-PlantUML ship built in. The
 image formats render from one emitter: `emitTemplate(template, registry, palette)` produces a
 backend-neutral command list that `renderTemplateToCanvas` and `renderTemplateToSvg` both
 replay — through the **same** edge geometry the screen uses — so PNG, PDF, and SVG can never

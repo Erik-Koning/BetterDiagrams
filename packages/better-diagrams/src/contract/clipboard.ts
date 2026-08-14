@@ -161,6 +161,11 @@ export function pasteFragment(
     id: remap.get(edge.id)!,
     source: remap.get(edge.source)!,
     target: remap.get(edge.target)!,
+    // Waypoints are canvas-absolute; both endpoints moved by the offset
+    // (fragment edges are wholly inside the selection), so the route must too.
+    ...(edge.points
+      ? { points: edge.points.map(([x, y]): [number, number] => [x + offset, y + offset]) }
+      : {}),
   }));
 
   const zones = [

@@ -11,18 +11,27 @@
  * an optional `ExportPalette`, which is how light-mode exports work.
  */
 import {
+  ghostSourceId,
+  hiddenInline,
+  isBoundaryNodeId,
+  isGhostNodeId,
   toReactFlow,
+  visibleAnchor,
   visibleElements,
   type DiagramNode,
   type DiagramTemplate,
 } from "../contract/schema";
+import { cardinalityMarker, type CardinalityMarker } from "../contract/geometry";
 import { formatDiagramDate, templateTimeline } from "../contract/timeline";
+import { splitTemplate } from "../contract/presentation";
+import { drillableIds, focusPath, scopedView } from "../contract/scope";
 import { CLOUD_NODE_KINDS } from "./cloud-kinds";
 // Imports `./registry-types`, not `./registry` — registry.ts imports
 // BUILTIN_EXPORTERS from here, so depending on it directly would be a cycle.
 import type { ExportContext, ExporterDef, ResolvedRegistry } from "./registry-types";
 import { emitTemplate, type ExportPalette } from "./draw";
-import { buildTimelineHtml } from "./html-export";
+import { levelLabel } from "./chrome";
+import { buildMultiViewHtml, buildTimelineHtml, type ViewEntry } from "./html-export";
 import {
   blobToUint8,
   buildSinglePageJpegPdf,
@@ -55,8 +64,9 @@ export function renderTemplateToSvg(
   template: DiagramTemplate,
   registry: ResolvedRegistry,
   palette: Partial<ExportPalette> = {},
+  opts: { gridId?: string } = {},
 ): string {
-  return emittedToSvg(emitTemplate(template, registry, palette));
+  return emittedToSvg(emitTemplate(template, registry, palette), opts);
 }
 
 // ─── C4-PlantUML ─────────────────────────────────────────────────────────────
@@ -81,7 +91,36 @@ const C4_MACRO: Record<string, string> = {
  * inside a group is placed by its group, so a group's zone placement carries
  * its members — the same priority the canvas uses.
  */
-export function renderTemplateToC4Puml(template: DiagramTemplate): string {
+/**
+ * Project a document onto its root level for the flat text formats: drill
+ * children disappear, and their crossing edges land on the card that holds
+ * them — the same rerouting the canvas and image exports apply. Uses the
+ * builtin container vocabulary (these renderers carry no registry).
+ */
+function rootLevelProjection(template: DiagramTemplate): DiagramTemplate {
+  const hidden = hiddenInline(template);
+  if (!hidden.size) return template;
+  const byId = new Map(template.nodes.map((n) => [n.id, n]));
+  const seen = new Set<string>();
+  return {
+    ...template,
+    nodes: template.nodes.filter((n) => !hidden.has(n.id)),
+    edges: template.edges.flatMap((e) => {
+      const source = visibleAnchor(e.source, byId, hidden);
+      const target = visibleAnchor(e.target, byId, hidden);
+      if (source === target) return []; // internal wiring of one card
+      if (source === e.source && target === e.target) return [e];
+      const key = `${source}→${target}`;
+      if (seen.has(key)) return [];
+      seen.add(key);
+      // A stand-in summarising hidden originals shows no one edge's label.
+      return [{ ...e, source, target, label: "" }];
+    }),
+  };
+}
+
+export function renderTemplateToC4Puml(rawTemplate: DiagramTemplate): string {
+  const template = rootLevelProjection(rawTemplate);
   const safe = (id: string) => id.replace(/[^A-Za-z0-9_]/g, "_");
   const q = (text: string) => text.replace(/"/g, "'");
   const visible = visibleElements(template);
@@ -178,10 +217,74 @@ export function renderTemplateToC4Puml(template: DiagramTemplate): string {
 
 const ARROW: Record<string, string> = { solid: "-->", dashed: "-.->", dotted: "-.->" };
 
+/**
+ * Mermaid's glyph for each cardinality, per end — read through the SAME parser
+ * the canvas draws its crow's feet from, so the exported notation and the
+ * on-screen symbol can never disagree. Mermaid requires a cardinality on every
+ * relationship, so text that isn't one falls back to "exactly one" here rather
+ * than to no marker.
+ */
+const ER_GLYPH: Record<CardinalityMarker, { left: string; right: string }> = {
+  one: { left: "||", right: "||" },
+  "zero-one": { left: "|o", right: "o|" },
+  "one-many": { left: "}|", right: "|{" },
+  "zero-many": { left: "}o", right: "o{" },
+};
+
+const erCardinality = (raw: string | undefined, side: "left" | "right") =>
+  ER_GLYPH[cardinalityMarker(raw) ?? "one"][side];
+
+/**
+ * An ER diagram, when the document IS one — every visible box carries rows.
+ * A mixed document stays a flowchart: half the entities having no columns
+ * would make an `erDiagram` claim something false about them.
+ */
+function renderTemplateToMermaidEr(template: DiagramTemplate, safe: (id: string) => string): string {
+  const visible = visibleElements(template);
+  const lines = ["erDiagram"];
+  // Mermaid attribute types are single tokens; a name with spaces or a stray
+  // quote would break the block rather than render oddly.
+  const token = (text: string) => text.trim().replace(/\s+/g, "_").replace(/[^A-Za-z0-9_()[\]]/g, "");
+
+  for (const n of template.nodes) {
+    if (!visible.nodes.has(n.id) || !n.fields?.length) continue;
+    lines.push(`  ${safe(n.id)} {`);
+    for (const field of n.fields) {
+      // Mermaid wants `type name KEY`; it has no "optional" marker, so a
+      // required column says so in the comment slot instead.
+      const key = field.key === "pk" || field.key === "pfk" ? " PK" : field.key === "fk" ? " FK" : "";
+      const note = field.required ? ' "required"' : "";
+      lines.push(`    ${token(field.type || "string")} ${token(field.name) || "column"}${key}${note}`);
+    }
+    lines.push("  }");
+  }
+
+  for (const e of template.edges) {
+    if (!visible.edges.has(e.id)) continue;
+    const rel = `${erCardinality(e.startLabel, "left")}--${erCardinality(e.endLabel, "right")}`;
+    // The relationship label is mandatory in Mermaid's ER grammar; the joined
+    // columns are the truest thing to say when the edge carries no words.
+    const label =
+      e.label || (e.startField && e.endField ? `${e.startField} → ${e.endField}` : "relates");
+    lines.push(`  ${safe(e.source)} ${rel} ${safe(e.target)} : "${label.replace(/"/g, "'")}"`);
+  }
+  return lines.join("\n");
+}
+
 /** Text export — pastes straight into a Markdown ```mermaid fence. */
-export function renderTemplateToMermaid(template: DiagramTemplate): string {
+export function renderTemplateToMermaid(rawTemplate: DiagramTemplate): string {
+  const template = rootLevelProjection(rawTemplate);
   const safe = (id: string) => id.replace(/[^A-Za-z0-9_]/g, "_");
   const visible = visibleElements(template);
+
+  // A document whose every visible box is a record exports as what it is.
+  const boxes = template.nodes.filter(
+    (n) => visible.nodes.has(n.id) && n.kind !== "text" && n.kind !== "group",
+  );
+  if (boxes.length && boxes.every((n) => n.fields?.length)) {
+    return renderTemplateToMermaidEr(template, safe);
+  }
+
   const lines: string[] = [];
 
   // Mermaid subgraphs must nest strictly, so they can't express zones that
@@ -243,6 +346,85 @@ export function renderTemplateToMermaid(template: DiagramTemplate): string {
 
 const json = (value: unknown) => new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
 
+/**
+ * Validation options mirroring the registry, for `splitTemplate`'s internal
+ * re-validate — without them a custom kind or provider would be "repaired"
+ * away from a document that legitimately uses it.
+ */
+const splitOpts = (registry: ResolvedRegistry) => ({
+  knownKinds: registry.kindOrder,
+  knownIcons: registry.iconNames,
+  containerKinds: registry.containerKinds,
+  knownProviders: registry.providerOrder,
+});
+
+/**
+ * One `ViewEntry` per drill level: the root plus every node with children,
+ * each pre-rendered through the SAME pipeline as the canvas. Click targets:
+ * a drillable node opens its level, a ghost visits its home level, and the
+ * boundary frame steps out one level.
+ */
+function buildDrillViews(
+  template: DiagramTemplate,
+  registry: ResolvedRegistry,
+  palette: Partial<ExportPalette> = {},
+): ViewEntry[] {
+  const parents = drillableIds(template);
+  const parentSet = new Set(parents);
+  const byId = new Map(template.nodes.map((n) => [n.id, n]));
+  const drillHidden = hiddenInline(template, registry.containerKinds);
+  const rootLabel = String(template.meta?.title ?? "Overview");
+  const labelOf = (id: string) => byId.get(id)?.label ?? id;
+  /** The view that SHOWS a node — its parent's level, or the root. */
+  const homeViewOf = (id: string) => focusPath(template, id).at(-1) ?? "";
+
+  const crumbFor = (id: string) => [
+    { key: "", label: rootLabel },
+    ...[...focusPath(template, id), id].map((step) => ({ key: step, label: labelOf(step) })),
+  ];
+
+  const rootDrills: Record<string, string> = {};
+  for (const p of parents) {
+    // Drill-hidden parents have no box on the root canvas; everything else
+    // (cards, frames, chips) is stamped `node:<id>` and clickable.
+    if (!drillHidden.has(p)) rootDrills[`node:${p}`] = p;
+  }
+
+  const views: ViewEntry[] = [
+    {
+      key: "",
+      crumb: [{ key: "", label: rootLabel }],
+      levelLabel: levelLabel(0),
+      parent: null,
+      svg: renderTemplateToSvg(template, registry, palette, { gridId: "as-grid-v0" }),
+      drills: rootDrills,
+    },
+  ];
+
+  parents.forEach((focusId, i) => {
+    const view = scopedView(template, focusId, { containerKinds: registry.containerKinds });
+    const drills: Record<string, string> = {};
+    for (const n of view.nodes) {
+      if (isBoundaryNodeId(n.id)) {
+        drills[`node:${n.id}`] = homeViewOf(focusId);
+      } else if (isGhostNodeId(n.id)) {
+        drills[`node:${n.id}`] = homeViewOf(ghostSourceId(n.id));
+      } else if (parentSet.has(n.id)) {
+        drills[`node:${n.id}`] = n.id;
+      }
+    }
+    views.push({
+      key: focusId,
+      crumb: crumbFor(focusId),
+      levelLabel: levelLabel(focusPath(template, focusId).length + 1),
+      parent: homeViewOf(focusId),
+      svg: renderTemplateToSvg(view, registry, palette, { gridId: `as-grid-v${i + 1}` }),
+      drills,
+    });
+  });
+  return views;
+}
+
 export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
   png: {
     label: "PNG image",
@@ -277,17 +459,24 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
   },
   html: {
     label: "Interactive HTML",
-    hint: "Self-contained page with a timeline scrubber",
+    hint: "Self-contained page — drill between levels, scrub the timeline",
     // The page carries its own scrubber, so it needs every element and every
     // date — a hide-mode slice would leave it nothing to scrub.
     fullDocument: true,
     run({ template, registry, filename, palette }: ExportContext) {
-      const page = buildTimelineHtml({
-        svg: renderTemplateToSvg(template, registry, palette),
-        title: String(template.meta?.title ?? filename),
-        stops: templateTimeline(template).stops,
-        palette,
-      });
+      const title = String(template.meta?.title ?? filename);
+      const stops = templateTimeline(template).stops;
+      // Any nesting makes the page multi-view: one pre-rendered SVG per
+      // drillable level, clickable in place. A flat document keeps the
+      // original single-view page byte-for-byte.
+      const page = drillableIds(template).length
+        ? buildMultiViewHtml({ views: buildDrillViews(template, registry, palette), title, stops, palette })
+        : buildTimelineHtml({
+            svg: renderTemplateToSvg(template, registry, palette),
+            title,
+            stops,
+            palette,
+          });
       return { blob: new Blob([page], { type: "text/html" }), filename: `${filename}.html` };
     },
   },
@@ -301,6 +490,25 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
     fullDocument: true,
     run({ template, filename }: ExportContext) {
       return { blob: json(template), filename: `${filename}.template.json` };
+    },
+  },
+  content: {
+    label: "Content (.json)",
+    hint: "Architecture without layout — hand this to an AI",
+    // Document-shaped: the whole point is that every element is in it.
+    fullDocument: true,
+    run({ template, registry, filename }: ExportContext) {
+      const { content } = splitTemplate(template, splitOpts(registry));
+      return { blob: json(content), filename: `${filename}.content.json` };
+    },
+  },
+  layout: {
+    label: "Layout (.json)",
+    hint: "Positions & routes — pairs with Content",
+    fullDocument: true,
+    run({ template, registry, filename }: ExportContext) {
+      const { presentation } = splitTemplate(template, splitOpts(registry));
+      return { blob: json(presentation), filename: `${filename}.layout.json` };
     },
   },
   reactflow: {

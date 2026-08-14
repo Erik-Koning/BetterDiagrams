@@ -765,3 +765,69 @@ export function InspectorSection({ caption, children }: { caption: string; child
     </span>
   );
 }
+
+// ─── Drill breadcrumbs ───────────────────────────────────────────────────────
+
+/** C4 level names by drill depth. Depth 0 (the root) never shows the bar. */
+const LEVEL_LABELS = ["C1 · Context", "C2 · Containers", "C3 · Components", "C4 · Code"];
+
+export function levelLabel(depth: number): string {
+  return depth < LEVEL_LABELS.length ? LEVEL_LABELS[depth] : "C4+ · Code";
+}
+
+export interface BreadcrumbEntry {
+  /** null marks the root crumb (no focus). */
+  id: string | null;
+  label: string;
+}
+
+/**
+ * The drill-in bar: where you are (root ▸ … ▸ focus), how deep in C4 terms,
+ * and the way out. Same chrome contract as the compare bar and the timeline
+ * scrubber — a mode is active, so the bar says so and carries its own exit.
+ */
+export function Breadcrumbs({
+  path,
+  onNavigate,
+  onExit,
+}: {
+  /** [0] is the root entry; the last entry is the current focus. */
+  path: BreadcrumbEntry[];
+  /** Clicking crumb `i` drills to that level (`i === 0` exits to the root). */
+  onNavigate: (index: number) => void;
+  onExit: () => void;
+}) {
+  const depth = path.length - 1;
+  return (
+    <nav className="as-focusbar" aria-label="Diagram level">
+      {path.map((entry, i) => (
+        <span key={`${entry.id ?? "root"}-${i}`} className="as-focusbar__crumbwrap">
+          {i > 0 ? (
+            <span className="as-focusbar__sep" aria-hidden="true">
+              ›
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className={`as-focusbar__crumb${i === path.length - 1 ? " as-focusbar__crumb--here" : ""}`}
+            onClick={() => onNavigate(i)}
+            disabled={i === path.length - 1}
+            title={i === path.length - 1 ? undefined : `Back to ${entry.label}`}
+          >
+            {entry.label}
+          </button>
+        </span>
+      ))}
+      <span
+        className="as-focusbar__level"
+        title="C4 model level — each drill-in is one level of decomposition"
+      >
+        {levelLabel(depth)}
+      </span>
+      <span className="as-focusbar__spacer" />
+      <button type="button" className="as-btn" onClick={onExit}>
+        Exit focus
+      </button>
+    </nav>
+  );
+}

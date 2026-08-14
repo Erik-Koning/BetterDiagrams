@@ -47,6 +47,22 @@ export interface StudioContextValue {
    * (resolved by the host — id first, then name) instead of a browser link.
    */
   navigateFile?: (ref: string) => void;
+  /**
+   * The drill-in position: null at the root level (C1), else the focused
+   * node and how deep it sits. Renderers use it to suppress affordances that
+   * would corrupt a scoped view (a chip's expand toggle) and to label levels.
+   */
+  focus: { id: string; depth: number } | null;
+  /** Step one level into a node — the drill badge and double-click land here. */
+  drillInto: (id: string) => void;
+  /** Jump to the level that shows a node — a ghost's "go to definition". */
+  navigateToNode: (id: string) => void;
+  /**
+   * Direct-child counts by DOCUMENT node id — the drill badge's number.
+   * Computed from the document, not the canvas, so a card's hidden detail
+   * still counts.
+   */
+  childCounts: ReadonlyMap<string, number>;
 }
 
 const FALLBACK: StudioContextValue = {
@@ -57,6 +73,10 @@ const FALLBACK: StudioContextValue = {
   requestCommit: () => {},
   beginZoneResize: () => {},
   endZoneResize: () => {},
+  focus: null,
+  drillInto: () => {},
+  navigateToNode: () => {},
+  childCounts: new Map(),
 };
 
 export const StudioContext = createContext<StudioContextValue>(FALLBACK);

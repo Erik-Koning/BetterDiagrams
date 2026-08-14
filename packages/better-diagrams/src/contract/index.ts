@@ -28,6 +28,8 @@ export {
   PROVIDER_IDS,
   EDGE_DIRECTIONS,
   EDGE_ROUTINGS,
+  EDGE_ANCHOR_SIDES,
+  FIELD_KEYS,
   NODE_STATUSES,
   VERSION_TAG_POSITIONS,
   EDGE_COLOR_HEX,
@@ -55,6 +57,14 @@ export {
   parseLlmTemplate,
   toReactFlow,
   fromReactFlow,
+  // Data-model rows: the metrics, the row→anchor maths, and the resolver both
+  // the canvas and the exporters route field-anchored edges through.
+  FIELD_ROW_H,
+  MAX_NODE_FIELDS,
+  fieldListTop,
+  fieldsBoxHeight,
+  fieldRowT,
+  fieldAnchors,
 } from "./schema";
 export type {
   NodeKind,
@@ -64,6 +74,11 @@ export type {
   ProviderId,
   EdgeDirection,
   EdgeRouting,
+  EdgeAnchor,
+  EdgeAnchorSide,
+  NodeField,
+  FieldKey,
+  FieldAnchorNode,
   NodeStatus,
   VersionTagPosition,
   DiagramNode,
@@ -89,8 +104,37 @@ export { ZONE_SHAPES, ZONE_OUTLINES } from "./zones";
 export type { DiagramZone, ZoneOutline, ZoneShape, ZonePoint } from "./zones";
 
 // ── Auto-layout ──────────────────────────────────────────────────────────────
-export { autoLayout, hasOverlaps } from "./layout";
+export { autoLayout, hasOverlaps, placeUnpositioned } from "./layout";
 export type { LayoutOptions } from "./layout";
+
+// ── Content/presentation split ───────────────────────────────────────────────
+export {
+  PRESENTATION_FORMAT,
+  validatePresentation,
+  splitTemplate,
+  mergeTemplate,
+} from "./presentation";
+export type {
+  DiagramPresentation,
+  DiagramContent,
+  NodePlacement,
+  EdgeRoute,
+  ViewRecord,
+} from "./presentation";
+
+// ── Scoped views (C4 drill-down) ─────────────────────────────────────────────
+export { scopedView, liftScopedReactFlow, drillableIds, focusPath } from "./scope";
+export type { ScopedViewOptions } from "./scope";
+export {
+  BOUNDARY_NODE_PREFIX,
+  GHOST_NODE_PREFIX,
+  GHOST_EDGE_PREFIX,
+  isBoundaryNodeId,
+  isGhostNodeId,
+  isGhostEdgeId,
+  ghostSourceId,
+  validateViewRecords,
+} from "./schema";
 
 // ── Clipboard ────────────────────────────────────────────────────────────────
 export {

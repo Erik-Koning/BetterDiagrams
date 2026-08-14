@@ -35,9 +35,10 @@ export interface TemplateDiff {
 
 /**
  * Fields that describe placement rather than architecture. `points` is a
- * zone's outline; `labelT` is where an edge label sits along its curve.
+ * zone's outline or an edge's waypoints; `labelT` is where an edge label sits
+ * along its curve; `start`/`end` pin an edge to a side of its node boxes.
  */
-export const POSITIONAL_FIELDS = ["x", "y", "w", "h", "labelT", "points"] as const;
+export const POSITIONAL_FIELDS = ["x", "y", "w", "h", "labelT", "points", "start", "end"] as const;
 
 function diffCollection<T extends { id: string }>(
   base: T[],
