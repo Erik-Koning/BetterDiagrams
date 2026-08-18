@@ -589,7 +589,9 @@
 
 .as-node__title {
   overflow: hidden;
-  font-size: 13px;
+  /* --as-node-font is set only when the node overrides fontSize, so the
+     default stays the literal 13px the exporter also hard-codes. */
+  font-size: var(--as-node-font, 13px);
   font-weight: 600;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -605,6 +607,44 @@
   color: var(--as-text-dim);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+/* ── Text layout ─────────────────────────────────────────────────────────── */
+/* All opt-in: a node with no textAlign/textVAlign/wrap gets none of these
+   classes and renders exactly as it did before they existed. */
+
+.as-node--align-center .as-node__body {
+  text-align: center;
+}
+
+.as-node--align-right .as-node__body {
+  text-align: right;
+}
+
+.as-node--valign-top {
+  align-items: flex-start;
+}
+
+.as-node--valign-bottom {
+  align-items: flex-end;
+}
+
+/* Wrapping trades the one-line ellipsis for as many lines as the label needs.
+   Nothing is clipped: validateTemplate grew the node's stored height to hold
+   every line, using the same measurement (contract/text.ts) the PNG/SVG
+   exporters wrap with, so the canvas and an export never disagree.
+   `overflow-wrap: anywhere` is what stops a long unbroken identifier from
+   spilling out of the box sideways. */
+.as-node--wrap .as-node__title {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.as-node--wrap .as-node__desc {
+  -webkit-line-clamp: unset;
+  overflow-wrap: anywhere;
 }
 
 /* ── Field rows ──────────────────────────────────────────────────────────── */
@@ -1245,17 +1285,26 @@
 
 /* ── Group / container nodes ─────────────────────────────────────────────── */
 
+/* The frame reads from custom properties GroupNode resolves, so a group can be
+   styled per node — including all the way to invisible (`fill: false` +
+   `outline: "none"`) for a purely abstract grouping box. The fallbacks are the
+   values this rule hard-coded before, so an untouched group is unchanged. */
 .as-group {
   width: 100%;
   height: 100%;
-  border: 1px dashed var(--as-node-accent);
+  border: var(--as-group-border-width, 1px) var(--as-group-outline, dashed)
+    var(--as-group-ink, var(--as-node-accent));
   border-radius: 10px;
-  background: color-mix(in srgb, var(--as-surface-2) 28%, transparent);
+  background: var(--as-group-fill, color-mix(in srgb, var(--as-surface-2) 28%, transparent));
 }
 
+/* Selection restores the border explicitly rather than only recolouring it, so
+   an `outline: none` frame still shows itself when you click it — otherwise an
+   invisible group would be impossible to confirm you had selected. */
 .as-group--selected {
-  border-color: var(--as-accent);
+  border-width: 1px;
   border-style: solid;
+  border-color: var(--as-accent);
 }
 
 /* A flex row rather than a line of text, so the truncation applies to the
@@ -1270,7 +1319,7 @@
   gap: 4px;
   max-width: 100%;
   padding: 2px 8px;
-  border: 1px solid var(--as-node-accent);
+  border: 1px solid var(--as-group-ink, var(--as-node-accent));
   border-radius: 10px 0 6px 0;
   background: var(--as-surface-2);
   color: var(--as-text-dim);
@@ -1456,6 +1505,57 @@
 
 .as-edge__waypoint:active {
   cursor: grabbing;
+}
+
+/* Endpoint handles on a selected edge: drag to pin where the line attaches,
+   drop on another node to re-attach it there. Slightly larger than a
+   waypoint, and always at the boxes, so the two affordances read apart. */
+.as-edge__endpoint {
+  fill: var(--as-bg);
+  cursor: grab;
+  pointer-events: all;
+}
+
+.as-edge__endpoint:hover {
+  stroke-width: 2.6;
+}
+
+.as-edge__endpoint:active {
+  cursor: grabbing;
+}
+
+/* Over a node this end may re-attach to: the handle lights up to say
+   "release here and the edge moves". */
+.as-edge__endpoint--drop {
+  fill: var(--as-accent);
+  stroke: var(--as-accent);
+}
+
+/* The free end of a dangling arrow: a bare dot the arrow stops at. The box
+   fills its (12px) node; the dot inside stays small so the arrowhead reads. */
+.as-point {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  cursor: grab;
+}
+
+.as-point:active {
+  cursor: grabbing;
+}
+
+.as-point__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--as-text-dim);
+  border: 1px solid var(--as-bg);
+}
+
+.as-point--selected .as-point__dot {
+  background: var(--as-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--as-accent) 35%, transparent);
 }
 
 /* Sequence badge for dynamic (numbered-flow) diagrams. */
@@ -2408,6 +2508,79 @@
 
 .as-modal__card--wide {
   width: min(680px, 100%);
+}
+
+/* ── Keyboard shortcuts sheet ────────────────────────────────────────────── */
+
+/* The sheet gets its own width: at 680px the list wraps to three tall rows and
+   the last group falls below the fold, which is exactly the group someone
+   opening a shortcut sheet is most likely looking for. */
+.as-modal__card--shortcuts {
+  width: min(920px, 100%);
+}
+
+/* Three columns where there is room, fewer where there isn't. `align-content:
+   start` keeps a short final row tight to the one above rather than stretching
+   the gap. */
+.as-shortcuts {
+  display: grid;
+  align-content: start;
+  gap: 18px 28px;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  margin-top: 12px;
+  max-height: min(70vh, 640px);
+  overflow-y: auto;
+}
+
+.as-shortcuts__caption {
+  margin: 0 0 6px;
+  color: var(--as-text-dim);
+  font-family: var(--as-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.as-shortcuts__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+}
+
+/* Keys first at a fixed width so every description starts on the same line —
+   a ragged left edge makes a reference list much harder to scan. */
+.as-shortcuts__row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.as-shortcuts__keys {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 3px;
+  min-width: 116px;
+}
+
+.as-shortcuts__desc {
+  margin: 0;
+  color: var(--as-text-dim);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.as-kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--as-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--as-surface-2);
+  color: var(--as-text);
+  font-family: var(--as-mono);
+  font-size: 10px;
+  white-space: nowrap;
 }
 
 /* ── Export-states modal ─────────────────────────────────────────────────── */

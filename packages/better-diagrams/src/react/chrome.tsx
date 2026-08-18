@@ -8,6 +8,7 @@
  */
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { VERSION_TAG_POSITIONS, type VersionTagPosition } from "../contract/schema";
+import { isMac } from "./keys";
 import {
   TIMELINE_FUTURE_MODES,
   dateToDay,
@@ -532,6 +533,153 @@ export function Modal({
         {children}
       </div>
     </div>
+  );
+}
+
+/**
+ * The `?` sheet: every binding the editor answers to, in one place.
+ *
+ * Written as data rather than markup so the same list can be asserted against
+ * in tests — a shortcut that stops working should also stop being advertised.
+ * `mod` renders as ⌘ on a Mac and Ctrl elsewhere, decided once here rather
+ * than by each row.
+ */
+export type ShortcutGroup = {
+  title: string;
+  items: ReadonlyArray<[keys: string, description: string]>;
+};
+
+export const SHORTCUT_GROUPS: Record<"architecture" | "sequence", ReadonlyArray<ShortcutGroup>> = {
+  architecture: [
+    {
+      title: "Essentials",
+      items: [
+        ["mod+Z", "Undo"],
+        ["mod+⇧+Z", "Redo"],
+        ["mod+S", "Save"],
+        ["mod+A", "Select all"],
+        ["Delete", "Delete selection (cascades into groups)"],
+        ["Esc", "Close panels · leave a drilled level"],
+        ["?", "This sheet"],
+      ],
+    },
+    {
+      title: "Clipboard",
+      items: [
+        ["mod+C", "Copy"],
+        ["mod+V", "Paste"],
+        ["mod+X", "Cut"],
+        ["mod+D", "Duplicate, keeping connections"],
+        ["Alt+drag", "Drag a copy, leaving the original"],
+      ],
+    },
+    {
+      title: "Insert",
+      items: [
+        ["N", "Node"],
+        ["G", "Group"],
+        ["T", "Text note"],
+        ["Z", "Zone"],
+      ],
+    },
+    {
+      title: "Arrange",
+      items: [
+        ["←↑→↓", "Nudge 1px"],
+        ["⇧+←↑→↓", "Nudge 10px"],
+        ["mod+⇧+←↑→↓", "Align selection"],
+        ["mod+G", "Group selection into a container"],
+        ["mod+⇧+G", "Ungroup"],
+        ["mod+⇧+L", "Lock / unlock"],
+        ["mod+] / mod+[", "Zone forward / backward"],
+        ["mod+⇧+] / mod+⇧+[", "Zone to front / to back"],
+      ],
+    },
+    {
+      title: "View",
+      items: [
+        ["mod+= / mod+-", "Zoom in / out"],
+        ["mod+0", "Reset zoom"],
+        ["⇧+1", "Zoom to fit"],
+        ["⇧+2", "Zoom to selection"],
+        ["mod+'", "Snap to grid"],
+        ["mod+K", "Search"],
+        ["mod+⇧+E", "Export PNG"],
+        ["Space+drag", "Pan"],
+      ],
+    },
+  ],
+  // Sequence mode has no grouping, no zones and no free placement, so those
+  // rows are absent rather than listed against a no-op.
+  sequence: [
+    {
+      title: "Essentials",
+      items: [
+        ["mod+Z", "Undo"],
+        ["mod+⇧+Z", "Redo"],
+        ["mod+S", "Save"],
+        ["mod+A", "Select all"],
+        ["Delete", "Delete selection"],
+        ["Esc", "Close panels"],
+        ["?", "This sheet"],
+      ],
+    },
+    {
+      title: "Insert",
+      items: [
+        ["N", "Participant"],
+        ["A", "Actor"],
+        ["M", "Message"],
+        ["T", "Note"],
+      ],
+    },
+    {
+      title: "View",
+      items: [
+        ["mod+= / mod+-", "Zoom in / out"],
+        ["mod+0", "Reset zoom"],
+        ["⇧+1", "Zoom to fit"],
+        ["←/→", "Step the timeline"],
+        ["Space+drag", "Pan"],
+      ],
+    },
+  ],
+};
+
+export function ShortcutsModal({
+  mode = "architecture",
+  onClose,
+}: {
+  mode?: "architecture" | "sequence";
+  onClose: () => void;
+}) {
+  const render = (combo: string) =>
+    combo.split(" / ").map((part) => part.replace(/mod/g, isMac() ? "⌘" : "Ctrl").replace(/\+/g, " "));
+
+  return (
+    <Modal title="Keyboard shortcuts" onClose={onClose} cardClassName="as-modal__card--shortcuts">
+      <div className="as-shortcuts">
+        {SHORTCUT_GROUPS[mode].map((group) => (
+          <section key={group.title} className="as-shortcuts__group">
+            <h3 className="as-shortcuts__caption">{group.title}</h3>
+            <dl className="as-shortcuts__list">
+              {group.items.map(([combo, description]) => (
+                <div key={combo} className="as-shortcuts__row">
+                  <dt className="as-shortcuts__keys">
+                    {render(combo).map((part, i) => (
+                      <kbd key={i} className="as-kbd">
+                        {part}
+                      </kbd>
+                    ))}
+                  </dt>
+                  <dd className="as-shortcuts__desc">{description}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        ))}
+      </div>
+    </Modal>
   );
 }
 

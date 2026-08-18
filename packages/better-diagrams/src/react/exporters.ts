@@ -15,6 +15,7 @@ import {
   hiddenInline,
   isBoundaryNodeId,
   isGhostNodeId,
+  POINT_KINDS,
   toReactFlow,
   visibleAnchor,
   visibleElements,
@@ -124,7 +125,15 @@ export function renderTemplateToC4Puml(rawTemplate: DiagramTemplate): string {
   const safe = (id: string) => id.replace(/[^A-Za-z0-9_]/g, "_");
   const q = (text: string) => text.replace(/"/g, "'");
   const visible = visibleElements(template);
-  const nodes = template.nodes.filter((n) => visible.nodes.has(n.id) && n.kind !== "text");
+  // C4 is a strict semantic model with no dangling-arrow concept: a point
+  // node (and any arrow that ends on one) is sketch scaffolding, not
+  // architecture, so it stays out of this export entirely.
+  const pointIds = new Set(
+    template.nodes.filter((n) => POINT_KINDS.includes(n.kind as string)).map((n) => n.id),
+  );
+  const nodes = template.nodes.filter(
+    (n) => visible.nodes.has(n.id) && n.kind !== "text" && !pointIds.has(n.id),
+  );
   const zoneById = new Map((template.zones ?? []).map((z) => [z.id, z]));
 
   const lines: string[] = ["@startuml"];
@@ -203,6 +212,7 @@ export function renderTemplateToC4Puml(rawTemplate: DiagramTemplate): string {
   lines.push("");
   for (const e of template.edges) {
     if (!visible.edges.has(e.id)) continue;
+    if (pointIds.has(e.source) || pointIds.has(e.target)) continue;
     const macro = e.direction === "both" ? "BiRel" : "Rel";
     const label = e.seq ? `${e.seq}. ${e.label || ""}`.trim() : e.label || "";
     const tech = e.tech ? `, "${q(e.tech)}"` : "";
@@ -259,8 +269,14 @@ function renderTemplateToMermaidEr(template: DiagramTemplate, safe: (id: string)
     lines.push("  }");
   }
 
+  const pointIds = new Set(
+    template.nodes.filter((n) => POINT_KINDS.includes(n.kind as string)).map((n) => n.id),
+  );
   for (const e of template.edges) {
     if (!visible.edges.has(e.id)) continue;
+    // An ER diagram has no dangling relationships — Mermaid would conjure an
+    // empty entity for the unknown id, which reads as a data-model mistake.
+    if (pointIds.has(e.source) || pointIds.has(e.target)) continue;
     const rel = `${erCardinality(e.startLabel, "left")}--${erCardinality(e.endLabel, "right")}`;
     // The relationship label is mandatory in Mermaid's ER grammar; the joined
     // columns are the truest thing to say when the edge carries no words.
@@ -278,8 +294,14 @@ export function renderTemplateToMermaid(rawTemplate: DiagramTemplate): string {
   const visible = visibleElements(template);
 
   // A document whose every visible box is a record exports as what it is.
+  // A dangling arrow's dot is sketch scaffolding, not a box — one mustn't
+  // flip a data model's export from erDiagram to flowchart.
   const boxes = template.nodes.filter(
-    (n) => visible.nodes.has(n.id) && n.kind !== "text" && n.kind !== "group",
+    (n) =>
+      visible.nodes.has(n.id) &&
+      n.kind !== "text" &&
+      n.kind !== "group" &&
+      !POINT_KINDS.includes(n.kind as string),
   );
   if (boxes.length && boxes.every((n) => n.fields?.length)) {
     return renderTemplateToMermaidEr(template, safe);
@@ -304,6 +326,12 @@ export function renderTemplateToMermaid(rawTemplate: DiagramTemplate): string {
   }
 
   const emitNode = (n: DiagramNode, indent: string) => {
+    // A dangling arrow's endpoint: mermaid's closest thing to a dot is a tiny
+    // circle. The edge to it still exports, arrow into nearly-nothing.
+    if (POINT_KINDS.includes(n.kind as string)) {
+      lines.push(`${indent}${safe(n.id)}((" "))`);
+      return;
+    }
     // The date is real data, not decoration, so it travels with the semantic
     // exports too — on the same sub-line the description already uses, which
     // is the only free-form slot a Mermaid node label has.

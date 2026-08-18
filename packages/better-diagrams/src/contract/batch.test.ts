@@ -107,6 +107,105 @@ describe("new node fields", () => {
     // A collapsed service is meaningless and would still hide "descendants".
     expect("collapsed" in t.nodes.find((n) => n.id === "s")!).toBe(false);
   });
+
+  it("stores text layout only when it differs from the default", () => {
+    const t = validateTemplate({
+      nodes: [
+        node({ id: "a", textAlign: "center", textVAlign: "bottom", wrap: true }),
+        // The defaults, written out explicitly — none should persist, or every
+        // pre-existing document would grow three keys on its next save.
+        node({ id: "b", textAlign: "left", textVAlign: "middle", wrap: false }),
+        node({ id: "c", textAlign: "diagonal" }),
+      ],
+    });
+    expect(t.nodes.find((n) => n.id === "a")).toMatchObject({
+      textAlign: "center",
+      textVAlign: "bottom",
+      wrap: true,
+    });
+    const plain = t.nodes.find((n) => n.id === "b")!;
+    expect("textAlign" in plain).toBe(false);
+    expect("textVAlign" in plain).toBe(false);
+    expect("wrap" in plain).toBe(false);
+    // An unknown value is repaired to the default rather than kept.
+    expect("textAlign" in t.nodes.find((n) => n.id === "c")!).toBe(false);
+  });
+
+  it("grows a wrapped node's height to hold every line, and only when wrapping", () => {
+    const long = "A deliberately long component label that cannot fit on one line";
+    const t = validateTemplate({
+      nodes: [
+        node({ id: "wrapped", label: long, wrap: true }),
+        node({ id: "clipped", label: long }),
+      ],
+    });
+    // The unwrapped node is untouched: one ellipsised line never resizes a box.
+    expect(t.nodes.find((n) => n.id === "clipped")!.h).toBe(76);
+    expect(t.nodes.find((n) => n.id === "wrapped")!.h).toBeGreaterThan(76);
+  });
+
+  it("does not grow a wrapped node whose label already fits", () => {
+    const t = validateTemplate({ nodes: [node({ id: "s", label: "API", wrap: true })] });
+    expect(t.nodes.find((n) => n.id === "s")!.h).toBe(76);
+  });
+
+  it("keeps frame styling only on container kinds, and only when non-default", () => {
+    const t = validateTemplate({
+      nodes: [
+        node({ id: "frame", kind: "group", fill: false, outline: "none" }),
+        node({ id: "default", kind: "group", fill: true, outline: "dashed" }),
+        node({ id: "leaf", fill: false, outline: "none" }),
+      ],
+    });
+    expect(t.nodes.find((n) => n.id === "frame")).toMatchObject({
+      fill: false,
+      outline: "none",
+    });
+    // Dashed-and-filled is how a group has always drawn, so nothing persists.
+    const untouched = t.nodes.find((n) => n.id === "default")!;
+    expect("fill" in untouched).toBe(false);
+    expect("outline" in untouched).toBe(false);
+    // A leaf draws its own shape; a frame style there would mean nothing.
+    const leaf = t.nodes.find((n) => n.id === "leaf")!;
+    expect("fill" in leaf).toBe(false);
+    expect("outline" in leaf).toBe(false);
+  });
+
+  it("folds a colour's alpha into the container's opacity, as zones do", () => {
+    const t = validateTemplate({
+      nodes: [
+        node({ id: "a", kind: "group", color: "#38BDF8/40" }),
+        node({ id: "b", kind: "group", color: "#abc" }),
+      ],
+    });
+    expect(t.nodes.find((n) => n.id === "a")).toMatchObject({ color: "#38bdf8", opacity: 0.4 });
+    // No alpha anywhere means no stored opacity — the default still applies.
+    const b = t.nodes.find((n) => n.id === "b")!;
+    expect(b.color).toBe("#aabbcc");
+    expect("opacity" in b).toBe(false);
+  });
+
+  it("round-trips the new fields through React Flow", () => {
+    const t = validateTemplate({
+      nodes: [
+        node({ id: "a", textAlign: "center", textVAlign: "top", wrap: true, fontSize: 20 }),
+        node({ id: "g", kind: "group", fill: false, outline: "dotted", color: "#8b5cf6" }),
+      ],
+    });
+    const rf = toReactFlow(t);
+    const back = fromReactFlow(rf.nodes, rf.edges);
+    expect(back.nodes.find((n) => n.id === "a")).toMatchObject({
+      textAlign: "center",
+      textVAlign: "top",
+      wrap: true,
+      fontSize: 20,
+    });
+    expect(back.nodes.find((n) => n.id === "g")).toMatchObject({
+      fill: false,
+      outline: "dotted",
+      color: "#8b5cf6",
+    });
+  });
 });
 
 describe("meta version tag", () => {

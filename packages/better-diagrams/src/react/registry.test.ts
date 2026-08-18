@@ -52,7 +52,7 @@ describe("resolveRegistry", () => {
 
   it("orders kinds: built-ins, then cloud packs, then extensions", () => {
     const r = resolveRegistry({ nodeKinds: { zeta: {}, alpha: {} } });
-    expect(r.kindOrder.slice(0, 9)).toEqual([
+    expect(r.kindOrder.slice(0, 10)).toEqual([
       "service",
       "database",
       "queue",
@@ -62,9 +62,10 @@ describe("resolveRegistry", () => {
       "table",
       "group",
       "text",
+      "point",
     ]);
     // The cloud pack kinds sit between built-ins and extensions.
-    expect(r.kindOrder[9]).toBe("aws-lambda");
+    expect(r.kindOrder[10]).toBe("aws-lambda");
     expect(r.kindOrder.slice(-2)).toEqual(["zeta", "alpha"]);
   });
 
@@ -150,6 +151,31 @@ describe("text exporters", () => {
     expect(out).toContain("-.->");
     // Annotations are not flowchart nodes.
     expect(out).not.toContain("note[");
+  });
+
+  it("exports a dangling arrow as a dot in mermaid, and not at all in C4", () => {
+    const doc = {
+      version: 1 as const,
+      nodes: [
+        { id: "api", label: "API", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76 },
+        { id: "db", label: "DB", kind: "database", icon: "database", description: "", parentId: null, x: 300, y: 0, w: 170, h: 76 },
+        { id: "pt", label: "", kind: "point", icon: "none", description: "", parentId: null, x: 400, y: 200, w: 12, h: 12 },
+      ],
+      edges: [
+        { id: "e1", source: "api", target: "db", label: "reads", style: "solid" as const, color: "slate" as const },
+        { id: "e2", source: "api", target: "pt", label: "future", style: "dashed" as const, color: "slate" as const },
+      ],
+    };
+    const mermaid = renderTemplateToMermaid(doc);
+    // The dot is mermaid's smallest circle; the arrow to it survives.
+    expect(mermaid).toContain('pt((" "))');
+    expect(mermaid).toContain("api -.->|future| pt");
+
+    // C4 is a strict semantic model: no dot, no dangling Rel — but the rest
+    // of the diagram is untouched.
+    const puml = renderTemplateToC4Puml(doc);
+    expect(puml).not.toContain("pt");
+    expect(puml).toContain('Rel(api, db, "reads")');
   });
 
   it("exports cloud kinds by their silhouette — DynamoDB is a cylinder, SQS a pipe", () => {
@@ -261,6 +287,68 @@ describe("text exporters", () => {
     // token in salmon — so the two halves assert separately.
     expect(svg).toContain("DATABASE");
     expect(svg).toContain("· DEPRECATED");
+  });
+
+  it("centres and wraps a node's label in image exports, matching the canvas", () => {
+    const label = "A deliberately long component label that will not fit on one line";
+    const doc = validateTemplate({
+      nodes: [
+        { id: "n", label, kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76, textAlign: "center", wrap: true },
+      ],
+      edges: [],
+    }) as DiagramTemplate;
+    const svg = renderTemplateToSvg(doc, resolveRegistry());
+
+    // Centred text is emitted with an anchor rather than a shifted x, so the
+    // canvas and the export cannot drift apart as the label changes.
+    expect(svg).toContain('text-anchor="middle"');
+    // Wrapped, so the label arrives as several <text> runs rather than one
+    // ellipsised line — and nothing is elided.
+    expect(svg).not.toContain("…");
+    expect(svg).toContain("deliberately");
+    expect(svg).toContain("line</text>");
+  });
+
+  it("right-aligns with an end anchor", () => {
+    const doc = validateTemplate({
+      nodes: [
+        { id: "n", label: "Ledger", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76, textAlign: "right" },
+      ],
+      edges: [],
+    }) as DiagramTemplate;
+    expect(renderTemplateToSvg(doc, resolveRegistry())).toContain('text-anchor="end"');
+  });
+
+  it("omits a transparent group's frame entirely from image exports", () => {
+    const group = (over: Record<string, unknown>): DiagramTemplate =>
+      validateTemplate({
+        nodes: [
+          { id: "g", label: "Payments", kind: "group", icon: "none", description: "", parentId: null, x: 0, y: 0, w: 320, h: 240, ...over },
+        ],
+        edges: [],
+      }) as DiagramTemplate;
+    const registry = resolveRegistry();
+
+    // The default frame draws both layers.
+    const normal = renderTemplateToSvg(group({}), registry);
+    expect(normal).toContain("stroke-dasharray");
+
+    // An abstract grouping box must not reappear in the PNG — no border, no
+    // wash, just the label chip that makes it selectable.
+    const invisible = renderTemplateToSvg(group({ fill: false, outline: "none" }), registry);
+    expect(invisible).not.toContain("stroke-dasharray");
+    expect(invisible).toContain(">Payments</text>");
+  });
+
+  it("draws a container frame in its own colour when one is set", () => {
+    const doc = validateTemplate({
+      nodes: [
+        { id: "g", label: "Payments", kind: "group", icon: "none", description: "", parentId: null, x: 0, y: 0, w: 320, h: 240, color: "#8b5cf6", outline: "dotted" },
+      ],
+      edges: [],
+    }) as DiagramTemplate;
+    const svg = renderTemplateToSvg(doc, resolveRegistry());
+    expect(svg).toContain("#8b5cf6");
   });
 
   it("draws a box behind a text note unless it opts out with `plain`", () => {

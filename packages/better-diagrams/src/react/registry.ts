@@ -78,6 +78,7 @@ export const BUILTIN_NODE_KINDS: Record<string, NodeKindDef> = {
   table: { label: "Table", fill: "#042f2e", accent: "#2dd4bf", text: "#99f6e4", icon: "none", record: true },
   group: { label: "Group", fill: "transparent", accent: "#475569", text: "#94a3b8", icon: "none", container: true },
   text: { label: "Text", fill: "transparent", accent: "#38bdf8", text: "#e2e8f0", icon: "none", annotation: true },
+  point: { label: "Point", fill: "transparent", accent: "#64748b", text: "#94a3b8", icon: "none", point: true },
 };
 
 /** Order the built-ins appear in the inspector. Extensions append after these. */
@@ -91,6 +92,7 @@ const BUILTIN_KIND_ORDER = [
   "table",
   "group",
   "text",
+  "point",
 ];
 
 /**
@@ -200,6 +202,7 @@ export function resolveRegistry(
     lintRules,
     containerKinds: kindOrder.filter((k) => nodeKinds[k]?.container),
     annotationKinds: kindOrder.filter((k) => nodeKinds[k]?.annotation),
+    pointKinds: kindOrder.filter((k) => nodeKinds[k]?.point),
     promptExtraRules: extensions.promptExtraRules,
   };
 }

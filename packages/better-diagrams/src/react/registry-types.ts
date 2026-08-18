@@ -48,6 +48,11 @@ export interface NodeKindDef {
    */
   record?: boolean;
   /**
+   * Rendered as a bare dot: the free end of a dangling arrow. Same escape as
+   * `container`/`annotation` — a flag, not a hard-coded kind list.
+   */
+  point?: boolean;
+  /**
    * Cloud pack tag ("aws" | "azure" | "gcp" | …). Registry-level metadata:
    * the UI groups the kind under its provider and demotes it when the
    * document doesn't reference that provider. Documents never store it.
@@ -156,6 +161,7 @@ export interface ResolvedRegistry {
   lintRules: Record<string, LintRuleDef>;
   containerKinds: string[];
   annotationKinds: string[];
+  pointKinds: string[];
   promptExtraRules?: string;
 }
 

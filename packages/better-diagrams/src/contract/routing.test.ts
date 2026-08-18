@@ -5,12 +5,13 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  DIAGRAM_SYSTEM_PROMPT,
   fromReactFlow,
   toReactFlow,
   validateTemplate,
   type DiagramTemplate,
 } from "./schema";
-import { edgeGeometryFor, floatingEdgeGeometry, type Box } from "./geometry";
+import { anchorFromPoint, edgeGeometryFor, floatingEdgeGeometry, type Box } from "./geometry";
 import { copyFragment, pasteFragment } from "./clipboard";
 import { autoLayout } from "./layout";
 import { scaleZoneMembers } from "./schema";
@@ -139,6 +140,143 @@ describe("spec geometry", () => {
     const spec = edgeGeometryFor("curved", source, target, 0.5, {});
     const floating = floatingEdgeGeometry(source, target, 0.5);
     expect(spec.path).toBe(floating.path);
+  });
+});
+
+describe("spline continuity through waypoints", () => {
+  const source: Box = { x: 0, y: 0, width: 100, height: 50 };
+  const target: Box = { x: 300, y: 0, width: 100, height: 50 };
+
+  /** The path's cubic segments, with the running start point attached. */
+  function parseCubics(path: string) {
+    const chunks = path.split("C").map((s) => s.trim().replace(/,/g, "").split(/\s+/).map(Number));
+    let a = { x: chunks[0][1], y: chunks[0][2] };
+    return chunks.slice(1).map((c) => {
+      const seg = { a, c1: { x: c[0], y: c[1] }, c2: { x: c[2], y: c[3] }, b: { x: c[4], y: c[5] } };
+      a = seg.b;
+      return seg;
+    });
+  }
+
+  /** Assert the line leaves each dot at the same angle it entered. */
+  function expectG1(path: string) {
+    const segs = parseCubics(path);
+    for (let i = 1; i < segs.length; i++) {
+      const entry = { x: segs[i - 1].b.x - segs[i - 1].c2.x, y: segs[i - 1].b.y - segs[i - 1].c2.y };
+      const exit = { x: segs[i].c1.x - segs[i].a.x, y: segs[i].c1.y - segs[i].a.y };
+      const cross = entry.x * exit.y - entry.y * exit.x;
+      const dot = entry.x * exit.x + entry.y * exit.y;
+      const scale = Math.max(1, Math.hypot(entry.x, entry.y) * Math.hypot(exit.x, exit.y));
+      // Parallel (zero cross product) and pointing the same way — one angle
+      // through the dot, whatever the two sides' magnitudes.
+      expect(Math.abs(cross) / scale, `kink at joint ${i} of ${path}`).toBeLessThan(1e-9);
+      expect(dot, `reversal at joint ${i} of ${path}`).toBeGreaterThan(0);
+    }
+  }
+
+  it("keeps one tangent angle through every dot — entry and exit agree", () => {
+    expectG1(edgeGeometryFor("curved", source, target, 0.5, { points: [[130, 90], [260, 140]] }).path);
+    // Wildly unequal chords — a dot just past the box next to a long reach.
+    expectG1(edgeGeometryFor("curved", source, target, 0.5, { points: [[120, 60]] }).path);
+    // Pinned anchors change the launch directions, not the continuity.
+    expectG1(
+      edgeGeometryFor("curved", source, target, 0.5, {
+        start: { side: "bottom" },
+        end: { side: "top", t: 0.2 },
+        points: [[90, 160], [280, -40]],
+      }).path,
+    );
+  });
+
+  it("a dot dropped just past the box no longer wiggles the line backwards", () => {
+    // Everything on this route travels rightward. The uniform Catmull-Rom
+    // tangent (half the neighbour chord, on both sides) used to overshoot the
+    // short first segment and drag the line back left before the dot — an
+    // S-wiggle that read as the curve breaking at the handle.
+    const geo = edgeGeometryFor("curved", source, target, 0.5, { points: [[120, 60]] });
+    let prev = -Infinity;
+    for (let i = 0; i <= 200; i++) {
+      const { x } = geo.at(i / 200);
+      expect(x, `backtrack at t=${i / 200}`).toBeGreaterThanOrEqual(prev - 0.5);
+      prev = Math.max(prev, x);
+    }
+  });
+});
+
+describe("straight routing", () => {
+  const source: Box = { x: 0, y: 0, width: 100, height: 50 };
+  const target: Box = { x: 300, y: 0, width: 100, height: 50 };
+
+  it("validates, stores, and round-trips routing: straight", () => {
+    const t = doc({ routing: "straight" });
+    expect(t.edges[0].routing).toBe("straight");
+    expect(JSON.stringify(validateTemplate(t))).toBe(JSON.stringify(t));
+  });
+
+  it("draws one straight stroke between the facing sides with no spec", () => {
+    const geo = edgeGeometryFor("straight", source, target, 0.5);
+    expect(geo.path).toBe("M 100 25 L 300 25");
+    expect(geo.tip).toEqual({ x: 300, y: 25 });
+  });
+
+  it("runs straight strokes through every waypoint", () => {
+    const geo = edgeGeometryFor("straight", source, target, 0.5, { points: [[200, 200]] });
+    // Both exits face the waypoint below, so the line leaves both bottoms.
+    expect(geo.path).toBe("M 50 50 L 200 200 L 350 50");
+  });
+
+  it("honours pinned anchors", () => {
+    const geo = edgeGeometryFor("straight", source, target, 0.5, {
+      start: { side: "top", t: 0.25 },
+      end: { side: "bottom" },
+    });
+    expect(geo.path).toBe("M 25 0 L 350 50");
+  });
+
+  it("is advertised to the model alongside the other routings", () => {
+    expect(DIAGRAM_SYSTEM_PROMPT).toContain("curved|orthogonal|straight");
+  });
+});
+
+describe("dangling arrows (point nodes)", () => {
+  const raw = {
+    version: 1,
+    nodes: [
+      { id: "a", label: "A", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 100, h: 50 },
+      { id: "p", label: "", kind: "point", icon: "none", description: "", parentId: null, x: 300, y: 100 },
+    ],
+    edges: [{ id: "e1", source: "a", target: "p", label: "", style: "solid", color: "slate" }],
+  };
+
+  it("validates a point node and its edge like any other", () => {
+    const t = validateTemplate(raw);
+    expect(t.nodes[1].kind).toBe("point");
+    // The kind's own default size fills in: a 12px dot, not a service card.
+    expect(t.nodes[1].w).toBe(12);
+    expect(t.nodes[1].h).toBe(12);
+    expect(t.edges).toHaveLength(1);
+  });
+
+  it("maps point nodes to their own React Flow type and round-trips", () => {
+    const t = validateTemplate(raw);
+    const rf = toReactFlow(t);
+    expect(rf.nodes.find((n) => n.id === "p")?.type).toBe("point");
+    const back = fromReactFlow(rf.nodes, rf.edges, { meta: t.meta });
+    expect(JSON.stringify(back)).toBe(JSON.stringify(t));
+  });
+});
+
+describe("anchorFromPoint", () => {
+  const box: Box = { x: 100, y: 100, width: 200, height: 100 };
+
+  it("picks the nearest side and the fraction along it", () => {
+    expect(anchorFromPoint(box, { x: 150, y: 95 })).toEqual({ side: "top", t: 0.25 });
+    expect(anchorFromPoint(box, { x: 90, y: 150 })).toEqual({ side: "left", t: 0.5 });
+    expect(anchorFromPoint(box, { x: 310, y: 175 })).toEqual({ side: "right", t: 0.75 });
+  });
+
+  it("projects a far-away point back onto the perimeter", () => {
+    expect(anchorFromPoint(box, { x: 200, y: 500 })).toEqual({ side: "bottom", t: 0.5 });
   });
 });
 

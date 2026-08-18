@@ -26,6 +26,8 @@ import { kindDef, iconPaths } from "./registry-types";
 import { ZoneNode } from "./ZoneNode";
 import { silhouettePath, teamColor } from "./shapes";
 import {
+  DEFAULT_CONTAINER_OPACITY,
+  DEFAULT_FONT_SIZE,
   NODE_MIN_SIZE,
   ghostSourceId,
   isBoundaryNodeId,
@@ -153,6 +155,12 @@ export const ShapeNode = memo(function ShapeNode({
 
   const style = {
     "--as-node-accent": def.accent,
+    // The title carries the node's own size; the eyebrow, description and
+    // rows keep their fixed scale so a resized label doesn't drag the whole
+    // card's typography with it.
+    ...(data.fontSize && data.fontSize !== DEFAULT_FONT_SIZE
+      ? { "--as-node-font": `${data.fontSize}px` }
+      : {}),
     ...(sil
       ? { paddingTop: 6 + sil.contentTop, paddingInline: 12 + sil.contentInlinePad }
       : {}),
@@ -167,6 +175,10 @@ export const ShapeNode = memo(function ShapeNode({
     scopeGhost ? "as-node--scope-ghost" : "",
     dimmed ? "as-node--dimmed" : "",
     data.status ? `as-node--status-${data.status}` : "",
+    // Text layout. Absent data means the pre-existing look, so no class.
+    data.textAlign ? `as-node--align-${data.textAlign}` : "",
+    data.textVAlign ? `as-node--valign-${data.textVAlign}` : "",
+    data.wrap ? "as-node--wrap" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -318,7 +330,29 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
       </button>
     ) : null;
 
-  const style = { "--as-node-accent": def.accent } as CSSProperties;
+  // Frame styling, resolved exactly as a zone's is: the stored colour is the
+  // INK (what a human reads as the boundary), and the fill is derived from it
+  // as a tint at `opacity`, so light and dark mode each get a sensible wash
+  // from one stored value. `fill: false` + `outline: "none"` is the fully
+  // transparent grouping frame.
+  const ink = data.color || def.accent;
+  // Untinted groups keep the neutral surface wash they have always had — the
+  // ink-derived tint kicks in only once a colour or an opacity is actually
+  // stored, so every pre-existing diagram renders pixel-identical.
+  const tinted = !!data.color || data.opacity !== undefined;
+  const fill =
+    data.fill === false
+      ? "transparent"
+      : tinted
+        ? `color-mix(in srgb, ${ink} ${Math.round((data.opacity ?? DEFAULT_CONTAINER_OPACITY) * 100)}%, transparent)`
+        : "color-mix(in srgb, var(--as-surface-2) 28%, transparent)";
+  const style = {
+    "--as-node-accent": def.accent,
+    "--as-group-ink": ink,
+    "--as-group-fill": fill,
+    "--as-group-outline": data.outline ?? "dashed",
+    "--as-group-border-width": data.outline === "none" ? "0" : "1px",
+  } as CSSProperties;
   const teamBadge =
     data.team && showTeams ? (
       <span
@@ -468,9 +502,29 @@ export const AnnotationNode = memo(function AnnotationNode({
   );
 });
 
+export type PointNodeType = Node<DiagramNodeData, "point">;
+
+/**
+ * The free end of a dangling arrow: a bare dot. Born when a connection drag
+ * is released over empty canvas, and dragged around like any node — the
+ * arrow follows. Its handles stay live so a chain can continue FROM the dot,
+ * and so the edge that ends on it can be measured at all (see ConnectHandles
+ * on why unmounting them would erase the edge).
+ */
+export const PointNode = memo(function PointNode({ selected }: NodeProps<PointNodeType>) {
+  const { readOnly } = useStudio();
+  return (
+    <div className={`as-point${selected ? " as-point--selected" : ""}`}>
+      <ConnectHandles hidden={readOnly} />
+      <div className="as-point__dot" />
+    </div>
+  );
+});
+
 export const NODE_TYPES = {
   shape: ShapeNode,
   group: GroupNode,
   annotation: AnnotationNode,
+  point: PointNode,
   zone: ZoneNode,
 };

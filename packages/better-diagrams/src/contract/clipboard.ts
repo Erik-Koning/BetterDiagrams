@@ -5,7 +5,12 @@
  * fragment pastes into another diagram, another tab, or a text editor — and
  * anything already able to read the schema can read a clipboard fragment too.
  */
-import { validateTemplate, type DiagramTemplate, type ValidateOptions } from "./schema";
+import {
+  validateTemplate,
+  type DiagramNode,
+  type DiagramTemplate,
+  type ValidateOptions,
+} from "./schema";
 
 /** Marks a template as a clipboard fragment rather than a whole document. */
 export const FRAGMENT_MARKER = "better-diagrams/fragment";
@@ -37,12 +42,17 @@ export interface Fragment extends DiagramTemplate {
  * whose `zoneId` is that zone (and their descendants and internal edges) —
  * "clone this whole region". Subject zones are recorded in the fragment's
  * meta so paste knows to clone them under fresh ids rather than reuse them.
+ *
+ * A fragment always carries ABSOLUTE coordinates for its roots: a node whose
+ * parent stays behind is re-rooted on paste, and its stored parent-relative
+ * x/y would then be read as canvas coordinates.
  */
 export function copyFragment(
   template: DiagramTemplate,
   selectedIds: readonly string[],
   opts: { zones?: readonly string[] } = {},
 ): Fragment {
+  const nodeById = new Map(template.nodes.map((n) => [n.id, n]));
   const zoneById = new Map((template.zones ?? []).map((z) => [z.id, z]));
   const subjects = (opts.zones ?? []).filter((id) => zoneById.has(id));
   const subjectSet = new Set(subjects);
@@ -65,7 +75,34 @@ export function copyFragment(
     }
   }
 
-  const nodes = template.nodes.filter((n) => selected.has(n.id));
+  // A child's stored x/y are RELATIVE to its parent. When the parent does not
+  // come along, paste re-roots the copy — so the fragment has to carry
+  // ABSOLUTE coordinates, or the copy lands wherever those relative numbers
+  // happen to point (a node at 30,60 inside a group at 520,40 would paste
+  // itself into the canvas's top-left corner, ~500px from the original).
+  // Only the source document knows the ancestor chain, so absolutize here
+  // rather than in pasteFragment.
+  const absoluteOffset = (node: DiagramNode) => {
+    let dx = 0;
+    let dy = 0;
+    const guard = new Set<string>([node.id]);
+    let parent = node.parentId ? nodeById.get(node.parentId) : undefined;
+    while (parent && !guard.has(parent.id) && !selected.has(parent.id)) {
+      guard.add(parent.id);
+      dx += parent.x;
+      dy += parent.y;
+      parent = parent.parentId ? nodeById.get(parent.parentId) : undefined;
+    }
+    return { dx, dy };
+  };
+
+  const nodes = template.nodes
+    .filter((n) => selected.has(n.id))
+    .map((n) => {
+      if (!n.parentId || selected.has(n.parentId)) return n;
+      const { dx, dy } = absoluteOffset(n);
+      return dx || dy ? { ...n, x: n.x + dx, y: n.y + dy } : n;
+    });
   const edges = template.edges.filter((e) => selected.has(e.source) && selected.has(e.target));
 
   // Carry the zones the fragment references, so pasting into an empty diagram
@@ -120,7 +157,10 @@ export function pasteFragment(
   const remap = new Map<string, string>();
   const fresh = (oldId: string, prefix: string) => {
     let id = makeId(prefix);
-    while (existing.has(id)) id = makeId(prefix);
+    // A caller-supplied `makeId` may be deterministic (tests pass
+    // `p => `${p}_copy``), in which case re-calling it can never resolve a
+    // collision. Suffix instead of spinning.
+    for (let bump = 2; existing.has(id); bump++) id = `${makeId(prefix)}_${bump}`;
     existing.add(id);
     remap.set(oldId, id);
     return id;
@@ -168,13 +208,21 @@ export function pasteFragment(
       : {}),
   }));
 
+  // A cloned region has to be able to CLAIM the members pasted into it. The
+  // editor re-derives zone membership from geometry after every change, and
+  // `zoneAt` breaks a tie on equal z and equal area by keeping the first zone
+  // it saw — always the original, which comes first in this array. A clone
+  // sitting on top of its source would therefore hand its members straight
+  // back and end up empty. Stack it above everything instead.
+  const topZ = Math.max(0, ...(template.zones ?? []).map((z) => z.z ?? 0));
   const zones = [
     ...(template.zones ?? []),
-    ...newZones.map((zone) => ({
+    ...newZones.map((zone, index) => ({
       ...zone,
       id: remap.get(zone.id)!,
       x: zone.x + offset,
       y: zone.y + offset,
+      z: topZ + 1 + index,
     })),
   ];
 
@@ -255,14 +303,21 @@ export function duplicateWithConnections(
   };
 }
 
-/** Parse clipboard text into a fragment, or null if it isn't one. */
-export function parseFragment(text: string): DiagramTemplate | null {
+/**
+ * Parse clipboard text into a fragment, or null if it isn't one.
+ *
+ * Takes the same `ValidateOptions` as everything else: without the host's
+ * registry, validation coerces an extension kind or icon back to
+ * "service"/"none" — and since paste prefers the SYSTEM clipboard, that would
+ * silently downgrade every cross-tab paste of a registry-extended document.
+ */
+export function parseFragment(text: string, options: ValidateOptions = {}): DiagramTemplate | null {
   try {
     const parsed = JSON.parse(text);
     if (!parsed || !Array.isArray(parsed.nodes)) return null;
     // Accept a whole template too — pasting an exported diagram into another
     // one is a reasonable thing to want.
-    return validateTemplate(parsed);
+    return validateTemplate(parsed, options);
   } catch {
     return null;
   }

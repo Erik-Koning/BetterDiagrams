@@ -185,14 +185,35 @@ function autoSide(box: Box, toward: Pt): EdgeAnchorSpec["side"] {
   return dy > 0 ? "bottom" : "top";
 }
 
+/**
+ * The nearest point on a box's perimeter, as a stored anchor: which side, and
+ * the fraction along it. This is the write half of `anchorPoint` — dragging an
+ * edge's endpoint hands the pointer position here and pins what it returns.
+ */
+export function anchorFromPoint(box: Box, point: Pt): EdgeAnchorSpec {
+  const cx = Math.min(box.x + box.width, Math.max(box.x, point.x));
+  const cy = Math.min(box.y + box.height, Math.max(box.y, point.y));
+  const candidates: Array<{ side: EdgeAnchorSpec["side"]; t: number; d: number }> = [
+    { side: "top", t: box.width ? (cx - box.x) / box.width : 0.5, d: Math.hypot(point.x - cx, point.y - box.y) },
+    { side: "bottom", t: box.width ? (cx - box.x) / box.width : 0.5, d: Math.hypot(point.x - cx, point.y - (box.y + box.height)) },
+    { side: "left", t: box.height ? (cy - box.y) / box.height : 0.5, d: Math.hypot(point.x - box.x, point.y - cy) },
+    { side: "right", t: box.height ? (cy - box.y) / box.height : 0.5, d: Math.hypot(point.x - (box.x + box.width), point.y - cy) },
+  ];
+  const best = candidates.reduce((a, b) => (b.d < a.d ? b : a));
+  // Two decimals: enough for any pointer, and it keeps the JSON readable.
+  return { side: best.side, t: Math.round(best.t * 100) / 100 };
+}
+
 /** Samples per cubic segment when flattening a spline for arc-length `at`. */
 const SPLINE_SAMPLES = 16;
 
 /**
- * A smooth curve through every point: Catmull-Rom tangents at the interior
- * waypoints, perpendicular launch/landing at the boxes — the curve leaves and
- * arrives square to the side it is pinned to, matching the floating router's
- * visual language.
+ * A smooth curve through every point, G1-continuous at every waypoint: each
+ * dot carries a single tangent direction (the bisector of its two chords),
+ * both neighbouring segments follow it, and so the line enters and leaves the
+ * dot at the same angle — it reads as one continuous stroke that happens to
+ * pass through a handle. Launch/landing at the boxes is perpendicular to the
+ * side the line is pinned to, matching the floating router's visual language.
  */
 function curvedSpecGeometry(
   p1: Pt,
@@ -205,27 +226,58 @@ function curvedSpecGeometry(
   const P: Pt[] = [p1, ...waypoints, p2];
   const n = P.length - 1;
 
-  // Tangents. m[i] is the derivative at P[i]; a cubic segment i uses
-  // c1 = P[i] + m[i]/3 and c2 = P[i+1] − m[i+1]/3.
-  const m: Pt[] = new Array(P.length);
-  for (let i = 1; i < n; i++) {
-    m[i] = { x: (P[i + 1].x - P[i - 1].x) / 2, y: (P[i + 1].y - P[i - 1].y) / 2 };
+  // Chord length of each segment; every control magnitude derives from these.
+  const lens: number[] = [];
+  for (let i = 0; i < n; i++) {
+    lens.push(Math.hypot(P[i + 1].x - P[i].x, P[i + 1].y - P[i].y));
   }
-  const launch = (side: EdgeAnchorSpec["side"], from: Pt, to: Pt, sign: 1 | -1): Pt => {
-    const off = Math.max(MIN_CONTROL_OFFSET, Math.hypot(to.x - from.x, to.y - from.y) * CONTROL_RATIO);
-    const normal = outwardNormal(side);
-    return { x: normal.x * off * 3 * sign, y: normal.y * off * 3 * sign };
+
+  const unit = (v: Pt): Pt => {
+    const d = Math.hypot(v.x, v.y);
+    return d > 0 ? { x: v.x / d, y: v.y / d } : { x: 0, y: 0 };
   };
-  m[0] = launch(startSide, P[0], P[1], 1);
+
+  // ONE tangent direction per point — this is what makes the line read as
+  // continuous through a dot: both neighbouring segments aim their control
+  // points along the same line, so the entry and exit angles are equal by
+  // construction. Interior dots use the bisector of their two chord
+  // directions (length-independent — a short hop next to a long reach doesn't
+  // tilt it, which the raw Catmull-Rom neighbour chord did). Box ends stay
+  // perpendicular to the side they're pinned to, matching the floating
+  // router's visual language.
+  const dir: Pt[] = new Array(P.length);
+  dir[0] = outwardNormal(startSide);
+  const outN = outwardNormal(endSide);
   // Arrival travels INTO the box: opposite of the outward normal.
-  m[n] = launch(endSide, P[n], P[n - 1], -1);
+  dir[n] = { x: -outN.x, y: -outN.y };
+  for (let i = 1; i < n; i++) {
+    const into = unit({ x: P[i].x - P[i - 1].x, y: P[i].y - P[i - 1].y });
+    const outOf = unit({ x: P[i + 1].x - P[i].x, y: P[i + 1].y - P[i].y });
+    const sum = { x: into.x + outOf.x, y: into.y + outOf.y };
+    // A route that doubles back exactly has no bisector; keep travelling.
+    dir[i] = Math.hypot(sum.x, sum.y) > 1e-6 ? unit(sum) : outOf;
+  }
+
+  // Control magnitude on each SIDE of a point: a third of that side's own
+  // chord, so the shared direction bends softly into short and long segments
+  // alike instead of flinging a uniform magnitude past a nearby dot. The box
+  // ends keep the floating router's offset, capped at HALF the chord so a
+  // dot placed close to a box can't make the launch overshoot it and wiggle
+  // back.
+  const endMag = (len: number) =>
+    Math.min(Math.max(MIN_CONTROL_OFFSET, len * CONTROL_RATIO), len / 2);
+  const outMag = (i: number) => (i === 0 ? endMag(lens[0]) : lens[i] / 3);
+  const inMag = (i: number) => (i === n ? endMag(lens[n - 1]) : lens[i - 1] / 3);
 
   const segments: Array<{ a: Pt; c1: Pt; c2: Pt; b: Pt }> = [];
   for (let i = 0; i < n; i++) {
     segments.push({
       a: P[i],
-      c1: { x: P[i].x + m[i].x / 3, y: P[i].y + m[i].y / 3 },
-      c2: { x: P[i + 1].x - m[i + 1].x / 3, y: P[i + 1].y - m[i + 1].y / 3 },
+      c1: { x: P[i].x + dir[i].x * outMag(i), y: P[i].y + dir[i].y * outMag(i) },
+      c2: {
+        x: P[i + 1].x - dir[i + 1].x * inMag(i + 1),
+        y: P[i + 1].y - dir[i + 1].y * inMag(i + 1),
+      },
       b: P[i + 1],
     });
   }
@@ -314,6 +366,15 @@ function orthogonalSpecGeometry(
     push(b);
   }
 
+  return polylineGeometry(pts, labelT);
+}
+
+/**
+ * The `EdgeGeometry` of a bare polyline: straight strokes point to point.
+ * Both the orthogonal routers and the straight routing reduce to this once
+ * their point lists are built.
+ */
+function polylineGeometry(pts: readonly Pt[], labelT: number): EdgeGeometry {
   const at = arcLengthAt(pts);
   const tail = pts[pts.length - 1];
   const beforeTail = pts.length > 1 ? pts[pts.length - 2] : tail;
@@ -325,6 +386,35 @@ function orthogonalSpecGeometry(
     angle: Math.atan2(tail.y - beforeTail.y, tail.x - beforeTail.x),
     at,
   };
+}
+
+/**
+ * Route a straight line between two boxes: the classic flow-chart connector.
+ * Attachment sides are chosen by the dominant axis, exactly like the other
+ * routers, so switching an edge between routings never flips which side it
+ * leaves through.
+ */
+export function straightEdgeGeometry(source: Box, target: Box, labelT = 0.5): EdgeGeometry {
+  const scx = source.x + source.width / 2;
+  const scy = source.y + source.height / 2;
+  const tcx = target.x + target.width / 2;
+  const tcy = target.y + target.height / 2;
+
+  const dx = tcx - scx;
+  const dy = tcy - scy;
+
+  const [p1, p2]: [Pt, Pt] =
+    Math.abs(dx) >= Math.abs(dy)
+      ? [
+          { x: dx > 0 ? source.x + source.width : source.x, y: scy },
+          { x: dx > 0 ? target.x : target.x + target.width, y: tcy },
+        ]
+      : [
+          { x: scx, y: dy > 0 ? source.y + source.height : source.y },
+          { x: tcx, y: dy > 0 ? target.y : target.y + target.height },
+        ];
+
+  return polylineGeometry([p1, p2], labelT);
 }
 
 /**
@@ -368,17 +458,7 @@ export function orthogonalEdgeGeometry(source: Box, target: Box, labelT = 0.5): 
         : [p1, { x: p1.x, y: midY }, { x: p2.x, y: midY }, p2];
   }
 
-  const at = arcLengthAt(points);
-  const last = points[points.length - 1];
-  const beforeLast = points[points.length - 2];
-
-  return {
-    path: points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" "),
-    label: at(clampLabelT(labelT)),
-    tip: last,
-    angle: Math.atan2(last.y - beforeLast.y, last.x - beforeLast.x),
-    at,
-  };
+  return polylineGeometry(points, labelT);
 }
 
 /**
@@ -388,7 +468,7 @@ export function orthogonalEdgeGeometry(source: Box, target: Box, labelT = 0.5): 
  * output is identical to what this function always produced.
  */
 export function edgeGeometryFor(
-  routing: "curved" | "orthogonal" | undefined,
+  routing: "curved" | "orthogonal" | "straight" | undefined,
   source: Box,
   target: Box,
   labelT = 0.5,
@@ -398,7 +478,9 @@ export function edgeGeometryFor(
   if (!spec?.start && !spec?.end && !waypoints.length) {
     return routing === "orthogonal"
       ? orthogonalEdgeGeometry(source, target, labelT)
-      : floatingEdgeGeometry(source, target, labelT);
+      : routing === "straight"
+        ? straightEdgeGeometry(source, target, labelT)
+        : floatingEdgeGeometry(source, target, labelT);
   }
 
   const centerOf = (b: Box): Pt => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
@@ -410,7 +492,9 @@ export function edgeGeometryFor(
 
   return routing === "orthogonal"
     ? orthogonalSpecGeometry(p1, startSide, waypoints, p2, endSide, labelT)
-    : curvedSpecGeometry(p1, startSide, waypoints, p2, endSide, labelT);
+    : routing === "straight"
+      ? polylineGeometry([p1, ...waypoints, p2], labelT)
+      : curvedSpecGeometry(p1, startSide, waypoints, p2, endSide, labelT);
 }
 
 // ─── Crow's-foot cardinality markers ─────────────────────────────────────────

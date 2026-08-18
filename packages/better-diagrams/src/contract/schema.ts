@@ -31,6 +31,7 @@ import {
 import { ALL_CLOUD_KIND_IDS } from "./cloud";
 import { normalizeDate, type DiagramDate } from "./timeline";
 import { parseLlmJson } from "./json-repair";
+import { wrappedLineCount } from "./text";
 
 // ─── Vocabulary ──────────────────────────────────────────────────────────────
 
@@ -44,6 +45,7 @@ export const NODE_KINDS = [
   "table", // data-model entity — its columns live in `fields`
   "group", // container / boundary — other nodes nest inside via parentId
   "text", // free-floating annotation; the text lives in `label`
+  "point", // bare arrow endpoint — a dot an edge can end on in empty space
 ] as const;
 export type NodeKind = (typeof NODE_KINDS)[number] | (string & {});
 
@@ -51,6 +53,14 @@ export type NodeKind = (typeof NODE_KINDS)[number] | (string & {});
 export const CONTAINER_KINDS: readonly string[] = ["group"];
 /** Kinds rendered as bare text rather than a box. */
 export const ANNOTATION_KINDS: readonly string[] = ["text"];
+/**
+ * Kinds that render as a bare dot: the free end of a dangling arrow. An edge
+ * to a point IS the feature — the arrow exists, the thing it points at
+ * doesn't yet. Modelled as a node rather than a nullable edge endpoint so
+ * every mechanism that already understands nodes (dragging, undo, clipboard,
+ * exports, diff, re-attachment) works on the loose end unchanged.
+ */
+export const POINT_KINDS: readonly string[] = ["point"];
 
 export const ICON_NAMES = [
   "none",
@@ -89,8 +99,20 @@ export const EDGE_DIRECTIONS = ["forward", "both", "none"] as const;
 export type EdgeDirection = (typeof EDGE_DIRECTIONS)[number];
 
 /** How an edge is routed. Unset on an edge means "inherit `meta.routing`". */
-export const EDGE_ROUTINGS = ["curved", "orthogonal"] as const;
+export const EDGE_ROUTINGS = ["curved", "orthogonal", "straight"] as const;
 export type EdgeRouting = (typeof EDGE_ROUTINGS)[number];
+
+/**
+ * The routing a stored value resolves to: a known routing, else the "curved"
+ * default. Every consumer of `meta.routing` goes through this — the canvas,
+ * the exporters, and new-edge defaults — so adding a routing mode is a change
+ * to ONE list, not a hunt for hand-written `=== "orthogonal"` checks.
+ */
+export function resolveRouting(routing: unknown): EdgeRouting {
+  return (EDGE_ROUTINGS as readonly string[]).includes(routing as string)
+    ? (routing as EdgeRouting)
+    : "curved";
+}
 
 /** Sides of a node box an edge endpoint can be pinned to. */
 export const EDGE_ANCHOR_SIDES = ["top", "right", "bottom", "left"] as const;
@@ -165,6 +187,39 @@ export function fieldsBoxHeight(count: number, hasDescription = false): number {
 }
 
 /**
+ * Width left for text once the box's padding and the icon chip are taken.
+ *
+ * The CSS (12px padding each side, a 10px gap, a 28px chip) and the exporter
+ * (`textX` + a 10px right margin) arrive at 62 and 60 respectively for a node
+ * with an icon. Measuring with the SMALLER of the two is deliberate: it can
+ * only ever over-estimate the number of lines, and a box one line too tall is
+ * invisible where a box one line too short clips the label.
+ */
+export function nodeTextWidth(w: number, hasIcon: boolean): number {
+  return Math.max(24, w - (hasIcon ? 62 : 24));
+}
+
+/** `.as-node__title` line-height, which the exporter's row pitch also follows. */
+const TITLE_LINE_HEIGHT = 1.35;
+
+/**
+ * The height a node needs for a WRAPPED title, by the same measurement the
+ * renderer and the exporters use (contract/text.ts).
+ *
+ * Only called when `wrap` is set — an unwrapped title is one ellipsised line
+ * and never changes the box.
+ */
+export function wrappedTitleHeight(
+  label: string,
+  fontSize: number,
+  w: number,
+  hasIcon: boolean,
+): number {
+  const lines = wrappedLineCount(label, fontSize, "sans", nodeTextWidth(w, hasIcon));
+  return Math.round(lines * fontSize * TITLE_LINE_HEIGHT) + WRAP_BOX_PADDING;
+}
+
+/**
  * Lifecycle stage of a node. `active` is the default and is never stored —
  * validation strips it so pre-status documents stay byte-identical.
  */
@@ -192,6 +247,31 @@ export type NodeStatus = (typeof NODE_STATUSES)[number];
 export const VERSION_TAG_POSITIONS = ["top-left", "top-right", "bottom-left", "bottom-right"] as const;
 export type VersionTagPosition = (typeof VERSION_TAG_POSITIONS)[number];
 
+/** Horizontal placement of a node's text. "left" is the default and never stored. */
+export const NODE_TEXT_ALIGNS = ["left", "center", "right"] as const;
+export type NodeTextAlign = (typeof NODE_TEXT_ALIGNS)[number];
+
+/** Vertical placement of a node's text block. "middle" is the default and never stored. */
+export const NODE_TEXT_VALIGNS = ["top", "middle", "bottom"] as const;
+export type NodeTextVAlign = (typeof NODE_TEXT_VALIGNS)[number];
+
+/**
+ * Frame outline style for a container node — the same vocabulary a zone uses,
+ * deliberately, so the concept is learned once. "dashed" is the group default
+ * and never stored.
+ */
+export const NODE_OUTLINES = ["solid", "dashed", "dotted", "none"] as const;
+export type NodeOutline = (typeof NODE_OUTLINES)[number];
+
+/** Background tint strength for a container node that doesn't specify one. */
+export const DEFAULT_CONTAINER_OPACITY = 0.28;
+
+/** The label size a node uses when it doesn't specify one. */
+export const DEFAULT_FONT_SIZE = 13;
+
+/** Space a wrapped title needs beyond the text itself: eyebrow, padding, chrome. */
+const WRAP_BOX_PADDING = 46;
+
 export const EDGE_COLOR_HEX: Record<EdgeColor, string> = {
   slate: "#64748b",
   sky: "#38bdf8",
@@ -211,6 +291,9 @@ export const EDGE_DASH: Record<EdgeStyle, number[]> = {
 export const KIND_DEFAULT_SIZE: Record<string, { w: number; h: number }> = {
   group: { w: 320, h: 240 },
   text: { w: 300, h: 60 },
+  // A dot, not a box: just big enough that the arrowhead stops visibly short
+  // of the exact spot and the dot itself can be grabbed and dragged.
+  point: { w: 12, h: 12 },
   // Wider than a service box: a column line is "name  type", two words that
   // must not ellipsise. The height is a floor — a table with rows grows.
   table: { w: 230, h: 96 },
@@ -242,8 +325,25 @@ export interface DiagramNode {
   y: number;
   w: number;
   h: number;
-  /** Only meaningful for kind === "text" (default 13) */
+  /** Label size in px (default 13). Applies to every kind's title. */
   fontSize?: number;
+
+  /**
+   * Horizontal placement of the label, description and field rows.
+   * Absent = "left", which is how every node rendered before this existed.
+   */
+  textAlign?: NodeTextAlign;
+  /**
+   * Vertical placement of the text block inside the box. Absent = "middle"
+   * (record kinds pin to the top regardless — their rows are anchored).
+   */
+  textVAlign?: NodeTextVAlign;
+  /**
+   * Wrap the label across as many lines as it needs instead of ellipsising it
+   * on one, growing the node's height to fit. Absent = the single-line
+   * treatment. Width is never changed — that stays authored.
+   */
+  wrap?: boolean;
 
   /**
    * The infra zone this node sits on, or null. Independent of `parentId` — a
@@ -291,6 +391,21 @@ export interface DiagramNode {
    * size and survive collapse — expanding restores the layout exactly.
    */
   collapsed?: boolean;
+
+  /**
+   * Container frame styling — the same four knobs a zone has, with the same
+   * names and meanings, so `fill: false` + `outline: "none"` gives an
+   * invisible grouping frame that still nests, still accepts drops, and still
+   * collapses and drills in.
+   *
+   * Absent = the default dashed frame over a faint tint.
+   */
+  fill?: boolean;
+  outline?: NodeOutline;
+  /** Canonical `#rrggbb`. Absent = the kind's registry accent. */
+  color?: string;
+  /** Tint strength 0..1. Absent = DEFAULT_CONTAINER_OPACITY. */
+  opacity?: number;
 }
 
 export interface DiagramEdge {
@@ -427,6 +542,13 @@ const NODE_KEY_MAP: Record<keyof DiagramNode, true> = {
   w: true,
   h: true,
   fontSize: true,
+  textAlign: true,
+  textVAlign: true,
+  wrap: true,
+  fill: true,
+  outline: true,
+  color: true,
+  opacity: true,
   zoneId: true,
   providers: true,
   tags: true,
@@ -562,18 +684,22 @@ export function buildSystemPrompt(opts: PromptOptions = {}): string {
   const styles = EDGE_STYLES.join("|");
   const colors = EDGE_COLORS.join("|");
   const shapes = ZONE_SHAPES.join("|");
+  const routings = EDGE_ROUTINGS.join("|");
   const geo = opts.geometry !== false;
 
   return `You convert software requirements, source code, or natural-language descriptions into an architecture diagram template. Respond with ONLY compact valid JSON (no markdown fences, no commentary) matching:
-{"version":1,"meta":{"title":"Name","routing":"curved|orthogonal","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${PROVIDER_IDS[0]}"],"provider":"${PROVIDER_IDS[0]}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":"","date":"YYYY-MM-DD"}]}
+{"version":1,"meta":{"title":"Name","routing":"${routings}","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${PROVIDER_IDS[0]}"],"provider":"${PROVIDER_IDS[0]}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":"","date":"YYYY-MM-DD"}]}
 Rules:
 - "group" = boundary (VPC, cluster, tier, bounded context). Children set parentId${geo ? "; child x/y are RELATIVE to the group's top-left. Size groups to contain all children (+24px sides, +48px top). Children of a NON-group parent use small local coordinates starting near 0,0 (their own drilled canvas); never size the parent to contain them." : "."}
 - "text" = free annotation; put the sentence in label, fontSize 12-16${geo ? ", w~300 h~60" : ""}, no edges.
+- "point" = the bare endpoint of a dangling arrow: a tiny dot an edge can end on, for an arrow into empty space (a dependency on something that doesn't exist yet). label ""${geo ? ", w=h=12" : ""}; use ONLY as an edge's source/target, and only when the user asks for an open-ended/abstract arrow.
 - ${geo ? "Regular nodes: w 160-200, h 64-84. Pick" : "Pick"} a fitting icon. description is an optional one-line tech detail (C4 style, e.g. "Node.js / Express").
 - Edge style semantics: dashed = async/event-driven, dotted = cache/optional/telemetry, solid = synchronous. Vary color by concern (e.g. amber = data, violet = messaging).${geo ? " labelT (0.15-0.85) slides the label along the arrow to avoid collisions." : ""}
 - Edge "tech" = protocol/format, C4 style ("JSON/HTTPS", "gRPC", "SQL"); omit when obvious. "direction":"both" for genuinely bidirectional links, "none" for plain association; omit for normal flow. When the user asks for a request flow or sequence, number the participating edges with "seq":1,2,3… in traversal order; omit seq otherwise.
-- meta.routing "orthogonal" gives right-angle connectors (formal/dense diagrams); omit for curved. meta.title names the diagram. meta.versionTag labels the revision ("v2.1", "2026-Q3 draft") when the user gives one; omit otherwise.
+- meta.routing "orthogonal" gives right-angle connectors (formal/dense diagrams), "straight" direct point-to-point lines (classic flow charts); omit for curved. meta.title names the diagram. meta.versionTag labels the revision ("v2.1", "2026-Q3 draft") when the user gives one; omit otherwise.
 - Node "tags" = short lowercase labels for cross-cutting concerns the user mentions ("pci","gdpr","deprecated","planned"); omit when none. Node "url" = deep link to docs/repo if the user supplies one; omit otherwise. Node "team" = the owning or contact team when the user names one ("Payments", "Platform"); omit otherwise. Node "status" = lifecycle stage when stated: "planned" for future work, "stubbed" for scaffolding that exists but does nothing yet, "dark" for built-and-shipped but not yet enabled, "deprecated" for being sunset; omit for normal active components. Text notes draw a subtle box by default; set "plain":true only when the user wants bare text with no outline.
+- Node text layout, all optional and all rarely needed — omit unless the user asks: "textAlign":"center"/"right" (default left), "textVAlign":"top"/"bottom" (default middle), "wrap":true to break a long label across lines instead of ellipsising it on one (the editor grows the node's height to fit). "fontSize" sets the label size in px (default 13).
+- A "group" may also be styled as a purely visual grouping frame: "fill":false drops its background, "outline":"none" drops its border, "outline":"dotted"/"solid" changes it (default dashed), and "color" is an "#rrggbb" ink the background tint derives from. Use "fill":false with "outline":"none" only when the user explicitly wants an invisible/abstract grouping box.
 - Node/edge/zone "date" = when that piece lands or landed, as "YYYY-MM-DD". Set it ONLY when the user gives a roadmap, phases, quarters, or a migration order; omit it everywhere else. Undated elements are treated as always present, so a phased plan dates the new pieces and leaves today's system undated. A node inside a group is never shown before the group, so date the group with its earliest phase.
 - parentId may reference ANY existing node. A child of a "group" renders inside its frame. A child of any other node is that component's INTERNAL decomposition (the next C4 level) — shown only when the user drills into that component, never on the parent's own diagram. Do NOT decompose a component into children unless the user explicitly asks for its internal detail. Never create a parent cycle.
 - DATA MODELS: an entity/table is a node of kind "table" whose columns are "fields" — {id, name, type, key:"pk"/"fk"/"pfk", required}. Field ids are unique within their node.${geo ? " Give a table w 200-260; the editor grows its height to fit the rows, so h is only a hint." : ""} A relationship is an ordinary edge between the two tables: name the columns it joins with "startField"/"endField" (field ids on the source and target), and put cardinality in "startLabel"/"endLabel" ("1", "0..1", "0..*", "1..*") — these render as crow's-foot symbols, so write real cardinalities there rather than prose. Use "fields" ONLY for data modelling — an ordinary architecture node omits the key entirely. Subject areas are "group" parents, exactly as elsewhere.
@@ -679,6 +805,25 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
       const date = normalizeDate(n.date);
       const fields = validateFields(n.fields);
       const description = n.description ? String(n.description) : "";
+      const fontSize = positive(n.fontSize, DEFAULT_FONT_SIZE);
+
+      // Text layout. Each default is dropped rather than stored, so a document
+      // written before these existed round-trips byte-identical.
+      const textAlign = NODE_TEXT_ALIGNS.includes(n.textAlign as NodeTextAlign)
+        ? (n.textAlign as NodeTextAlign)
+        : "left";
+      const textVAlign = NODE_TEXT_VALIGNS.includes(n.textVAlign as NodeTextVAlign)
+        ? (n.textVAlign as NodeTextVAlign)
+        : "middle";
+      const wrap = n.wrap === true;
+
+      // Container frame styling, mirroring the zone rules exactly: an explicit
+      // `opacity` beats an alpha carried on the colour, which beats the default.
+      const isContainer = containerSet.has(kind);
+      const color = isContainer ? normalizeHexColor(n.color) : null;
+      const outline = NODE_OUTLINES.includes(n.outline as NodeOutline)
+        ? (n.outline as NodeOutline)
+        : "dashed";
 
       return {
         id,
@@ -707,6 +852,24 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         // the field is stored only when true, and only where it means
         // something — every other kind draws its own shape.
         ...(n.plain === true && annotationSet.has(kind) ? { plain: true } : {}),
+        // Left / middle / unwrapped is how every node rendered before these
+        // fields existed, so those values are the ones never written down.
+        ...(textAlign !== "left" ? { textAlign } : {}),
+        ...(textVAlign !== "middle" ? { textVAlign } : {}),
+        ...(wrap ? { wrap: true } : {}),
+        // Frame styling means nothing on a leaf node — it draws its own shape.
+        ...(isContainer && n.fill === false ? { fill: false } : {}),
+        ...(isContainer && outline !== "dashed" ? { outline } : {}),
+        ...(color ? { color: color.hex } : {}),
+        ...(isContainer && (n.opacity !== undefined || color?.alpha !== undefined)
+          ? {
+              opacity: clamp(
+                num(n.opacity, color?.alpha ?? DEFAULT_CONTAINER_OPACITY),
+                0,
+                1,
+              ),
+            }
+          : {}),
         // x/y may legitimately be 0; w/h/fontSize may not, so they fall back
         // to the kind default rather than collapsing the node to a sliver.
         x: num(n.x, 0),
@@ -716,10 +879,25 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         // model (or an old document written before a column was added) asks
         // for, it grows to fit the list. Rows are content; clipping them would
         // silently drop meaning, unlike clipping a description.
+        //
+        // A wrapped label is content by the same argument: `wrap` promises
+        // nothing is hidden, so the box grows to hold every line. This is the
+        // one measurement the canvas, the exports and validation all share
+        // (contract/text.ts), or the PNG would disagree with the screen.
         h: fields
           ? Math.max(positive(n.h, size.h), fieldsBoxHeight(fields.length, !!description))
-          : positive(n.h, size.h),
-        fontSize: positive(n.fontSize, 13),
+          : wrap
+            ? Math.max(
+                positive(n.h, size.h),
+                wrappedTitleHeight(
+                  String(n.label ?? id),
+                  fontSize,
+                  positive(n.w, size.w),
+                  iconSet.has(n.icon as string) && n.icon !== "none",
+                ),
+              )
+            : positive(n.h, size.h),
+        fontSize,
       };
     });
 
@@ -1038,7 +1216,7 @@ function validateAnchor(raw: unknown): EdgeAnchor | undefined {
  * normalised 0..1 box; these are absolute canvas coordinates. Rounded to
  * whole pixels, capped so a runaway document can't smuggle in thousands.
  */
-const MAX_EDGE_POINTS = 16;
+export const MAX_EDGE_POINTS = 16;
 function validateEdgePoints(raw: unknown): Array<[number, number]> | undefined {
   if (!Array.isArray(raw)) return undefined;
   const points = raw
@@ -1783,6 +1961,13 @@ export type DiagramNodeData = {
   locked?: boolean;
   collapsed?: boolean;
   date?: DiagramDate;
+  textAlign?: NodeTextAlign;
+  textVAlign?: NodeTextVAlign;
+  wrap?: boolean;
+  fill?: boolean;
+  outline?: NodeOutline;
+  color?: string;
+  opacity?: number;
   /**
    * Rendered only because ghost mode is on — this node is hidden by the active
    * provider selection. Purely presentational; never persisted, because it
@@ -1920,6 +2105,8 @@ export function toReactFlow(
   opts: {
     annotationKinds?: readonly string[];
     containerKinds?: readonly string[];
+    /** Kinds rendered as a bare dot (dangling-arrow endpoints). */
+    pointKinds?: readonly string[];
     /** Drop nodes hidden by the active provider selection. Default true. */
     applyVisibility?: boolean;
     /**
@@ -1934,6 +2121,7 @@ export function toReactFlow(
   const byId = new Map(t.nodes.map((n) => [n.id, n]));
   const containers = new Set(opts.containerKinds ?? CONTAINER_KINDS);
   const annotations = new Set(opts.annotationKinds ?? ANNOTATION_KINDS);
+  const points = new Set(opts.pointKinds ?? POINT_KINDS);
 
   const applyVisibility = opts.applyVisibility !== false;
   const visible = applyVisibility ? visibleElements(t) : null;
@@ -1971,7 +2159,13 @@ export function toReactFlow(
       const depth = depthOf(n, byId);
       const ghost = !!visible && !visible.nodes.has(n.id);
       const isContainer = containers.has(n.kind as string);
-      const type = isContainer ? "group" : annotations.has(n.kind as string) ? "annotation" : "shape";
+      const type = isContainer
+        ? "group"
+        : annotations.has(n.kind as string)
+          ? "annotation"
+          : points.has(n.kind as string)
+            ? "point"
+            : "shape";
       // A collapsed container renders as a compact chip; its stored w/h are
       // the expanded size and come back untouched on expand.
       const w = n.collapsed ? COLLAPSED_SIZE.w : n.w;
@@ -1996,6 +2190,13 @@ export function toReactFlow(
           ...(n.plain ? { plain: true } : {}),
           ...(n.locked ? { locked: true } : {}),
           ...(n.collapsed ? { collapsed: true } : {}),
+          ...(n.textAlign ? { textAlign: n.textAlign } : {}),
+          ...(n.textVAlign ? { textVAlign: n.textVAlign } : {}),
+          ...(n.wrap ? { wrap: true } : {}),
+          ...(n.fill === false ? { fill: false } : {}),
+          ...(n.outline ? { outline: n.outline } : {}),
+          ...(n.color ? { color: n.color } : {}),
+          ...(n.opacity !== undefined ? { opacity: n.opacity } : {}),
           ...(ghost ? { ghost: true } : {}),
         },
         position: { x: n.x, y: n.y },
@@ -2016,11 +2217,7 @@ export function toReactFlow(
     });
 
   const renderedNodeIds = new Set(diagramNodes.map((n) => n.id));
-  const defaultRouting: EdgeRouting = (EDGE_ROUTINGS as readonly string[]).includes(
-    t.meta?.routing as string,
-  )
-    ? (t.meta!.routing as EdgeRouting)
-    : "curved";
+  const defaultRouting = resolveRouting(t.meta?.routing);
 
   const rerouteSeen = new Set<string>();
   const edges: RFEdge[] = t.edges
@@ -2189,6 +2386,13 @@ export function fromReactFlow(
       plain: n.data?.plain,
       locked: n.data?.locked,
       collapsed,
+      textAlign: n.data?.textAlign,
+      textVAlign: n.data?.textVAlign,
+      wrap: n.data?.wrap,
+      fill: n.data?.fill,
+      outline: n.data?.outline,
+      color: n.data?.color,
+      opacity: n.data?.opacity,
       x: n.position.x,
       y: n.position.y,
       // Size can live in any of three places: `width`/`height` after a

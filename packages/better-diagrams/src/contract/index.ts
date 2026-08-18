@@ -65,7 +65,20 @@ export {
   fieldsBoxHeight,
   fieldRowT,
   fieldAnchors,
+  // Node text layout and container frame styling — the vocabularies a host
+  // building its own inspector needs, plus the height a wrapped label demands.
+  NODE_TEXT_ALIGNS,
+  NODE_TEXT_VALIGNS,
+  NODE_OUTLINES,
+  DEFAULT_CONTAINER_OPACITY,
+  DEFAULT_FONT_SIZE,
+  nodeTextWidth,
+  wrappedTitleHeight,
 } from "./schema";
+// The one text measurement validation, the canvas and every exporter share.
+// Public because a host drawing its own node bodies has to agree with it.
+export { approxTextWidth, ellipsise, wrapText, wrappedLineCount } from "./text";
+export type { TextFont } from "./text";
 export type {
   NodeKind,
   IconName,
@@ -80,6 +93,9 @@ export type {
   FieldKey,
   FieldAnchorNode,
   NodeStatus,
+  NodeTextAlign,
+  NodeTextVAlign,
+  NodeOutline,
   VersionTagPosition,
   DiagramNode,
   DiagramEdge,

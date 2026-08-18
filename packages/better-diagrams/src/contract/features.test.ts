@@ -359,6 +359,67 @@ describe("clipboard", () => {
     expect(parseFragment("hello")).toBeNull();
     expect(parseFragment('{"foo":1}')).toBeNull();
   });
+
+  it("validates a parsed fragment against the caller's registry", () => {
+    // Without the options, an extension kind is coerced to "service" — which
+    // is what every cross-tab paste used to do.
+    const text = JSON.stringify({ version: 1, nodes: [node({ id: "x", kind: "lambda" })], edges: [] });
+    expect(parseFragment(text)?.nodes[0].kind).toBe("service");
+    expect(parseFragment(text, { knownKinds: ["lambda"] })?.nodes[0].kind).toBe("lambda");
+  });
+
+  it("absolutizes a copied child so re-rooting doesn't teleport it", () => {
+    // `child` is stored at 20,60 RELATIVE to `g` at 0,0 — move the group and
+    // the relative coordinates alone would paste the copy somewhere else.
+    const moved = validateTemplate({
+      ...template,
+      nodes: template.nodes.map((n) => (n.id === "g" ? { ...n, x: 520, y: 40 } : n)),
+    }) as DiagramTemplate;
+
+    // Copied WITHOUT its parent: the fragment must carry absolute coordinates.
+    const alone = copyFragment(moved, ["child"]);
+    expect(alone.nodes[0]).toMatchObject({ x: 540, y: 100 });
+
+    // Copied WITH its parent it stays parent-relative — the parent moves it.
+    const withParent = copyFragment(moved, ["g"]);
+    expect(withParent.nodes.find((n) => n.id === "child")).toMatchObject({ x: 20, y: 60 });
+  });
+
+  it("lands a re-rooted copy beside the original rather than at the origin", () => {
+    const moved = validateTemplate({
+      ...template,
+      nodes: template.nodes.map((n) => (n.id === "g" ? { ...n, x: 520, y: 40 } : n)),
+    }) as DiagramTemplate;
+    const { template: next, newNodeIds } = pasteFragment(moved, copyFragment(moved, ["child"]), {
+      offset: 60,
+    });
+    expect(next.nodes.find((n) => n.id === newNodeIds[0])).toMatchObject({
+      x: 600,
+      y: 160,
+      parentId: null,
+    });
+  });
+
+  it("stacks a cloned subject zone above its source so it claims its members", () => {
+    // zoneAt breaks a z/area tie by keeping the zone it saw first — always the
+    // original. Without a higher z the clone hands its members straight back
+    // the next time membership is derived from geometry, and ends up empty.
+    const fragment = copyFragment(template, [], { zones: ["r"] });
+    const { template: next, newZoneIds } = pasteFragment(template, fragment);
+    const clone = next.zones!.find((z) => z.id === newZoneIds[0])!;
+    const original = next.zones!.find((z) => z.id === "r")!;
+    expect(clone.z ?? 0).toBeGreaterThan(original.z ?? 0);
+  });
+
+  it("survives a deterministic makeId instead of spinning forever", () => {
+    const fragment = copyFragment(template, ["solo"]);
+    const once = pasteFragment(template, fragment, { makeId: (p) => `${p}_copy` });
+    expect(once.newNodeIds).toEqual(["solo_copy"]);
+    // The second paste collides on every id the generator can produce.
+    const twice = pasteFragment(once.template, fragment, { makeId: (p) => `${p}_copy` });
+    expect(twice.newNodeIds[0]).not.toBe("solo_copy");
+    expect(twice.template.nodes).toHaveLength(template.nodes.length + 2);
+  });
 });
 
 describe("autoLayout", () => {

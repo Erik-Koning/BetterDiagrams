@@ -35,6 +35,7 @@ import {
   type Connection,
   type Edge,
   type Node,
+  type OnConnectEnd,
   type OnSelectionChangeParams,
 } from "@xyflow/react";
 
@@ -47,12 +48,24 @@ import {
   EDGE_ANCHOR_SIDES,
   EDGE_COLOR_HEX,
   EDGE_DASH,
+  EDGE_ROUTINGS,
   EDGE_STYLES,
   EMPTY_TEMPLATE,
   FIELD_KEYS,
   MAX_NODE_FIELDS,
+  NODE_OUTLINES,
   NODE_STATUSES,
+  NODE_TEXT_ALIGNS,
+  NODE_TEXT_VALIGNS,
+  DEFAULT_CONTAINER_OPACITY,
+  DEFAULT_FONT_SIZE,
+  type NodeOutline,
+  type NodeTextAlign,
+  type NodeTextVAlign,
+  NODE_MIN_SIZE,
+  wrappedTitleHeight,
   fieldsBoxHeight,
+  KIND_DEFAULT_SIZE,
   activeScenario,
   assignZonesByGeometry,
   snapNodesIntoZones,
@@ -64,6 +77,7 @@ import {
   isGhostEdgeId,
   isGhostNodeId,
   isZoneNodeId,
+  resolveRouting,
   scaleZoneMembers,
   setAllZoneProviders,
   templateProviders,
@@ -113,9 +127,11 @@ import {
 } from "../contract/states";
 import { focusPath, liftScopedReactFlow, scopedView } from "../contract/scope";
 import { DiffCanvas } from "./DiffCanvas";
+import { isTypingTarget } from "./keys";
 import {
   FileMenu,
   Breadcrumbs,
+  ShortcutsModal,
   InspectorSection,
   TimelineScrubber,
   levelLabel,
@@ -161,6 +177,7 @@ import type { RegistryExtensions, ResolvedRegistry } from "./registry-types";
 import { kindDef, providerDef, zoneInk } from "./registry-types";
 import { NODE_TYPES } from "./nodes";
 import { EDGE_TYPES } from "./edges";
+import { topDropTarget } from "./dangling";
 import { StudioContext } from "./context";
 import { paletteFromTheme, themeToStyle, type Theme } from "./theme";
 import { useHistory, type Snapshot } from "./history";
@@ -274,6 +291,22 @@ export interface ArchitectureStudioProps {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/** First usable number among React Flow's three places a size can live. */
+function firstNumber(...values: unknown[]): number | undefined {
+  for (const v of values) if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
+  return undefined;
+}
+
+/**
+ * How far a pasted or duplicated copy lands from its source.
+ *
+ * Larger than the contract's 28px default on purpose: the smallest node is
+ * 110×52 and the default is 170×76, so 28px left a copy almost exactly on top
+ * of the original. 60 clears it in both axes while keeping the copy inside the
+ * same glance.
+ */
+const PASTE_OFFSET = 60;
+
 let idCounter = 0;
 /** Collision-resistant without pulling in a uuid dependency. */
 function nextId(prefix: string): string {
@@ -294,13 +327,6 @@ function download(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** True when focus is in a text field, so global key handlers should stand down. */
-function isTypingTarget(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null;
-  if (!el) return false;
-  const tag = el.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
-}
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -393,6 +419,8 @@ function StudioInner({
     "files" | "insert" | "arrange" | "view" | "checks" | "export" | null
   >(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  /** The `?` shortcuts sheet. */
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const [toast, setToast] = useState<{ message: string; color?: string } | null>(null);
   const [error, setError] = useState("");
@@ -731,6 +759,17 @@ function StudioInner({
    */
   const localClipboard = useRef<DiagramTemplate | null>(null);
 
+  /**
+   * How far the next paste lands from what it was copied from.
+   *
+   * The contract's 28px default is smaller than any node, so a copy covered
+   * ~84% of its original and — because a single-node fragment carries no lines
+   * by design, and the pasted node is selected, which lifts it a z-band — read
+   * as "pasting deleted my node's edges". They were drawn underneath. Clear
+   * the original, and cascade so a run of ⌘V fans out instead of stacking.
+   */
+  const pasteStep = useRef(0);
+
   const copySelection = useCallback(async () => {
     const ids = selectedNodeIds.filter((id) => !isZoneNodeId(id));
     // A selected zone copies as a SUBJECT: the zone plus its member nodes.
@@ -738,6 +777,7 @@ function StudioInner({
     if (!ids.length && !zoneIds.length) return;
     const fragment = copyFragment(templateRef.current, ids, { zones: zoneIds });
     localClipboard.current = fragment;
+    pasteStep.current = 0; // a fresh copy restarts the cascade
     try {
       await navigator.clipboard?.writeText(JSON.stringify(fragment, null, 2));
     } catch {
@@ -760,7 +800,9 @@ function StudioInner({
         // pastes here; fall back to the in-memory copy.
         try {
           const text = await navigator.clipboard?.readText();
-          if (text) source = parseFragment(text);
+          // With the registry, or an extension kind pasted from another tab
+          // is coerced back to a plain "service".
+          if (text) source = parseFragment(text, registryOpts(registry));
         } catch {
           // Permission denied or unsupported.
         }
@@ -770,6 +812,7 @@ function StudioInner({
 
       const { template: next, newNodeIds, newZoneIds } = pasteFragment(templateRef.current, source, {
         ...registryOpts(registry),
+        offset: PASTE_OFFSET * ++pasteStep.current,
       });
       // Pasting while drilled in pastes INTO the level: fragment roots become
       // children of the focus (their nested structure comes along untouched).
@@ -813,6 +856,7 @@ function StudioInner({
     // their connections.
     const { template: next, newNodeIds } = duplicateWithConnections(templateRef.current, ids, {
       ...registryOpts(registry),
+      offset: PASTE_OFFSET,
       zones: zoneIds,
     });
     applyTemplate(next, { fit: false });
@@ -1139,7 +1183,7 @@ function StudioInner({
   const versionTagPosition: VersionTagPosition = template.meta?.versionTagPosition ?? "top-left";
   const patchVersionTag = useCallback(
     (patch: { versionTag?: string; versionTagPosition?: VersionTagPosition }) => {
-      // Through applyTemplate (the toggleRouting pattern) so the change is
+      // Through applyTemplate (the setDefaultRouting pattern) so the change is
       // validated, committed, undoable, and emitted like any document edit.
       applyTemplate(
         { ...templateRef.current, meta: { ...templateRef.current.meta, ...patch } },
@@ -1149,18 +1193,26 @@ function StudioInner({
     [applyTemplate],
   );
 
-  const routing: EdgeRouting = template.meta?.routing === "orthogonal" ? "orthogonal" : "curved";
+  const routing: EdgeRouting = resolveRouting(template.meta?.routing);
 
-  const toggleRouting = useCallback(() => {
-    if (readOnly) return;
-    const next: EdgeRouting = routing === "orthogonal" ? "curved" : "orthogonal";
-    // Through applyTemplate so every edge's resolved routing refreshes.
-    applyTemplate(
-      { ...templateRef.current, meta: { ...templateRef.current.meta, routing: next } },
-      { fit: false },
-    );
-    showToast(next === "orthogonal" ? "Right-angle connectors" : "Curved connectors");
-  }, [readOnly, routing, applyTemplate, showToast]);
+  const setDefaultRouting = useCallback(
+    (next: EdgeRouting) => {
+      if (readOnly) return;
+      // Through applyTemplate so every edge's resolved routing refreshes.
+      applyTemplate(
+        { ...templateRef.current, meta: { ...templateRef.current.meta, routing: next } },
+        { fit: false },
+      );
+      showToast(
+        next === "orthogonal"
+          ? "Right-angle connectors"
+          : next === "straight"
+            ? "Straight connectors"
+            : "Curved connectors",
+      );
+    },
+    [readOnly, applyTemplate, showToast],
+  );
 
   const tidy = useCallback(() => {
     if (readOnly) return;
@@ -1254,7 +1306,7 @@ function StudioInner({
               color: "slate",
               ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
               // New edges inherit the diagram default (no own `routing`).
-              routingResolved: meta.current?.routing === "orthogonal" ? "orthogonal" : "curved",
+              routingResolved: resolveRouting(meta.current?.routing),
             } satisfies DiagramEdgeData,
             style: { stroke: EDGE_COLOR_HEX.slate, strokeWidth: 1.8 },
           },
@@ -1264,6 +1316,66 @@ function StudioInner({
       commitLater();
     },
     [readOnly, setEdges, commitLater],
+  );
+
+  /**
+   * A connection drag released with no handle under it. Two meanings:
+   * over a node's BODY (handles are 8px dots — sloppy drops are the norm)
+   * the user meant that node, so connect to it; over empty canvas they meant
+   * a DANGLING arrow — an arrow to something that doesn't exist yet. A bare
+   * "point" node is born under the pointer to hold the loose end, and the
+   * edge attaches to it like any other, so the whole edge toolbox (bending,
+   * labels, re-attachment, undo, exports) works on it unchanged.
+   */
+  const onConnectEnd = useCallback<OnConnectEnd>(
+    (event, connectionState) => {
+      if (readOnly) return;
+      // A drop that completed on a handle already went through onConnect.
+      if (connectionState.isValid) return;
+      const from = connectionState.fromNode;
+      if (!from) return;
+      if (isZoneNodeId(from.id) || isGhostNodeId(from.id) || isBoundaryNodeId(from.id)) return;
+      // From the EVENT, not connectionState.to — `to` is container-relative
+      // screen coordinates unless a handle resolved it, and this branch is
+      // exactly the no-handle case.
+      const touch = "changedTouches" in event ? event.changedTouches[0] : undefined;
+      const clientX = touch?.clientX ?? (event as MouseEvent).clientX;
+      const clientY = touch?.clientY ?? (event as MouseEvent).clientY;
+      if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+      const at = flow.screenToFlowPosition({ x: clientX, y: clientY });
+
+      const over = topDropTarget(flow, at);
+      // Released back on its own node: the drag was abandoned, not aimed.
+      if (over === from.id) return;
+      if (over) {
+        onConnect({ source: from.id, target: over, sourceHandle: null, targetHandle: null });
+        return;
+      }
+
+      const size = KIND_DEFAULT_SIZE.point;
+      const pointNode: Node = {
+        id: nextId("point"),
+        type: "point",
+        position: { x: Math.round(at.x - size.w / 2), y: Math.round(at.y - size.h / 2) },
+        width: size.w,
+        height: size.h,
+        style: { width: size.w, height: size.h },
+        zIndex: 1000,
+        data: {
+          label: "",
+          kind: "point",
+          icon: "none",
+          description: "",
+          fontSize: 13,
+          ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
+        } satisfies DiagramNodeData,
+      };
+      setNodes((current) => [...current, pointNode]);
+      // Through onConnect, so a dangling edge is styled, defaulted, and
+      // committed exactly like a completed one.
+      onConnect({ source: from.id, target: pointNode.id, sourceHandle: null, targetHandle: null });
+    },
+    [readOnly, flow, onConnect, setNodes],
   );
 
   const deleteSelection = useCallback(() => {
@@ -1298,10 +1410,18 @@ function StudioInner({
           }
         }
       }
+      // Deleting a dangling arrow's edge (or its source) strands the dot at
+      // its loose end — sweep exactly those, nothing else.
+      const docPointIds = new Set(
+        doc.nodes.filter((n) => registry.pointKinds.includes(n.kind as string)).map((n) => n.id),
+      );
+      const docRemovedEdge = (e: { id: string; source: string; target: string }) =>
+        edgeIds.includes(e.id) || doomed.has(e.source) || doomed.has(e.target);
+      const stranded = strandedPoints(docPointIds, doc.edges, docRemovedEdge);
       const next = validateTemplate(
         {
           ...doc,
-          nodes: doc.nodes.filter((n) => !doomed.has(n.id)),
+          nodes: doc.nodes.filter((n) => !doomed.has(n.id) && !stranded.has(n.id)),
           edges: doc.edges.filter(
             (e) => !edgeIds.includes(e.id) && !doomed.has(e.source) && !doomed.has(e.target),
           ),
@@ -1326,7 +1446,21 @@ function StudioInner({
       }
     }
 
-    setNodes((current) => current.filter((n) => !doomed.has(n.id)));
+    // Same stranded-dot sweep as the document path above, judged on canvas
+    // state: a dangling arrow's dot goes with the last edge that held it.
+    const pointIds = new Set(
+      flow
+        .getNodes()
+        .filter((n) =>
+          registry.pointKinds.includes((n.data as DiagramNodeData | undefined)?.kind ?? ""),
+        )
+        .map((n) => n.id),
+    );
+    const removedEdge = (e: { id: string; source: string; target: string }) =>
+      edgeIds.includes(e.id) || doomed.has(e.source) || doomed.has(e.target);
+    const stranded = strandedPoints(pointIds, flow.getEdges(), removedEdge);
+
+    setNodes((current) => current.filter((n) => !doomed.has(n.id) && !stranded.has(n.id)));
     setEdges((current) =>
       current.filter(
         (e) => !edgeIds.includes(e.id) && !doomed.has(e.source) && !doomed.has(e.target),
@@ -1343,17 +1477,79 @@ function StudioInner({
           if (n.id !== id) return n;
           const data = { ...(n.data as DiagramNodeData), ...patch };
           // Explicit undefined means "clear the field", not "keep the old value".
-          for (const key of ["tags", "url", "locked", "providers", "date"] as const) {
+          for (const key of [
+            "tags",
+            "url",
+            "locked",
+            "providers",
+            "date",
+            "textAlign",
+            "textVAlign",
+            "wrap",
+            "fill",
+            "outline",
+            "color",
+            "opacity",
+            "fontSize",
+          ] as const) {
             if (key in patch && patch[key] === undefined) delete data[key];
           }
           // Changing kind can change which renderer the node needs.
           const def = kindDef(registry, data.kind);
-          const type = def.container ? "group" : def.annotation ? "annotation" : "shape";
+          const type = def.container
+            ? "group"
+            : def.annotation
+              ? "annotation"
+              : def.point
+                ? "point"
+                : "shape";
+
+          // A wrapped label decides the node's height. `validateTemplate` grows
+          // the stored `h` for it, but the DOCUMENT is derived from the canvas
+          // — so unless the canvas node grows too, the next derive reads the
+          // old height back off it and the extra lines spill out of the box.
+          // Anything that changes how many lines the label takes lands here.
+          const affectsHeight =
+            "wrap" in patch || "fontSize" in patch || ("label" in patch && data.wrap);
+          const grown =
+            affectsHeight && data.wrap && !def.container && !def.annotation
+              ? wrappedTitleHeight(
+                  data.label,
+                  data.fontSize ?? DEFAULT_FONT_SIZE,
+                  firstNumber(n.width, n.style?.width, n.measured?.width) ?? 170,
+                  !!data.icon && data.icon !== "none",
+                )
+              : null;
+          const height = grown
+            ? Math.max(grown, NODE_MIN_SIZE.shape.h)
+            : firstNumber(n.height, n.style?.height, n.measured?.height);
+
+          // Materializing a dangling arrow's dot: changing a point's kind is
+          // how "the thing this arrow points at" comes into existence, and a
+          // real node in the dot's 12×12 box would be an invisible sliver.
+          // Size it like a freshly inserted node of the new kind. (The other
+          // direction — shrinking a node INTO a dot — keeps the box; the
+          // stored size survives the round trip, like a collapsed group's.)
+          const wasPoint = kindDef(registry, (n.data as DiagramNodeData).kind).point;
+          const bodied =
+            "kind" in patch && wasPoint && !def.point
+              ? KIND_DEFAULT_SIZE[data.kind] ?? KIND_DEFAULT_SIZE.default
+              : null;
+
           return {
             ...n,
             type,
             data,
             zIndex: def.container ? 0 : 1000,
+            ...(bodied
+              ? {
+                  width: bodied.w,
+                  height: bodied.h,
+                  style: { ...(n.style ?? {}), width: bodied.w, height: bodied.h },
+                }
+              : grown && height
+                ? { height, style: { ...(n.style ?? {}), height } }
+                : {}),
             // React Flow reads draggability from the node object, not data.
             ...("locked" in patch ? { draggable: !data.locked } : {}),
           };
@@ -1380,8 +1576,7 @@ function StudioInner({
           // The edge's own routing changed (or was cleared) — recompute what
           // the renderer draws from the diagram default.
           if ("routing" in patch) {
-            data.routingResolved =
-              data.routing ?? (meta.current?.routing === "orthogonal" ? "orthogonal" : "curved");
+            data.routingResolved = data.routing ?? resolveRouting(meta.current?.routing);
           }
           return {
             ...e,
@@ -1407,9 +1602,62 @@ function StudioInner({
    * Positions are converted between absolute and parent-relative by hand
    * because React Flow stores child positions relative to the parent.
    */
+  /**
+   * Alt-drag leaves a copy behind, the way every canvas editor does.
+   *
+   * Recorded on drag START but applied on drag STOP: cloning mid-gesture would
+   * re-materialize the canvas under the pointer and drop the drag. The end
+   * state is identical either way — the user drags the original away and the
+   * clone is left where the drag began.
+   */
+  const altDragOrigins = useRef<Map<string, { x: number; y: number }> | null>(null);
+
+  const onNodeDragStart = useCallback(
+    (event: MouseEvent | TouchEvent, _node: Node, dragged: Node[]) => {
+      // Touch has no alt key, so a touch drag simply never clones.
+      if (readOnly || !("altKey" in event && event.altKey)) {
+        altDragOrigins.current = null;
+        return;
+      }
+      altDragOrigins.current = new Map(
+        dragged
+          .filter((n) => !isZoneNodeId(n.id) && !isBoundaryNodeId(n.id) && !isGhostNodeId(n.id))
+          .map((n) => [n.id, { x: n.position.x, y: n.position.y }]),
+      );
+    },
+    [readOnly],
+  );
+
+  const finishAltDrag = useCallback(() => {
+    const origins = altDragOrigins.current;
+    altDragOrigins.current = null;
+    if (!origins?.size || readOnly) return false;
+
+    const ids = [...origins.keys()];
+    // offset 0 — the clone is placed by its recorded origin, not nudged.
+    const { template: next, idMap } = duplicateWithConnections(templateRef.current, ids, {
+      ...registryOpts(registry),
+      offset: 0,
+    });
+    const placed = {
+      ...next,
+      nodes: next.nodes.map((n) => {
+        const from = ids.find((id) => idMap[id] === n.id);
+        const origin = from ? origins.get(from) : undefined;
+        return origin ? { ...n, x: origin.x, y: origin.y } : n;
+      }),
+    };
+    applyTemplate(placed, { fit: false });
+    showToast(`Left a copy of ${ids.length} node${ids.length === 1 ? "" : "s"} behind`);
+    return true;
+  }, [readOnly, registry, applyTemplate, showToast]);
+
   const onNodeDragStop = useCallback(
     (_event: unknown, _node: Node, dragged: Node[]) => {
       if (readOnly) return;
+      // An alt-drag drops its copy first, so the clone is in the document
+      // before this move is committed on top of it.
+      finishAltDrag();
 
       const all = flow.getNodes();
       const absOf = (id: string) => flow.getInternalNode(id)?.internals.positionAbsolute;
@@ -1705,94 +1953,8 @@ function StudioInner({
     if (activeDiffBase && focusStackRef.current.length) drillTo([]);
   }, [activeDiffBase, drillTo]);
 
-  // ── Keyboard ──────────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const mod = event.metaKey || event.ctrlKey;
-      // ⌘K works from anywhere, including other inputs — it's a navigation key.
-      if (mod && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-        return;
-      }
-      if (isTypingTarget(event.target)) return;
-
-      // Arrows walk the plan stop to stop — but only with nothing selected,
-      // so they stay available to whatever the user is editing.
-      if (
-        timelineActive &&
-        !selectedNodeIds.length &&
-        !selectedEdgeIds.length &&
-        (event.key === "ArrowLeft" || event.key === "ArrowRight")
-      ) {
-        event.preventDefault();
-        stepTimelineStop(event.key === "ArrowRight" ? 1 : -1);
-        return;
-      }
-
-      // Compare shows a diff rather than the document, so shortcuts that would
-      // edit what the user cannot see are blocked. Timeline mode is NOT in
-      // this list: it shows the real canvas, and editing it is the point.
-      if (
-        activeDiffBase &&
-        (event.key === "Delete" ||
-          event.key === "Backspace" ||
-          (mod && ["c", "v", "d", "x"].includes(event.key.toLowerCase())))
-      ) {
-        return;
-      }
-
-      if (mod && event.key.toLowerCase() === "z") {
-        event.preventDefault();
-        if (event.shiftKey) doRedo();
-        else doUndo();
-        return;
-      }
-      if (mod && event.key.toLowerCase() === "y") {
-        event.preventDefault();
-        doRedo();
-        return;
-      }
-      if (mod && event.key.toLowerCase() === "c") {
-        void copySelection();
-        return;
-      }
-      if (mod && event.key.toLowerCase() === "v") {
-        event.preventDefault();
-        void pasteClipboard();
-        return;
-      }
-      if (mod && event.key.toLowerCase() === "d") {
-        event.preventDefault();
-        void duplicateSelection();
-        return;
-      }
-      if (mod && event.key.toLowerCase() === "s" && onSave) {
-        event.preventDefault();
-        void handleSave();
-        return;
-      }
-      if (event.key === "Delete" || event.key === "Backspace") {
-        event.preventDefault();
-        deleteSelection();
-        return;
-      }
-      if (event.key === "Escape") {
-        // Two-stage: the first press clears open chrome exactly as before;
-        // a "clean" press with nothing open steps one drill level out.
-        const hadChrome = openMenu !== null || panelOpen || timelineCursor !== null;
-        setOpenMenu(null);
-        setPanelOpen(false);
-        setTimelineCursor(null);
-        if (!hadChrome && focusStackRef.current.length) drillOut();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, timelineCursor, drillOut]);
+  // (The keyboard handler lives further down — it binds every command in this
+  //  component, so it has to be declared after all of them.)
 
   const toggleMenu = useCallback(
     (id: "files" | "insert" | "arrange" | "view" | "checks" | "export") =>
@@ -2442,6 +2604,441 @@ function StudioInner({
     [readOnly, setNodes, commitLater, registry, materializeTemplate, commit],
   );
 
+  // ── Selection commands (keyboard-first, all also reachable from the UI) ───
+
+  const selectAll = useCallback(() => {
+    setNodes((current) => current.map((n) => ({ ...n, selected: true })));
+    setEdges((current) => current.map((e) => ({ ...e, selected: true })));
+  }, [setNodes, setEdges]);
+
+  const cutSelection = useCallback(async () => {
+    if (readOnly) return;
+    const fragment = await copySelection();
+    if (fragment) deleteSelection();
+  }, [readOnly, copySelection, deleteSelection]);
+
+  /**
+   * Move the selection by a fixed step.
+   *
+   * Deliberately ours rather than React Flow's built-in arrow handling: RF
+   * nudges the one FOCUSED node, which is not the same set as the selection
+   * and cannot move a multi-selection at all. `disableKeyboardA11y` turns its
+   * version off so the two can't both fire and double the distance.
+   */
+  const nudgeSelection = useCallback(
+    (dx: number, dy: number) => {
+      if (readOnly) return;
+      const ids = new Set(selectedNodeIds);
+      if (!ids.size) return;
+      setNodes((current) =>
+        current.map((n) =>
+          ids.has(n.id) && !(n.data as DiagramNodeData)?.locked
+            ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
+            : n,
+        ),
+      );
+      commitLater();
+    },
+    [readOnly, selectedNodeIds, setNodes, commitLater],
+  );
+
+  const toggleLockSelection = useCallback(() => {
+    if (readOnly || !selectedNodeIds.length) return;
+    // One press makes the whole selection agree rather than flipping each node
+    // independently — a half-locked selection is not a state anyone wants.
+    const anyUnlocked = selectedNodeIds.some((id) => {
+      const node = flow.getNode(id);
+      return node && !(node.data as DiagramNodeData)?.locked;
+    });
+    for (const id of selectedNodeIds) {
+      if (isZoneNodeId(id)) patchZone(fromZoneNodeId(id), { locked: anyUnlocked || undefined });
+      else patchNode(id, { locked: anyUnlocked || undefined });
+    }
+  }, [readOnly, selectedNodeIds, flow, patchNode, patchZone]);
+
+  /**
+   * Restack a selected ZONE.
+   *
+   * Only zones have a stored `z`. A node's z-index is DERIVED from its nesting
+   * depth into fixed painting bands (zones < containers < edges < leaves), so
+   * "bring to front" on a node would either do nothing or break the invariant
+   * that a container renders behind its own children. Zones are where the
+   * command means something, so that is where it applies.
+   */
+  const restackZones = useCallback(
+    (mode: "front" | "back" | "forward" | "backward") => {
+      if (readOnly) return;
+      const zoneIds = selectedNodeIds.filter(isZoneNodeId).map(fromZoneNodeId);
+      if (!zoneIds.length) return;
+      const all = templateRef.current.zones ?? [];
+      const zs = all.map((z) => z.z ?? 0);
+      const top = Math.max(0, ...zs);
+      const bottom = Math.min(0, ...zs);
+      for (const id of zoneIds) {
+        const current = all.find((z) => z.id === id)?.z ?? 0;
+        if (mode === "front" || mode === "back") {
+          patchZone(id, { z: mode === "front" ? top + 1 : bottom - 1 });
+          continue;
+        }
+        // One step is a SWAP with the neighbour, not a ±1 on z. Incrementing
+        // would only tie with the zone above — and `zoneAt` breaks a tie by
+        // array order, so the press would appear to do nothing.
+        const forward = mode === "forward";
+        const neighbours = all
+          .filter((z) => z.id !== id && (forward ? (z.z ?? 0) > current : (z.z ?? 0) < current))
+          .sort((a, b) => (forward ? (a.z ?? 0) - (b.z ?? 0) : (b.z ?? 0) - (a.z ?? 0)));
+        const swap = neighbours[0];
+        if (!swap) continue;
+        patchZone(id, { z: swap.z ?? 0 });
+        patchZone(swap.id, { z: current });
+      }
+    },
+    [readOnly, selectedNodeIds, patchZone],
+  );
+
+  /** Padding between a new group's frame and the nodes it was drawn around. */
+  const GROUP_PAD = { side: 24, top: 48 };
+
+  /**
+   * Wrap the selection in a new container.
+   *
+   * Grouping is real nesting here, not a selection set: the new node becomes
+   * the children's `parentId`, so it drags them, collapses them, and drills
+   * into them. Positions go from absolute to parent-relative in the same pass,
+   * which is what `parentId` means in this schema.
+   */
+  const groupSelection = useCallback(() => {
+    if (readOnly) return;
+    const ids = selectedNodeIds.filter((id) => !isZoneNodeId(id));
+    if (ids.length < 1) return;
+
+    const boxes = ids
+      .map((id) => {
+        const internal = flow.getInternalNode(id);
+        if (!internal) return null;
+        return {
+          id,
+          x: internal.internals.positionAbsolute.x,
+          y: internal.internals.positionAbsolute.y,
+          w: (internal.measured?.width as number) ?? 170,
+          h: (internal.measured?.height as number) ?? 76,
+        };
+      })
+      .filter((b): b is NonNullable<typeof b> => b !== null);
+    if (!boxes.length) return;
+
+    // Only top-level members are re-parented: a node whose own parent is also
+    // in the selection already travels with it, and re-parenting it here would
+    // flatten the nesting the user built.
+    const chosen = new Set(ids);
+    const roots = boxes.filter((b) => {
+      const parent = flow.getNode(b.id)?.parentId;
+      return !parent || !chosen.has(parent);
+    });
+    if (!roots.length) return;
+
+    const minX = Math.min(...roots.map((b) => b.x)) - GROUP_PAD.side;
+    const minY = Math.min(...roots.map((b) => b.y)) - GROUP_PAD.top;
+    const maxX = Math.max(...roots.map((b) => b.x + b.w)) + GROUP_PAD.side;
+    const maxY = Math.max(...roots.map((b) => b.y + b.h)) + GROUP_PAD.side;
+
+    const groupId = nextId("group");
+    const groupNode: Node = {
+      id: groupId,
+      type: "group",
+      position: { x: minX, y: minY },
+      width: maxX - minX,
+      height: maxY - minY,
+      style: { width: maxX - minX, height: maxY - minY },
+      zIndex: 0,
+      selected: true,
+      data: {
+        label: "New Group",
+        kind: "group",
+        icon: "none",
+        description: "",
+        fontSize: DEFAULT_FONT_SIZE,
+        ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
+      } satisfies DiagramNodeData,
+    };
+
+    const rootIds = new Set(roots.map((b) => b.id));
+    setNodes((current) => {
+      const next = current.map((n) => {
+        if (!rootIds.has(n.id)) return { ...n, selected: false };
+        const box = roots.find((b) => b.id === n.id)!;
+        return {
+          ...n,
+          parentId: groupId,
+          // Absolute → parent-relative, which is what the child now stores.
+          position: { x: box.x - minX, y: box.y - minY },
+          selected: false,
+        };
+      });
+      // React Flow requires a parent to appear before its children.
+      return sortByDepth([...next, groupNode]);
+    });
+    commitLater();
+    showToast(`Grouped ${roots.length} node${roots.length === 1 ? "" : "s"}`);
+  }, [readOnly, selectedNodeIds, flow, setNodes, commitLater, showToast]);
+
+  /** Unwrap: children go back to the group's own parent, the frame is removed. */
+  const ungroupSelection = useCallback(() => {
+    if (readOnly) return;
+    const groupIds = selectedNodeIds.filter((id) => {
+      const node = flow.getNode(id);
+      return node && kindDef(registry, (node.data as DiagramNodeData).kind).container;
+    });
+    if (!groupIds.length) return;
+
+    const all = flow.getNodes();
+    setNodes((current) => {
+      const next = current
+        .map((n) => {
+          if (!n.parentId || !groupIds.includes(n.parentId)) return n;
+          const group = all.find((g) => g.id === n.parentId)!;
+          return {
+            ...n,
+            parentId: group.parentId,
+            // The child was relative to the group; make it relative to
+            // whatever the group itself was relative to.
+            position: { x: n.position.x + group.position.x, y: n.position.y + group.position.y },
+            selected: true,
+          };
+        })
+        .filter((n) => !groupIds.includes(n.id));
+      return sortByDepth(next);
+    });
+    commitLater();
+    showToast(`Ungrouped ${groupIds.length} container${groupIds.length === 1 ? "" : "s"}`);
+  }, [readOnly, selectedNodeIds, flow, registry, setNodes, commitLater, showToast]);
+
+  // ── Keyboard ──────────────────────────────────────────────────────────────
+  //
+  // One window-level handler owns every binding, so precedence is readable top
+  // to bottom instead of scattered across elements. Conventions follow
+  // Excalidraw wherever this editor has the same concept; the three places
+  // they could not, and why, are commented at the point of divergence.
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const mod = event.metaKey || event.ctrlKey;
+      const key = event.key.toLowerCase();
+      // ⌘K works from anywhere, including other inputs — it's a navigation key.
+      // (Excalidraw spends ⌘K on links; here search is both older and more
+      //  valuable, so links take ⌘⇧K instead.)
+      if (mod && key === "k" && !event.shiftKey) {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+      if (isTypingTarget(event.target)) return;
+
+      // Compare shows a diff rather than the document, so shortcuts that would
+      // edit what the user cannot see are blocked. Timeline mode is NOT in
+      // this list: it shows the real canvas, and editing it is the point.
+      const editing = !readOnly && !activeDiffBase;
+      if (
+        activeDiffBase &&
+        (event.key === "Delete" ||
+          event.key === "Backspace" ||
+          (mod && ["c", "v", "d", "x", "g", "a"].includes(key)))
+      ) {
+        return;
+      }
+
+      // ── History ──
+      if (mod && key === "z") {
+        event.preventDefault();
+        if (event.shiftKey) doRedo();
+        else doUndo();
+        return;
+      }
+      if (mod && key === "y") {
+        event.preventDefault();
+        doRedo();
+        return;
+      }
+
+      // ── Clipboard ──
+      if (mod && key === "c") {
+        // Without this the browser's native copy also fires and races the
+        // async clipboard write in copySelection, landing the DOM text
+        // selection on the clipboard instead of the fragment.
+        event.preventDefault();
+        void copySelection();
+        return;
+      }
+      if (mod && key === "v") {
+        event.preventDefault();
+        void pasteClipboard();
+        return;
+      }
+      if (mod && key === "x") {
+        event.preventDefault();
+        void cutSelection();
+        return;
+      }
+      if (mod && key === "d") {
+        event.preventDefault();
+        void duplicateSelection();
+        return;
+      }
+      if (mod && key === "a") {
+        event.preventDefault();
+        selectAll();
+        return;
+      }
+      if (mod && key === "s" && onSave) {
+        event.preventDefault();
+        void handleSave();
+        return;
+      }
+
+      // ── Structure ──
+      if (mod && key === "g") {
+        event.preventDefault();
+        if (event.shiftKey) ungroupSelection();
+        else groupSelection();
+        return;
+      }
+      if (mod && event.shiftKey && key === "l") {
+        event.preventDefault();
+        toggleLockSelection();
+        return;
+      }
+      if (mod && event.shiftKey && key === "e") {
+        event.preventDefault();
+        void runExport("png");
+        return;
+      }
+      // Only zones carry a stored z — see restackZones for why nodes cannot.
+      if (mod && (event.key === "]" || event.key === "[")) {
+        event.preventDefault();
+        const forward = event.key === "]";
+        restackZones(
+          event.shiftKey ? (forward ? "front" : "back") : forward ? "forward" : "backward",
+        );
+        return;
+      }
+
+      // ── View ──
+      if (mod && (event.key === "=" || event.key === "+")) {
+        event.preventDefault();
+        void flow.zoomIn({ duration: 120 });
+        return;
+      }
+      if (mod && event.key === "-") {
+        event.preventDefault();
+        void flow.zoomOut({ duration: 120 });
+        return;
+      }
+      if (mod && event.key === "0") {
+        event.preventDefault();
+        void flow.zoomTo(1, { duration: 120 });
+        return;
+      }
+      if (mod && event.key === "'") {
+        event.preventDefault();
+        setSnapEnabled((on) => !on);
+        return;
+      }
+      // Matched on `code`, not `key`: ⇧1 produces "!" on a US layout and
+      // something else on most others, but the physical key is Digit1 everywhere.
+      if (event.shiftKey && !mod && event.code === "Digit1") {
+        event.preventDefault();
+        void flow.fitView({ padding: 0.15, duration: 300 });
+        return;
+      }
+      if (event.shiftKey && !mod && event.code === "Digit2") {
+        event.preventDefault();
+        const nodes = selectedNodeIds.map((id) => ({ id }));
+        if (nodes.length) void flow.fitView({ nodes, padding: 0.3, duration: 300 });
+        return;
+      }
+      if (event.key === "?") {
+        event.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+
+      // ── Insert. Single letters, so they must not fire with a modifier. ──
+      if (editing && !mod && !event.altKey) {
+        const insert: Record<string, () => void> = {
+          n: () => addNode("service"),
+          g: () => addNode("group"),
+          t: () => addNode("text"),
+          z: () => addZone(),
+        };
+        if (insert[key]) {
+          event.preventDefault();
+          insert[key]();
+          return;
+        }
+      }
+
+      // ── Arrows. Three-way contention, resolved by what is selected: ──
+      //  * a selection  → nudge it (React Flow's own arrow handling is off,
+      //                   see nudgeSelection);
+      //  * nothing, but scrubbing → walk the timeline stop to stop.
+      if (event.key.startsWith("Arrow")) {
+        const step = event.shiftKey ? 10 : 1;
+        const [dx, dy] =
+          event.key === "ArrowLeft" ? [-step, 0]
+          : event.key === "ArrowRight" ? [step, 0]
+          : event.key === "ArrowUp" ? [0, -step]
+          : [0, step];
+
+        if (selectedNodeIds.length) {
+          event.preventDefault();
+          if (mod && event.shiftKey) {
+            // ⌘⇧arrow aligns instead of moving, as Excalidraw does.
+            alignSelection(
+              event.key === "ArrowLeft" ? "left"
+              : event.key === "ArrowRight" ? "right"
+              : event.key === "ArrowUp" ? "top"
+              : "bottom",
+            );
+          } else {
+            nudgeSelection(dx, dy);
+          }
+          return;
+        }
+        if (
+          timelineActive &&
+          !selectedEdgeIds.length &&
+          (event.key === "ArrowLeft" || event.key === "ArrowRight")
+        ) {
+          event.preventDefault();
+          stepTimelineStop(event.key === "ArrowRight" ? 1 : -1);
+          return;
+        }
+        return;
+      }
+
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        deleteSelection();
+        return;
+      }
+      if (event.key === "Escape") {
+        // Two-stage: the first press clears open chrome exactly as before;
+        // a "clean" press with nothing open steps one drill level out.
+        const hadChrome =
+          openMenu !== null || panelOpen || timelineCursor !== null || shortcutsOpen;
+        setOpenMenu(null);
+        setPanelOpen(false);
+        setTimelineCursor(null);
+        setShortcutsOpen(false);
+        if (!hadChrome && focusStackRef.current.length) drillOut();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, timelineCursor, drillOut]);
+
   // ── Zone resize gesture ───────────────────────────────────────────────────
   //
   // Membership is captured at resize START: the per-frame derive re-judges
@@ -2708,16 +3305,41 @@ function StudioInner({
                   <div className="as-menu__label">↕ Distribute vertically</div>
                 </button>
                 <div className="as-menu__sep" role="separator" />
+                {/* Unnamed radios: each is its own group, so two studios on
+                    one page can't capture each other's dots. Checked state is
+                    controlled from the document either way. */}
+                <label
+                  className="as-menu__check"
+                  title="Smooth splines for the whole diagram (per-edge overrides win)"
+                >
+                  <input
+                    type="radio"
+                    checked={routing === "curved"}
+                    onChange={() => setDefaultRouting("curved")}
+                  />
+                  Curved connectors
+                </label>
                 <label
                   className="as-menu__check"
                   title="Right-angle connectors for the whole diagram (per-edge overrides win)"
                 >
                   <input
-                    type="checkbox"
+                    type="radio"
                     checked={routing === "orthogonal"}
-                    onChange={toggleRouting}
+                    onChange={() => setDefaultRouting("orthogonal")}
                   />
                   Right-angle connectors
+                </label>
+                <label
+                  className="as-menu__check"
+                  title="Direct point-to-point lines for the whole diagram (per-edge overrides win)"
+                >
+                  <input
+                    type="radio"
+                    checked={routing === "straight"}
+                    onChange={() => setDefaultRouting("straight")}
+                  />
+                  Straight connectors
                 </label>
                 <label className="as-menu__check" title="Snap dragging to the grid">
                   <input
@@ -2766,6 +3388,18 @@ function StudioInner({
                     Show team badges
                   </label>
                 ) : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  onClick={() => {
+                    setShortcutsOpen(true);
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">Keyboard shortcuts</div>
+                  <div className="as-menu__hint">Or press ?</div>
+                </button>
                 {!readOnly && !versionTag ? (
                   <button
                     type="button"
@@ -3183,6 +3817,8 @@ function StudioInner({
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            onConnectEnd={onConnectEnd}
+            onNodeDragStart={onNodeDragStart}
             onNodeDragStop={onNodeDragStop}
             onSelectionChange={onSelectionChange}
             onMove={(_, viewport) => setZoom(viewport.zoom)}
@@ -3201,6 +3837,10 @@ function StudioInner({
             elementsSelectable
             // The component owns Delete/Backspace so it can cascade to children.
             deleteKeyCode={null}
+            // …and the arrow keys, so they move the SELECTION rather than the
+            // one focused node. React Flow's built-in nudge would otherwise
+            // fire alongside ours and move a focused node twice per press.
+            disableKeyboardA11y
             // Double-click means DRILL now (nodes.tsx) — pane zoom on the same
             // gesture would fight it, and React Flow's dblclick-zoom plumbing
             // swallows the event before node handlers see it on
@@ -3430,6 +4070,8 @@ function StudioInner({
             onConfirm={(choice) => void onExportStatesChoice(choice)}
           />
         ) : null}
+
+        {shortcutsOpen ? <ShortcutsModal onClose={() => setShortcutsOpen(false)} /> : null}
       </div>
     </StudioContext.Provider>
   );
@@ -3914,6 +4556,139 @@ function NodeInspector({
         </InspectorSection>
       ) : null}
 
+      {/* Text layout. Every default is left/middle/unwrapped, and validation
+          stores a value only when it differs — so touching nothing here leaves
+          the document byte-identical. Annotations keep their own editor. */}
+      {!def.annotation ? (
+        <InspectorSection caption="Text">
+          <select
+            className="as-select"
+            value={data.textAlign ?? "left"}
+            onChange={(event) => {
+              const value = event.target.value as NodeTextAlign;
+              onPatch(node.id, { textAlign: value === "left" ? undefined : value });
+            }}
+            aria-label="Text alignment"
+            title="Horizontal alignment of the label and description"
+          >
+            {NODE_TEXT_ALIGNS.map((a) => (
+              <option key={a} value={a}>
+                align: {a}
+              </option>
+            ))}
+          </select>
+          <select
+            className="as-select"
+            value={data.textVAlign ?? "middle"}
+            onChange={(event) => {
+              const value = event.target.value as NodeTextVAlign;
+              onPatch(node.id, { textVAlign: value === "middle" ? undefined : value });
+            }}
+            aria-label="Vertical text alignment"
+            title="Where the text block sits in the box"
+          >
+            {NODE_TEXT_VALIGNS.map((a) => (
+              <option key={a} value={a}>
+                vertical: {a}
+              </option>
+            ))}
+          </select>
+          <select
+            className="as-select"
+            value={data.fontSize ?? DEFAULT_FONT_SIZE}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              onPatch(node.id, { fontSize: value === DEFAULT_FONT_SIZE ? undefined : value });
+            }}
+            aria-label="Label size"
+            title="Label size"
+          >
+            {[11, 13, 16, 20, 26].map((size) => (
+              <option key={size} value={size}>
+                {size}px
+              </option>
+            ))}
+          </select>
+          <label className="as-check" title="Wrap the label across lines, growing the box to fit">
+            <input
+              type="checkbox"
+              checked={!!data.wrap}
+              onChange={(event) =>
+                // One ellipsised line is the default, so only the opt-IN is stored.
+                onPatch(node.id, { wrap: event.target.checked ? true : undefined })
+              }
+            />
+            Wrap
+          </label>
+        </InspectorSection>
+      ) : null}
+
+      {/* Container frame — the same three controls a zone gets, because it is
+          the same vocabulary. Fill off + outline none is an invisible grouping
+          box that still nests, still accepts drops, and still drills in. */}
+      {def.container ? (
+        <InspectorSection caption="Frame">
+          <select
+            className="as-select"
+            value={data.outline ?? "dashed"}
+            onChange={(event) => {
+              const value = event.target.value as NodeOutline;
+              // `dashed` is the group default and never stored.
+              onPatch(node.id, { outline: value === "dashed" ? undefined : value });
+            }}
+            aria-label="Frame outline style"
+            title="Outline — solid, dashed, dotted, or none"
+          >
+            {NODE_OUTLINES.map((o) => (
+              <option key={o} value={o}>
+                outline: {o}
+              </option>
+            ))}
+          </select>
+          <label className="as-check" title="Draw the background tint">
+            <input
+              type="checkbox"
+              checked={data.fill !== false}
+              onChange={(event) =>
+                // Filled is the default; only the opt-out is stored.
+                onPatch(node.id, { fill: event.target.checked ? undefined : false })
+              }
+            />
+            Fill
+          </label>
+          <input
+            className="as-range"
+            type="range"
+            min={0}
+            max={0.6}
+            step={0.02}
+            value={data.opacity ?? DEFAULT_CONTAINER_OPACITY}
+            disabled={data.fill === false}
+            onChange={(event) => onPatch(node.id, { opacity: Number(event.target.value) })}
+            aria-label="Frame fill opacity"
+            title="How strong the background tint is"
+          />
+          <input
+            className="as-swatch as-swatch--custom"
+            type="color"
+            value={data.color ?? def.accent}
+            onChange={(event) => onPatch(node.id, { color: event.target.value })}
+            aria-label="Frame colour"
+            title="Frame ink — the outline colour the fill is derived from"
+          />
+          {data.color ? (
+            <button
+              type="button"
+              className="as-chip"
+              onClick={() => onPatch(node.id, { color: undefined, opacity: undefined })}
+              title="Back to the kind's own colour"
+            >
+              Auto
+            </button>
+          ) : null}
+        </InspectorSection>
+      ) : null}
+
       {/* Which deployments this node exists in. Only meaningful on a zone —
           without one there is no provider to compare against. */}
       {zone && zone.providers.length > 1 ? (
@@ -4283,8 +5058,11 @@ function EdgeInspector({
           title="Routing — default follows the diagram setting"
         >
           <option value="default">routing: default</option>
-          <option value="curved">curved</option>
-          <option value="orthogonal">orthogonal</option>
+          {EDGE_ROUTINGS.map((mode) => (
+            <option key={mode} value={mode}>
+              {mode}
+            </option>
+          ))}
         </select>
         <select
           className="as-select"
@@ -4331,7 +5109,7 @@ function EdgeInspector({
             type="button"
             className="as-btn"
             onClick={() => onPatch(edge.id, { points: undefined })}
-            title="Remove the waypoints this line bends through (double-click the line to add one)"
+            title="Remove the waypoints this line bends through (drag or double-click the line to add one)"
           >
             Clear route ({data.points.length})
           </button>
@@ -4359,6 +5137,31 @@ function EdgeInspector({
 
 // ─── Small utilities ─────────────────────────────────────────────────────────
 
+/**
+ * Points a deletion strands: dangling-arrow dots whose LAST edge is being
+ * removed. Only dots the deletion itself disconnects are swept — a point
+ * that was already alone (authored via JSON, or by an LLM) is the author's
+ * to keep or delete, and removing it as a side effect of deleting something
+ * unrelated would be a surprise.
+ */
+function strandedPoints(
+  pointIds: ReadonlySet<string>,
+  edges: ReadonlyArray<{ id: string; source: string; target: string }>,
+  removed: (edge: { id: string; source: string; target: string }) => boolean,
+): Set<string> {
+  const out = new Set<string>();
+  const kept = edges.filter((e) => !removed(e));
+  for (const e of edges) {
+    if (!removed(e)) continue;
+    for (const end of [e.source, e.target]) {
+      if (pointIds.has(end) && !kept.some((k) => k.source === end || k.target === end)) {
+        out.add(end);
+      }
+    }
+  }
+  return out;
+}
+
 /** The document with its title set — the write half of the title↔name sync. */
 function withMetaTitle<T extends { meta?: Record<string, unknown> }>(doc: T, title: string): T {
   return { ...doc, meta: { ...doc.meta, title } };
@@ -4369,6 +5172,7 @@ function registryOpts(registry: ResolvedRegistry) {
     knownKinds: registry.kindOrder,
     knownIcons: registry.iconNames,
     containerKinds: registry.containerKinds,
+    annotationKinds: registry.annotationKinds,
     knownProviders: registry.providerOrder,
   };
 }
@@ -4377,6 +5181,7 @@ function registryKinds(registry: ResolvedRegistry, showHidden = false) {
   return {
     containerKinds: registry.containerKinds,
     annotationKinds: registry.annotationKinds,
+    pointKinds: registry.pointKinds,
     showHidden,
   };
 }

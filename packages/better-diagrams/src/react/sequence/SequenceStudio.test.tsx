@@ -69,6 +69,29 @@ describe("SequenceStudio", () => {
     expect(latest.participants.at(-1)!.label).toBe("New Participant");
   });
 
+  it("adds a participant from the N key", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<SequenceStudio defaultValue={example} onChange={onChange} />);
+
+    await user.keyboard("n");
+
+    const latest = onChange.mock.calls.at(-1)![0] as SequenceTemplate;
+    expect(latest.participants).toHaveLength(example.participants.length + 1);
+  });
+
+  it("shows a sequence-specific shortcuts sheet on ?", async () => {
+    const user = userEvent.setup();
+    mount(<SequenceStudio defaultValue={example} />);
+
+    await user.keyboard("?");
+    const sheet = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+    expect(sheet).toHaveTextContent("Participant");
+    // Grouping and zones don't exist here, so they must not be advertised.
+    expect(sheet).not.toHaveTextContent("Ungroup");
+    expect(sheet).not.toHaveTextContent("Zone");
+  });
+
   it("press-drag on a lifeline creates an activation bar anchored to rows", async () => {
     const onChange = vi.fn();
     const { container } = mount(<SequenceStudio defaultValue={example} onChange={onChange} />);

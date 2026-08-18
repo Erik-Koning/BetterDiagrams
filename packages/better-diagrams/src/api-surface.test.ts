@@ -61,6 +61,19 @@ const CONTRACT_EXPORTS = [
   "fieldsBoxHeight",
   "fieldRowT",
   "fieldAnchors",
+  // node text layout + container frame styling
+  "NODE_TEXT_ALIGNS",
+  "NODE_TEXT_VALIGNS",
+  "NODE_OUTLINES",
+  "DEFAULT_CONTAINER_OPACITY",
+  "DEFAULT_FONT_SIZE",
+  "nodeTextWidth",
+  "wrappedTitleHeight",
+  // the shared text measurement (contract/text.ts)
+  "approxTextWidth",
+  "ellipsise",
+  "wrapText",
+  "wrappedLineCount",
   // zones
   "ZONE_OUTLINES",
   "ZONE_SHAPES",

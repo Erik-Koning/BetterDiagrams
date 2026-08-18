@@ -94,12 +94,14 @@ import { useHistory, type Snapshot } from "../history";
 import {
   FileMenu,
   InspectorSection,
+  ShortcutsModal,
   TimelineScrubber,
   ToolbarMenu,
   VersionTagChip,
   type StudioFile,
   type StudioFileInit,
 } from "../chrome";
+import { isTypingTarget } from "../keys";
 import {
   WelcomeModal,
   clearWelcomeSuppression,
@@ -206,13 +208,6 @@ function download(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function isTypingTarget(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null;
-  if (!el) return false;
-  const tag = el.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
-}
-
 /** Per-node decorations the adapter can't know about (drag constraints). */
 function decorate(nodes: SeqRFNode[]): Node[] {
   return nodes.map((n) =>
@@ -272,6 +267,8 @@ function SequenceInner({
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
   const [openMenu, setOpenMenu] = useState<"files" | "insert" | "view" | "export" | null>(null);
+  /** The `?` shortcuts sheet — the same one the architecture editor shows. */
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -850,6 +847,57 @@ function SequenceInner({
         void handleSave();
         return;
       }
+
+      // The conventions the architecture editor uses, for the commands that
+      // exist here too. Anything sequence mode has no concept of (grouping,
+      // zones, nudging a lifeline) is deliberately absent rather than bound to
+      // a no-op — a shortcut that silently does nothing is worse than none.
+      if (mod && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        setNodes((current) => current.map((n) => ({ ...n, selected: true })));
+        setEdges((current) => current.map((e) => ({ ...e, selected: true })));
+        return;
+      }
+      if (mod && (event.key === "=" || event.key === "+")) {
+        event.preventDefault();
+        void flow.zoomIn({ duration: 120 });
+        return;
+      }
+      if (mod && event.key === "-") {
+        event.preventDefault();
+        void flow.zoomOut({ duration: 120 });
+        return;
+      }
+      if (mod && event.key === "0") {
+        event.preventDefault();
+        void flow.zoomTo(1, { duration: 120 });
+        return;
+      }
+      if (event.shiftKey && !mod && event.code === "Digit1") {
+        event.preventDefault();
+        void flow.fitView({ padding: 0.15, duration: 300 });
+        return;
+      }
+      if (event.key === "?") {
+        event.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+      if (!readOnly && !mod && !event.altKey) {
+        const insert: Record<string, () => void> = {
+          n: () => addParticipant("service"),
+          a: () => addParticipant("actor"),
+          m: () => addMessage(false),
+          t: () => addNote(),
+        };
+        const run = insert[event.key.toLowerCase()];
+        if (run) {
+          event.preventDefault();
+          run();
+          return;
+        }
+      }
+
       if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
         deleteSelection();
@@ -858,11 +906,12 @@ function SequenceInner({
       if (event.key === "Escape") {
         setOpenMenu(null);
         setTimelineCursor(null);
+        setShortcutsOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [doUndo, doRedo, deleteSelection, handleSave, onSave, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds]);
+  }, [doUndo, doRedo, deleteSelection, handleSave, onSave, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, readOnly, flow, setNodes, setEdges, addParticipant, addMessage, addNote]);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -1506,6 +1555,10 @@ function SequenceInner({
             onCancel={() => setPendingExport(null)}
             onConfirm={(choice) => void onExportStatesChoice(choice)}
           />
+        ) : null}
+
+        {shortcutsOpen ? (
+          <ShortcutsModal mode="sequence" onClose={() => setShortcutsOpen(false)} />
         ) : null}
       </div>
     </SequenceContext.Provider>

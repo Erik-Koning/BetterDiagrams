@@ -735,6 +735,72 @@ describe("ArchitectureStudio", () => {
     expect(latest.edges).toHaveLength(EXAMPLE_TEMPLATE.edges.length);
   });
 
+  it("leaves every original line attached to the original node, and lands the copy clear of it", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.keyboard("{Meta>}c{/Meta}");
+    await user.keyboard("{Meta>}v{/Meta}");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    // Identity, not count: a retargeted edge keeps the total the same, so the
+    // count assertion above cannot see one. Every original line must still
+    // join the same two nodes it always did.
+    for (const original of EXAMPLE_TEMPLATE.edges) {
+      expect(latest.edges.find((e) => e.id === original.id)).toMatchObject({
+        source: original.source,
+        target: original.target,
+      });
+    }
+
+    // The reported "paste deleted my edges" was an edge-less copy landing on
+    // top of the original at the old 28px offset, hiding it and its lines.
+    // The copy must now be shifted far enough in BOTH axes to read as a second
+    // box — in particular clear of the original's left edge, where its two
+    // incoming lines attach.
+    const db = EXAMPLE_TEMPLATE.nodes.find((n) => n.id === "db")!;
+    const copy = latest.nodes.find((n) => n.label === "Postgres" && n.id !== "db")!;
+    expect(copy.x - db.x).toBeGreaterThanOrEqual(60);
+    expect(copy.y - db.y).toBeGreaterThanOrEqual(60);
+  });
+
+  it("cascades repeat pastes instead of stacking them", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.keyboard("{Meta>}c{/Meta}");
+    await user.keyboard("{Meta>}v{/Meta}");
+    await user.keyboard("{Meta>}v{/Meta}");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    const copies = latest.nodes.filter((n) => n.label === "Postgres" && n.id !== "db");
+    expect(copies).toHaveLength(2);
+    expect(copies[0].x).not.toBe(copies[1].x);
+  });
+
+  it("pastes a copy of a grouped node beside it, not into the canvas corner", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    // "REST API" is stored at 30,60 RELATIVE to the VPC group at 520,40 —
+    // absolute 550,100. Re-rooted on paste, those relative numbers used to be
+    // read as canvas coordinates and dropped the copy ~500px away.
+    fireEvent.click(screen.getByText("REST API"));
+    await user.keyboard("{Meta>}c{/Meta}");
+    await user.keyboard("{Meta>}v{/Meta}");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    const copy = latest.nodes.find((n) => n.label === "REST API" && n.id !== "api")!;
+    expect(copy.parentId).toBeNull();
+    expect(copy.x).toBeGreaterThan(500);
+    expect(copy.y).toBeGreaterThan(80);
+  });
+
   it("pasting a connected multi-selection keeps the line between the copies", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -1024,18 +1090,178 @@ describe("ArchitectureStudio", () => {
     expect(screen.getByText("1/1")).toBeInTheDocument();
   });
 
-  it("toggles diagram-wide orthogonal routing through meta", async () => {
+  it("sets diagram-wide routing through meta from the connector picker", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
 
     await user.click(screen.getByRole("button", { name: "Arrange ▾" }));
-    await user.click(screen.getByRole("checkbox", { name: "Right-angle connectors" }));
+    await user.click(screen.getByRole("radio", { name: "Right-angle connectors" }));
     expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).meta?.routing).toBe("orthogonal");
 
-    // The menu stays open for repeated toggling.
-    await user.click(screen.getByRole("checkbox", { name: "Right-angle connectors" }));
+    // The menu stays open for repeated switching.
+    await user.click(screen.getByRole("radio", { name: "Straight connectors" }));
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).meta?.routing).toBe("straight");
+
+    await user.click(screen.getByRole("radio", { name: "Curved connectors" }));
     expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).meta?.routing).toBe("curved");
+  });
+
+  it("re-attaches a dragged edge end through the controlled studio and emits the new target", async () => {
+    const onChange = vi.fn();
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "a", label: "A", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 100, h: 50 },
+        { id: "b", label: "B", kind: "service", icon: "box", description: "", parentId: null, x: 300, y: 0, w: 100, h: 50 },
+        { id: "c", label: "C", kind: "service", icon: "box", description: "", parentId: null, x: 300, y: 300, w: 100, h: 50 },
+      ],
+      edges: [{ id: "e1", source: "a", target: "b", label: "", style: "solid", color: "slate" }],
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={doc} onChange={onChange} />);
+
+    await waitFor(() => expect(container.querySelector(".as-edge__hit")).toBeTruthy());
+    // Select the edge so its endpoint handles appear.
+    fireEvent.click(container.querySelector(".as-edge__hit")!);
+    await waitFor(() => expect(container.querySelectorAll(".as-edge__endpoint")).toHaveLength(2));
+
+    // Map flow coordinates to client coordinates through the live viewport
+    // transform — fitView has been at work, so identity can't be assumed.
+    const viewport = container.querySelector(".react-flow__viewport") as HTMLElement;
+    const m = viewport.style.transform.match(
+      /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)\s*scale\(([\d.]+)\)/,
+    );
+    const [tx, ty, k] = m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [0, 0, 1];
+    const client = (x: number, y: number) => ({ clientX: x * k + tx, clientY: y * k + ty });
+
+    // Drag the target end from node b down into node c's box.
+    const endHandle = container.querySelectorAll(".as-edge__endpoint")[1];
+    fireEvent.pointerDown(endHandle, { pointerId: 1, button: 0, ...client(300, 25) });
+    fireEvent.pointerMove(endHandle, { pointerId: 1, ...client(350, 330) });
+    fireEvent.pointerUp(endHandle, { pointerId: 1 });
+
+    await waitFor(() => {
+      const latest = onChange.mock.calls.at(-1)?.[0] as DiagramTemplate | undefined;
+      expect(latest?.edges[0]?.target).toBe("c");
+    });
+  });
+
+  /** The live canvas transform, for tests that must aim at flow coordinates. */
+  function flowToClient(container: HTMLElement) {
+    const viewport = container.querySelector(".react-flow__viewport") as HTMLElement;
+    const m = viewport.style.transform.match(
+      /translate\((-?[\d.]+)px,\s*(-?[\d.]+)px\)\s*scale\(([\d.]+)\)/,
+    );
+    const [tx, ty, k] = m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [0, 0, 1];
+    return (x: number, y: number) => ({ clientX: x * k + tx, clientY: y * k + ty });
+  }
+
+  it("drops a dragged-out connection in space as a dangling arrow to a new point", async () => {
+    const onChange = vi.fn();
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "a", label: "A", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 100, h: 50 },
+      ],
+      edges: [],
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={doc} onChange={onChange} />);
+
+    await waitFor(() =>
+      expect(container.querySelector('.react-flow__handle[data-nodeid="a"]')).toBeTruthy(),
+    );
+    // Let fitView finish animating: probe the transform until two consecutive
+    // reads agree, or the client coordinates would aim at a moving target.
+    let prev = "";
+    await waitFor(() => {
+      const t = (container.querySelector(".react-flow__viewport") as HTMLElement).style.transform;
+      expect(t).toMatch(/scale/);
+      if (t !== prev) {
+        prev = t;
+        throw new Error("viewport still animating");
+      }
+    });
+    const client = flowToClient(container);
+    const handle = container.querySelector('.react-flow__handle[data-nodeid="a"]')!;
+
+    // A connection drag that ends far from any node or handle. The handle
+    // starts the drag on MOUSEDOWN, then tracks it through document-level
+    // mousemove/mouseup.
+    fireEvent.mouseDown(handle, { button: 0, ...client(100, 25) });
+    fireEvent.mouseMove(document, { ...client(600, 400) });
+    fireEvent.mouseUp(document, { ...client(600, 400) });
+
+    await waitFor(() => {
+      const t = onChange.mock.calls.at(-1)?.[0] as DiagramTemplate | undefined;
+      const point = t?.nodes.find((n) => n.kind === "point");
+      expect(point).toBeDefined();
+      // A 12px dot, well away from node a in the drop's direction. The exact
+      // spot is not asserted: connection drags auto-pan the canvas, and
+      // jsdom's zero-sized container makes every position "near the edge",
+      // shifting the viewport under any precomputed client coordinates.
+      // (Precise drop→coordinate maths is covered by anchorFromPoint and the
+      // identity-viewport tests in edges.test.tsx.)
+      expect(point!.w).toBe(12);
+      expect(point!.h).toBe(12);
+      expect(point!.x).toBeGreaterThan(300);
+      expect(point!.y).toBeGreaterThan(200);
+      expect(t!.edges.some((e) => e.source === "a" && e.target === point!.id)).toBe(true);
+    });
+  });
+
+  it("changing a dot's kind materializes a full-size node the arrow already points at", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "a", label: "A", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 100, h: 50 },
+        { id: "p", label: "", kind: "point", icon: "none", description: "", parentId: null, x: 400, y: 200 },
+      ],
+      edges: [{ id: "e1", source: "a", target: "p", label: "", style: "solid", color: "slate" }],
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={doc} onChange={onChange} />);
+
+    await waitFor(() => expect(container.querySelector('[data-id="p"]')).toBeTruthy());
+    fireEvent.click(container.querySelector('[data-id="p"]')!);
+    await user.click(await screen.findByRole("button", { name: "Node kind" }));
+    await user.click(screen.getByRole("option", { name: "Service" }));
+
+    await waitFor(() => {
+      const t = onChange.mock.calls.at(-1)?.[0] as DiagramTemplate | undefined;
+      const node = t?.nodes.find((n) => n.id === "p");
+      expect(node?.kind).toBe("service");
+      // Not the dot's 12×12 sliver — a freshly inserted service's box.
+      expect(node?.w).toBe(170);
+      expect(node?.h).toBe(76);
+      // The arrow it grew out of still points at it.
+      expect(t?.edges[0]?.target).toBe("p");
+    });
+  });
+
+  it("deleting a dangling edge sweeps its stranded dot", async () => {
+    const onChange = vi.fn();
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "a", label: "A", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 100, h: 50 },
+        { id: "p", label: "", kind: "point", icon: "none", description: "", parentId: null, x: 400, y: 200 },
+      ],
+      edges: [{ id: "e1", source: "a", target: "p", label: "", style: "solid", color: "slate" }],
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={doc} onChange={onChange} />);
+
+    await waitFor(() => expect(container.querySelector(".as-edge__hit")).toBeTruthy());
+    fireEvent.click(container.querySelector(".as-edge__hit")!);
+    fireEvent.keyDown(window, { key: "Delete" });
+
+    await waitFor(() => {
+      const t = onChange.mock.calls.at(-1)?.[0] as DiagramTemplate | undefined;
+      expect(t?.edges).toHaveLength(0);
+      // The dot existed only to hold that arrow's loose end — it goes with it.
+      expect(t?.nodes.some((n) => n.kind === "point")).toBe(false);
+      expect(t?.nodes.some((n) => n.id === "a")).toBe(true);
+    });
   });
 
   it("locks a node from the inspector", async () => {
@@ -1067,6 +1293,253 @@ describe("ArchitectureStudio", () => {
     await user.click(screen.getByRole("checkbox", { name: "pci" }));
     expect(container.querySelector('[data-id="db"] .as-node--dimmed')).toBeNull();
     expect(container.querySelector('[data-id="api"] .as-node--dimmed')).not.toBeNull();
+  });
+
+  it("centres and wraps a node's text from the inspector, growing the box", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />,
+    );
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.selectOptions(screen.getByLabelText("Text alignment"), "center");
+    await user.selectOptions(screen.getByLabelText("Vertical text alignment"), "top");
+    await user.click(screen.getByRole("checkbox", { name: "Wrap" }));
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "db")).toMatchObject({
+      textAlign: "center",
+      textVAlign: "top",
+      wrap: true,
+    });
+    expect(container.querySelector('[data-id="db"] .as-node--align-center')).not.toBeNull();
+    expect(container.querySelector('[data-id="db"] .as-node--valign-top')).not.toBeNull();
+    expect(container.querySelector('[data-id="db"] .as-node--wrap')).not.toBeNull();
+  });
+
+  it("keeps a wrapped node's grown height across the next derive", async () => {
+    // validateTemplate grows `h` for a wrapped label, but the document is
+    // DERIVED from the canvas — so unless the canvas node grows too, the very
+    // next edit reads the old height back off it and the extra lines spill out
+    // of the box. This pins the round-trip, not just the first commit.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.clear(screen.getByLabelText("Node label"));
+    await user.type(
+      screen.getByLabelText("Node label"),
+      "Primary Transactional Postgres Cluster For Billing",
+    );
+    await user.click(screen.getByRole("checkbox", { name: "Wrap" }));
+
+    const grown = (onChange.mock.calls.at(-1)![0] as DiagramTemplate).nodes.find(
+      (n) => n.id === "db",
+    )!.h;
+    expect(grown).toBeGreaterThan(76);
+
+    // Any other edit re-derives the document from the canvas.
+    await user.type(screen.getByLabelText("Node description"), "!");
+
+    const after = (onChange.mock.calls.at(-1)![0] as DiagramTemplate).nodes.find(
+      (n) => n.id === "db",
+    )!;
+    expect(after.h).toBe(grown);
+    expect(after.wrap).toBe(true);
+  });
+
+  it("leaves a node with default text layout completely unmarked", () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    // Opt-in means opt-in: an untouched document carries none of the classes,
+    // so it renders exactly as it did before the feature existed.
+    expect(container.querySelector(".as-node--align-center")).toBeNull();
+    expect(container.querySelector(".as-node--align-right")).toBeNull();
+    expect(container.querySelector(".as-node--valign-top")).toBeNull();
+    expect(container.querySelector(".as-node--wrap")).toBeNull();
+  });
+
+  it("makes a group's frame invisible while keeping it a container", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />,
+    );
+
+    fireEvent.click(screen.getByText("Application VPC"));
+    await user.selectOptions(screen.getByLabelText("Frame outline style"), "none");
+    await user.click(screen.getByRole("checkbox", { name: "Fill" }));
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    const vpc = latest.nodes.find((n) => n.id === "vpc")!;
+    expect(vpc).toMatchObject({ outline: "none", fill: false });
+    // Still a container: its children keep parenting to it, so an invisible
+    // frame is a grouping box rather than a decoration.
+    expect(latest.nodes.filter((n) => n.parentId === "vpc").length).toBeGreaterThan(0);
+
+    const frame = container.querySelector('[data-id="vpc"] .as-group') as HTMLElement;
+    expect(frame.style.getPropertyValue("--as-group-fill")).toBe("transparent");
+    expect(frame.style.getPropertyValue("--as-group-border-width")).toBe("0");
+  });
+
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
+
+  it("selects everything with ⌘A and cuts it with ⌘X", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    await user.keyboard("{Meta>}a{/Meta}");
+    await user.keyboard("{Meta>}x{/Meta}");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes).toHaveLength(0);
+    // Cut is copy-then-delete, so the fragment is still on the clipboard.
+    await user.keyboard("{Meta>}v{/Meta}");
+    const pasted = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(pasted.nodes.length).toBe(EXAMPLE_TEMPLATE.nodes.length);
+  });
+
+  it("nudges the selection with the arrow keys, 10px with Shift", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+    const start = EXAMPLE_TEMPLATE.nodes.find((n) => n.id === "db")!;
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.keyboard("{ArrowRight}");
+    let latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "db")!.x).toBe(start.x + 1);
+
+    await user.keyboard("{Shift>}{ArrowDown}{/Shift}");
+    latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "db")!.y).toBe(start.y + 10);
+  });
+
+  it("leaves the arrow keys to the timeline when nothing is selected", async () => {
+    // The two uses cannot both own the arrows; selection decides which wins.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    const before = onChange.mock.calls.length;
+    await user.keyboard("{ArrowRight}");
+    expect(onChange.mock.calls.length).toBe(before);
+  });
+
+  it("inserts a node, group, text note and zone from single keys", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    await user.keyboard("n");
+    await user.keyboard("g");
+    await user.keyboard("t");
+    await user.keyboard("z");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length + 3);
+    expect(latest.nodes.some((n) => n.kind === "text" && n.id.startsWith("text"))).toBe(true);
+    expect(latest.zones ?? []).toHaveLength(1);
+  });
+
+  it("does not insert while typing in a field", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    // "n", "g", "t" and "z" are all ordinary letters — the typing guard is the
+    // only thing stopping a search for "gateway" from inserting four nodes.
+    await user.click(screen.getByPlaceholderText(/Search/));
+    await user.keyboard("gateway");
+
+    const latest = onChange.mock.calls.at(-1)?.[0] as DiagramTemplate | undefined;
+    expect(latest?.nodes.length ?? EXAMPLE_TEMPLATE.nodes.length).toBe(
+      EXAMPLE_TEMPLATE.nodes.length,
+    );
+  });
+
+  it("groups a selection into a container with ⌘G and unwraps it with ⌘⇧G", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.keyboard("{Meta>}g{/Meta}");
+
+    let latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    const group = latest.nodes.find((n) => n.kind === "group" && n.id !== "vpc")!;
+    expect(group).toBeTruthy();
+    // Real nesting, not a selection set — the node is parented to the frame.
+    expect(latest.nodes.find((n) => n.id === "db")!.parentId).toBe(group.id);
+
+    fireEvent.click(screen.getByText("New Group"));
+    await user.keyboard("{Meta>}{Shift>}g{/Shift}{/Meta}");
+
+    latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === group.id)).toBeUndefined();
+    // The child survives, back at the top level and where it started.
+    const db = latest.nodes.find((n) => n.id === "db")!;
+    expect(db.parentId).toBeNull();
+    expect(db.x).toBe(EXAMPLE_TEMPLATE.nodes.find((n) => n.id === "db")!.x);
+  });
+
+  it("locks and unlocks the selection with ⌘⇧L", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.keyboard("{Meta>}{Shift>}l{/Shift}{/Meta}");
+    let latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "db")!.locked).toBe(true);
+
+    await user.keyboard("{Meta>}{Shift>}l{/Shift}{/Meta}");
+    latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect("locked" in latest.nodes.find((n) => n.id === "db")!).toBe(false);
+  });
+
+  it("refuses to nudge a locked node", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+    const start = EXAMPLE_TEMPLATE.nodes.find((n) => n.id === "db")!;
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.keyboard("{Meta>}{Shift>}l{/Shift}{/Meta}");
+    await user.keyboard("{ArrowRight}");
+
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "db")!.x).toBe(start.x);
+  });
+
+  it("restacks a selected zone with ⌘] and ⌘[", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Cloud Region"));
+    await user.keyboard("{Meta>}]{/Meta}");
+    const raised = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    const region = raised.zones!.find((z) => z.id === "region")!;
+    const vendor = raised.zones!.find((z) => z.id === "vendor")!;
+    expect(region.z ?? 0).toBeGreaterThan(vendor.z ?? 0);
+  });
+
+  it("opens the shortcuts sheet with ? and closes it with Escape", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+
+    expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).toBeNull();
+    await user.keyboard("?");
+    const sheet = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
+    // It advertises what actually exists.
+    expect(sheet).toHaveTextContent("Group selection into a container");
+    expect(sheet).toHaveTextContent("Nudge 1px");
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).toBeNull();
   });
 
   it("does not burn an undo step on the Show-hidden view toggle", async () => {

@@ -161,6 +161,56 @@ Text notes render **boxed by default** — a subtle outline and background, on s
 exports. Set `plain: true` (or untick **Outline** in the inspector) for bare text. Like every
 default, it is stored only when it differs, so pre-existing documents round-trip byte-identical.
 
+## Node text: alignment and wrapping
+
+A node's label is one ellipsised line, left-aligned and vertically centred, unless you say
+otherwise. Four optional fields change that, in the **Text** section of the inspector or
+directly in the document:
+
+```jsonc
+{ "id": "api", "label": "Payment Reconciliation Worker",
+  "textAlign": "center",     // left (default) · center · right
+  "textVAlign": "middle",    // top · middle (default) · bottom
+  "wrap": true,              // break across lines instead of ellipsising
+  "fontSize": 16 }           // default 13
+```
+
+**`wrap` grows the node.** Nothing is ever clipped: `validateTemplate` measures the wrapped label
+and raises the stored `h` to hold every line, the same way a table node already grows to fit its
+rows. Width stays exactly as authored. The measurement lives in `contract/text.ts`, and
+validation, the canvas and the PNG/SVG exporters all call it — which is the only reason an export
+can be trusted to look like the screen. A record node is excluded from vertical alignment: its
+rows sit at offsets that field-anchored edges also compute, so moving them would leave
+foreign-key lines pointing between columns.
+
+Every value above is stored **only when it differs from the default**, so a document written
+before these existed round-trips byte-identical.
+
+## Transparent containers: boxes in boxes
+
+Nesting is `parentId`, and any node can parent any other, to any depth — a `group` renders its
+children inline inside its frame, and dropping a node on a group nests it while dragging it out
+un-nests it. What a group looks like is now separately controllable, using the same four knobs a
+zone has:
+
+```jsonc
+{ "id": "ctx", "label": "Bounded context", "kind": "group",
+  "fill": false,        // drop the background tint     (default true)
+  "outline": "none",    // solid · dashed (default) · dotted · none
+  "color": "#8b5cf6",   // frame ink; the tint derives from it
+  "opacity": 0.28 }     // tint strength
+```
+
+`fill: false` + `outline: "none"` is a **fully invisible grouping frame** — nothing renders on
+screen or in exports except its name chip, but it still nests, still accepts drops, still
+collapses to a chip, and still drills in. Selecting it restores a visible border so you can tell
+you have hold of it. `⌘G` wraps the current selection in a new container and `⌘⇧G` unwraps one,
+converting between absolute and parent-relative coordinates in the same pass.
+
+Note the deliberate split: **groups nest, zones don't.** A zone is a shaped infra *background*
+that nodes reference by `zoneId` (so a node can be in one zone and one group at once); zones
+resolve overlap by `z`, not by containment. If you want boxes inside boxes, they are groups.
+
 ## Drill-down: C1–C4 levels in one document
 
 A node's children (`parentId`) are its next C4 level — any kind can have them, not just
@@ -238,18 +288,39 @@ they are the split's precedent, not a new case.)
 Presentation now includes how a line travels, not just where boxes sit. An edge may pin its
 `start`/`end` to a side of the node box (`{ "side": "left", "t": 0.25 }` — `t` slides along the
 side, centre by default) and carry `points`, absolute-canvas waypoints the line bends through.
-Both routings honour them: curved threads a smooth spline through every waypoint; orthogonal
-keeps every segment axis-aligned and always leaves/arrives square to a pinned side. The same
-geometry function drives the screen and every image export, so a routed edge exports exactly as
-drawn.
+All three routings honour them: curved threads a smooth spline through every waypoint — the line enters and leaves each dot at the same angle, so it reads as one continuous stroke that happens to pass through a handle;
+orthogonal keeps every segment axis-aligned and always leaves/arrives square to a pinned side;
+straight runs direct point-to-point strokes, the classic flow-chart line. The same geometry
+function drives the screen and every image export, so a routed edge exports exactly as drawn.
 
-In the editor: the edge inspector picks the anchors (`start: auto` follows wherever the line is
-going, exactly the old behaviour) and **double-click a selected edge** to add a waypoint — drag
-it to bend the line, double-click the dot to remove it, or *Clear route* in the inspector.
+In the editor, shaping a line is direct manipulation: **drag anywhere on it** to bend it there —
+a waypoint is born under the pointer and follows it until release (double-click does the same
+without the drag). Drag a waypoint to move it, double-click the dot to remove it, or *Clear
+route* in the inspector. On a selected edge, **drag an endpoint handle** to pin exactly where
+the line attaches — anywhere along any side of its box — or drop it on another node to
+re-attach the edge there. The inspector's anchor pickers do the same by side (`start: auto`
+follows wherever the line is going, exactly the old behaviour).
 Waypoints are deliberately canvas-absolute: dragging a node re-aims the endpoints but leaves the
 route in place, a **Tidy** discards all waypoints as stale (pinned anchors survive — sides are
 intent), pasting a fragment translates them with it, and zone scaling carries the routes whose
 endpoints both scaled.
+
+### Dangling arrows
+
+Drag a connection out of a node and release it over empty canvas: instead of the drop being
+discarded, a bare **point** — a 12px dot, node kind `"point"` — is born under the pointer and
+the arrow attaches to it. That gives you abstract arrows: pointing in a direction, at a
+component that doesn't exist yet, or into the space between things. Because the dot is an
+ordinary (tiny) node, everything already works on it — drag it to re-aim the arrow, bend the
+line through waypoints, label it, undo it, copy it, export it. Drag the arrow's endpoint onto
+a real node when the thing it pointed at arrives, and the stranded dot cleans itself up
+(deleting a dangling edge sweeps its dot the same way). Releasing a connection drag on a
+node's **body** connects to that node — the tiny handle dots no longer have to be hit
+exactly.
+
+Exports know the difference: image exports draw the same small dot the canvas shows, Mermaid
+renders the closest thing it has (a tiny circle), and C4-PlantUML — a strict semantic model
+with no dangling concept — omits points and their arrows entirely.
 
 ### The split at the toolbar and the API boundary
 
@@ -480,7 +551,7 @@ The schema and editor cover C4's notational essentials:
 | **Edge tech label** — C4's `[JSON/HTTPS]` | `edge.tech`, second line under the label |
 | **Numbered dynamic flows** | `edge.seq` renders a circled step badge; C4-PlantUML export prefixes `1.` |
 | **Direction** — `forward` / `both` / `none` arrowheads | `edge.direction` |
-| **Right-angle routing** | `meta.routing: "orthogonal"` sets the diagram default (Arrange ▾ → Right-angle connectors); `edge.routing` overrides per edge |
+| **Routing** — curved / right-angle / straight | `meta.routing` sets the diagram default (Arrange ▾ → connector picker); `edge.routing` overrides per edge |
 | **Collapsible groups** | ▾ on a group collapses it to a chip; contents hide, their edges re-route to the chip, and the stored size survives expand. Never destructive — collapse is view state that rides the undo stack |
 | **Tags + filter** | `node.tags`; the View ▾ tag filter dims non-matching nodes — dim only, never hide, so the filter can't touch what persists |
 | **Doc links** | `node.url` renders an ↗ affix (a real link in read-only) |
@@ -679,6 +750,13 @@ keeps only the lines wholly **inside** the selection — copy two connected node
 between them pastes too; copy one node and no lines come along (the other endpoint may not
 exist wherever the fragment lands).
 
+The copy lands **clear of its original and cascades** on repeat pastes. That matters more than it
+sounds: a single-node fragment carries no lines by design, and a copy sitting nearly on top of
+its source — selected, so drawn a z-band above it — reads convincingly as "pasting deleted my
+node's edges" when they are simply underneath. A fragment also carries **absolute** coordinates
+for its roots, so copying a node out of a group puts the copy beside it rather than wherever its
+parent-relative numbers happened to point.
+
 **Duplicate** (`⌘D`, or the ⧉ button in the inspector) is different by design: it happens in
 the same document, so it carries the selection's **direct connections** — internal lines clone
 between the copies, and boundary lines re-attach their cloned end to the copy while keeping the
@@ -703,11 +781,41 @@ Tags · Link) instead of an unbroken run of inputs.
 
 ## Keyboard
 
-`⌘Z` undo · `⇧⌘Z` redo · `⌘S` save · `⌘C`/`⌘V`/`⌘D` copy/paste/duplicate · `Delete` remove
-selection (cascades into groups) · `Esc` close panels and leave timeline mode · `←`/`→` step
-between timeline stops while scrubbing with nothing selected. Drag from a node edge to connect. Drop a node onto a
-group to nest it, drag it out to un-nest. Drag an edge label to slide it along the curve. Drop a
-`.json` template file on the canvas to load it.
+Press **`?`** for the full sheet (also in View ▾). Bindings follow Excalidraw's conventions
+wherever this editor has the same concept, so muscle memory carries over.
+
+| | |
+|---|---|
+| **Essentials** | `⌘Z` undo · `⇧⌘Z` redo · `⌘S` save · `⌘A` select all · `Delete` remove selection (cascades into groups) · `Esc` close panels, then leave a drilled level |
+| **Clipboard** | `⌘C` · `⌘V` · `⌘X` cut · `⌘D` duplicate with connections · `⌥`-drag to drag a copy and leave the original |
+| **Insert** | `N` node · `G` group · `T` text note · `Z` zone — all land at the canvas centre, exactly as the Insert menu does |
+| **Arrange** | `←↑→↓` nudge 1px · `⇧`+arrows nudge 10px · `⌘⇧`+arrows align · `⌘G` wrap the selection in a container · `⌘⇧G` ungroup · `⌘⇧L` lock |
+| **View** | `⌘=`/`⌘-`/`⌘0` zoom · `⇧1` fit · `⇧2` fit selection · `⌘'` snap to grid · `⌘K` search · `⌘⇧E` export PNG · `Space`-drag pan |
+| **Timeline** | `←`/`→` step between stops, while scrubbing with nothing selected |
+
+Three places the conventions could not be copied verbatim, and why:
+
+- **`⌘K` is search, not link.** It predates this, is advertised in the search field, and works
+  from inside any input. Links take `⌘⇧K`.
+- **Arrow keys move the selection, not the focused node.** React Flow's built-in nudge only
+  moves the one node with DOM focus and can't move a multi-selection, so `disableKeyboardA11y`
+  turns it off and the editor owns all four arrows. With nothing selected they fall through to
+  the timeline.
+- **`⌘]`/`⌘[` restack zones only.** A node's z-index is *derived* from nesting depth into fixed
+  painting bands (zones < containers < edges < leaves); only zones carry a stored `z`. One press
+  swaps with the neighbour rather than incrementing, since equal `z` resolves by array order and
+  would look like nothing happened.
+
+Excalidraw's freedraw, eraser, laser, image and flip tools have no counterpart in a node graph,
+and copy-/paste-styles is near-empty here because colour is registry-level by kind rather than
+stored per node — so none of those are bound.
+
+Sequence mode binds the subset that means something there (`N` participant, `A` actor,
+`M` message, `T` note, plus the essentials and zoom); its `?` sheet lists only those.
+
+Mouse: drag from a node edge to connect. Drop a node onto a group to nest it, drag it out to
+un-nest. Drag an edge label to slide it along the curve. Drop a `.json` template file on the
+canvas to load it.
 
 ## Versioning
 

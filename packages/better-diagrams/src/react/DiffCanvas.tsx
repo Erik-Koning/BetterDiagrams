@@ -36,6 +36,7 @@ import {
 import type { DiffState, TemplateDiff } from "../contract/diff";
 import { NODE_TYPES } from "./nodes";
 import { EDGE_TYPES } from "./edges";
+import { StudioContext, useStudio } from "./context";
 
 // Stable identity — React Flow stores this object. Same layering as the
 // editor's canvas: edges under every node (see EDGE_Z_INDEX).
@@ -102,6 +103,13 @@ export const DiffCanvas = memo(function DiffCanvas({
   current: DiagramTemplate;
   diff: TemplateDiff;
 }) {
+  // The studio's context, re-provided read-only. `elementsSelectable={false}`
+  // already hides the selection affordances, but the edge's shaping gestures
+  // (drag-to-bend, double-click) don't require selection — without this they
+  // would inherit the EDITOR's readOnly and let a compare overlay be bent.
+  const studio = useStudio();
+  const readOnlyStudio = useMemo(() => ({ ...studio, readOnly: true }), [studio]);
+
   const { nodes, edges } = useMemo(() => {
     const overlay = buildOverlay(base, current, diff);
     const rf = toReactFlow(overlay, { applyVisibility: false });
@@ -133,6 +141,7 @@ export const DiffCanvas = memo(function DiffCanvas({
 
   return (
     <div className="as-diffcanvas">
+      <StudioContext.Provider value={readOnlyStudio}>
       <ReactFlowProvider>
         <ReactFlow
           nodes={nodes}
@@ -159,6 +168,7 @@ export const DiffCanvas = memo(function DiffCanvas({
           <Controls showInteractive={false} />
         </ReactFlow>
       </ReactFlowProvider>
+      </StudioContext.Provider>
     </div>
   );
 });

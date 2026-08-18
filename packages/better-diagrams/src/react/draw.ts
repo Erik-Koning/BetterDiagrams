@@ -23,12 +23,14 @@ import {
   visibleAnchor,
   visibleElements,
   COLLAPSED_SIZE,
+  DEFAULT_CONTAINER_OPACITY,
   DEFAULT_ZONE_OPACITY,
   EDGE_COLOR_HEX,
   EDGE_DASH,
   FIELD_ROW_H,
   fieldAnchors,
   fieldListTop,
+  resolveRouting,
   type DiagramEdge,
   type DiagramNode,
   type DiagramTemplate,
@@ -180,7 +182,7 @@ type RawDrawCmd =
       color: string;
       alpha?: number;
       weight?: number;
-      anchor?: "start" | "middle";
+      anchor?: "start" | "middle" | "end";
       /** Knock a bg-coloured rect out behind the text (edge labels over lines). */
       knockout?: { color: string; padX: number; height: number };
     }
@@ -188,42 +190,12 @@ type RawDrawCmd =
 
 // ─── Shared approximate text metrics ─────────────────────────────────────────
 
-const CHAR_FACTOR = { mono: 0.602, sans: 0.52 } as const;
+// These live in the contract because `validateTemplate` grows a wrapped node's
+// height with the same measurement the renderer lays it out with. Re-exported
+// here so the drawing code keeps reading as one module.
+import { approxTextWidth, ellipsise, wrapText, wrappedLineCount } from "../contract/text";
 
-export function approxTextWidth(text: string, size: number, font: "mono" | "sans"): number {
-  return text.length * size * CHAR_FACTOR[font];
-}
-
-export function wrapText(text: string, size: number, font: "mono" | "sans", maxWidth: number, maxLines: number): string[] {
-  const words = String(text).split(/\s+/).filter(Boolean);
-  if (!words.length) return [];
-  const lines: string[] = [];
-  let line = "";
-  for (const word of words) {
-    const candidate = line ? `${line} ${word}` : word;
-    if (approxTextWidth(candidate, size, font) > maxWidth && line) {
-      lines.push(line);
-      line = word;
-      if (lines.length === maxLines) break;
-    } else {
-      line = candidate;
-    }
-  }
-  if (lines.length < maxLines && line) lines.push(line);
-  if (lines.length === maxLines && line && lines[maxLines - 1] !== line) {
-    // Out of room — ellipsise what we kept.
-    let last = lines[maxLines - 1];
-    while (last.length > 1 && approxTextWidth(`${last}…`, size, font) > maxWidth) last = last.slice(0, -1);
-    lines[maxLines - 1] = `${last}…`;
-  }
-  return lines.slice(0, maxLines);
-}
-
-export function ellipsise(text: string, size: number, font: "mono" | "sans", maxWidth: number): string {
-  let s = text;
-  while (s.length > 1 && approxTextWidth(`${s}…`, size, font) > maxWidth) s = s.slice(0, -1);
-  return s === text ? text : `${s}…`;
-}
+export { approxTextWidth, ellipsise, wrapText, wrappedLineCount };
 
 // ─── Small path builders ─────────────────────────────────────────────────────
 
@@ -321,9 +293,7 @@ function layout(template: DiagramTemplate, containerKinds?: readonly string[]): 
   };
 }
 
-function defaultRoutingOf(template: DiagramTemplate): "curved" | "orthogonal" {
-  return template.meta?.routing === "orthogonal" ? "orthogonal" : "curved";
-}
+const defaultRoutingOf = (template: DiagramTemplate) => resolveRouting(template.meta?.routing);
 
 function zoneOutlineAbs(zone: DiagramZone): Array<[number, number]> | null {
   const outline = zoneOutline(zone);
@@ -476,14 +446,30 @@ export function emitTemplate(
     const def = kindDef(registry, node.kind);
     if (!def.container || node.collapsed) continue;
     const nodeStart = cmds.length;
+    // Frame styling, resolved exactly as GroupNode resolves it for the canvas
+    // — the ink is the stored colour (or the kind accent), the fill is derived
+    // from it, and `fill: false` / `outline: "none"` each drop their layer. A
+    // frame with neither is invisible in the export too, which is the point:
+    // an abstract grouping box must not reappear in the PNG.
+    const frameInk = node.color || def.accent;
+    const frameTinted = !!node.color || node.opacity !== undefined;
+    const frameOutline = node.outline ?? "dashed";
+    const frameDash =
+      frameOutline === "dashed" ? [6, 5] : frameOutline === "dotted" ? [2, 4] : undefined;
     cmds.push({
       op: "path",
       d: roundedRectPath(box.x, box.y, box.width, box.height, 10),
-      fill: palette.surface2,
-      fillAlpha: 0.28,
-      stroke: def.accent,
-      strokeWidth: 1.2,
-      dash: [6, 5],
+      // The default tint is the neutral surface wash groups have always used;
+      // an ink-derived tint appears only once the node stores a colour.
+      ...(node.fill === false
+        ? {}
+        : {
+            fill: frameTinted ? frameInk : palette.surface2,
+            fillAlpha: node.opacity ?? DEFAULT_CONTAINER_OPACITY,
+          }),
+      ...(frameOutline === "none"
+        ? {}
+        : { stroke: frameInk, strokeWidth: 1.2, ...(frameDash ? { dash: frameDash } : {}) }),
     });
     const chipW = Math.max(60, approxTextWidth(node.label, 11, "mono") + 18);
     cmds.push({ op: "path", d: roundedRectPath(box.x, box.y, chipW, 22, 6), fill: palette.surface2 });
@@ -622,6 +608,22 @@ export function emitTemplate(
     if (def.container && !node.collapsed) continue;
     const leafStart = cmds.length;
 
+    // A dangling-arrow endpoint: just the dot the canvas shows (.as-point__dot
+    // — 7px, dim, on a bg ring), never a card. Its box still routed the edge.
+    if (def.point) {
+      cmds.push({
+        op: "circle",
+        cx: box.x + box.width / 2,
+        cy: box.y + box.height / 2,
+        r: 3.5,
+        fill: palette.textDim,
+        stroke: palette.bg,
+        strokeWidth: 1,
+      });
+      stamp(leafStart, `node:${node.id}`, dayOf(nodeDates.get(node.id)));
+      continue;
+    }
+
     if (def.container) {
       const d = roundedRectPath(box.x, box.y, box.width, box.height, 9);
       cmds.push({ op: "path", d, fill: palette.surface });
@@ -744,39 +746,82 @@ export function emitTemplate(
     const textW = box.width - (textX - box.x) - 10;
     const kindText = def.label.toUpperCase();
     const statusText = status ? ` · ${status.toUpperCase()}` : "";
-    const title = ellipsise(node.label, 13, "sans", textW);
-    if (status === "deprecated") {
-      // The status token gets the editor's salmon; the node's own dimming
-      // still applies through the shared alpha, exactly as opacity does on
-      // the canvas.
-      cmds.push({ op: "text", x: textX, y: box.y + cTop + 16, text: kindText, size: 9, font: "mono", color: def.accent, alpha: 0.8 * dim });
-      cmds.push({
-        op: "text",
-        x: textX + approxTextWidth(kindText, 9, "mono"),
-        y: box.y + cTop + 16,
-        text: statusText,
-        size: 9,
-        font: "mono",
-        color: palette.warn ?? "#fa8072",
-        alpha: 0.8 * dim,
-      });
-    } else {
-      cmds.push({ op: "text", x: textX, y: box.y + cTop + 16, text: kindText + statusText, size: 9, font: "mono", color: def.accent, alpha: 0.8 * dim });
-    }
-    cmds.push({ op: "text", x: textX, y: box.y + cTop + 31, text: title, size: 13, font: "sans", weight: 600, color: palette.text, ...(dim < 1 ? { alpha: dim } : {}) });
-    if (status === "retired") {
-      const strikeW = approxTextWidth(title, 13, "sans");
-      cmds.push({ op: "path", d: `M ${textX} ${box.y + cTop + 26.5} L ${textX + strikeW} ${box.y + cTop + 26.5}`, stroke: palette.text, strokeAlpha: dim, strokeWidth: 1 });
-    }
+
+    // Text layout — mirrors the CSS classes ShapeNode applies, so an export
+    // reproduces what the user arranged rather than a second interpretation.
+    // `anchorX` is where a run of text is placed FROM; the anchor tells the
+    // backend which end of the run that x refers to.
+    const fontSize = node.fontSize ?? 13;
+    const align = node.textAlign ?? "left";
+    const anchor = align === "center" ? "middle" : align === "right" ? "end" : "start";
+    const anchorX = align === "center" ? textX + textW / 2 : align === "right" ? textX + textW : textX;
+    const aligned = anchor === "start" ? {} : ({ anchor } as const);
+
+    // A wrapped title takes as many lines as it needs; validateTemplate has
+    // already grown the box to hold them, using this same measurement.
+    const titleLines = node.wrap
+      ? wrapText(node.label, fontSize, "sans", textW, Number.MAX_SAFE_INTEGER)
+      : [ellipsise(node.label, fontSize, "sans", textW)];
+    const lineH = Math.round(fontSize * 1.35);
+    // What the extra lines push down: description, strike-through, everything
+    // after the title.
+    const titleOverflow = Math.max(0, titleLines.length - 1) * lineH;
+
+    const rows = node.fields ?? [];
     // A node with rows holds its description to ONE line: the rows below are
     // placed by a shared formula, and a second line would shift every one of
     // them out from under its edge anchor.
-    const rows = node.fields ?? [];
     const descLines = node.description
-      ? wrapText(node.description, 10.5, "sans", textW, rows.length ? 1 : 2)
+      ? wrapText(node.description, 10.5, "sans", textW, rows.length ? 1 : node.wrap ? 4 : 2)
       : [];
+
+    // Vertical placement moves the whole text block inside the box. Record
+    // nodes are excluded: their rows sit at offsets a field-anchored edge also
+    // computes, so shifting them would leave every foreign-key line pointing
+    // between columns. (The canvas agrees — .as-node--record pins to the top.)
+    const blockH = 45 + titleOverflow + descLines.length * 13;
+    const slack = Math.max(0, box.height - cTop - blockH);
+    const vShift = rows.length
+      ? 0
+      : node.textVAlign === "top"
+        ? -slack / 2
+        : node.textVAlign === "bottom"
+          ? slack / 2
+          : 0;
+    const ty = (offset: number) => box.y + cTop + offset + vShift;
+
+    if (status === "deprecated") {
+      // The status token gets the editor's salmon; the node's own dimming
+      // still applies through the shared alpha, exactly as opacity does on
+      // the canvas. Centred/right-aligned nodes draw the eyebrow as one run so
+      // the two halves can't drift apart under a non-start anchor.
+      const eyebrowX = align === "left" ? textX : anchorX;
+      cmds.push({ op: "text", x: eyebrowX, y: ty(16), text: kindText, size: 9, font: "mono", color: def.accent, alpha: 0.8 * dim, ...aligned });
+      if (align === "left") {
+        cmds.push({
+          op: "text",
+          x: textX + approxTextWidth(kindText, 9, "mono"),
+          y: ty(16),
+          text: statusText,
+          size: 9,
+          font: "mono",
+          color: palette.warn ?? "#fa8072",
+          alpha: 0.8 * dim,
+        });
+      }
+    } else {
+      cmds.push({ op: "text", x: anchorX, y: ty(16), text: kindText + statusText, size: 9, font: "mono", color: def.accent, alpha: 0.8 * dim, ...aligned });
+    }
+    titleLines.forEach((line, i) =>
+      cmds.push({ op: "text", x: anchorX, y: ty(31 + i * lineH), text: line, size: fontSize, font: "sans", weight: 600, color: palette.text, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
+    );
+    if (status === "retired") {
+      const strikeW = approxTextWidth(titleLines[0] ?? "", fontSize, "sans");
+      const strikeX = align === "center" ? anchorX - strikeW / 2 : align === "right" ? anchorX - strikeW : textX;
+      cmds.push({ op: "path", d: `M ${strikeX} ${ty(26.5)} L ${strikeX + strikeW} ${ty(26.5)}`, stroke: palette.text, strokeAlpha: dim, strokeWidth: 1 });
+    }
     descLines.forEach((line, i) =>
-      cmds.push({ op: "text", x: textX, y: box.y + cTop + 45 + i * 13, text: line, size: 10.5, font: "sans", color: palette.textDim, ...(dim < 1 ? { alpha: dim } : {}) }),
+      cmds.push({ op: "text", x: anchorX, y: ty(45 + titleOverflow + i * 13), text: line, size: 10.5, font: "sans", color: palette.textDim, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
     );
 
     // Field rows — the same list the canvas draws, from the same metrics.
@@ -992,10 +1037,15 @@ export function drawToCanvas(ctx: CanvasRenderingContext2D, cmds: DrawCmd[]): vo
       case "text": {
         ctx.save();
         ctx.font = `${cmd.weight ?? 400} ${cmd.size}px ${fontOf(cmd.font)}`;
-        ctx.textAlign = cmd.anchor === "middle" ? "center" : "left";
+        ctx.textAlign = cmd.anchor === "middle" ? "center" : cmd.anchor === "end" ? "right" : "left";
         if (cmd.knockout) {
           const w = approxTextWidth(cmd.text, cmd.size, cmd.font) + cmd.knockout.padX * 2;
-          const left = cmd.anchor === "middle" ? cmd.x - w / 2 : cmd.x - cmd.knockout.padX;
+          const left =
+            cmd.anchor === "middle"
+              ? cmd.x - w / 2
+              : cmd.anchor === "end"
+                ? cmd.x - w + cmd.knockout.padX
+                : cmd.x - cmd.knockout.padX;
           ctx.fillStyle = cmd.knockout.color;
           ctx.fillRect(left, cmd.y - cmd.knockout.height + 4, w, cmd.knockout.height);
         }
@@ -1078,7 +1128,12 @@ export function drawToSvg(cmds: DrawCmd[], opts: { gridId?: string } = {}): stri
       case "text": {
         if (cmd.knockout) {
           const w = approxTextWidth(cmd.text, cmd.size, cmd.font) + cmd.knockout.padX * 2;
-          const left = cmd.anchor === "middle" ? cmd.x - w / 2 : cmd.x - cmd.knockout.padX;
+          const left =
+            cmd.anchor === "middle"
+              ? cmd.x - w / 2
+              : cmd.anchor === "end"
+                ? cmd.x - w + cmd.knockout.padX
+                : cmd.x - cmd.knockout.padX;
           out.push(
             `<rect x="${left}" y="${cmd.y - cmd.knockout.height + 4}" width="${w}" height="${cmd.knockout.height}" fill="${cmd.knockout.color}"/>`,
           );
@@ -1090,6 +1145,7 @@ export function drawToSvg(cmds: DrawCmd[], opts: { gridId?: string } = {}): stri
           `fill="${cmd.color}"`,
           cmd.alpha !== undefined ? `fill-opacity="${cmd.alpha}"` : "",
           cmd.anchor === "middle" ? `text-anchor="middle"` : "",
+          cmd.anchor === "end" ? `text-anchor="end"` : "",
         ]
           .filter(Boolean)
           .join(" ");
