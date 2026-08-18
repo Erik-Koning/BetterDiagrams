@@ -1239,6 +1239,37 @@ describe("ArchitectureStudio", () => {
     });
   });
 
+  it("arms a dot's connect handles only from its trigger, never on mere hover", async () => {
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "a", label: "A", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 100, h: 50 },
+        { id: "p", label: "", kind: "point", icon: "none", description: "", parentId: null, x: 400, y: 200 },
+      ],
+      edges: [{ id: "e1", source: "a", target: "p", label: "", style: "solid", color: "slate" }],
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={doc} />);
+
+    await waitFor(() => expect(container.querySelector(".as-point")).toBeTruthy());
+    const point = container.querySelector(".as-point")!;
+    // The handles stay MOUNTED regardless — React Flow measures the edge's
+    // attachment from them (see ConnectHandles) — arming is a class the
+    // stylesheet maps to visibility and pointer events.
+    expect(point.querySelectorAll(".react-flow__handle")).toHaveLength(4);
+
+    // Hovering the head itself does not arm them…
+    fireEvent.mouseOver(point.querySelector(".as-point__dot")!, { relatedTarget: document.body });
+    expect(point.classList.contains("as-point--armed")).toBe(false);
+
+    // …resting exactly on the trigger dot does…
+    fireEvent.mouseOver(point.querySelector(".as-point__arm")!, { relatedTarget: document.body });
+    expect(point.classList.contains("as-point--armed")).toBe(true);
+
+    // …and leaving the whole cluster puts them away.
+    fireEvent.mouseOut(point, { relatedTarget: document.body });
+    expect(point.classList.contains("as-point--armed")).toBe(false);
+  });
+
   it("deleting a dangling edge sweeps its stranded dot", async () => {
     const onChange = vi.fn();
     const doc = validateTemplate({

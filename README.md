@@ -312,7 +312,10 @@ discarded, a bare **point** — a 12px dot, node kind `"point"` — is born unde
 the arrow attaches to it. That gives you abstract arrows: pointing in a direction, at a
 component that doesn't exist yet, or into the space between things. Because the dot is an
 ordinary (tiny) node, everything already works on it — drag it to re-aim the arrow, bend the
-line through waypoints, label it, undo it, copy it, export it. Drag the arrow's endpoint onto
+line through waypoints, label it, undo it, copy it, export it. Chaining another arrow off the
+head goes through a small trigger dot beside it: the four connect handles stay hidden and
+inert until the pointer rests exactly on that trigger, so they never bury the head you came
+to drag. Drag the arrow's endpoint onto
 a real node when the thing it pointed at arrives, and the stranded dot cleans itself up
 (deleting a dangling edge sweeps its dot the same way). Releasing a connection drag on a
 node's **body** connects to that node — the tiny handle dots no longer have to be hit

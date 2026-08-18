@@ -1534,6 +1534,7 @@
 /* The free end of a dangling arrow: a bare dot the arrow stops at. The box
    fills its (12px) node; the dot inside stays small so the arrowhead reads. */
 .as-point {
+  position: relative;
   width: 100%;
   height: 100%;
   display: grid;
@@ -1556,6 +1557,58 @@
 .as-point--selected .as-point__dot {
   background: var(--as-accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--as-accent) 35%, transparent);
+}
+
+/* The trigger for chaining another arrow off the head: a smaller satellite
+   dot a few pixels off the corner. Visible whenever the pointer is near the
+   head, but the connect handles it reveals arm only when the pointer rests
+   exactly ON it — see the rules below. */
+.as-point__arm {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1px solid var(--as-accent);
+  background: var(--as-bg);
+  opacity: 0;
+  transition: opacity 120ms;
+  cursor: crosshair;
+}
+
+.as-point:hover .as-point__arm,
+.as-point--armed .as-point__arm {
+  opacity: 1;
+}
+
+.as-point--armed .as-point__arm {
+  background: var(--as-accent);
+}
+
+/* Point nodes only: the connect handles do NOT appear on mere hover — on a
+   12px dot the four of them cover everything, burying the head the pointer
+   came to drag (and the edge's own tip handle beneath it). Dormant means
+   invisible AND inert: a drag can't accidentally start from one. Incoming
+   connections still snap to them by distance, which needs no pointer events. */
+.as-root .react-flow__node-point .react-flow__handle,
+.as-root .react-flow__node-point:hover .react-flow__handle,
+.as-root .react-flow__node-point.selected .react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Armed — the pointer rests on the trigger dot (or travelled from it to a
+   handle without leaving the cluster): the four dots wake up. */
+.as-root .react-flow__node-point .as-point--armed .react-flow__handle {
+  opacity: 1;
+  pointer-events: all;
+}
+
+/* Mid-drag the pointer is long gone from the trigger — keep live ends lit. */
+.as-root .react-flow__node-point .react-flow__handle.connectingfrom,
+.as-root .react-flow__node-point .react-flow__handle.connectingto {
+  opacity: 1;
 }
 
 /* Sequence badge for dynamic (numbered-flow) diagrams. */

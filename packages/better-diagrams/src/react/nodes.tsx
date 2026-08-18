@@ -507,16 +507,38 @@ export type PointNodeType = Node<DiagramNodeData, "point">;
 /**
  * The free end of a dangling arrow: a bare dot. Born when a connection drag
  * is released over empty canvas, and dragged around like any node — the
- * arrow follows. Its handles stay live so a chain can continue FROM the dot,
- * and so the edge that ends on it can be measured at all (see ConnectHandles
- * on why unmounting them would erase the edge).
+ * arrow follows. Its handles stay mounted so a chain can continue FROM the
+ * dot, and so the edge that ends on it can be measured at all (see
+ * ConnectHandles on why unmounting them would erase the edge).
+ *
+ * Unlike every other node, the handles do NOT appear on mere hover: on a
+ * 12px dot the four of them cover everything, burying the head the pointer
+ * came to drag. They arm — become visible and grabbable — only while the
+ * pointer rests EXACTLY on the small trigger dot beside the head, and
+ * disarm when it leaves the cluster (trigger, head, and handles all count
+ * as inside, so travelling from the trigger to a handle keeps them armed).
+ * Incoming connections are unaffected: drops snap to handles by distance,
+ * not through these pointer targets.
  */
 export const PointNode = memo(function PointNode({ selected }: NodeProps<PointNodeType>) {
   const { readOnly } = useStudio();
+  const [armed, setArmed] = useState(false);
   return (
-    <div className={`as-point${selected ? " as-point--selected" : ""}`}>
+    <div
+      className={["as-point", selected ? "as-point--selected" : "", armed ? "as-point--armed" : ""]
+        .filter(Boolean)
+        .join(" ")}
+      onMouseLeave={() => setArmed(false)}
+    >
       <ConnectHandles hidden={readOnly} />
       <div className="as-point__dot" />
+      {!readOnly ? (
+        <div
+          className="as-point__arm nodrag"
+          onMouseEnter={() => setArmed(true)}
+          title="Start another arrow from this point"
+        />
+      ) : null}
     </div>
   );
 });
