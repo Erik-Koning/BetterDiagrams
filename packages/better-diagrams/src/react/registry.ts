@@ -78,6 +78,9 @@ export const BUILTIN_NODE_KINDS: Record<string, NodeKindDef> = {
   table: { label: "Table", fill: "#042f2e", accent: "#2dd4bf", text: "#99f6e4", icon: "none", record: true },
   group: { label: "Group", fill: "transparent", accent: "#475569", text: "#94a3b8", icon: "none", container: true },
   text: { label: "Text", fill: "transparent", accent: "#38bdf8", text: "#e2e8f0", icon: "none", annotation: true },
+  decision: { label: "Decision", fill: "#431407", accent: "#fb923c", text: "#fed7aa", icon: "none", shape: "diamond" },
+  terminator: { label: "Start / End", fill: "#052e16", accent: "#4ade80", text: "#bbf7d0", icon: "none", shape: "pipe" },
+  io: { label: "Input / Output", fill: "#172554", accent: "#60a5fa", text: "#bfdbfe", icon: "none", shape: "parallelogram" },
   point: { label: "Point", fill: "transparent", accent: "#64748b", text: "#94a3b8", icon: "none", point: true },
 };
 
@@ -92,6 +95,9 @@ const BUILTIN_KIND_ORDER = [
   "table",
   "group",
   "text",
+  "decision",
+  "terminator",
+  "io",
   "point",
 ];
 

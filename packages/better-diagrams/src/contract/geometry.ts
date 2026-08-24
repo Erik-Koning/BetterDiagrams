@@ -366,21 +366,55 @@ function orthogonalSpecGeometry(
     push(b);
   }
 
-  return polylineGeometry(pts, labelT);
+  return polylineGeometry(pts, labelT, ORTH_CORNER_RADIUS);
 }
+
+/** Elbow radius the orthogonal routers round their corners with. */
+const ORTH_CORNER_RADIUS = 8;
 
 /**
  * The `EdgeGeometry` of a bare polyline: straight strokes point to point.
  * Both the orthogonal routers and the straight routing reduce to this once
  * their point lists are built.
+ *
+ * `cornerRadius` rounds each interior corner with a small quadratic arc —
+ * the orthogonal elbows pass one; straight routing keeps its sharp corners
+ * (a straight polyline's corners ARE its meaning). Labels, hit tests, and
+ * the arrow angle still ride the sharp polyline: the visual difference is a
+ * few pixels at each elbow, and endpoints/waypoints stay exact.
  */
-function polylineGeometry(pts: readonly Pt[], labelT: number): EdgeGeometry {
+function polylineGeometry(pts: readonly Pt[], labelT: number, cornerRadius = 0): EdgeGeometry {
   const at = arcLengthAt(pts);
   const tail = pts[pts.length - 1];
   const beforeTail = pts.length > 1 ? pts[pts.length - 2] : tail;
 
+  let path = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 1; i < pts.length; i++) {
+    const b = pts[i];
+    if (cornerRadius <= 0 || i === pts.length - 1) {
+      path += ` L ${b.x} ${b.y}`;
+      continue;
+    }
+    const a = pts[i - 1];
+    const c = pts[i + 1];
+    const inV = { x: b.x - a.x, y: b.y - a.y };
+    const outV = { x: c.x - b.x, y: c.y - b.y };
+    const inLen = Math.hypot(inV.x, inV.y);
+    const outLen = Math.hypot(outV.x, outV.y);
+    // Collinear (or degenerate) corners have nothing to round.
+    const cross = inV.x * outV.y - inV.y * outV.x;
+    const r = Math.min(cornerRadius, inLen / 2, outLen / 2);
+    if (r < 0.5 || inLen === 0 || outLen === 0 || cross === 0) {
+      path += ` L ${b.x} ${b.y}`;
+      continue;
+    }
+    const p = { x: b.x - (inV.x / inLen) * r, y: b.y - (inV.y / inLen) * r };
+    const q = { x: b.x + (outV.x / outLen) * r, y: b.y + (outV.y / outLen) * r };
+    path += ` L ${p.x} ${p.y} Q ${b.x} ${b.y} ${q.x} ${q.y}`;
+  }
+
   return {
-    path: pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" "),
+    path,
     label: at(clampLabelT(labelT)),
     tip: tail,
     angle: Math.atan2(tail.y - beforeTail.y, tail.x - beforeTail.x),
@@ -458,7 +492,7 @@ export function orthogonalEdgeGeometry(source: Box, target: Box, labelT = 0.5): 
         : [p1, { x: p1.x, y: midY }, { x: p2.x, y: midY }, p2];
   }
 
-  return polylineGeometry(points, labelT);
+  return polylineGeometry(points, labelT, ORTH_CORNER_RADIUS);
 }
 
 /**
@@ -475,6 +509,38 @@ export function edgeGeometryFor(
   spec?: EdgePathSpec,
 ): EdgeGeometry {
   const waypoints: Pt[] = (spec?.points ?? []).map(([x, y]) => ({ x, y }));
+
+  // A self-loop: both ends on the same box. Every point-to-point router
+  // degenerates here (zero-length chord), so the loop is its own case: out
+  // one face, around, back into an adjacent one — a retry arrow. Always the
+  // spline, whatever the routing: a right-angle loop is a follow-up, not a
+  // degenerate elbow. Pinned anchors move the ends; waypoints reshape the
+  // loop; with neither, a synthetic bulge past the corner shapes it.
+  if (
+    source.x === target.x &&
+    source.y === target.y &&
+    source.width === target.width &&
+    source.height === target.height
+  ) {
+    const startSide = spec?.start?.side ?? "right";
+    const endSide = spec?.end?.side ?? "top";
+    const p1 = anchorPoint(source, startSide, spec?.start?.t ?? 0.3);
+    const p2 = anchorPoint(target, endSide, spec?.end?.t ?? 0.7);
+    let loopPts = waypoints;
+    if (!loopPts.length) {
+      const n1 = outwardNormal(startSide);
+      const n2 = outwardNormal(endSide);
+      const reach = 40;
+      loopPts = [
+        {
+          x: (p1.x + n1.x * reach + p2.x + n2.x * reach) / 2,
+          y: (p1.y + n1.y * reach + p2.y + n2.y * reach) / 2,
+        },
+      ];
+    }
+    return curvedSpecGeometry(p1, startSide, loopPts, p2, endSide, labelT);
+  }
+
   if (!spec?.start && !spec?.end && !waypoints.length) {
     return routing === "orthogonal"
       ? orthogonalEdgeGeometry(source, target, labelT)
@@ -524,6 +590,60 @@ export function cardinalityMarker(text: string | undefined): CardinalityMarker |
   if (zero) return "zero-one";
   if (one) return "one";
   return undefined;
+}
+
+/** Structural twin of the schema's `EdgeHead` — geometry stays import-free. */
+export type EdgeHeadSpec = "arrow" | "open" | "diamond" | "circle" | "bar";
+
+/**
+ * One path for an end glyph at `point`, where `angleIntoBox` is the direction
+ * of travel INTO that endpoint (`geo.angle` at the target, `startAngle(geo)`
+ * at the source). Every glyph is drawn BACKWARD from the point — apex at the
+ * attachment, body reaching back along the line — because the canvas paints
+ * nodes over edges: anything past the attachment disappears under the box.
+ *
+ * `filled` says how to render: the classic arrow is a filled shape, the rest
+ * are strokes. One function for both renderers, like `crowsFootPath`, so the
+ * PNG's arrowheads are the screen's.
+ */
+export function edgeHeadPath(
+  head: EdgeHeadSpec,
+  point: { x: number; y: number },
+  angleIntoBox: number,
+): { d: string; filled: boolean } {
+  // Back along the line; `n` is perpendicular to that.
+  const dx = -Math.cos(angleIntoBox);
+  const dy = -Math.sin(angleIntoBox);
+  const nx = -dy;
+  const ny = dx;
+  const at = (along: number, across = 0) =>
+    `${point.x + dx * along + nx * across} ${point.y + dy * along + ny * across}`;
+
+  switch (head) {
+    case "open":
+      // A chevron: two strokes meeting at the point, never closed.
+      return { d: `M ${at(9, 4.5)} L ${at(0)} L ${at(9, -4.5)}`, filled: false };
+    case "diamond":
+      // UML aggregation: a hollow rhombus, nose at the attachment.
+      return {
+        d: `M ${at(0)} L ${at(6, 4.2)} L ${at(12)} L ${at(6, -4.2)} Z`,
+        filled: false,
+      };
+    case "circle":
+      // A hollow ring touching the attachment point.
+      return {
+        d:
+          `M ${at(0)} A 3.5 3.5 0 1 0 ${at(7)} ` +
+          `A 3.5 3.5 0 1 0 ${at(0)}`,
+        filled: false,
+      };
+    case "bar":
+      // A tee: one perpendicular tick right at the attachment.
+      return { d: `M ${at(1, 5)} L ${at(1, -5)}`, filled: false };
+    default:
+      // The classic solid triangle, apex at the attachment.
+      return { d: `M ${at(0)} L ${at(9, 4.5)} L ${at(9, -4.5)} Z`, filled: true };
+  }
 }
 
 /** Distance from the box to the crow's foot's apex. */

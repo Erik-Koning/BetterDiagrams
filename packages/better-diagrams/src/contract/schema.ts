@@ -46,6 +46,9 @@ export const NODE_KINDS = [
   "group", // container / boundary — other nodes nest inside via parentId
   "text", // free-floating annotation; the text lives in `label`
   "point", // bare arrow endpoint — a dot an edge can end on in empty space
+  "decision", // flow-chart branch — renders as a diamond
+  "terminator", // flow-chart start/end — renders as a stadium
+  "io", // flow-chart input/output — renders as a parallelogram
 ] as const;
 export type NodeKind = (typeof NODE_KINDS)[number] | (string & {});
 
@@ -97,6 +100,17 @@ export type ProviderId = (typeof PROVIDER_IDS)[number] | (string & {});
 /** Arrowhead placement. `forward` (default) points at the target only. */
 export const EDGE_DIRECTIONS = ["forward", "both", "none"] as const;
 export type EdgeDirection = (typeof EDGE_DIRECTIONS)[number];
+
+/**
+ * End-glyph vocabulary: the classic solid arrow, an open chevron, a hollow
+ * diamond (UML aggregation), a hollow circle, and a bar/tee. `direction`
+ * decides WHICH ends get a glyph by default; `startHead`/`endHead` override
+ * WHAT is drawn there — and a startHead set explicitly renders even on a
+ * `forward` edge, which is how a diamond-at-source aggregation coexists with
+ * its arrow-at-target. A recognisable cardinality still wins its end.
+ */
+export const EDGE_HEADS = ["arrow", "open", "diamond", "circle", "bar"] as const;
+export type EdgeHead = (typeof EDGE_HEADS)[number];
 
 /** How an edge is routed. Unset on an edge means "inherit `meta.routing`". */
 export const EDGE_ROUTINGS = ["curved", "orthogonal", "straight"] as const;
@@ -294,6 +308,11 @@ export const KIND_DEFAULT_SIZE: Record<string, { w: number; h: number }> = {
   // A dot, not a box: just big enough that the arrowhead stops visibly short
   // of the exact spot and the dot itself can be grabbed and dragged.
   point: { w: 12, h: 12 },
+  // A diamond loses its corners to the shape — squarer than a service card
+  // so the label still has room.
+  decision: { w: 170, h: 100 },
+  terminator: { w: 160, h: 56 },
+  io: { w: 180, h: 70 },
   // Wider than a service box: a column line is "name  type", two words that
   // must not ellipsise. The height is a floor — a table with rows grows.
   table: { w: 230, h: 96 },
@@ -437,6 +456,14 @@ export interface DiagramEdge {
   tech?: string;
   /** Arrowheads: `forward` (default), `both`, or `none`. Stored only when non-default. */
   direction?: EdgeDirection;
+  /**
+   * Which glyph each end draws (see EDGE_HEADS). Absent = the classic arrow
+   * wherever `direction` puts one. An explicit `startHead` renders regardless
+   * of direction — UML aggregation is a diamond at the source of a `forward`
+   * edge.
+   */
+  startHead?: EdgeHead;
+  endHead?: EdgeHead;
   /** Step number for a C4 dynamic diagram — renders as a circled badge. */
   seq?: number;
   /** Routing override for this edge. Unset inherits `meta.routing`. */
@@ -573,6 +600,8 @@ const EDGE_KEY_MAP: Record<keyof DiagramEdge, true> = {
   providers: true,
   tech: true,
   direction: true,
+  startHead: true,
+  endHead: true,
   seq: true,
   routing: true,
   start: true,
@@ -693,6 +722,8 @@ Rules:
 - "group" = boundary (VPC, cluster, tier, bounded context). Children set parentId${geo ? "; child x/y are RELATIVE to the group's top-left. Size groups to contain all children (+24px sides, +48px top). Children of a NON-group parent use small local coordinates starting near 0,0 (their own drilled canvas); never size the parent to contain them." : "."}
 - "text" = free annotation; put the sentence in label, fontSize 12-16${geo ? ", w~300 h~60" : ""}, no edges.
 - "point" = the bare endpoint of a dangling arrow: a tiny dot an edge can end on, for an arrow into empty space (a dependency on something that doesn't exist yet). label ""${geo ? ", w=h=12" : ""}; use ONLY as an edge's source/target, and only when the user asks for an open-ended/abstract arrow.
+- FLOW CHARTS: "terminator" (stadium) for start/end, "decision" (diamond) for branches — label its outgoing edges "yes"/"no" — "io" (parallelogram) for input/output, "service" for process steps. An edge may target its own source ("source"==="target") to draw a retry/self loop. Use these kinds only for flow charts, not architecture.
+- Edge "startHead"/"endHead" (${EDGE_HEADS.join("|")}) override the glyph at each end when the user asks for UML-style notation (hollow "diamond" at the source = aggregation, "open" arrow = dependency); omit for normal arrows.
 - ${geo ? "Regular nodes: w 160-200, h 64-84. Pick" : "Pick"} a fitting icon. description is an optional one-line tech detail (C4 style, e.g. "Node.js / Express").
 - Edge style semantics: dashed = async/event-driven, dotted = cache/optional/telemetry, solid = synchronous. Vary color by concern (e.g. amber = data, violet = messaging).${geo ? " labelT (0.15-0.85) slides the label along the arrow to avoid collisions." : ""}
 - Edge "tech" = protocol/format, C4 style ("JSON/HTTPS", "gRPC", "SQL"); omit when obvious. "direction":"both" for genuinely bidirectional links, "none" for plain association; omit for normal flow. When the user asks for a request flow or sequence, number the participating edges with "seq":1,2,3… in traversal order; omit seq otherwise.
@@ -917,11 +948,11 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
   }
   breakParentCycles(nodes, byId);
 
+  // Self-loops (source === target) are legal: a retry / iterate-until-done
+  // arrow is core flow-chart vocabulary, drawn as a loop out one face and
+  // back into an adjacent one.
   const edges: DiagramEdge[] = (Array.isArray(r.edges) ? r.edges : [])
-    .filter(
-      (e): e is DiagramEdge =>
-        !!e && byId.has(String(e.source)) && byId.has(String(e.target)) && e.source !== e.target,
-    )
+    .filter((e): e is DiagramEdge => !!e && byId.has(String(e.source)) && byId.has(String(e.target)))
     .map((e, i) => {
       const providers = Array.isArray(e.providers)
         ? [...new Set(e.providers.filter((p): p is string => typeof p === "string" && !!p))]
@@ -954,6 +985,12 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         ...(date ? { date } : {}),
         // Defaults are stripped so an old document round-trips byte-identical.
         ...(e.direction === "both" || e.direction === "none" ? { direction: e.direction } : {}),
+        ...((EDGE_HEADS as readonly string[]).includes(e.startHead as string)
+          ? { startHead: e.startHead }
+          : {}),
+        ...((EDGE_HEADS as readonly string[]).includes(e.endHead as string)
+          ? { endHead: e.endHead }
+          : {}),
         ...(seq > 0 ? { seq } : {}),
         ...((EDGE_ROUTINGS as readonly string[]).includes(e.routing as string)
           ? { routing: e.routing }
@@ -1996,6 +2033,9 @@ export type DiagramEdgeData = {
   providers?: string[];
   tech?: string;
   direction?: EdgeDirection;
+  /** End glyph overrides; see the schema field of the same name. */
+  startHead?: EdgeHead;
+  endHead?: EdgeHead;
   seq?: number;
   date?: DiagramDate;
   /**
@@ -2239,8 +2279,10 @@ export function toReactFlow(
       const source = visibleAnchor(e.source, byId, collapseHidden);
       const target = visibleAnchor(e.target, byId, collapseHidden);
       if (!renderedNodeIds.has(source) || !renderedNodeIds.has(target)) return [];
-      // Both ends inside the same collapsed group: internal wiring, not shown.
-      if (source === target) return [];
+      // Both ends REMAPPED into the same collapsed group: internal wiring,
+      // not shown. A genuine self-loop (source === target in the document)
+      // is different — that's a retry arrow, and it renders as a loop.
+      if (source === target && (source !== e.source || target !== e.target)) return [];
 
       const rerouted = source !== e.source || target !== e.target;
       if (rerouted) {
@@ -2269,6 +2311,8 @@ export function toReactFlow(
             ...(!rerouted && e.tech ? { tech: e.tech } : {}),
             ...(!rerouted && e.date ? { date: e.date } : {}),
             ...(e.direction ? { direction: e.direction } : {}),
+            ...(e.startHead ? { startHead: e.startHead } : {}),
+            ...(e.endHead ? { endHead: e.endHead } : {}),
             ...(!rerouted && e.seq ? { seq: e.seq } : {}),
             ...(e.routing ? { routing: e.routing } : {}),
             // Anchors/waypoints describe the ORIGINAL endpoints' boxes; a
@@ -2421,6 +2465,8 @@ export function fromReactFlow(
       providers: e.data?.providers,
       tech: e.data?.tech,
       direction: e.data?.direction,
+      startHead: e.data?.startHead,
+      endHead: e.data?.endHead,
       seq: e.data?.seq,
       date: e.data?.date,
       // The edge's OWN routing — never routingResolved, which would bake the

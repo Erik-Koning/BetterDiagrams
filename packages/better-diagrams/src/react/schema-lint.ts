@@ -30,6 +30,7 @@ import type { SyntaxNode } from "@lezer/common";
 import {
   EDGE_COLORS,
   EDGE_DIRECTIONS,
+  EDGE_HEADS,
   EDGE_KEYS,
   EDGE_ROUTINGS,
   EDGE_STYLES,
@@ -259,6 +260,8 @@ export function buildArchitectureLint(
       { path: "edges.*", key: "style", allowed: setOf(EDGE_STYLES), noun: "edge style", describe: "an edge style", consequence: 'It will be inserted as "solid".' },
       { path: "edges.*", key: "color", allowed: setOf(EDGE_COLORS), noun: "edge color", describe: "an edge color", consequence: 'It will be inserted as "slate".' },
       { path: "edges.*", key: "direction", allowed: setOf(EDGE_DIRECTIONS), noun: "direction", describe: "a direction", consequence: "It will be ignored (the edge defaults to forward)." },
+      { path: "edges.*", key: "startHead", allowed: setOf(EDGE_HEADS), noun: "end glyph", describe: "an end glyph", consequence: "It will be ignored (the end follows the direction setting)." },
+      { path: "edges.*", key: "endHead", allowed: setOf(EDGE_HEADS), noun: "end glyph", describe: "an end glyph", consequence: "It will be ignored (the end follows the direction setting)." },
       { path: "edges.*", key: "routing", allowed: setOf(EDGE_ROUTINGS), noun: "routing", describe: "a routing", consequence: "It will be ignored (the edge inherits the diagram default)." },
       { path: "zones.*", key: "shape", allowed: setOf(ZONE_SHAPES), noun: "zone shape", describe: "a zone shape", consequence: 'It will be inserted as "rounded".' },
       { path: "zones.*", key: "outline", allowed: setOf(ZONE_OUTLINES), noun: "zone outline", describe: "a zone outline", consequence: "It will be ignored (the outline stays solid)." },

@@ -343,7 +343,10 @@ export function renderTemplateToMermaid(rawTemplate: DiagramTemplate): string {
     // Cloud pack kinds export by their silhouette (aws-dynamodb → cylinder).
     const cloudShape = CLOUD_NODE_KINDS[n.kind as string]?.shape;
     if (n.kind === "database" || cloudShape === "cylinder") lines.push(`${indent}${safe(n.id)}[(${text})]`);
-    else if (n.kind === "client" || n.kind === "external") lines.push(`${indent}${safe(n.id)}([${text}])`);
+    else if (n.kind === "decision") lines.push(`${indent}${safe(n.id)}{${text}}`);
+    else if (n.kind === "terminator" || n.kind === "client" || n.kind === "external")
+      lines.push(`${indent}${safe(n.id)}([${text}])`);
+    else if (n.kind === "io") lines.push(`${indent}${safe(n.id)}[/${text}/]`);
     else if (n.kind === "queue" || cloudShape === "pipe") lines.push(`${indent}${safe(n.id)}[[${text}]]`);
     else lines.push(`${indent}${safe(n.id)}[${text}]`);
   };

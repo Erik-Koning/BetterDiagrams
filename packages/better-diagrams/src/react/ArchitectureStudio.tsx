@@ -48,6 +48,7 @@ import {
   EDGE_ANCHOR_SIDES,
   EDGE_COLOR_HEX,
   EDGE_DASH,
+  EDGE_HEADS,
   EDGE_ROUTINGS,
   EDGE_STYLES,
   EMPTY_TEMPLATE,
@@ -91,6 +92,7 @@ import {
   type EdgeColor,
   type EdgeAnchorSide,
   type EdgeDirection,
+  type EdgeHead,
   type EdgeRouting,
   type EdgeStyle,
   type FieldKey,
@@ -713,7 +715,9 @@ function StudioInner({
           ? { w: 280, h: 56 }
           : def.record
             ? { w: 230, h: fieldsBoxHeight(fields!.length) }
-            : { w: 170, h: 76 };
+            : // The kind's own default (a decision diamond is squarer than a
+              // card), falling back to the ordinary box.
+              KIND_DEFAULT_SIZE[kind] ?? { w: 170, h: 76 };
 
       // Drop the new node at the centre of the *canvas element*, not the
       // window — this component is often embedded in a panel, so the viewport
@@ -1292,7 +1296,8 @@ function StudioInner({
   const onConnect = useCallback(
     (connection: Connection) => {
       if (readOnly) return;
-      if (connection.source === connection.target) return;
+      // source === target is a SELF-LOOP — a retry arrow, drawn out one face
+      // and back into an adjacent one. Legal since validation learned it.
       setEdges((current) =>
         addEdge(
           {
@@ -1345,8 +1350,8 @@ function StudioInner({
       const at = flow.screenToFlowPosition({ x: clientX, y: clientY });
 
       const over = topDropTarget(flow, at);
-      // Released back on its own node: the drag was abandoned, not aimed.
-      if (over === from.id) return;
+      // Released back on its own node included: that's a SELF-LOOP, the
+      // flow-chart retry arrow.
       if (over) {
         onConnect({ source: from.id, target: over, sourceHandle: null, targetHandle: null });
         return;
@@ -1570,7 +1575,7 @@ function StudioInner({
           // A spread keeps keys explicitly set to undefined; delete them so
           // "routing: default" and a cleared seq, date, anchor, or route
           // genuinely unset the field.
-          for (const key of ["routing", "seq", "direction", "date", "start", "end", "points"] as const) {
+          for (const key of ["routing", "seq", "direction", "startHead", "endHead", "date", "start", "end", "points"] as const) {
             if (key in patch && patch[key] === undefined) delete data[key];
           }
           // The edge's own routing changed (or was cleared) — recompute what
@@ -3227,6 +3232,43 @@ function StudioInner({
                 >
                   <div className="as-menu__label">Text</div>
                   <div className="as-menu__hint">A free-floating annotation</div>
+                </button>
+                <div className="as-menu__sep" role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  onClick={() => {
+                    addNode("terminator");
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">Start / End</div>
+                  <div className="as-menu__hint">Flow-chart terminator (stadium)</div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  onClick={() => {
+                    addNode("decision");
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">Decision</div>
+                  <div className="as-menu__hint">Flow-chart branch (diamond) — label its edges yes/no</div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  onClick={() => {
+                    addNode("io");
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">Input / Output</div>
+                  <div className="as-menu__hint">Flow-chart I/O (parallelogram)</div>
                 </button>
                 <button
                   type="button"
@@ -4956,6 +4998,44 @@ function EdgeInspector({
           <option value="both">↔</option>
           <option value="none">—</option>
         </select>
+        <select
+          className="as-select"
+          value={data.startHead ?? "default"}
+          onChange={(event) => {
+            const value = event.target.value;
+            onPatch(edge.id, {
+              startHead: value === "default" ? undefined : (value as EdgeHead),
+            });
+          }}
+          aria-label="Start glyph"
+          title="Glyph at the source end — default follows the direction setting"
+        >
+          <option value="default">tail: default</option>
+          {EDGE_HEADS.map((head) => (
+            <option key={head} value={head}>
+              tail: {head}
+            </option>
+          ))}
+        </select>
+        <select
+          className="as-select"
+          value={data.endHead ?? "default"}
+          onChange={(event) => {
+            const value = event.target.value;
+            onPatch(edge.id, {
+              endHead: value === "default" ? undefined : (value as EdgeHead),
+            });
+          }}
+          aria-label="End glyph"
+          title="Glyph at the target end — default follows the direction setting"
+        >
+          <option value="default">head: default</option>
+          {EDGE_HEADS.map((head) => (
+            <option key={head} value={head}>
+              head: {head}
+            </option>
+          ))}
+        </select>
         <input
           className="as-input as-inspector__seq"
           type="number"
@@ -5109,7 +5189,7 @@ function EdgeInspector({
             type="button"
             className="as-btn"
             onClick={() => onPatch(edge.id, { points: undefined })}
-            title="Remove the waypoints this line bends through (drag or double-click the line to add one)"
+            title="Remove the waypoints this line bends through (drag the line to bend it; double-click edits the label)"
           >
             Clear route ({data.points.length})
           </button>

@@ -67,6 +67,7 @@ function mountEdge(
     selected = true,
     targetData = {} as Record<string, unknown>,
     extraEdges = [] as Array<Record<string, unknown>>,
+    selfLoop = false,
   } = {},
 ) {
   const ctx: StudioContextValue = {
@@ -89,7 +90,7 @@ function mountEdge(
           defaultNodes={[NODE("a", 0, 0), NODE("b", 300, 0, targetData), NODE("c", 300, 300)]}
           defaultEdges={
             [
-              { id: "e1", source: "a", target: "b", type: "labeled", data, selected },
+              { id: "e1", source: "a", target: selfLoop ? "a" : "b", type: "labeled", data, selected },
               ...extraEdges,
             ] as never[]
           }
@@ -187,15 +188,40 @@ describe("drag-to-bend", () => {
     expect(requestCommit).not.toHaveBeenCalled();
   });
 
-  it("still inserts a waypoint on double-click", async () => {
+  it("snaps a dragged bend onto the endpoints' reference lines", async () => {
+    const { container } = mountEdge();
+    await waitFor(() => expect(container.querySelector(".as-edge__hit")).toBeTruthy());
+    const hit = container.querySelector(".as-edge__hit")!;
+
+    // Both attachments sit at y=25; releasing 4px off snaps level with them,
+    // and the guide line shows while the snap holds.
+    fireEvent.pointerDown(hit, { pointerId: 1, clientX: 200, clientY: 25, button: 0 });
+    fireEvent.pointerMove(hit, { pointerId: 1, clientX: 200, clientY: 120 });
+    fireEvent.pointerMove(hit, { pointerId: 1, clientX: 210, clientY: 29 });
+    expect(container.querySelector(".as-edge__guide")).toBeTruthy();
+    fireEvent.pointerUp(hit, { pointerId: 1 });
+
+    expect(theEdge().data.points).toEqual([[210, 25]]);
+    expect(container.querySelector(".as-edge__guide")).toBeNull();
+  });
+
+  it("double-click edits the label inline — bending is the drag gesture", async () => {
     const { container } = mountEdge();
     await waitFor(() => expect(container.querySelector(".as-edge__hit")).toBeTruthy());
     const hit = container.querySelector(".as-edge__hit")!;
 
     fireEvent.doubleClick(hit, { clientX: 200, clientY: 25 });
+    // No waypoint was born — the editor was.
+    expect(theEdge().data.points).toBeUndefined();
+    const input = container.querySelector(".as-edge__labeledit") as HTMLInputElement;
+    expect(input).toBeTruthy();
 
-    expect(theEdge().data.points).toEqual([[200, 25]]);
+    fireEvent.change(input, { target: { value: "publishes" } });
+    fireEvent.blur(input);
+
+    expect(theEdge().data.label).toBe("publishes");
     expect(requestCommit).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".as-edge__labeledit")).toBeNull();
   });
 });
 
@@ -261,7 +287,7 @@ describe("endpoint handles", () => {
     expect(theEdge().data.endField).toBeUndefined();
   });
 
-  it("treats a drop on the far endpoint's node as a pin, never a self-loop", async () => {
+  it("dropping an end on its own source turns the edge into a self-loop", async () => {
     const { container } = mountEdge();
     await waitFor(() =>
       expect(container.querySelectorAll(".as-edge__endpoint")).toHaveLength(2),
@@ -273,9 +299,31 @@ describe("endpoint handles", () => {
     fireEvent.pointerMove(endHandle, { pointerId: 1, clientX: 50, clientY: 25 });
     fireEvent.pointerUp(endHandle, { pointerId: 1 });
 
-    expect(theEdge().target).toBe("b");
-    // The pointer sat far to b's left, so the pin lands on b's left face.
-    expect(theEdge().data.end).toEqual({ side: "left", t: 0.5 });
+    // A retry arrow: a→a, drawn as a loop. Validation keeps it now.
+    expect(theEdge().target).toBe("a");
+    expect(theEdge().data.end).toBeUndefined();
+    expect(requestCommit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("end glyphs", () => {
+  it("draws the chosen glyphs — the arrow filled, hollow ones stroked", async () => {
+    // UML aggregation: hollow diamond at the source of a plain forward edge.
+    const { container } = mountEdge(edgeData({ startHead: "diamond" }));
+    await waitFor(() => expect(container.querySelector(".as-edge__arrow")).toBeTruthy());
+    // The default forward arrow still points at the target…
+    expect(container.querySelectorAll(".as-edge__arrow")).toHaveLength(1);
+    // …and the diamond strokes like the (also hollow) crow's feet.
+    expect(container.querySelectorAll(".as-edge__crow")).toHaveLength(1);
+  });
+
+  it("renders a self-loop with its arrowhead", async () => {
+    const { container } = mountEdge(edgeData(), { selfLoop: true });
+    await waitFor(() => expect(container.querySelector(".as-edge__stroke")).toBeTruthy());
+    expect(container.querySelectorAll(".as-edge__arrow")).toHaveLength(1);
+    const d = container.querySelector(".as-edge__stroke")!.getAttribute("d")!;
+    // Out the right face of node a (0,0)-(100,50), back into its top.
+    expect(d.startsWith("M 100 15")).toBe(true);
   });
 });
 

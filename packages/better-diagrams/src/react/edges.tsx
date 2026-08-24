@@ -18,12 +18,19 @@
  *     it on another node to re-attach the edge there
  */
 import { memo, useCallback, useRef, useState } from "react";
-import { useInternalNode, useReactFlow, type Edge, type EdgeProps } from "@xyflow/react";
+import {
+  EdgeLabelRenderer,
+  useInternalNode,
+  useReactFlow,
+  type Edge,
+  type EdgeProps,
+} from "@xyflow/react";
 import {
   anchorFromPoint,
   cardinalityMarker,
   crowsFootPath,
   edgeGeometryFor,
+  edgeHeadPath,
   endLabelInset,
   nearestTOnCurve,
   startAngle,
@@ -65,6 +72,20 @@ function insertionIndex(
   return points.length;
 }
 
+/** How close (px) a dragged waypoint must come to a reference line to snap. */
+const SNAP_TOL = 6;
+
+/** The nearest reference within snapping distance, or nothing. */
+function snapAxis(v: number, refs: readonly number[]): number | null {
+  let best: number | null = null;
+  for (const r of refs) {
+    if (Math.abs(v - r) <= SNAP_TOL && (best === null || Math.abs(v - r) < Math.abs(v - best))) {
+      best = r;
+    }
+  }
+  return best;
+}
+
 export const LabeledEdge = memo(function LabeledEdge({
   id,
   source,
@@ -88,6 +109,13 @@ export const LabeledEdge = memo(function LabeledEdge({
     y: number;
     drop: string | null;
   } | null>(null);
+  /** Inline label editor open (double-click on the line or its label). */
+  const [editingLabel, setEditingLabel] = useState(false);
+  /**
+   * Alignment guides while a waypoint drags: the reference lines the dragged
+   * point is currently snapped to, drawn as dashed hints.
+   */
+  const [guides, setGuides] = useState<{ x?: number; y?: number } | null>(null);
   // A stand-in for other edges — collapse-rerouted, or a scoped view's
   // projection of a connection crossing the level. `fromReactFlow` strips
   // both, so any edit made through one would be silently discarded: offer
@@ -193,19 +221,29 @@ export const LabeledEdge = memo(function LabeledEdge({
 
   const onWaypointPointerDown = useCallback(
     (index: number) => (event: React.PointerEvent<SVGCircleElement>) => {
-      if (readOnly || synthetic) return;
+      if (readOnly || synthetic || !s || !t) return;
       event.stopPropagation();
       const element = event.currentTarget;
       element.setPointerCapture(event.pointerId);
+      // Alignment references, fixed at grab time: the two attachment points
+      // and every OTHER waypoint. Level runs are what make a route look tidy.
+      const grabGeo = edgeGeometryFor(data?.routingResolved, s, t, data?.labelT ?? 0.5, specOf(s, t));
+      const o = grabGeo.at(0);
+      const others = (data?.points ?? []).filter((_, i) => i !== index);
+      const refsX = [Math.round(o.x), Math.round(grabGeo.tip.x), ...others.map((p) => p[0])];
+      const refsY = [Math.round(o.y), Math.round(grabGeo.tip.y), ...others.map((p) => p[1])];
       let moved = false;
       const move = (e: PointerEvent) => {
         const point = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+        const sx = snapAxis(Math.round(point.x), refsX);
+        const sy = snapAxis(Math.round(point.y), refsY);
+        setGuides(sx !== null || sy !== null ? { ...(sx !== null ? { x: sx } : {}), ...(sy !== null ? { y: sy } : {}) } : null);
         moved = true;
         setEdges((edges) =>
           edges.map((edge) => {
             if (edge.id !== id) return edge;
             const pts = [...((edge.data as DiagramEdgeData | undefined)?.points ?? [])];
-            pts[index] = [Math.round(point.x), Math.round(point.y)];
+            pts[index] = [sx ?? Math.round(point.x), sy ?? Math.round(point.y)];
             return { ...edge, data: { ...edge.data, points: pts } };
           }),
         );
@@ -214,12 +252,13 @@ export const LabeledEdge = memo(function LabeledEdge({
         element.releasePointerCapture(event.pointerId);
         element.removeEventListener("pointermove", move as EventListener);
         element.removeEventListener("pointerup", up);
+        setGuides(null);
         if (moved) requestCommit();
       };
       element.addEventListener("pointermove", move as EventListener);
       element.addEventListener("pointerup", up);
     },
-    [readOnly, synthetic, screenToFlowPosition, setEdges, id, requestCommit],
+    [readOnly, synthetic, s, t, data, screenToFlowPosition, setEdges, id, requestCommit],
   );
 
   const removeWaypoint = useCallback(
@@ -275,6 +314,11 @@ export const LabeledEdge = memo(function LabeledEdge({
   const colorClass = data?.diffState ? `as-edge--${data.diffState}` : `as-edge--c-${data?.color ?? "slate"}`;
   const dash = EDGE_DASH[data?.style ?? "solid"]?.join(" ") || undefined;
   const direction = data?.direction ?? "forward";
+  // Which glyph each end draws. `direction` sets the defaults; an explicit
+  // head renders regardless of it — a diamond-at-source aggregation keeps its
+  // plain forward arrow at the target.
+  const endHead = data?.endHead ?? (direction !== "none" ? "arrow" : undefined);
+  const startHead = data?.startHead ?? (direction === "both" ? "arrow" : undefined);
   const hasLabel = !!data?.label || !!data?.tech || !!data?.seq || !!data?.date;
   // Stacked under whatever else the label group is showing, so a connection
   // that lands later says so without displacing its own name.
@@ -293,24 +337,14 @@ export const LabeledEdge = memo(function LabeledEdge({
     ? geo.at(tAtDistance(geo, endLabelInset(endMarker), true))
     : null;
 
-  // Double-click on the line bends it there: a new waypoint, inserted between
-  // its neighbours by position along the curve so the route stays ordered.
-  const onPathDoubleClick = (event: React.MouseEvent<SVGPathElement>) => {
+  // Double-click means WORDS: name the connection right where it is —
+  // bending is the drag gesture, as in every mainstream diagrammer.
+  // (Double-click on a waypoint dot still removes that dot.)
+  const onPathDoubleClick = (event: React.MouseEvent<SVGElement>) => {
     if (readOnly || synthetic) return;
     event.stopPropagation();
     event.preventDefault();
-    const existing = data?.points ?? [];
-    // Validation caps the stored route at MAX_EDGE_POINTS; inserting past it
-    // would draw a bend the document silently loses on the next round-trip.
-    if (existing.length >= MAX_EDGE_POINTS) return;
-    const point = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    const index = insertionIndex(geo, existing, point);
-    setPoints([
-      ...existing.slice(0, index),
-      [Math.round(point.x), Math.round(point.y)],
-      ...existing.slice(index),
-    ]);
-    requestCommit();
+    setEditingLabel(true);
   };
 
   // Drag anywhere on the line to bend it there: past a small threshold the
@@ -330,14 +364,25 @@ export const LabeledEdge = memo(function LabeledEdge({
     // reshapes under the pointer once the new point starts moving.
     const grabGeo = geo;
     const basePoints = data?.points ?? [];
+    // The new point snaps softly to the attachment points' and other
+    // waypoints' reference lines — level runs read as deliberate.
+    const refsX = [Math.round(origin.x), Math.round(grabGeo.tip.x), ...basePoints.map((p) => p[0])];
+    const refsY = [Math.round(origin.y), Math.round(grabGeo.tip.y), ...basePoints.map((p) => p[1])];
     let bendIndex = -1;
 
     const move = (e: PointerEvent) => {
       if (bendIndex < 0 && Math.hypot(e.clientX - from.x, e.clientY - from.y) < 4) return;
       const point = screenToFlowPosition({ x: e.clientX, y: e.clientY });
       if (bendIndex < 0) bendIndex = insertionIndex(grabGeo, basePoints, point);
+      const sx = snapAxis(Math.round(point.x), refsX);
+      const sy = snapAxis(Math.round(point.y), refsY);
+      setGuides(
+        sx !== null || sy !== null
+          ? { ...(sx !== null ? { x: sx } : {}), ...(sy !== null ? { y: sy } : {}) }
+          : null,
+      );
       const pts: Array<[number, number]> = [...basePoints];
-      pts.splice(bendIndex, 0, [Math.round(point.x), Math.round(point.y)]);
+      pts.splice(bendIndex, 0, [sx ?? Math.round(point.x), sy ?? Math.round(point.y)]);
       setEdges((edges) =>
         edges.map((edge) => (edge.id === id ? { ...edge, data: { ...edge.data, points: pts } } : edge)),
       );
@@ -349,6 +394,7 @@ export const LabeledEdge = memo(function LabeledEdge({
       element.removeEventListener("pointermove", move as EventListener);
       element.removeEventListener("pointerup", up);
       element.removeEventListener("pointercancel", up);
+      setGuides(null);
       if (bendIndex >= 0) requestCommit();
     };
     element.addEventListener("pointermove", move as EventListener);
@@ -368,7 +414,6 @@ export const LabeledEdge = memo(function LabeledEdge({
       const element = event.currentTarget;
       element.setPointerCapture(event.pointerId);
       const ownId = which === "start" ? source : target;
-      const otherId = which === "start" ? target : source;
       const ownNode = which === "start" ? sourceNode : targetNode;
       const ownBox = which === "start" ? s : t;
       // A point-backed end IS its node: released in space the gesture moves
@@ -384,9 +429,10 @@ export const LabeledEdge = memo(function LabeledEdge({
         const point = screenToFlowPosition({ x: e.clientX, y: e.clientY });
         last = point;
         const over = nodeAt(point);
-        // Dropping on the far node would make a self-loop, which validation
-        // deletes outright — treat it like empty canvas instead.
-        drop = over && over !== ownId && over !== otherId ? over : null;
+        // Dropping on the far node makes a SELF-LOOP — dragging an edge's end
+        // onto its own source is how an ordinary arrow becomes a retry loop.
+        // Only this end's own node stays a pin, never a re-attachment.
+        drop = over && over !== ownId ? over : null;
         setDragEnd({ which, x: point.x, y: point.y, drop });
       };
       // Unlike the bend, nothing is written until release — so a cancelled
@@ -492,26 +538,41 @@ export const LabeledEdge = memo(function LabeledEdge({
         style={{ pointerEvents: "none" }}
       />
       {/* An end that states its cardinality draws the symbol INSTEAD of an
-          arrowhead: a relationship reads by its crow's foot, and stacking both
-          at one point says two different things about the same end. */}
-      {direction !== "none" && !endMarker ? (
-        <polygon
-          className={`as-edge__arrow ${colorClass}`}
-          points="0,-4.5 9,0 0,4.5"
-          fill={color}
-          transform={`translate(${geo.tip.x} ${geo.tip.y}) rotate(${(geo.angle * 180) / Math.PI})`}
-          style={{ pointerEvents: "none" }}
-        />
-      ) : null}
-      {direction === "both" && !startMarker ? (
-        <polygon
-          className={`as-edge__arrow ${colorClass}`}
-          points="0,-4.5 9,0 0,4.5"
-          fill={color}
-          transform={`translate(${origin.x} ${origin.y}) rotate(${(startAngle(geo) * 180) / Math.PI})`}
-          style={{ pointerEvents: "none" }}
-        />
-      ) : null}
+          end glyph: a relationship reads by its crow's foot, and stacking both
+          at one point says two different things about the same end. Otherwise
+          `direction` decides which ends carry a glyph by default and
+          startHead/endHead choose which one — filled glyphs theme like the
+          classic arrow, hollow ones like the (also stroked) crow's feet. */}
+      {endHead && !endMarker
+        ? (() => {
+            const glyph = edgeHeadPath(endHead, geo.tip, geo.angle);
+            return (
+              <path
+                className={`${glyph.filled ? "as-edge__arrow" : "as-edge__crow"} ${colorClass}`}
+                d={glyph.d}
+                fill={glyph.filled ? color : "none"}
+                stroke={glyph.filled ? undefined : color}
+                strokeWidth={glyph.filled ? undefined : 1.8}
+                style={{ pointerEvents: "none" }}
+              />
+            );
+          })()
+        : null}
+      {startHead && !startMarker
+        ? (() => {
+            const glyph = edgeHeadPath(startHead, origin, startAngle(geo));
+            return (
+              <path
+                className={`${glyph.filled ? "as-edge__arrow" : "as-edge__crow"} ${colorClass}`}
+                d={glyph.d}
+                fill={glyph.filled ? color : "none"}
+                stroke={glyph.filled ? undefined : color}
+                strokeWidth={glyph.filled ? undefined : 1.8}
+                style={{ pointerEvents: "none" }}
+              />
+            );
+          })()
+        : null}
       {endMarker ? (
         <path
           className={`as-edge__crow ${colorClass}`}
@@ -602,8 +663,85 @@ export const LabeledEdge = memo(function LabeledEdge({
             );
           })
         : null}
-      {hasLabel ? (
-        <g style={{ pointerEvents: readOnly ? "none" : "all" }} onPointerDown={onLabelPointerDown}>
+      {/* Alignment guides while a waypoint drags: dashed reference lines the
+          dragged point is snapped to. */}
+      {guides
+        ? (() => {
+            const xs = [origin.x, geo.tip.x, ...(data?.points ?? []).map((p) => p[0])];
+            const ys = [origin.y, geo.tip.y, ...(data?.points ?? []).map((p) => p[1])];
+            const pad = 30;
+            return (
+              <>
+                {guides.x !== undefined ? (
+                  <line
+                    className="as-edge__guide"
+                    x1={guides.x}
+                    y1={Math.min(...ys) - pad}
+                    x2={guides.x}
+                    y2={Math.max(...ys) + pad}
+                  />
+                ) : null}
+                {guides.y !== undefined ? (
+                  <line
+                    className="as-edge__guide"
+                    x1={Math.min(...xs) - pad}
+                    y1={guides.y}
+                    x2={Math.max(...xs) + pad}
+                    y2={guides.y}
+                  />
+                ) : null}
+              </>
+            );
+          })()
+        : null}
+      {editingLabel && !readOnly ? (
+        <EdgeLabelRenderer>
+          {/* HTML, not SVG text: a real caret, selection, and IME. Positioned
+              on the label point in FLOW coordinates — the renderer's layer
+              carries the viewport transform. */}
+          <input
+            className="as-edge__labeledit nodrag nopan"
+            style={{
+              position: "absolute",
+              transform: `translate(-50%, -50%) translate(${geo.label.x}px, ${geo.label.y - 5}px)`,
+              pointerEvents: "all",
+            }}
+            value={data?.label ?? ""}
+            autoFocus
+            onFocus={(event) => event.target.select()}
+            onChange={(event) => {
+              const value = event.target.value;
+              setEdges((edges) =>
+                edges.map((edge) =>
+                  edge.id === id ? { ...edge, data: { ...edge.data, label: value } } : edge,
+                ),
+              );
+            }}
+            onBlur={() => {
+              setEditingLabel(false);
+              // Live edits went through setEdges only — record them so the
+              // label is undoable and reaches a controlled host.
+              requestCommit();
+            }}
+            onKeyDown={(event) => {
+              // The editor's global shortcuts must not fire from the caret;
+              // Enter and Escape both finish (blur commits).
+              event.stopPropagation();
+              if (event.key === "Enter" || event.key === "Escape") {
+                (event.target as HTMLInputElement).blur();
+              }
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            aria-label="Edge label"
+          />
+        </EdgeLabelRenderer>
+      ) : null}
+      {hasLabel && !editingLabel ? (
+        <g
+          style={{ pointerEvents: readOnly ? "none" : "all" }}
+          onPointerDown={onLabelPointerDown}
+          onDoubleClick={onPathDoubleClick}
+        >
           {data?.seq ? (
             <>
               <circle

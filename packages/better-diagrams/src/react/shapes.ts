@@ -7,11 +7,13 @@
  * geometry. This is the same parity discipline as `floatingEdgeGeometry`.
  *
  * Shapes:
- *   card     — the default rounded rectangle (screen renders it in CSS; the
- *              path exists for the exporters)
- *   person   — C4 actor: head circle over a round-shouldered body
- *   cylinder — data store: elliptical lid over a barrel
- *   pipe     — queue/bus: stadium (fully rounded ends)
+ *   card          — the default rounded rectangle (screen renders it in CSS;
+ *                   the path exists for the exporters)
+ *   person        — C4 actor: head circle over a round-shouldered body
+ *   cylinder      — data store: elliptical lid over a barrel
+ *   pipe          — queue/bus AND flow-chart terminator: stadium ends
+ *   diamond       — flow-chart decision
+ *   parallelogram — flow-chart input/output
  */
 import type { NodeShape } from "./registry-types";
 
@@ -60,6 +62,18 @@ export function silhouettePath(shape: NodeShape, x: number, y: number, w: number
         `M ${x + r} ${y} H ${x + w - r} A ${r} ${r} 0 0 1 ${x + w - r} ${y + h} ` +
         `H ${x + r} A ${r} ${r} 0 0 1 ${x + r} ${y} Z`;
       return { body, contentTop: 0, contentInlinePad: r * 0.55 };
+    }
+    case "diamond": {
+      const cx = x + w / 2;
+      const cy = y + h / 2;
+      const body = `M ${cx} ${y} L ${x + w} ${cy} L ${cx} ${y + h} L ${x} ${cy} Z`;
+      // The corners are gone: keep the text in the middle band.
+      return { body, contentTop: h * 0.16, contentInlinePad: w * 0.18 };
+    }
+    case "parallelogram": {
+      const skew = Math.min(18, w * 0.16);
+      const body = `M ${x + skew} ${y} H ${x + w} L ${x + w - skew} ${y + h} H ${x} Z`;
+      return { body, contentTop: 0, contentInlinePad: skew * 0.7 };
     }
     default: {
       const r = 8;

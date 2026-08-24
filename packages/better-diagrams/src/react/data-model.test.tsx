@@ -121,7 +121,8 @@ describe("export", () => {
       edges: [{ ...MODEL.edges[0], startLabel: undefined, endLabel: "owns" }],
     });
     const edge = emitTemplate(roles, createRegistry()).cmds.filter((c) => c.tag?.id === "edge:fk1");
-    expect(edge.some((c) => c.op === "poly")).toBe(true);
+    // The arrowhead is a FILLED path (hollow glyphs and crow's feet stroke).
+    expect(edge.some((c) => c.op === "path" && "fill" in c && !!c.fill)).toBe(true);
   });
 
   it("leaves an ordinary diagram's output untouched", () => {

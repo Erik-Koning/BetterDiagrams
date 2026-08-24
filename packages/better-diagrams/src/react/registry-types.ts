@@ -14,7 +14,7 @@ import type { LintRuleDef } from "../contract/lint";
 // ─── Node kinds ──────────────────────────────────────────────────────────────
 
 /** Node silhouette, C4-style: shape conveys the element's nature at a glance. */
-export type NodeShape = "card" | "person" | "cylinder" | "pipe";
+export type NodeShape = "card" | "person" | "cylinder" | "pipe" | "diamond" | "parallelogram";
 
 export interface NodeKindDef {
   /** Shown in the inspector dropdown and as the small caps label on the node. */

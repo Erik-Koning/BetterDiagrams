@@ -41,6 +41,7 @@ import {
   cardinalityMarker,
   crowsFootPath,
   edgeGeometryFor,
+  edgeHeadPath,
   endLabelInset,
   startAngle,
   tAtDistance,
@@ -212,8 +213,6 @@ export function roundedRectPath(x: number, y: number, w: number, h: number, r: n
 function ellipsePath(cx: number, cy: number, rx: number, ry: number): string {
   return `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`;
 }
-
-const ARROW_POINTS = "0,-4.5 9,0 0,4.5";
 
 // ─── Layout pass (visibility + collapse, shared with nothing else) ───────────
 
@@ -510,15 +509,28 @@ export function emitTemplate(
 
     cmds.push({ op: "path", d: geo.path, stroke: color, strokeWidth: 1.8, dash: EDGE_DASH[edge.style] });
     // An end stating its cardinality draws the crow's-foot symbol instead of
-    // an arrowhead — the same rule the canvas applies, from the same parser.
+    // an end glyph — the same rule the canvas applies, from the same parser.
+    // Otherwise, the same glyph resolution as the canvas: `direction` decides
+    // which ends carry one by default, startHead/endHead choose which.
     const startMarker = cardinalityMarker(edge.startLabel);
     const endMarker = cardinalityMarker(edge.endLabel);
-    if (direction !== "none" && !endMarker) {
-      cmds.push({ op: "poly", points: ARROW_POINTS, fill: color, tx: geo.tip.x, ty: geo.tip.y, rotateDeg: (geo.angle * 180) / Math.PI });
+    const endHead = edge.endHead ?? (direction !== "none" ? "arrow" : undefined);
+    const startHead = edge.startHead ?? (direction === "both" ? "arrow" : undefined);
+    if (endHead && !endMarker) {
+      const glyph = edgeHeadPath(endHead, geo.tip, geo.angle);
+      cmds.push(
+        glyph.filled
+          ? { op: "path", d: glyph.d, fill: color }
+          : { op: "path", d: glyph.d, stroke: color, strokeWidth: 1.8, round: true },
+      );
     }
-    if (direction === "both" && !startMarker) {
-      const origin = geo.at(0);
-      cmds.push({ op: "poly", points: ARROW_POINTS, fill: color, tx: origin.x, ty: origin.y, rotateDeg: (startAngle(geo) * 180) / Math.PI });
+    if (startHead && !startMarker) {
+      const glyph = edgeHeadPath(startHead, geo.at(0), startAngle(geo));
+      cmds.push(
+        glyph.filled
+          ? { op: "path", d: glyph.d, fill: color }
+          : { op: "path", d: glyph.d, stroke: color, strokeWidth: 1.8, round: true },
+      );
     }
     if (endMarker) {
       cmds.push({ op: "path", d: crowsFootPath(endMarker, geo.tip, geo.angle), stroke: color, strokeWidth: 1.8, round: true });

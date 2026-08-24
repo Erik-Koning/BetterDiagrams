@@ -109,16 +109,17 @@ describe("validateTemplate", () => {
     expect(t.nodes.find((n) => n.id === "leaf")!.parentId).toBe("inner");
   });
 
-  it("drops edges that reference missing nodes, and self-edges", () => {
+  it("drops edges that reference missing nodes, but keeps self-loops", () => {
     const t = validateTemplate({
       nodes: [node({ id: "a" }), node({ id: "b" })],
       edges: [
         { id: "ok", source: "a", target: "b" },
         { id: "ghost", source: "a", target: "nope" },
+        // A retry arrow: source === target is legal flow-chart vocabulary.
         { id: "self", source: "a", target: "a" },
       ],
     });
-    expect(t.edges.map((e) => e.id)).toEqual(["ok"]);
+    expect(t.edges.map((e) => e.id)).toEqual(["ok", "self"]);
   });
 
   it("clamps labelT and defaults bad edge styles", () => {

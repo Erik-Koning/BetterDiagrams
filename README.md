@@ -294,9 +294,11 @@ straight runs direct point-to-point strokes, the classic flow-chart line. The sa
 function drives the screen and every image export, so a routed edge exports exactly as drawn.
 
 In the editor, shaping a line is direct manipulation: **drag anywhere on it** to bend it there —
-a waypoint is born under the pointer and follows it until release (double-click does the same
-without the drag). Drag a waypoint to move it, double-click the dot to remove it, or *Clear
-route* in the inspector. On a selected edge, **drag an endpoint handle** to pin exactly where
+a waypoint is born under the pointer and follows it until release, snapping softly to the
+endpoints' and other waypoints' reference lines (dashed guides show while a snap holds — level
+runs read as deliberate). **Double-click the line or its label to edit the label inline.**
+Drag a waypoint to move it, double-click the dot to remove it, or *Clear route* in the
+inspector. On a selected edge, **drag an endpoint handle** to pin exactly where
 the line attaches — anywhere along any side of its box — or drop it on another node to
 re-attach the edge there. The inspector's anchor pickers do the same by side (`start: auto`
 follows wherever the line is going, exactly the old behaviour).
@@ -554,7 +556,10 @@ The schema and editor cover C4's notational essentials:
 | **Edge tech label** — C4's `[JSON/HTTPS]` | `edge.tech`, second line under the label |
 | **Numbered dynamic flows** | `edge.seq` renders a circled step badge; C4-PlantUML export prefixes `1.` |
 | **Direction** — `forward` / `both` / `none` arrowheads | `edge.direction` |
-| **Routing** — curved / right-angle / straight | `meta.routing` sets the diagram default (Arrange ▾ → connector picker); `edge.routing` overrides per edge |
+| **End glyphs** — solid arrow, open chevron, hollow diamond (aggregation), circle, bar | `edge.startHead` / `edge.endHead`; an explicit `startHead` renders even on a `forward` edge. Drawn back from the attachment so nodes can't cover them |
+| **Self-loops** | `source === target` draws a retry arrow out one face and back into an adjacent one; drag an edge's endpoint onto its own source to make one |
+| **Routing** — curved / right-angle / straight | `meta.routing` sets the diagram default (Arrange ▾ → connector picker); `edge.routing` overrides per edge. Right-angle elbows are rounded |
+| **Flow-chart kinds** — `decision` (diamond), `terminator` (stadium), `io` (parallelogram) | Insert ▾ or the kind picker; Mermaid exports each by its shape |
 | **Collapsible groups** | ▾ on a group collapses it to a chip; contents hide, their edges re-route to the chip, and the stored size survives expand. Never destructive — collapse is view state that rides the undo stack |
 | **Tags + filter** | `node.tags`; the View ▾ tag filter dims non-matching nodes — dim only, never hide, so the filter can't touch what persists |
 | **Doc links** | `node.url` renders an ↗ affix (a real link in read-only) |

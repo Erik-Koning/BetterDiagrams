@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRegistry as resolveRegistry } from "./create-registry";
 import { kindDef, iconPaths, zoneFill, zoneInk } from "./registry-types";
+import { silhouettePath } from "./shapes";
 import { LIGHT_THEME, themeToStyle } from "./theme";
 import {
   emitTemplate,
@@ -52,7 +53,7 @@ describe("resolveRegistry", () => {
 
   it("orders kinds: built-ins, then cloud packs, then extensions", () => {
     const r = resolveRegistry({ nodeKinds: { zeta: {}, alpha: {} } });
-    expect(r.kindOrder.slice(0, 10)).toEqual([
+    expect(r.kindOrder.slice(0, 13)).toEqual([
       "service",
       "database",
       "queue",
@@ -62,10 +63,13 @@ describe("resolveRegistry", () => {
       "table",
       "group",
       "text",
+      "decision",
+      "terminator",
+      "io",
       "point",
     ]);
     // The cloud pack kinds sit between built-ins and extensions.
-    expect(r.kindOrder[10]).toBe("aws-lambda");
+    expect(r.kindOrder[13]).toBe("aws-lambda");
     expect(r.kindOrder.slice(-2)).toEqual(["zeta", "alpha"]);
   });
 
@@ -151,6 +155,32 @@ describe("text exporters", () => {
     expect(out).toContain("-.->");
     // Annotations are not flowchart nodes.
     expect(out).not.toContain("note[");
+  });
+
+  it("exports flow-chart kinds by their shapes, self-loops included", () => {
+    const doc = {
+      version: 1 as const,
+      nodes: [
+        { id: "start", label: "Start", kind: "terminator", icon: "none", description: "", parentId: null, x: 0, y: 0, w: 160, h: 56 },
+        { id: "ask", label: "Approved?", kind: "decision", icon: "none", description: "", parentId: null, x: 0, y: 150, w: 170, h: 100 },
+        { id: "form", label: "Read form", kind: "io", icon: "none", description: "", parentId: null, x: 300, y: 150, w: 180, h: 70 },
+      ],
+      edges: [
+        { id: "e1", source: "start", target: "ask", label: "", style: "solid" as const, color: "slate" as const },
+        { id: "e2", source: "ask", target: "ask", label: "retry", style: "solid" as const, color: "slate" as const },
+      ],
+    };
+    const mermaid = renderTemplateToMermaid(doc);
+    expect(mermaid).toContain('start(["Start"])');
+    expect(mermaid).toContain('ask{"Approved?"}');
+    expect(mermaid).toContain('form[/"Read form"/]');
+    // The retry loop survives as a self-edge.
+    expect(mermaid).toContain("ask -->|retry| ask");
+  });
+
+  it("cuts flow-chart silhouettes the canvas and exports share", () => {
+    expect(silhouettePath("diamond", 0, 0, 100, 60).body).toBe("M 50 0 L 100 30 L 50 60 L 0 30 Z");
+    expect(silhouettePath("parallelogram", 0, 0, 100, 60).body).toBe("M 16 0 H 100 L 84 60 H 0 Z");
   });
 
   it("exports a dangling arrow as a dot in mermaid, and not at all in C4", () => {
@@ -371,8 +401,10 @@ describe("text exporters", () => {
     const svg = renderTemplateToSvg(EXAMPLE_TEMPLATE, resolveRegistry());
     expect(svg).toMatch(/^<svg /);
     expect(svg.trimEnd()).toMatch(/<\/svg>$/);
-    // One arrowhead polygon per edge.
-    expect(svg.match(/<polygon/g)).toHaveLength(EXAMPLE_TEMPLATE.edges.length);
+    // One arrowhead per edge: a filled path whose apex sits at the target's
+    // attachment (heads draw BACKWARD from the tip so nodes can't cover them).
+    const heads = svg.match(/<path d="M [^"]+ Z" fill="#(?!0)[0-9a-f]{6}"\/>/g) ?? [];
+    expect(heads.length).toBeGreaterThanOrEqual(EXAMPLE_TEMPLATE.edges.length);
   });
 });
 

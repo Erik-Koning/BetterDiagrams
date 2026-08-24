@@ -1611,6 +1611,30 @@
   opacity: 1;
 }
 
+/* Alignment guides while a waypoint drags: dashed reference lines. */
+.as-edge__guide {
+  stroke: var(--as-accent);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* The inline edge-label editor (double-click the line). Styled like the
+   label it replaces, plus a caret-worthy field. */
+.as-edge__labeledit {
+  font-family: var(--as-mono);
+  font-size: 11px;
+  color: var(--as-text);
+  background: var(--as-surface);
+  border: 1px solid var(--as-accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  width: 140px;
+  text-align: center;
+  outline: none;
+}
+
 /* Sequence badge for dynamic (numbered-flow) diagrams. */
 .as-edge__seq {
   stroke: var(--as-bg);

@@ -11,7 +11,13 @@ import {
   validateTemplate,
   type DiagramTemplate,
 } from "./schema";
-import { anchorFromPoint, edgeGeometryFor, floatingEdgeGeometry, type Box } from "./geometry";
+import {
+  anchorFromPoint,
+  edgeGeometryFor,
+  edgeHeadPath,
+  floatingEdgeGeometry,
+  type Box,
+} from "./geometry";
 import { copyFragment, pasteFragment } from "./clipboard";
 import { autoLayout } from "./layout";
 import { scaleZoneMembers } from "./schema";
@@ -112,21 +118,35 @@ describe("spec geometry", () => {
     expect(best).toBeLessThan(1);
   });
 
-  it("keeps every orthogonal segment axis-aligned through free waypoints", () => {
+  it("keeps every orthogonal segment axis-aligned, elbows rounded, through free waypoints", () => {
     const geo = edgeGeometryFor("orthogonal", source, target, 0.5, { points: [[180, 170], [260, 90]] });
-    const pts = geo.path
-      .split(/[ML]/)
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((s) => s.split(" ").map(Number));
-    expect(pts.length).toBeGreaterThan(3);
-    for (let i = 1; i < pts.length; i++) {
-      const straight = pts[i][0] === pts[i - 1][0] || pts[i][1] === pts[i - 1][1];
-      expect(straight, `segment ${i} is diagonal`).toBe(true);
+    // The path is straight strokes joined by small Q arcs at the elbows.
+    // Every STRAIGHT stroke must stay axis-aligned; each arc's control point
+    // is the sharp corner itself, so the route still turns exactly at the
+    // waypoints it was given.
+    expect(geo.path).toContain("Q"); // the elbows are rounded
+    const tokens = geo.path.match(/[MLQ][^MLQ]+/g)!;
+    let prev: number[] | null = null;
+    const passes: number[][] = [];
+    for (const token of tokens) {
+      const nums = token.slice(1).trim().replace(/,/g, " ").split(/\s+/).map(Number);
+      if (token[0] === "Q") {
+        // The arc's control point IS the sharp corner it rounds.
+        passes.push([nums[0], nums[1]]);
+        prev = [nums[2], nums[3]];
+        continue;
+      }
+      const pt = [nums[0], nums[1]];
+      if (token[0] === "L" && prev) {
+        const straight = pt[0] === prev[0] || pt[1] === prev[1];
+        expect(straight, `stroke to ${pt} is diagonal`).toBe(true);
+      }
+      passes.push(pt);
+      prev = pt;
     }
-    // And it still passes through the waypoints.
-    expect(pts).toContainEqual([180, 170]);
-    expect(pts).toContainEqual([260, 90]);
+    // A waypoint is either a rounded corner (Q control) or sits mid-stroke.
+    expect(passes).toContainEqual([180, 170]);
+    expect(passes).toContainEqual([260, 90]);
   });
 
   it("chooses the exit side toward the first waypoint, not the far box", () => {
@@ -235,6 +255,91 @@ describe("straight routing", () => {
 
   it("is advertised to the model alongside the other routings", () => {
     expect(DIAGRAM_SYSTEM_PROMPT).toContain("curved|orthogonal|straight");
+  });
+});
+
+describe("self-loops", () => {
+  const box: Box = { x: 100, y: 100, width: 120, height: 60 };
+
+  it("routes a loop out the right face and back into the top", () => {
+    const geo = edgeGeometryFor("curved", box, box, 0.5);
+    const o = geo.at(0);
+    expect(o.x).toBe(220);
+    expect(o.y).toBeCloseTo(100 + 60 * 0.3, 5);
+    expect(geo.tip).toEqual({ x: 100 + 120 * 0.7, y: 100 });
+    // The loop genuinely leaves the box in between.
+    let escaped = false;
+    for (let i = 0; i <= 100; i++) {
+      const q = geo.at(i / 100);
+      if (q.x > 225 || q.y < 95) escaped = true;
+    }
+    expect(escaped).toBe(true);
+  });
+
+  it("reaches the canvas — kept by validation AND by toReactFlow", () => {
+    const t = doc({ target: "a" });
+    expect(t.edges[0].target).toBe("a");
+    const rf = toReactFlow(t);
+    expect(rf.edges).toHaveLength(1);
+    expect(rf.edges[0].source).toBe("a");
+    expect(rf.edges[0].target).toBe("a");
+  });
+
+  it("collapse still swallows internal wiring — only REROUTED self-maps drop", () => {
+    const t = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "g", label: "G", kind: "group", icon: "none", description: "", parentId: null, collapsed: true, x: 0, y: 0, w: 400, h: 300 },
+        { id: "in1", label: "1", kind: "service", icon: "box", description: "", parentId: "g", x: 20, y: 60, w: 170, h: 76 },
+        { id: "in2", label: "2", kind: "service", icon: "box", description: "", parentId: "g", x: 20, y: 160, w: 170, h: 76 },
+      ],
+      edges: [
+        { id: "internal", source: "in1", target: "in2", label: "", style: "solid", color: "slate" },
+      ],
+    });
+    // The internal edge maps chip→chip: a view artifact, never a loop.
+    expect(toReactFlow(t).edges).toHaveLength(0);
+  });
+
+  it("honours pinned anchors and waypoints on a loop", () => {
+    const geo = edgeGeometryFor("curved", box, box, 0.5, {
+      start: { side: "bottom" },
+      end: { side: "left", t: 0.5 },
+      points: [[60, 220]],
+    });
+    expect(geo.at(0)).toEqual({ x: 136, y: 160 });
+    expect(geo.tip).toEqual({ x: 100, y: 130 });
+    let best = Infinity;
+    for (let i = 0; i <= 100; i++) {
+      const q = geo.at(i / 100);
+      best = Math.min(best, Math.hypot(q.x - 60, q.y - 220));
+    }
+    expect(best).toBeLessThan(1);
+  });
+});
+
+describe("end glyphs (edgeHeadPath)", () => {
+  it("draws the classic arrow backward from the attachment — nodes can't cover it", () => {
+    const { d, filled } = edgeHeadPath("arrow", { x: 100, y: 50 }, 0);
+    expect(filled).toBe(true);
+    // Travelling +x into the box at (100,50): the whole glyph stays at x ≤ 100.
+    expect(d).toBe("M 100 50 L 91 45.5 L 91 54.5 Z");
+  });
+
+  it("strokes the hollow glyphs", () => {
+    for (const head of ["open", "diamond", "circle", "bar"] as const) {
+      expect(edgeHeadPath(head, { x: 0, y: 0 }, 0).filled).toBe(false);
+    }
+  });
+
+  it("validates, stores, and round-trips explicit heads — junk is dropped", () => {
+    const t = doc({ startHead: "diamond", endHead: "wiggly" });
+    expect(t.edges[0].startHead).toBe("diamond");
+    expect("endHead" in t.edges[0]).toBe(false);
+    const rf = toReactFlow(t);
+    expect(rf.edges[0].data.startHead).toBe("diamond");
+    const back = fromReactFlow(rf.nodes, rf.edges, { meta: t.meta });
+    expect(JSON.stringify(back)).toBe(JSON.stringify(t));
   });
 });
 
