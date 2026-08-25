@@ -32,10 +32,11 @@ import {
   fieldListTop,
   resolveRouting,
   type DiagramEdge,
+  stackLevels,
   type DiagramNode,
   type DiagramTemplate,
 } from "../contract/schema";
-import { zoneOutline, type DiagramZone } from "../contract/zones";
+import { zoneChipRadius, zoneCornerRadius, zoneOutline, type DiagramZone } from "../contract/zones";
 import { dateToDay, effectiveNodeDates, formatDiagramDate, isOverdue, laterDate } from "../contract/timeline";
 import {
   cardinalityMarker,
@@ -51,6 +52,13 @@ import { seqBadgeOffset, silhouettePath, teamColor } from "./shapes";
 import { kindDef, iconPaths, providerDef, zoneInk, type ResolvedRegistry } from "./registry-types";
 
 export const PAD = 48;
+
+/** Half the icon box plus the card's padding: where a pinned icon centres. */
+const ICON_INSET = 20;
+
+/** The container frame's corner, and therefore its name chip's outer corner. */
+const GROUP_RADIUS = 10;
+
 export const GRID = 24;
 
 // ─── Palette ─────────────────────────────────────────────────────────────────
@@ -186,6 +194,14 @@ type RawDrawCmd =
       anchor?: "start" | "middle" | "end";
       /** Knock a bg-coloured rect out behind the text (edge labels over lines). */
       knockout?: { color: string; padX: number; height: number };
+      /**
+       * A halo stroked BEHIND the glyphs, the `paint-order: stroke` the canvas
+       * uses on edge text. Unlike `knockout` it hugs the letters instead of
+       * filling a box, which is what edge labels need now that they paint over
+       * the cards they cross — a page-coloured rectangle on a node reads as a
+       * hole punched in it.
+       */
+      halo?: { color: string; width: number };
     }
   | { op: "grid"; x: number; y: number; w: number; h: number; step: number; color: string };
 
@@ -207,6 +223,63 @@ export function roundedRectPath(x: number, y: number, w: number, h: number, r: n
     `V ${y + h - rad} A ${rad} ${rad} 0 0 1 ${x + w - rad} ${y + h} ` +
     `H ${x + rad} A ${rad} ${rad} 0 0 1 ${x} ${y + h - rad} ` +
     `V ${y + rad} A ${rad} ${rad} 0 0 1 ${x + rad} ${y} Z`
+  );
+}
+
+/**
+ * A rectangle with a radius per corner — CSS's `border-radius: a b c d`, in
+ * path form.
+ *
+ * The label chips that sit ON a container's corner need this: the chip's
+ * outer corner has to trace the SAME arc as the frame it overlaps, or the two
+ * curves cross and the chip reads as a sticker that missed. A uniform radius
+ * cannot express "10 here, square there, 6 on the inside corner", which is
+ * exactly what those chips are (see .as-group__label / .as-zone__header).
+ */
+function roundedRectCorners(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  corners: { tl?: number; tr?: number; br?: number; bl?: number },
+): string {
+  const want = {
+    tl: Math.max(0, corners.tl ?? 0),
+    tr: Math.max(0, corners.tr ?? 0),
+    br: Math.max(0, corners.br ?? 0),
+    bl: Math.max(0, corners.bl ?? 0),
+  };
+  // CSS's own overlap rule: shrink ALL radii by one factor until no edge is
+  // asked for more than its length. Capping each corner at half the box
+  // instead would clip a deliberately large corner that its edge can afford —
+  // an 18px corner on a 22px-tall chip is fine when the corner below it is
+  // square, and that case is precisely the chip tracing a zone's boundary.
+  const ratio = (edge: number, a: number, b: number) => (a + b > 0 ? edge / (a + b) : Infinity);
+  const f = Math.min(
+    1,
+    ratio(w, want.tl, want.tr),
+    ratio(w, want.bl, want.br),
+    ratio(h, want.tl, want.bl),
+    ratio(h, want.tr, want.br),
+  );
+  const tl = want.tl * f;
+  const tr = want.tr * f;
+  const br = want.br * f;
+  const bl = want.bl * f;
+  // A square corner needs no command at all: the previous H/V already left
+  // the pen exactly there.
+  const arc = (r: number, ex: number, ey: number) =>
+    r > 0 ? `A ${r} ${r} 0 0 1 ${ex} ${ey} ` : "";
+  return (
+    `M ${x + tl} ${y} H ${x + w - tr} ` +
+    arc(tr, x + w, y + tr) +
+    `V ${y + h - br} ` +
+    arc(br, x + w - br, y + h) +
+    `H ${x + bl} ` +
+    arc(bl, x, y + h - bl) +
+    `V ${y + tl} ` +
+    arc(tl, x + tl, y) +
+    "Z"
   );
 }
 
@@ -337,6 +410,46 @@ export function emitTemplate(
     for (let i = start; i < cmds.length; i++) cmds[i].tag ??= { id, ...(day !== undefined ? { day } : {}) };
   };
 
+  /**
+   * Stacking bands — the export half of the canvas z-index policy (see
+   * STACK_BAND). A node sitting ON another node — inside its box, or
+   * overlapping most of it — paints in a later band, and so do the edges
+   * attached to it, so a stacked card is never visible with its own wiring
+   * buried under the card it sits on. Container
+   * frames are excluded: they are the band edges already travel over, so
+   * nesting in a group lifts nothing.
+   *
+   * Commands are emitted in one pass and MOVED afterwards rather than the
+   * loops running once per band: each element's commands are the contiguous
+   * tail of `cmds` at the moment it finishes (that is what `stamp` relies on
+   * too), so splicing that tail into a bucket costs one line per element and
+   * keeps every tag with the command it belongs to.
+   */
+  const levels = stackLevels(
+    placed
+      .filter(({ node }) => {
+        const def = kindDef(registry, node.kind);
+        return !def.container || node.collapsed;
+      })
+      .map(({ node, box }) => ({ id: node.id, box })),
+  );
+  const bandOf = (id: string) => levels.get(id) ?? 0;
+  const deferred = new Map<number, DrawCmd[]>();
+  /** Edge text, held back for the final pass — nothing may cover a label. */
+  const labelCmds: DrawCmd[] = [];
+  const defer = (band: number, start: number) => {
+    if (band <= 0) return;
+    const chunk = cmds.splice(start);
+    const bucket = deferred.get(band);
+    if (bucket) bucket.push(...chunk);
+    else deferred.set(band, chunk);
+  };
+  /** Stamp a leaf and file it under its band — every exit of the leaf loop. */
+  const endLeaf = (start: number, node: DiagramNode) => {
+    stamp(start, `node:${node.id}`, dayOf(nodeDates.get(node.id)));
+    defer(bandOf(node.id), start);
+  };
+
   // Background + dot grid.
   cmds.push({
     op: "path",
@@ -368,7 +481,7 @@ export function emitTemplate(
         ? ellipsePath(zone.x + zone.w / 2, zone.y + zone.h / 2, zone.w / 2, zone.h / 2)
         : polygon
           ? `M ${polygon.map(([px, py]) => `${px} ${py}`).join(" L ")} Z`
-          : roundedRectPath(zone.x, zone.y, zone.w, zone.h, zone.shape === "rounded" ? 18 : 2);
+          : roundedRectPath(zone.x, zone.y, zone.w, zone.h, zoneCornerRadius(zone.shape));
     // No outline AND no fill leaves nothing to draw — skip rather than emit a
     // no-op path that would pollute the HTML player's tagged groups.
     if (outlined || filled) {
@@ -401,7 +514,9 @@ export function emitTemplate(
     const chipW = approxTextWidth(label, 11, "mono") + 26;
     cmds.push({
       op: "path",
-      d: roundedRectPath(zone.x, zone.y, chipW, 22, 6),
+      // Same rule as the group chip: the outer corner is the zone's own, so
+      // the header sits ON the boundary rather than beside it.
+      d: roundedRectCorners(zone.x, zone.y, chipW, 22, { tl: zoneChipRadius(zone), br: 8 }),
       fill: ink,
       fillAlpha: 0.22,
       stroke: ink,
@@ -457,7 +572,7 @@ export function emitTemplate(
       frameOutline === "dashed" ? [6, 5] : frameOutline === "dotted" ? [2, 4] : undefined;
     cmds.push({
       op: "path",
-      d: roundedRectPath(box.x, box.y, box.width, box.height, 10),
+      d: roundedRectPath(box.x, box.y, box.width, box.height, GROUP_RADIUS),
       // The default tint is the neutral surface wash groups have always used;
       // an ink-derived tint appears only once the node stores a colour.
       ...(node.fill === false
@@ -471,7 +586,13 @@ export function emitTemplate(
         : { stroke: frameInk, strokeWidth: 1.2, ...(frameDash ? { dash: frameDash } : {}) }),
     });
     const chipW = Math.max(60, approxTextWidth(node.label, 11, "mono") + 18);
-    cmds.push({ op: "path", d: roundedRectPath(box.x, box.y, chipW, 22, 6), fill: palette.surface2 });
+    cmds.push({
+      op: "path",
+      // border-radius: 10px 0 6px 0 — the top-left is the FRAME's radius, so
+      // the two curves lie on top of each other instead of crossing.
+      d: roundedRectCorners(box.x, box.y, chipW, 22, { tl: GROUP_RADIUS, br: 6 }),
+      fill: palette.surface2,
+    });
     cmds.push({ op: "text", x: box.x + 9, y: box.y + 15, text: node.label, size: 11, font: "mono", color: palette.textDim });
     // Beside the boundary's name chip, in the same order the editor's group
     // label renders them: date first, then the owning team.
@@ -539,6 +660,11 @@ export function emitTemplate(
       cmds.push({ op: "path", d: crowsFootPath(startMarker, geo.at(0), startAngle(geo)), stroke: color, strokeWidth: 1.8, round: true });
     }
 
+    // Everything from here down is TEXT the edge carries, and it all paints
+    // in the final pass — above every card, as it does on the canvas (see
+    // .as-edge__labellayer). The commands stay contiguous so the whole run
+    // can be moved in one splice below.
+    const labelStart = cmds.length;
     if (edge.seq) {
       const cx = geo.label.x - seqBadgeOffset(edge.label);
       cmds.push({ op: "circle", cx, cy: geo.label.y - 9, r: 8, fill: color, stroke: palette.bg, strokeWidth: 1.5 });
@@ -554,7 +680,7 @@ export function emitTemplate(
         font: "mono",
         color: palette.textDim,
         anchor: "middle",
-        knockout: { color: palette.bg, padX: 4, height: 15 },
+        halo: { color: palette.bg, width: 4 },
       });
     }
     if (edge.tech) {
@@ -568,7 +694,7 @@ export function emitTemplate(
         color: palette.textDim,
         alpha: 0.8,
         anchor: "middle",
-        knockout: { color: palette.bg, padX: 3, height: 11 },
+        halo: { color: palette.bg, width: 3 },
       });
     }
     // Cardinality, a fixed distance in from each box — near the end it
@@ -589,7 +715,7 @@ export function emitTemplate(
         weight: 600,
         color: palette.text,
         anchor: "middle",
-        knockout: { color: palette.bg, padX: 3, height: 13 },
+        halo: { color: palette.bg, width: 3.5 },
       });
     }
     if (edge.date) {
@@ -603,7 +729,7 @@ export function emitTemplate(
         color: palette.textDim,
         alpha: 0.7,
         anchor: "middle",
-        knockout: { color: palette.bg, padX: 3, height: 11 },
+        halo: { color: palette.bg, width: 3 },
       });
     }
     stamp(
@@ -611,6 +737,12 @@ export function emitTemplate(
       `edge:${edge.id}`,
       dayOf(laterDate(edge.date, laterDate(nodeDates.get(edge.source), nodeDates.get(edge.target)))),
     );
+    // Text first — it is the tail of this edge's commands, so lifting it out
+    // leaves the line and its glyphs as the tail for the band splice below.
+    labelCmds.push(...cmds.splice(labelStart));
+    // The higher end wins: a line into a stacked node has to clear the card
+    // that node sits on, or the node is visible and its wiring is not.
+    defer(Math.max(bandOf(edge.source), bandOf(edge.target)), edgeStart);
   }
 
   // Leaves, annotations, and collapsed-container chips — everything edges
@@ -632,7 +764,7 @@ export function emitTemplate(
         stroke: palette.bg,
         strokeWidth: 1,
       });
-      stamp(leafStart, `node:${node.id}`, dayOf(nodeDates.get(node.id)));
+      endLeaf(leafStart, node);
       continue;
     }
 
@@ -655,7 +787,7 @@ export function emitTemplate(
         const shift = node.date ? dateChipW(node.date) + 6 : 0;
         pushTeamPill(node.team, box.x + box.width - teamPillW(node.team) - 8 - shift, box.y + (box.height - 16) / 2);
       }
-      stamp(leafStart, `node:${node.id}`, dayOf(nodeDates.get(node.id)));
+      endLeaf(leafStart, node);
       continue;
     }
 
@@ -675,16 +807,36 @@ export function emitTemplate(
         });
       }
       const lines = wrapText(node.label, size, "sans", box.width - pad * 2, Math.max(1, Math.floor(box.height / (size + 5))));
+      const top = box.y + (boxed ? 6 : 0);
       lines.forEach((line, i) =>
-        cmds.push({ op: "text", x: box.x + pad, y: box.y + (boxed ? 6 : 0) + size + i * (size + 5), text: line, size, font: "sans", color: palette.text }),
+        cmds.push({ op: "text", x: box.x + pad, y: top + size + i * (size + 5), text: line, size, font: "sans", color: palette.text }),
+      );
+      // The note's description, as a dim sub-line under its sentence —
+      // .as-annotation__desc on the canvas, 0.85em of the note's own size.
+      const descSize = Math.max(9, Math.round(size * 0.85));
+      const descLines = node.description
+        ? wrapText(node.description, descSize, "sans", box.width - pad * 2, 3)
+        : [];
+      const descTop = top + lines.length * (size + 5) + 3;
+      descLines.forEach((line, i) =>
+        cmds.push({
+          op: "text",
+          x: box.x + pad,
+          y: descTop + descSize + i * (descSize + 4),
+          text: line,
+          size: descSize,
+          font: "sans",
+          color: palette.textDim,
+        }),
       );
       if (node.date) {
         // Under the last line of the note, clamped inside the box so a long
         // annotation can't push the chip past its own outline.
-        const below = box.y + (boxed ? 6 : 0) + lines.length * (size + 5) + 2;
+        const below =
+          (descLines.length ? descTop + descLines.length * (descSize + 4) : top + lines.length * (size + 5)) + 2;
         pushDateChip(node.date, box.x + pad, Math.min(below, box.y + box.height - 17));
       }
-      stamp(leafStart, `node:${node.id}`, dayOf(nodeDates.get(node.id)));
+      endLeaf(leafStart, node);
       continue;
     }
 
@@ -736,10 +888,19 @@ export function emitTemplate(
     const icon = iconPaths(registry, node.icon);
     const textX = box.x + sil.contentInlinePad + (icon ? 50 : 14);
     const contentMidY = box.y + cTop + (box.height - cTop) / 2;
+    // Icon and text share one flex line on the canvas, so the icon follows
+    // the node's vertical alignment too — centred by default, pinned to the
+    // padding edge when the text is (records included, which pin to the top).
+    const iconMidY =
+      node.fields?.length || node.textVAlign === "top"
+        ? box.y + cTop + ICON_INSET
+        : node.textVAlign === "bottom"
+          ? box.y + box.height - ICON_INSET
+          : contentMidY;
     if (icon) {
       cmds.push({
         op: "path",
-        d: roundedRectPath(box.x + sil.contentInlinePad + 12, contentMidY - 14, 28, 28, 7),
+        d: roundedRectPath(box.x + sil.contentInlinePad + 12, iconMidY - 14, 28, 28, 7),
         fill: def.accent,
         fillAlpha: 0.13,
       });
@@ -750,7 +911,7 @@ export function emitTemplate(
           stroke: def.accent,
           strokeWidth: 1.8,
           round: true,
-          transform: { tx: box.x + sil.contentInlinePad + 17.5, ty: contentMidY - 8.5, scale: 17 / 24 },
+          transform: { tx: box.x + sil.contentInlinePad + 17.5, ty: iconMidY - 8.5, scale: 17 / 24 },
         });
       }
     }
@@ -787,19 +948,28 @@ export function emitTemplate(
       ? wrapText(node.description, 10.5, "sans", textW, rows.length ? 1 : node.wrap ? 4 : 2)
       : [];
 
-    // Vertical placement moves the whole text block inside the box. Record
-    // nodes are excluded: their rows sit at offsets a field-anchored edge also
-    // computes, so shifting them would leave every foreign-key line pointing
-    // between columns. (The canvas agrees — .as-node--record pins to the top.)
+    // Vertical placement moves the whole text block inside the box.
+    //
+    // The offsets below (16 for the eyebrow, 31 for the title, 45+ for the
+    // description) are measured from the TOP of the content area — `blockH`
+    // is exactly where that block ends — so `top` is the un-shifted layout
+    // and the other two push down into the slack beneath it. The canvas says
+    // the same thing with one flex line: `.as-node` centres its children,
+    // `--valign-top`/`--valign-bottom` swap that for flex-start/flex-end.
+    //
+    // Record nodes are excluded: their rows sit at offsets a field-anchored
+    // edge also computes, so shifting them would leave every foreign-key line
+    // pointing between columns. (The canvas agrees — .as-node--record pins to
+    // the top.)
     const blockH = 45 + titleOverflow + descLines.length * 13;
     const slack = Math.max(0, box.height - cTop - blockH);
     const vShift = rows.length
       ? 0
       : node.textVAlign === "top"
-        ? -slack / 2
+        ? 0
         : node.textVAlign === "bottom"
-          ? slack / 2
-          : 0;
+          ? slack
+          : slack / 2;
     const ty = (offset: number) => box.y + cTop + offset + vShift;
 
     if (status === "deprecated") {
@@ -910,13 +1080,22 @@ export function emitTemplate(
       // leaves no room, and the chip must not escape the silhouette.
       const below = rows.length
         ? listTop + rows.length * FIELD_ROW_H + 2
-        : box.y + cTop + 36 + descLines.length * 13;
+        : ty(36 + descLines.length * 13);
       pushDateChip(node.date, textX, Math.min(below, box.y + box.height - 19), isOverdue(node.date, node.status));
     }
     // Bottom-right, riding the edge — mirrors the editor's placement.
     if (node.team) pushTeamPill(node.team, box.x + box.width - teamPillW(node.team) - 6, box.y + box.height - 8);
-    stamp(leafStart, `node:${node.id}`, dayOf(nodeDates.get(node.id)));
+    endLeaf(leafStart, node);
   }
+
+  // Raised bands, in order — each bucket already holds its edges before its
+  // leaves, because that is the order they were emitted in.
+  for (const band of [...deferred.keys()].sort((a, b) => a - b)) {
+    cmds.push(...deferred.get(band)!);
+  }
+  // Then every edge label, over all of it. Only the diagram's own chrome
+  // (legend, title, version tag) paints after this.
+  cmds.push(...labelCmds);
 
   // Legend.
   if (legend.length) {
@@ -1061,6 +1240,13 @@ export function drawToCanvas(ctx: CanvasRenderingContext2D, cmds: DrawCmd[]): vo
           ctx.fillStyle = cmd.knockout.color;
           ctx.fillRect(left, cmd.y - cmd.knockout.height + 4, w, cmd.knockout.height);
         }
+        if (cmd.halo) {
+          ctx.strokeStyle = cmd.halo.color;
+          ctx.lineWidth = cmd.halo.width;
+          ctx.lineJoin = "round";
+          ctx.miterLimit = 2;
+          ctx.strokeText(cmd.text, cmd.x, cmd.y);
+        }
         ctx.fillStyle = rgba(cmd.color, cmd.alpha);
         ctx.fillText(cmd.text, cmd.x, cmd.y);
         ctx.restore();
@@ -1161,6 +1347,15 @@ export function drawToSvg(cmds: DrawCmd[], opts: { gridId?: string } = {}): stri
         ]
           .filter(Boolean)
           .join(" ");
+        // The halo is a SEPARATE stroke-only copy underneath rather than
+        // `paint-order="stroke"` on one element: paint-order is SVG 2, and a
+        // reader that ignores it would stroke 4px over 11px glyphs and render
+        // the label unreadable. Two elements say the same thing everywhere.
+        if (cmd.halo) {
+          out.push(
+            `<text x="${cmd.x}" y="${cmd.y}" ${attrs.replace(`fill="${cmd.color}"`, 'fill="none"')} stroke="${cmd.halo.color}" stroke-width="${cmd.halo.width}" stroke-linejoin="round">${esc(cmd.text)}</text>`,
+          );
+        }
         out.push(`<text x="${cmd.x}" y="${cmd.y}" ${attrs}>${esc(cmd.text)}</text>`);
         break;
       }

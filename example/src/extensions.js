@@ -34,8 +34,10 @@ export const nodeKinds = {
     icon: "cache",
   },
   // A container kind, so nodes can nest inside it exactly like a Group.
+  // Deliberately un-branded: a demo kind that named one cloud would put that
+  // cloud into every schema copied from this app, whatever the user picked.
   region: {
-    label: "AWS Region",
+    label: "Region",
     accent: "#a855f7",
     container: true,
   },
@@ -89,8 +91,15 @@ export const providers = {
   aws: { color: "#ff9d2e" },
 };
 
-/** Extra guidance appended to the generated LLM system prompt. */
+/**
+ * Extra guidance appended to the generated LLM system prompt.
+ *
+ * These rules ride along with EVERY copy, whatever clouds the user picked, so
+ * they must not name one: the cloud vocabulary comes from the scope picker,
+ * and a rule saying "we run on AWS" would quietly override an Azure
+ * selection. Keep host rules about the things the packs don't cover.
+ */
 export const promptExtraRules =
-  '- This organisation runs on AWS. Prefer the aws-* component kinds for cloud resources, "vault" for secrets management, "cache" for Redis, and wrap cloud resources in a "region" container.';
+  '- Use the custom kinds this workspace ships: "vault" for secrets management, "cache" for Redis, and wrap cloud resources in a "region" container.';
 
 export const registry = { nodeKinds, icons, exporters, providers, promptExtraRules };

@@ -896,7 +896,10 @@
   max-width: 100%;
   padding: 4px 8px;
   border: 1px solid color-mix(in srgb, var(--as-zone-color) 55%, transparent);
-  border-radius: 10px 0 8px 0;
+  /* The outer corner is the ZONE's own radius (ZoneNode sets the variable):
+     a chip curving differently from the boundary it sits on reads as a
+     sticker that missed. The inner corner is the chip's own. */
+  border-radius: var(--as-zone-radius, 10px) 0 8px 0;
   background: color-mix(in srgb, var(--as-surface) 94%, var(--as-zone-color));
   pointer-events: all;
   cursor: grab;
@@ -1414,6 +1417,17 @@
   background: color-mix(in srgb, var(--as-surface) 40%, transparent);
 }
 
+/* Sub-line under a note's sentence. Sized in `em` so it tracks the note's own
+   font size — a 26px annotation with an 11px description would read as two
+   unrelated things — and coloured with the theme's dim text, the same gray
+   `.as-node__desc` uses. */
+.as-annotation__desc {
+  margin-top: 3px;
+  font-size: 0.85em;
+  line-height: 1.3;
+  color: var(--as-text-dim);
+}
+
 .as-annotation__input {
   width: 100%;
   height: 100%;
@@ -1431,6 +1445,47 @@
 
 /* ── Edges ───────────────────────────────────────────────────────────────── */
 
+/* ── Edge labels: the topmost layer ──────────────────────────────────────── */
+
+/* A connection's NAME is the one thing that may never be covered. Lines pass
+   under cards by design (see EDGE_Z_INDEX) — and used to take their labels
+   under with them, so a label crossing a node simply vanished.
+   `.react-flow__viewport-portal` renders after the node layer and
+   `.react-flow__edgelabel-renderer` (the inline label editor) just before it;
+   both need a z-index that clears the nodes' own, which run into the stacking
+   bands and, for a selected node, SELECT_ELEVATION on top of that. */
+.as-root .react-flow__viewport-portal,
+.as-root .react-flow__edgelabel-renderer,
+.as-diffcanvas .react-flow__viewport-portal,
+.as-diffcanvas .react-flow__edgelabel-renderer {
+  z-index: 1000000;
+}
+
+/* The portal covers the whole viewport, so it must not be a hit target: only
+   the labels inside it take pointer events (they re-enable it themselves). */
+.as-root .react-flow__viewport-portal,
+.as-diffcanvas .react-flow__viewport-portal {
+  pointer-events: none;
+}
+
+/* A 0×0 window onto the flow plane: the labels inside carry absolute flow
+   coordinates, and the portal's transform is what places them. Zero-sized so
+   the svg box itself can never intercept a click meant for the canvas. */
+.as-edge__labellayer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+}
+
+/* The label is a handle on its line: along it slides the text, away from it
+   bends the line. `move` says both directions are live. */
+.as-edge__labelgroup {
+  cursor: move;
+}
+
 .as-edge__label {
   font-family: var(--as-mono);
   font-size: 11px;
@@ -1438,7 +1493,6 @@
   paint-order: stroke;
   stroke: var(--as-bg);
   stroke-width: 4px;
-  cursor: grab;
   user-select: none;
 }
 
@@ -3380,16 +3434,175 @@
   cursor: default;
 }
 
-.as-welcome__clouds {
+/* ── Cloud + resource scope picker ───────────────────────────────────────── */
+
+/* Shared by the welcome modal and the schema-copy modal: the chip row, then a
+   checklist per selected cloud. The checklists only exist once a chip is on,
+   so an unscoped copy is one glance rather than a wall of unticked boxes. */
+.as-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.as-scope__clouds {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
-.as-welcome__clouds-label {
+.as-scope__label {
   font-size: 11px;
   color: var(--as-text-dim);
   margin-right: 2px;
+}
+
+.as-scope__group {
+  margin: 0;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--as-border);
+  border-radius: 8px;
+  background: var(--as-surface-2);
+}
+
+.as-scope__legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  font-size: 11px;
+  color: var(--as-text-dim);
+}
+
+.as-scope__legend-name {
+  font-weight: 600;
+  color: var(--as-text);
+}
+
+.as-scope__count {
+  font-variant-numeric: tabular-nums;
+}
+
+.as-scope__presets {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.as-scope__preset {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--as-accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.as-scope__preset:hover {
+  text-decoration: underline;
+}
+
+/* Two or three columns of checkboxes, depending on the card's width — a
+   16-service pack is a scan, not a scroll. */
+.as-scope__rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 2px 12px;
+  margin-top: 8px;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.as-scope__row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--as-text);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.as-scope__row input {
+  accent-color: var(--as-accent);
+  cursor: pointer;
+}
+
+.as-scope__row-label {
+  white-space: nowrap;
+}
+
+/* The hint is the first thing to give up space — the label identifies the
+   service, the hint only reminds you what it is. */
+.as-scope__row-hint {
+  color: var(--as-text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* ── Schema-copy modal ───────────────────────────────────────────────────── */
+
+.as-schema-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.as-schema-copy__subtitle,
+.as-schema-copy__note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--as-text-dim);
+  line-height: 1.5;
+}
+
+.as-schema-copy__note {
+  padding: 8px 10px;
+  border: 1px dashed var(--as-border);
+  border-radius: 8px;
+}
+
+.as-schema-copy__forms {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.as-schema-copy__form-hint {
+  font-size: 11px;
+  color: var(--as-text-dim);
+}
+
+.as-schema-copy__error {
+  font-size: 12px;
+  color: var(--as-danger);
+}
+
+.as-schema-copy__footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.as-schema-copy__summary {
+  font-size: 11px;
+  color: var(--as-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.as-schema-copy__actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .as-cloud-chip {

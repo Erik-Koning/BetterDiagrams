@@ -45,6 +45,7 @@ import {
   DEFAULT_ZONE_OPACITY,
   EDGE_COLORS,
   EDGE_Z_INDEX,
+  LEAF_Z_INDEX,
   EDGE_ANCHOR_SIDES,
   EDGE_COLOR_HEX,
   EDGE_DASH,
@@ -153,8 +154,11 @@ import { KindSelect } from "./KindSelect";
 import { CLOUD_PROVIDER_IDS } from "../contract/cloud";
 import {
   cloudOptionsFor,
+  cloudResourceOptions,
   promptForCloudSelection,
   referencedProviders,
+  usedCloudResources,
+  type PromptScopeOptions,
 } from "./template-prompt";
 import { autoLayout, hasOverlaps } from "../contract/layout";
 import {
@@ -193,6 +197,13 @@ import {
 // stores it and would churn on a fresh literal every pass. See EDGE_Z_INDEX
 // for the layering bands this pins edges into.
 const DEFAULT_EDGE_OPTIONS = { zIndex: EDGE_Z_INDEX };
+
+/**
+ * How far a selected node floats above the rest. Bigger than every stacking
+ * band put together, so the node under the pointer is always the visible one
+ * — a lift of one band would only reach the things nested on top of it.
+ */
+const SELECT_ELEVATION = 100_000;
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -735,7 +746,7 @@ function StudioInner({
         width: size.w,
         height: size.h,
         style: { width: size.w, height: size.h },
-        zIndex: def.container ? 0 : 1000,
+        zIndex: def.container ? 0 : LEAF_Z_INDEX,
         selected: true,
         data: {
           label: def.annotation ? "Double-click to edit this note." : `New ${def.label}`,
@@ -1161,11 +1172,13 @@ function StudioInner({
     // selected node floats above whatever it is dragged across. Containers
     // stay put — lifting one would put its translucent body over the edges
     // pinned below the leaf band, washing out its own children's wiring.
+    // The lift clears every stacking band at once: one band's worth would
+    // merely tie a selected node with whatever is nested on top of it.
     return {
       ...view,
       nodes: view.nodes.map((n) =>
         n.selected && n.type !== "group" && n.type !== "zone"
-          ? { ...n, zIndex: (n.zIndex ?? 0) + 1000 }
+          ? { ...n, zIndex: (n.zIndex ?? 0) + SELECT_ELEVATION }
           : n,
       ),
     };
@@ -1365,7 +1378,7 @@ function StudioInner({
         width: size.w,
         height: size.h,
         style: { width: size.w, height: size.h },
-        zIndex: 1000,
+        zIndex: LEAF_Z_INDEX,
         data: {
           label: "",
           kind: "point",
@@ -1545,7 +1558,7 @@ function StudioInner({
             ...n,
             type,
             data,
-            zIndex: def.container ? 0 : 1000,
+            zIndex: def.container ? 0 : LEAF_Z_INDEX,
             ...(bodied
               ? {
                   width: bodied.w,
@@ -2187,7 +2200,7 @@ function StudioInner({
   );
 
   const promptForClouds = useCallback(
-    (clouds: readonly string[], opts?: { geometry?: boolean }) =>
+    (clouds: readonly string[], opts?: PromptScopeOptions) =>
       promptForCloudSelection(registry, clouds, opts),
     [registry],
   );
@@ -2262,6 +2275,13 @@ function StudioInner({
   // The modal's AWS/Azure/GCP toggle — labels and colors from the registry,
   // skipping any cloud an extension deleted.
   const welcomeClouds = useMemo(() => cloudOptionsFor(registry), [registry]);
+  // …and the services behind each chip, so the copied schema can be narrowed
+  // to the handful of resources the next diagram actually needs.
+  const welcomeResources = useMemo(() => cloudResourceOptions(registry), [registry]);
+  const welcomeUsedResources = useMemo(
+    () => usedCloudResources(template, registry),
+    [template, registry],
+  );
 
   const parseWelcomeJson = useCallback(
     (text: string) => parseArchitectureText(text, registryOpts(registry)),
@@ -4091,6 +4111,8 @@ function StudioInner({
             systemPromptContent={refineSystemPrompt}
             cloudProviders={welcomeClouds}
             promptForClouds={promptForClouds}
+            cloudResources={welcomeResources}
+            usedResources={welcomeUsedResources}
             initialClouds={referencedClouds}
             parse={parseWelcomeJson}
             onInsert={handleWelcomeInsert}
@@ -4595,6 +4617,16 @@ function NodeInspector({
             />
             Outline
           </label>
+          {/* A note's sentence is its label (double-click the note to edit);
+              the description is the dim sub-line under it, and this is the
+              only place to type one. */}
+          <input
+            className="as-input as-inspector__desc"
+            value={data.description}
+            placeholder="Description…"
+            onChange={(event) => onPatch(node.id, { description: event.target.value })}
+            aria-label="Node description"
+          />
         </InspectorSection>
       ) : null}
 
@@ -5364,9 +5396,14 @@ function applyTimelineView(
     nodes: nodes.map((n) => mark(n, nodeIsFuture(n.id))),
     // An endpoint check as well as the edge's own id: a collapse-rerouted edge
     // carries a synthetic id that no future set can know about.
-    edges: edges.map((e) =>
-      mark(e, future.edges.has(e.id) || nodeIsFuture(e.source) || nodeIsFuture(e.target)),
-    ),
+    edges: edges.map((e) => {
+      const isFuture =
+        future.edges.has(e.id) || nodeIsFuture(e.source) || nodeIsFuture(e.target);
+      // The label renders through a portal, outside the edge's own group, so a
+      // wrapper class alone would leave it bright — see DiagramEdgeData.future.
+      const flagged = isFuture ? { ...e, data: { ...e.data, future: true } } : e;
+      return mark(flagged, isFuture);
+    }),
   };
 }
 

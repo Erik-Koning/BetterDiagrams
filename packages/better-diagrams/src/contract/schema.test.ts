@@ -311,6 +311,32 @@ describe("buildSystemPrompt", () => {
       "- Always put the CDN first.",
     );
   });
+
+  // The unscoped prompt is what a user gets before they have said which cloud
+  // they are on. It must not answer that question for them: a concrete
+  // provider in the zone skeleton reads as "start here", and the model does.
+  it("names no cloud when the prompt is unscoped", () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).not.toContain('"provider":"azure"');
+    expect(prompt).not.toContain('"providers":["azure"]');
+    expect(prompt).not.toContain('providers:["aws"]');
+    // The zone skeleton shows the enum instead, like every other field.
+    expect(prompt).toContain('"providers":["azure|aws|gcp|onprem|k8s|saas"]');
+  });
+
+  it("points the examples at the clouds it was scoped to", () => {
+    const prompt = buildSystemPrompt({ exampleProviders: ["gcp", "aws"] });
+    expect(prompt).toContain('"providers":["gcp"],"provider":"gcp"');
+    expect(prompt).toContain('providers:["gcp"]');
+    expect(prompt).toContain('providers:["aws"]');
+    expect(prompt).not.toContain('"provider":"azure"');
+  });
+
+  it("a single scoped cloud gets the skeleton but no cross-cloud example", () => {
+    const prompt = buildSystemPrompt({ exampleProviders: ["azure"] });
+    expect(prompt).toContain('"providers":["azure"],"provider":"azure"');
+    expect(prompt).toContain("one node per provider's equivalent service");
+  });
 });
 
 /** Detect any remaining parent cycle — the invariant every consumer relies on. */

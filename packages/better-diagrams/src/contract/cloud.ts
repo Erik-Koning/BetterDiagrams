@@ -105,6 +105,33 @@ export function cloudKindIds(providers: readonly string[]): string[] {
     .flatMap((provider) => CLOUD_COMPONENTS[provider].map((component) => component.id));
 }
 
+/** One component, carrying the provider it came from — the row a picker renders. */
+export interface CloudResource extends CloudComponentDef {
+  provider: CloudProviderId;
+}
+
+/**
+ * The given providers' components as flat rows, in pack order. This is the
+ * menu behind "which resources should the schema teach?" — the caller shows
+ * them, and hands the chosen ids back as `components` below.
+ */
+export function cloudResources(providers: readonly string[]): CloudResource[] {
+  return providers
+    .filter(isCloudProviderId)
+    .flatMap((provider) => CLOUD_COMPONENTS[provider].map((component) => ({ ...component, provider })));
+}
+
+/** How much of each pack a prompt should teach. */
+export interface CloudSectionOptions {
+  /**
+   * Restrict every section to these kind ids — the "which resources" half of
+   * a scope. Absent = the provider's whole pack. A provider left with nothing
+   * gets no section at all, so an empty selection can never smuggle a cloud
+   * back in through its heading.
+   */
+  components?: readonly string[];
+}
+
 /**
  * Every cloud kind id, all providers. Part of `validateTemplate`'s base
  * vocabulary — a document that uses aws-lambda survives validation in a
@@ -116,11 +143,23 @@ export const ALL_CLOUD_KIND_IDS: readonly string[] = cloudKindIds(CLOUD_PROVIDER
  * The prompt appendix for the selected clouds — appended AFTER the base
  * system prompt, one section per provider. Teaches the model the component
  * ids and when to prefer them over the generic kinds. Empty selection ⇒ "".
+ *
+ * `opts.components` narrows each section to a chosen subset, so a prompt can
+ * teach "Azure, but only App Service, Blob, and Postgres" without inventing a
+ * second source of truth for what those services are.
  */
-export function buildCloudPromptSections(providers: readonly string[]): string {
-  const sections = providers.filter(isCloudProviderId).map((provider) => {
+export function buildCloudPromptSections(
+  providers: readonly string[],
+  opts: CloudSectionOptions = {},
+): string {
+  const wanted = opts.components ? new Set(opts.components) : null;
+  const sections = providers.filter(isCloudProviderId).flatMap((provider) => {
     const label = PROVIDER_LABEL[provider];
-    const lines = CLOUD_COMPONENTS[provider]
+    const components = wanted
+      ? CLOUD_COMPONENTS[provider].filter((component) => wanted.has(component.id))
+      : CLOUD_COMPONENTS[provider];
+    if (!components.length) return [];
+    const lines = components
       .map((component) => `  ${component.id} — ${component.label} (${component.hint})`)
       .join("\n");
     return (

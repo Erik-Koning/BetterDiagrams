@@ -249,6 +249,36 @@ describe("WelcomeModal cloud toggle", () => {
     expect(writeText).toHaveBeenCalledWith("PROMPT[aws+gcp]");
   });
 
+  it("narrows the copy to the ticked resources when the host offers them", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const promptForClouds = vi.fn(
+      (clouds: string[], opts?: { components?: readonly string[] }) =>
+        `PROMPT[${clouds.join("+")}|${(opts?.components ?? []).join(",")}]`,
+    );
+    mountModal({
+      cloudProviders: CLOUDS,
+      promptForClouds,
+      cloudResources: [
+        { id: "aws-s3", cloud: "aws", label: "S3" },
+        { id: "aws-lambda", cloud: "aws", label: "Lambda" },
+      ],
+    });
+
+    // Ticking a cloud takes all of its services…
+    await user.click(screen.getByRole("button", { name: "AWS" }));
+    expect(screen.getByLabelText(/Lambda/)).toBeChecked();
+    // …and unticking one narrows the copy without dropping the cloud.
+    await user.click(screen.getByLabelText(/Lambda/));
+    await user.click(screen.getByRole("button", { name: /Copy Schema & System Prompt/ }));
+    expect(promptForClouds).toHaveBeenCalledWith(["aws"], { components: ["aws-s3"] });
+    expect(writeText).toHaveBeenCalledWith("PROMPT[aws|aws-s3]");
+  });
+
   it("copies the base prompt when nothing is selected", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);

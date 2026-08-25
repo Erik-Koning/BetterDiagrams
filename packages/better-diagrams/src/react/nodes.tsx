@@ -494,6 +494,13 @@ export const AnnotationNode = memo(function AnnotationNode({
         ) : (
           <>
             {data.label}
+            {/* A note's description is a sub-line under its sentence — the
+                same dim gray a component card gives its own description, so
+                the two read as the same kind of remark. Editing targets the
+                label only, so it hides while the textarea is up. */}
+            {data.description ? (
+              <div className="as-annotation__desc">{data.description}</div>
+            ) : null}
             <DateChip date={data.date} inline prefix="Lands" />
           </>
         )}

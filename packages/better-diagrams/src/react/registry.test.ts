@@ -8,6 +8,7 @@ import {
   renderTemplateToC4Puml,
   renderTemplateToMermaid,
   renderTemplateToSvg,
+  DARK_EXPORT_PALETTE,
   LIGHT_EXPORT_PALETTE,
 } from "./exporters";
 import {
@@ -395,6 +396,226 @@ describe("text exporters", () => {
     // Exactly one extra command: the note's card.
     expect(boxed.cmds.length).toBe(bare.cmds.length + 1);
     expect(renderTemplateToSvg(doc(false), registry)).toContain("A note");
+  });
+
+  it("draws a note's description under its sentence, in the dim text colour", () => {
+    const doc: DiagramTemplate = {
+      version: 1,
+      nodes: [
+        { id: "n", label: "A note", kind: "text", icon: "none", description: "Reviewed 2026-Q1", parentId: null, x: 0, y: 0, w: 200, h: 60, fontSize: 13 },
+      ],
+      edges: [],
+    };
+    const registry = resolveRegistry();
+    const { cmds } = emitTemplate(doc, registry);
+    const texts = cmds.filter((c) => c.op === "text") as Extract<
+      (typeof cmds)[number],
+      { op: "text" }
+    >[];
+    const label = texts.find((c) => c.text === "A note")!;
+    const desc = texts.find((c) => c.text === "Reviewed 2026-Q1")!;
+    expect(desc).toBeTruthy();
+    // Under the sentence, smaller, and the palette's dim text — the export
+    // half of `.as-annotation__desc`.
+    expect(desc.y).toBeGreaterThan(label.y);
+    expect(desc.size).toBeLessThan(label.size!);
+    expect(desc.color).toBe(DARK_EXPORT_PALETTE.textDim);
+  });
+
+  it("draws the client kind as a plain card — no actor head", () => {
+    const doc: DiagramTemplate = {
+      version: 1,
+      nodes: [
+        { id: "c", label: "Browser", kind: "client", icon: "user", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76 },
+      ],
+      edges: [],
+    };
+    const registry = resolveRegistry();
+    expect(kindDef(registry, "client").shape).toBeUndefined();
+    // The person silhouette's head is a separate circular subpath: a card is
+    // one rounded rectangle, so the body path has a single `M`.
+    const body = (emitTemplate(doc, registry).cmds.find((c) => c.op === "path") as { d: string }).d;
+    expect(body.match(/M /g)).toHaveLength(1);
+    // The silhouette itself stays available for a registry that wants it.
+    expect(silhouettePath("person", 0, 0, 170, 76).body.match(/M /g)).toHaveLength(2);
+  });
+
+  it("paints a stacked node — and its wiring — after the card it sits on", () => {
+    // The export half of the canvas z policy: same order, one pass.
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "big", label: "Big", kind: "service", x: 0, y: 0, w: 400, h: 300 },
+        { id: "small", label: "Small", kind: "service", x: 40, y: 40, w: 170, h: 76 },
+        { id: "far", label: "Far", kind: "service", x: 700, y: 0, w: 170, h: 76 },
+      ],
+      edges: [
+        { id: "in-out", source: "small", target: "far" },
+        { id: "out-out", source: "big", target: "far" },
+      ],
+    }) as DiagramTemplate;
+    const { cmds } = emitTemplate(doc, resolveRegistry());
+    const first = (id: string) => cmds.findIndex((c) => c.tag?.id === id);
+    const last = (id: string) => cmds.map((c) => c.tag?.id).lastIndexOf(id);
+
+    // Unstacked: edges under every card, exactly as before.
+    expect(last("edge:out-out")).toBeLessThan(first("node:big"));
+    expect(last("edge:out-out")).toBeLessThan(first("node:far"));
+    // Stacked: the nested card and its line both clear the card underneath.
+    expect(first("edge:in-out")).toBeGreaterThan(last("node:big"));
+    expect(first("node:small")).toBeGreaterThan(last("edge:in-out"));
+  });
+
+  it("keeps each node's commands contiguous when a band is raised", () => {
+    // The SVG backend groups CONSECUTIVE same-tag commands — a raised band
+    // that interleaved two elements would split one of them into two groups.
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "big", label: "Big", kind: "service", x: 0, y: 0, w: 400, h: 300 },
+        { id: "small", label: "Small", kind: "service", description: "inside", x: 40, y: 40, w: 170, h: 76 },
+      ],
+      edges: [],
+    }) as DiagramTemplate;
+    const { cmds } = emitTemplate(doc, resolveRegistry());
+    const runs = cmds
+      .map((c) => c.tag?.id)
+      .filter((id, i, all) => id !== undefined && id !== all[i - 1]);
+    expect(new Set(runs).size).toBe(runs.length);
+  });
+
+  it("paints every edge label above the nodes, in its own final pass", () => {
+    // A line passes under a card by design; its NAME never does.
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "a", label: "A", kind: "service", x: 0, y: 0, w: 170, h: 76 },
+        { id: "b", label: "B", kind: "service", x: 600, y: 0, w: 170, h: 76 },
+        // Sitting on the line between them, where the label lands.
+        { id: "mid", label: "Mid", kind: "service", x: 280, y: 0, w: 170, h: 76 },
+      ],
+      edges: [{ id: "e", source: "a", target: "b", label: "calls", startLabel: "1", endLabel: "0..*" }],
+    }) as DiagramTemplate;
+    const { cmds } = emitTemplate(doc, resolveRegistry());
+    const at = (text: string) => cmds.findIndex((c) => c.op === "text" && (c as { text: string }).text === text);
+    const lastOf = (id: string) => cmds.map((c) => c.tag?.id).lastIndexOf(id);
+
+    // The line is still under the card it crosses…
+    expect(cmds.findIndex((c) => c.tag?.id === "edge:e")).toBeLessThan(lastOf("node:mid"));
+    // …while every word it carries paints after every node.
+    for (const text of ["calls", "1", "0..*"]) {
+      expect(at(text)).toBeGreaterThan(lastOf("node:mid"));
+      expect(at(text)).toBeGreaterThan(lastOf("node:b"));
+    }
+    // The edge contributes exactly two runs: its line, then its text.
+    const runs = cmds
+      .map((c) => c.tag?.id)
+      .filter((id, i, all) => id !== undefined && id !== all[i - 1]);
+    expect(runs.filter((id) => id === "edge:e")).toHaveLength(2);
+  });
+
+  it("keeps top-aligned text inside the box, whatever the node's height", () => {
+    // The bug: the shift was measured from the middle, so `top` pushed the
+    // block half the slack ABOVE the card — off the top of a tall one.
+    const card = (over: Record<string, unknown>, h: number): DiagramTemplate =>
+      validateTemplate({
+        version: 1,
+        nodes: [{ id: "c", label: "Browser", kind: "client", icon: "user", x: 0, y: 0, w: 200, h, ...over }],
+        edges: [],
+      }) as DiagramTemplate;
+    const registry = resolveRegistry();
+    const ys = (t: DiagramTemplate) =>
+      (emitTemplate(t, registry).cmds.filter((c) => c.op === "text" && c.tag?.id === "node:c") as Array<{ y: number }>).map((c) => c.y);
+
+    for (const h of [76, 160, 300]) {
+      const top = ys(card({ textVAlign: "top" }, h));
+      expect(Math.min(...top)).toBeGreaterThan(0);
+      expect(Math.max(...top)).toBeLessThan(h);
+      // Pinned to the top: the same offsets whatever the height.
+      expect(top).toEqual(ys(card({ textVAlign: "top" }, 76)));
+
+      const bottom = ys(card({ textVAlign: "bottom" }, h));
+      expect(Math.max(...bottom)).toBeLessThan(h);
+      const middle = ys(card({}, h));
+      expect(Math.min(...middle)).toBeGreaterThan(Math.min(...top));
+      expect(Math.min(...middle)).toBeLessThan(Math.min(...bottom));
+    }
+  });
+
+  it("centres a default node's text in its box, like the canvas does", () => {
+    // `.as-node` is one flex line with `align-items: center` — the block
+    // travels with the box's height rather than sitting at a fixed offset.
+    const tall = validateTemplate({
+      version: 1,
+      nodes: [{ id: "c", label: "Browser", kind: "client", icon: "user", x: 0, y: 0, w: 200, h: 200 }],
+      edges: [],
+    }) as DiagramTemplate;
+    const cmds = emitTemplate(tall, resolveRegistry()).cmds;
+    const texts = cmds.filter((c) => c.op === "text" && c.tag?.id === "node:c") as Array<{ y: number }>;
+    const blockMid = (Math.min(...texts.map((t) => t.y)) + Math.max(...texts.map((t) => t.y))) / 2;
+    expect(Math.abs(blockMid - 100)).toBeLessThan(12);
+  });
+
+  it("the label chip traces the exact corner of the container it sits on", () => {
+    // Two curves at the one corner a reader looks at first: they have to be
+    // the same curve, on canvas and in the export.
+    const doc = validateTemplate({
+      version: 1,
+      zones: [{ id: "z", label: "West", shape: "rounded", x: 0, y: 0, w: 600, h: 400, providers: ["aws"], provider: "aws" }],
+      nodes: [{ id: "g", label: "Tier", kind: "group", x: 40, y: 40, w: 400, h: 200 }],
+      edges: [],
+    }) as DiagramTemplate;
+    const paths = emitTemplate(doc, resolveRegistry()).cmds.filter(
+      (c) => c.op === "path",
+    ) as Array<{ d: string; tag?: { id: string } }>;
+    const of = (id: string) => paths.filter((c) => c.tag?.id === id).map((c) => c.d);
+
+    // The frame OPENS with its top-left arc; the chip CLOSES on it.
+    const [zoneFrame, zoneChip] = of("zone:z");
+    expect(zoneChip.endsWith("A 18 18 0 0 1 18 0 Z")).toBe(true);
+    expect(zoneFrame).toContain("A 18 18 0 0 1 18 0");
+
+    const [groupFrame, groupChip] = of("node:g");
+    expect(groupChip.endsWith("A 10 10 0 0 1 50 40 Z")).toBe(true);
+    expect(groupFrame).toContain("A 10 10 0 0 1 50 40");
+  });
+
+  it("a rect zone's chip squares off with it", () => {
+    const doc = validateTemplate({
+      version: 1,
+      zones: [{ id: "z", label: "West", shape: "rect", x: 0, y: 0, w: 600, h: 400, providers: ["aws"], provider: "aws" }],
+      nodes: [],
+      edges: [],
+    }) as DiagramTemplate;
+    const paths = emitTemplate(doc, resolveRegistry()).cmds.filter(
+      (c) => c.op === "path" && c.tag?.id === "zone:z",
+    ) as Array<{ d: string }>;
+    expect(paths[1].d.endsWith("A 2 2 0 0 1 2 0 Z")).toBe(true);
+  });
+
+  it("haloes edge text instead of boxing it — labels now paint over cards", () => {
+    // A page-coloured knockout RECT was fine while labels painted under the
+    // nodes; over one it reads as a hole punched in the card. The canvas has
+    // always used `paint-order: stroke`, and now the export does too.
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "a", label: "A", kind: "service", x: 0, y: 0, w: 170, h: 76 },
+        { id: "b", label: "B", kind: "service", x: 600, y: 0, w: 170, h: 76 },
+      ],
+      edges: [{ id: "e", source: "a", target: "b", label: "calls" }],
+    }) as DiagramTemplate;
+    const svg = renderTemplateToSvg(doc, resolveRegistry());
+    // Two elements: a stroke-only copy underneath, then the glyphs.
+    expect(svg).toMatch(
+      new RegExp(
+        `<text[^>]*fill="none"[^>]*stroke="${DARK_EXPORT_PALETTE.bg}"[^>]*>calls</text>\\s*` +
+          `<text[^>]*>calls</text>`,
+      ),
+    );
+    // And no page-coloured rectangle standing in for one.
+    const upTo = svg.slice(0, svg.indexOf(">calls<"));
+    expect(upTo.slice(-300)).not.toContain(`<rect`);
   });
 
   it("renders the whole example diagram to SVG", () => {

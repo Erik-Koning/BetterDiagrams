@@ -8,11 +8,14 @@
  * through `onInsert`. Escape and the backdrop behave like "Insert Node
  * Manually" — this can never trap the user.
  */
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BrandMark, Modal } from "./chrome";
 import { JsonCodeEditor } from "./JsonCodeEditor";
+import { CloudScopePicker, scopeFor, type CloudScope } from "./CloudScopePicker";
+import { copyText } from "./copy-text";
 import { SEQUENCE_LINT, buildArchitectureLint, type JsonDocLint } from "./schema-lint";
 import { approximateJsonFix } from "../contract/json-repair";
+import type { CloudResourceOption } from "./template-prompt";
 
 export interface WelcomeModalProps {
   kind: "architecture" | "sequence";
@@ -55,8 +58,21 @@ export interface WelcomeModalProps {
    */
   cloudProviders?: { id: string; label: string; color: string }[];
   /** Builds the prompt for the selected clouds; copy prefers it when present.
-   *  `geometry: false` asks for the content form (see `systemPromptContent`). */
-  promptForClouds?: (clouds: string[], opts?: { geometry?: boolean }) => string;
+   *  `geometry: false` asks for the content form (see `systemPromptContent`);
+   *  `components` narrows to chosen services (see `cloudResources`). */
+  promptForClouds?: (
+    clouds: string[],
+    opts?: { geometry?: boolean; components?: readonly string[] },
+  ) => string;
+  /**
+   * The services each cloud offers. Supplying them turns the cloud toggles
+   * into a two-level scope — cloud, then which of its resources the schema
+   * should teach — so a copy can carry Azure's Blob and Postgres without its
+   * other fourteen kinds. Absent ⇒ chips only, whole packs.
+   */
+  cloudResources?: CloudResourceOption[];
+  /** The open document's own cloud kinds, offered as a per-cloud preset. */
+  usedResources?: readonly string[];
   /**
    * Clouds pre-toggled at mount — the studio passes the ones the open
    * document already references, so an immediate copy describes the diagram
@@ -81,28 +97,6 @@ export interface WelcomeModalProps {
    * silently rewritten by a paste.
    */
   lockKind?: boolean;
-}
-
-/** Clipboard write with the legacy fallback for insecure contexts. */
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    try {
-      const helper = document.createElement("textarea");
-      helper.value = text;
-      helper.style.position = "fixed";
-      helper.style.opacity = "0";
-      document.body.appendChild(helper);
-      helper.select();
-      const ok = document.execCommand("copy");
-      helper.remove();
-      return ok;
-    } catch {
-      return false;
-    }
-  }
 }
 
 const ARCH_PLACEHOLDER = JSON.stringify({ version: 1, nodes: [], edges: [] }, null, 2);
@@ -187,6 +181,8 @@ export function WelcomeModal({
   lint,
   cloudProviders,
   promptForClouds,
+  cloudResources,
+  usedResources,
   initialClouds,
   parseOther,
   onInsertOther,
@@ -195,7 +191,11 @@ export function WelcomeModal({
   lockKind,
 }: WelcomeModalProps) {
   const [name, setName] = useState(defaultName);
-  const [selectedClouds, setSelectedClouds] = useState<string[]>(initialClouds ?? []);
+  // Clouds and their resources are one answer: ticking a cloud takes all of
+  // its services, and narrowing is a second, deliberate act.
+  const [scope, setScope] = useState<CloudScope>(() =>
+    scopeFor(initialClouds ?? [], cloudResources ?? []),
+  );
   const [text, setText] = useState(initialText ?? "");
   const [error, setError] = useState<string | null>(null);
   /** Lossy rescue for a failed Insert — offered, never applied on its own. */
@@ -211,21 +211,25 @@ export function WelcomeModal({
 
   const finalName = () => name.trim() || defaultName;
 
-  const toggleCloud = (id: string) =>
-    setSelectedClouds((current) =>
-      current.includes(id) ? current.filter((c) => c !== id) : [...current, id],
-    );
-
   // The content form exists only when the host supplied it — that presence
   // is what turns the copy button into a two-option hover menu.
   const contentPromptAvailable = !!(pickedKind === kind ? systemPromptContent : systemPromptOtherContent);
 
   const handleCopy = async (form: "full" | "content" = "full") => {
+    // Only pass options the caller asked for: a host that offers no resource
+    // list gets the plain `(clouds)` call it has always been handed.
+    const opts: { geometry?: boolean; components?: readonly string[] } = {};
+    if (form === "content") opts.geometry = false;
+    if (cloudResources?.length) opts.components = scope.components;
+    const scoped = () =>
+      Object.keys(opts).length
+        ? promptForClouds?.(scope.clouds, opts)
+        : promptForClouds?.(scope.clouds);
     const prompt =
       pickedKind === kind
         ? form === "content"
-          ? (promptForClouds?.(selectedClouds, { geometry: false }) ?? systemPromptContent ?? systemPrompt)
-          : (promptForClouds?.(selectedClouds) ?? systemPrompt)
+          ? (scoped() ?? systemPromptContent ?? systemPrompt)
+          : (scoped() ?? systemPrompt)
         : form === "content"
           ? (systemPromptOtherContent ?? systemPromptOther ?? systemPrompt)
           : (systemPromptOther ?? systemPrompt);
@@ -315,23 +319,13 @@ export function WelcomeModal({
         </div>
 
         {pickedKind === "architecture" && cloudProviders?.length ? (
-          <div className="as-welcome__clouds" role="group" aria-label="Cloud providers">
-            <span className="as-welcome__clouds-label">Clouds</span>
-            {cloudProviders.map((cloud) => (
-              <button
-                key={cloud.id}
-                type="button"
-                className="as-cloud-chip"
-                style={{ "--chip-color": cloud.color } as CSSProperties}
-                aria-pressed={selectedClouds.includes(cloud.id)}
-                onClick={() => toggleCloud(cloud.id)}
-                title={`Include ${cloud.label} components in the copied schema & prompt`}
-              >
-                <span className="as-cloud-chip__dot" aria-hidden="true" />
-                {cloud.label}
-              </button>
-            ))}
-          </div>
+          <CloudScopePicker
+            clouds={cloudProviders}
+            resources={cloudResources}
+            value={scope}
+            onChange={setScope}
+            usedResources={usedResources}
+          />
         ) : null}
 
         <div className="as-welcome__ctas">

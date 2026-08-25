@@ -22,10 +22,10 @@ import {
   EXAMPLE_TEMPLATE,
   EXAMPLE_ZONED_TEMPLATE,
   LIGHT_THEME,
+  SchemaCopyModal,
   SequenceStudio,
   WelcomeModal,
   buildSequencePrompt,
-  buildTemplateSystemPrompt,
   createProxyGenerator,
   parseLlmSequence,
   parseLlmTemplate,
@@ -379,15 +379,12 @@ export default function App() {
     });
   }, [updateWorkspace]);
 
-  /** Hand the active mode's schema contract to an external AI agent. */
-  const copySchema = useCallback(async () => {
-    const isSeq = active?.kind === "sequence";
-    // The architecture prompt follows the OPEN document: the clouds its zones
-    // and nodes reference contribute their component sections. Sequence has
-    // no provider vocabulary, so its prompt has nothing to tailor.
-    const text = isSeq
-      ? buildSequencePrompt()
-      : buildTemplateSystemPrompt(active?.doc ?? EMPTY_TEMPLATE, registry);
+  /** The scope dialog behind ✦ Copy schema on an architecture file. */
+  const [schemaCopyOpen, setSchemaCopyOpen] = useState(false);
+
+  /** Sequence has no provider vocabulary to scope — it copies straight away. */
+  const copySequenceSchema = useCallback(async () => {
+    const text = buildSequencePrompt();
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -400,10 +397,41 @@ export default function App() {
       document.execCommand("copy");
       area.remove();
     }
-    toast.success(`Copied the ${isSeq ? "sequence" : "architecture"} schema`, {
+    toast.success("Copied the sequence schema", {
       description: "Paste it into your AI agent to have it author this diagram type.",
     });
+  }, []);
+
+  /**
+   * Hand the active mode's schema contract to an external AI agent.
+   *
+   * Architecture files ASK first: which clouds, and which of their services,
+   * the schema should teach. The open document's own clouds seed the answer,
+   * but the copy is aimed at the diagram the user is ABOUT to ask for — which
+   * may be on a cloud this document has never mentioned.
+   */
+  const copySchema = useCallback(() => {
+    if (active?.kind === "sequence") void copySequenceSchema();
+    else setSchemaCopyOpen(true);
+  }, [active, copySequenceSchema]);
+
+  // The dialog belongs to the file it was opened over: switching to a sequence
+  // file (or deleting the last one) closes it, so the flag can't sit true and
+  // reopen the modal by itself the next time an architecture file appears.
+  useEffect(() => {
+    if (!active || active.kind === "sequence") setSchemaCopyOpen(false);
   }, [active]);
+
+  // Prompt context for the copy dialog, computed from the LIVE document at
+  // open time — the clouds it references seed the scope, and its own cloud
+  // kinds become the "in this diagram" preset.
+  const copyPromptCtx = useMemo(
+    () =>
+      schemaCopyOpen && active && active.kind !== "sequence"
+        ? templatePromptContext(active.doc, registry)
+        : null,
+    [schemaCopyOpen, active],
+  );
 
   // ── Presentation state ────────────────────────────────────────────────────
 
@@ -741,6 +769,34 @@ export default function App() {
         ) : null}
       </main>
 
+      {copyPromptCtx && active ? (
+        // Same token-carrying wrapper as the Edit-JSON modal below: library
+        // modals read --as-* tokens, which live on the studio roots.
+        <div style={{ display: "contents", ...themeToStyle(modalTheme) }}>
+          <SchemaCopyModal
+            subtitle={`Scoped for “${active.name}”. Nothing is included that you haven't ticked — leave the clouds off for a provider-neutral schema.`}
+            clouds={copyPromptCtx.cloudOptions}
+            resources={copyPromptCtx.cloudResources}
+            initialClouds={copyPromptCtx.referencedClouds}
+            usedResources={copyPromptCtx.usedResources}
+            buildPrompt={(scope, { geometry }) =>
+              copyPromptCtx.promptForClouds(scope.clouds, {
+                components: scope.components,
+                geometry,
+              })
+            }
+            onCopied={(_text, scope) =>
+              toast.success("Copied the architecture schema", {
+                description: scope.clouds.length
+                  ? `${scope.clouds.join(", ")} — ${scope.components.length} resources. Paste it into your AI agent.`
+                  : "Provider-neutral — name your cloud in your own prompt.",
+              })
+            }
+            onClose={() => setSchemaCopyOpen(false)}
+          />
+        </div>
+      ) : null}
+
       {editJsonOpen && active ? (
         // The library modal reads --as-* tokens, which live on the studio
         // roots — this wrapper carries a complete set without adding a
@@ -756,6 +812,8 @@ export default function App() {
             systemPrompt={editPromptCtx ? editPromptCtx.systemPrompt : buildSequencePrompt()}
             cloudProviders={editPromptCtx?.cloudOptions}
             promptForClouds={editPromptCtx?.promptForClouds}
+            cloudResources={editPromptCtx?.cloudResources}
+            usedResources={editPromptCtx?.usedResources}
             initialClouds={editPromptCtx?.referencedClouds}
             initialText={JSON.stringify(active.doc, null, 2)}
             parse={(text) =>

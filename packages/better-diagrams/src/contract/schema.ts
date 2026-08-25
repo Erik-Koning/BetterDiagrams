@@ -97,6 +97,15 @@ export type EdgeColor = (typeof EDGE_COLORS)[number];
 export const PROVIDER_IDS = ["azure", "aws", "gcp", "onprem", "k8s", "saas"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number] | (string & {});
 
+/**
+ * What a zone with no stated provider falls back to. Deliberately NOT a
+ * cloud: an unstated provider that resolved to one would tint the zone with
+ * that cloud's brand AND make the document "reference" a cloud nobody named —
+ * enough to pull that whole component pack into every schema copied from the
+ * document. A neutral fallback keeps silence silent.
+ */
+const NEUTRAL_PROVIDER_ID = "onprem";
+
 /** Arrowhead placement. `forward` (default) points at the target only. */
 export const EDGE_DIRECTIONS = ["forward", "both", "none"] as const;
 export type EdgeDirection = (typeof EDGE_DIRECTIONS)[number];
@@ -690,6 +699,14 @@ export interface PromptOptions {
   /** Appended verbatim — domain rules like "always place the CDN left of the ALB". */
   extraRules?: string;
   /**
+   * The providers this prompt is scoped to, used ONLY where the skeleton and
+   * the rules need a concrete provider to point at. Absent or empty leaves
+   * both spots showing the enum instead of a value, so an unscoped prompt
+   * never nudges the model toward one cloud — the caller (or the user, in
+   * their own words) supplies that.
+   */
+  exampleProviders?: readonly string[];
+  /**
    * When false, the prompt describes the CONTENT form: no node x/y/w/h, no
    * labelT, and layout rules replaced by "never emit geometry, keep ids
    * stable". Used for refine flows that merge the reply with the document's
@@ -715,9 +732,18 @@ export function buildSystemPrompt(opts: PromptOptions = {}): string {
   const shapes = ZONE_SHAPES.join("|");
   const routings = EDGE_ROUTINGS.join("|");
   const geo = opts.geometry !== false;
+  // The two spots that need a provider VALUE rather than the enum. Scoped to
+  // one or more clouds, they show those; unscoped, they fall back to the enum
+  // union and to phrasing that names no provider at all.
+  const scoped = (opts.exampleProviders ?? []).filter((p) => typeof p === "string" && p);
+  const zoneProvider = scoped[0] ?? providers;
+  const multiProviderRule =
+    scoped.length > 1
+      ? `Use it to show provider-specific services, e.g. a node with providers:["${scoped[0]}"] for the ${scoped[0]} managed database alongside its ${scoped[1]} counterpart with providers:["${scoped[1]}"].`
+      : `Use it to show provider-specific services: one node per provider's equivalent service, each carrying only its own provider id.`;
 
   return `You convert software requirements, source code, or natural-language descriptions into an architecture diagram template. Respond with ONLY compact valid JSON (no markdown fences, no commentary) matching:
-{"version":1,"meta":{"title":"Name","routing":"${routings}","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${PROVIDER_IDS[0]}"],"provider":"${PROVIDER_IDS[0]}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":"","date":"YYYY-MM-DD"}]}
+{"version":1,"meta":{"title":"Name","routing":"${routings}","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${zoneProvider}"],"provider":"${zoneProvider}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":"","date":"YYYY-MM-DD"}]}
 Rules:
 - "group" = boundary (VPC, cluster, tier, bounded context). Children set parentId${geo ? "; child x/y are RELATIVE to the group's top-left. Size groups to contain all children (+24px sides, +48px top). Children of a NON-group parent use small local coordinates starting near 0,0 (their own drilled canvas); never size the parent to contain them." : "."}
 - "text" = free annotation; put the sentence in label, fontSize 12-16${geo ? ", w~300 h~60" : ""}, no edges.
@@ -738,7 +764,7 @@ Rules:
 - Zone "color" (optional) is the OUTLINE hex; the background derives from it automatically. It may carry "/NN" percent alpha for fill strength ("#38bdf8/22"). Omit for the provider's default colour. Zone "outline" (optional): dashed for logical/planned boundaries, dotted for soft groupings, none for a pure background wash; omit for solid.
 - A zone's "providers" lists every provider it could run on; "provider" is the one shown. Use a higher "z" for a small zone that sits on top of a bigger one (e.g. a third-party SaaS island inside a cloud region).
 - Nodes reference a zone with "zoneId" — this is INDEPENDENT of parentId, so a node can be in a zone and a group at once.${geo ? " Position them so they fall inside the zone's box." : ""}
-- A node's "providers" lists which providers it exists on; it is hidden when the zone shows anything else. Omit it (or use []) for nodes present in every deployment. Use it to show provider-specific services, e.g. a node with providers:["aws"] for RDS alongside one with providers:["azure"] for Azure SQL.
+- A node's "providers" lists which providers it exists on; it is hidden when the zone shows anything else. Omit it (or use []) for nodes present in every deployment. ${multiProviderRule}
 - Use "shape":"polygon" with normalised "points":[[0,0],[1,0],[1,1]] (0..1 within the zone box) only for genuinely irregular regions; prefer "rounded".
 - ${
     geo
@@ -1061,7 +1087,9 @@ function validateZones(raw: unknown, providerSet: Set<string>): DiagramZone[] {
         ? [...new Set(z.providers.filter((p): p is string => typeof p === "string" && !!p))]
         : [];
       if (!providers.length) {
-        providers = [typeof z.provider === "string" && z.provider ? z.provider : PROVIDER_IDS[0]];
+        providers = [
+          typeof z.provider === "string" && z.provider ? z.provider : NEUTRAL_PROVIDER_ID,
+        ];
       }
       // Unknown provider ids are kept — a registry may define them, and
       // dropping them would silently destroy the author's intent.
@@ -2064,6 +2092,14 @@ export type DiagramEdgeData = {
    * (`fromReactFlow` reads named fields and this is not one of them).
    */
   diffState?: "added" | "removed" | "changed";
+  /**
+   * Set only by the timeline view pass: this edge lands after the cursor.
+   * View-only, like `diffState`. The dimming itself is a class on the edge
+   * WRAPPER, which is enough for the line — but an edge's text renders
+   * through the viewport portal, outside that wrapper, where CSS inheritance
+   * cannot reach it. The flag is how the label learns to fade with its line.
+   */
+  future?: boolean;
 };
 
 export type RFNode = {
@@ -2087,6 +2123,8 @@ export type RFEdge = {
   type: string;
   data: DiagramEdgeData;
   style: { stroke: string; strokeDasharray?: string; strokeWidth: number };
+  /** The edge's painting band — EDGE_Z_INDEX, raised by its endpoints' stack. */
+  zIndex?: number;
 };
 
 /**
@@ -2133,6 +2171,87 @@ function firstSize(...values: Array<number | string | null | undefined>): number
  * spline on top of every node it crosses.
  */
 export const EDGE_Z_INDEX = 500;
+
+/** The leaf band's base: every card paints above every edge at the same level. */
+export const LEAF_Z_INDEX = 1000;
+
+/**
+ * One stacking band. A node sitting ON another node — inside its box, or
+ * overlapping most of it — paints in the band above it, card and attached
+ * edges together, so:
+ *
+ *   … edges(0) < leaves(0) < edges(1) < leaves(1) …
+ *
+ * The gap between the two bases (500) is what keeps an edge under its OWN
+ * level's cards, and the band being wider than that is what lifts a nested
+ * node's wiring clear of the card it sits on. Without the lift, a node placed
+ * on top of another is visible but its lines vanish underneath.
+ */
+export const STACK_BAND = 1000;
+
+/** Absurd nesting shouldn't run the z-index away; 20 bands is already a lot. */
+const MAX_STACK_LEVEL = 20;
+
+/** A box in ABSOLUTE canvas coordinates, as the stacking rules see it. */
+interface StackBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * How much of the smaller box has to lie inside the bigger one before it counts
+ * as sitting ON it rather than merely touching it. Full containment is 1; a
+ * card dropped on another and left hanging over an edge is still "on" it; two
+ * neighbours whose corners graze are not.
+ */
+const SITS_ON_OVERLAP = 0.6;
+
+/**
+ * Does `over` sit on `under` — is it the one a reader sees as on top?
+ *
+ * Two conditions, both needed. `under` must be the BIGGER box: that is what
+ * makes the answer stable in one direction, and it settles identical boxes
+ * (neither sits on the other, so they tie and document order decides, exactly
+ * as before). And most of `over` must actually lie within `under`, so a small
+ * card overlapping a big one counts while two cards sharing a corner do not.
+ */
+function sitsOn(under: StackBox, over: StackBox): boolean {
+  const underArea = under.width * under.height;
+  const overArea = over.width * over.height;
+  if (overArea <= 0 || underArea <= overArea) return false;
+  const w = Math.min(under.x + under.width, over.x + over.width) - Math.max(under.x, over.x);
+  const h = Math.min(under.y + under.height, over.y + over.height) - Math.max(under.y, over.y);
+  if (w <= 0 || h <= 0) return false;
+  return w * h >= overArea * SITS_ON_OVERLAP;
+}
+
+/**
+ * How deep each box sits in the OVERLAP stack: 0 for one nothing sits under,
+ * 1 for one resting on a single card, 2 for a card resting on that, and so on.
+ *
+ * Counting what each box sits on rather than walking a tree keeps chains
+ * consistent without building one: with a on b on c, a sits on two boxes and b
+ * on one, so a paints above b paints above c whatever order they arrive in.
+ *
+ * Pass only boxes that share the leaf band — expanded container frames are a
+ * band of their own (edges cross them by design), so a node inside a group is
+ * NOT stacked for this purpose and its wiring stays where it was.
+ */
+export function stackLevels(
+  boxes: ReadonlyArray<{ id: string; box: StackBox }>,
+): Map<string, number> {
+  const levels = new Map<string, number>();
+  for (const entry of boxes) {
+    let under = 0;
+    for (const other of boxes) {
+      if (other.id !== entry.id && sitsOn(other.box, entry.box)) under += 1;
+    }
+    levels.set(entry.id, Math.min(under, MAX_STACK_LEVEL));
+  }
+  return levels;
+}
 
 /**
  * Map a validated template to React Flow nodes/edges.
@@ -2192,9 +2311,28 @@ export function toReactFlow(
   // nodes for editing, but a collapsed group is intentional viewing state.
   const collapseHidden = hiddenByCollapse(t, { containerKinds: opts.containerKinds });
 
-  const diagramNodes: RFNode[] = [...t.nodes]
+  const rendered = [...t.nodes]
     .filter((n) => !collapseHidden.has(n.id) && (!visible || showHidden || visible.nodes.has(n.id)))
-    .sort((a, b) => depthOf(a, byId) - depthOf(b, byId))
+    .sort((a, b) => depthOf(a, byId) - depthOf(b, byId));
+
+  // The overlap stack, over the leaf band only: a card dropped on another card
+  // — or a note dropped on one — paints above it, and so do its edges. Group
+  // frames are excluded on purpose: they are the band edges already travel
+  // over, so nesting in a group must not lift anything.
+  const levels = stackLevels(
+    rendered
+      .filter((n) => !containers.has(n.kind as string) || n.collapsed)
+      .map((n) => ({
+        id: n.id,
+        box: {
+          ...absolutePosition(n, byId),
+          width: n.collapsed ? COLLAPSED_SIZE.w : n.w,
+          height: n.collapsed ? COLLAPSED_SIZE.h : n.h,
+        },
+      })),
+  );
+
+  const diagramNodes: RFNode[] = rendered
     .map((n) => {
       const depth = depthOf(n, byId);
       const ghost = !!visible && !visible.nodes.has(n.id);
@@ -2246,7 +2384,10 @@ export function toReactFlow(
         // Containers must render behind their children; deeper nesting wins.
         // A collapsed container is a solid chip with no children on the
         // canvas, so it joins the leaf band and edges pass under it too.
-        zIndex: isContainer && !n.collapsed ? depth : 1000 + depth,
+        zIndex:
+          isContainer && !n.collapsed
+            ? depth
+            : LEAF_Z_INDEX + (levels.get(n.id) ?? 0) * STACK_BAND + depth,
         ...(n.locked ? { draggable: false } : {}),
         // Deliberately NOT `extent: "parent"`. That clamps a child inside its
         // container, which makes it impossible to drag a node back out of a
@@ -2300,6 +2441,13 @@ export function toReactFlow(
           source,
           target,
           type: "labeled",
+          // The higher of the two ends' bands: a line reaching a node that
+          // sits ON another card has to clear that card, or the node is
+          // visible with its wiring buried underneath. It still passes under
+          // every card in its own band.
+          zIndex:
+            EDGE_Z_INDEX +
+            Math.max(levels.get(source) ?? 0, levels.get(target) ?? 0) * STACK_BAND,
           data: {
             style: e.style,
             color: e.color,

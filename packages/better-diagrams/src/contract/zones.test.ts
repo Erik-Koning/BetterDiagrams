@@ -75,6 +75,15 @@ describe("zone validation", () => {
     expect(t.zones![0].provider).toBe("gcp");
   });
 
+  it("falls back to a NON-cloud provider when the zone names none", () => {
+    // Silence must stay silent: a zone that defaulted to a cloud would tint
+    // itself with that brand and make the document "reference" a cloud nobody
+    // chose — which is enough to pull that whole pack into a copied schema.
+    const t = validateTemplate({ zones: [zone({ providers: [], provider: "" })], nodes: [] });
+    expect(t.zones![0].providers).toEqual(["onprem"]);
+    expect(t.zones![0].provider).toBe("onprem");
+  });
+
   it("keeps registry-defined provider ids it does not recognise", () => {
     // Dropping them would silently destroy the author's intent.
     const t = validateTemplate({

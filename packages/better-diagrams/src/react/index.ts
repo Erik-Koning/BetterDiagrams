@@ -61,8 +61,18 @@ export {
 export type { ExportPalette, DrawCmd, DrawTag, Emitted } from "./draw";
 export { buildTimelineHtml, buildMultiViewHtml } from "./html-export";
 export type { ViewEntry, MultiViewHtmlOptions } from "./html-export";
-export { buildTemplateSystemPrompt, templatePromptContext } from "./template-prompt";
-export type { CloudOption, TemplatePromptContext } from "./template-prompt";
+export {
+  buildTemplateSystemPrompt,
+  templatePromptContext,
+  cloudResourceOptions,
+  usedCloudResources,
+} from "./template-prompt";
+export type {
+  CloudOption,
+  CloudResourceOption,
+  PromptScopeOptions,
+  TemplatePromptContext,
+} from "./template-prompt";
 export type { TimelineHtmlOptions } from "./html-export";
 export { silhouettePath } from "./shapes";
 export type { Silhouette } from "./shapes";
@@ -73,4 +83,8 @@ export type { Theme } from "./theme";
 export { BrandMark, DateChip, TimelineScrubber } from "./chrome";
 export { WelcomeModal } from "./WelcomeModal";
 export type { WelcomeModalProps } from "./WelcomeModal";
+export { SchemaCopyModal } from "./SchemaCopyModal";
+export type { SchemaCopyModalProps, SchemaForm } from "./SchemaCopyModal";
+export { CloudScopePicker, scopeFor, EMPTY_SCOPE } from "./CloudScopePicker";
+export type { CloudScope, CloudScopePickerProps } from "./CloudScopePicker";
 export type { StudioFile, StudioFileInit } from "./chrome";

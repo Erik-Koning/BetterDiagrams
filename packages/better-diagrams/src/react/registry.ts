@@ -73,7 +73,11 @@ export const BUILTIN_NODE_KINDS: Record<string, NodeKindDef> = {
   database: { label: "Database", fill: "#451a03", accent: "#f59e0b", text: "#fde68a", icon: "database", shape: "cylinder" },
   queue: { label: "Queue", fill: "#2e1065", accent: "#a78bfa", text: "#ddd6fe", icon: "layers", shape: "pipe" },
   gateway: { label: "Gateway", fill: "#022c22", accent: "#34d399", text: "#a7f3d0", icon: "shield" },
-  client: { label: "Client", fill: "#1e293b", accent: "#94a3b8", text: "#e2e8f0", icon: "user", shape: "person" },
+  // Plain card, not the actor silhouette: the head circle read as a glyph
+  // stuck to the box rather than as a person, and every other kind in this
+  // list says what it is with its icon. `person` stays available for a
+  // registry that wants it.
+  client: { label: "Client", fill: "#1e293b", accent: "#94a3b8", text: "#e2e8f0", icon: "user" },
   external: { label: "External", fill: "#0f172a", accent: "#64748b", text: "#cbd5e1", icon: "globe" },
   table: { label: "Table", fill: "#042f2e", accent: "#2dd4bf", text: "#99f6e4", icon: "none", record: true },
   group: { label: "Group", fill: "transparent", accent: "#475569", text: "#94a3b8", icon: "none", container: true },

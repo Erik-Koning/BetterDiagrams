@@ -225,6 +225,115 @@ describe("drag-to-bend", () => {
   });
 });
 
+describe("label layer", () => {
+  it("renders edge text into the viewport portal, above the node layer", async () => {
+    const { container } = mountEdge(edgeData({ label: "calls", startLabel: "1", endLabel: "0..*" }));
+    await waitFor(() => expect(container.querySelector(".as-edge__label")).toBeTruthy());
+
+    const portal = container.querySelector(".react-flow__viewport-portal")!;
+    expect(portal.querySelector(".as-edge__label")).toBeTruthy();
+    expect(portal.querySelectorAll(".as-edge__endlabel")).toHaveLength(2);
+    // The line itself stays where it was — under the cards, by design.
+    const edgeLayer = container.querySelector(".react-flow__edges")!;
+    expect(edgeLayer.querySelector(".as-edge__stroke")).toBeTruthy();
+    expect(edgeLayer.querySelector(".as-edge__label")).toBeNull();
+  });
+
+  it("still selects its edge when the label is clicked", async () => {
+    // Non-obvious and load-bearing: a React portal bubbles events through the
+    // REACT tree, not the DOM one, so the click still reaches React Flow's
+    // edge wrapper even though the label is rendered outside it.
+    const { container } = mountEdge(edgeData({ label: "calls" }), { selected: false });
+    await waitFor(() => expect(container.querySelector(".as-edge__label")).toBeTruthy());
+    expect(flow!.getEdges()[0].selected).toBe(false);
+    fireEvent.click(container.querySelector(".as-edge__label")!);
+    expect(flow!.getEdges()[0].selected).toBe(true);
+  });
+
+  it("fades with its line when the timeline puts the edge in the future", async () => {
+    // CSS does NOT follow the portal: `.as-future` on the edge wrapper dims
+    // the line, and the label has to be told separately.
+    const { container } = mountEdge(edgeData({ label: "calls", future: true }));
+    await waitFor(() => expect(container.querySelector(".as-edge__labellayer")).toBeTruthy());
+    expect(container.querySelector(".as-edge__labellayer")!.classList).toContain("as-future");
+
+    const { container: present } = mountEdge(edgeData({ label: "calls" }));
+    await waitFor(() => expect(present.querySelector(".as-edge__labellayer")).toBeTruthy());
+    expect(present.querySelector(".as-edge__labellayer")!.classList).not.toContain("as-future");
+  });
+
+  it("adds nothing to the portal for an edge that carries no text", async () => {
+    const { container } = mountEdge();
+    await waitFor(() => expect(container.querySelector(".as-edge__hit")).toBeTruthy());
+    expect(container.querySelector(".as-edge__labellayer")).toBeNull();
+  });
+});
+
+describe("dragging the label", () => {
+  /** The label group: pointer events on the text bubble to its handler. */
+  const labelOf = (container: HTMLElement) => container.querySelector(".as-edge__label")!;
+
+  it("slides the label along the line without bending it", async () => {
+    const { container } = mountEdge(edgeData({ label: "calls" }));
+    await waitFor(() => expect(labelOf(container)).toBeTruthy());
+    const label = labelOf(container);
+
+    // Grabbed on the text (5px above the line) and moved ALONG it.
+    fireEvent.pointerDown(label, { pointerId: 1, clientX: 200, clientY: 20, button: 0 });
+    fireEvent.pointerMove(label, { pointerId: 1, clientX: 250, clientY: 20 });
+    fireEvent.pointerUp(label, { pointerId: 1 });
+
+    expect(theEdge().data.points).toBeUndefined();
+    expect(theEdge().data.labelT).toBeGreaterThan(0.5);
+  });
+
+  it("bends the line when the label is dragged away from it", async () => {
+    const { container } = mountEdge(edgeData({ label: "calls" }));
+    await waitFor(() => expect(labelOf(container)).toBeTruthy());
+    const label = labelOf(container);
+
+    fireEvent.pointerDown(label, { pointerId: 1, clientX: 200, clientY: 20, button: 0 });
+    fireEvent.pointerMove(label, { pointerId: 1, clientX: 200, clientY: 100 });
+    fireEvent.pointerUp(label, { pointerId: 1 });
+
+    // The line passes through the pointer MINUS the grab offset: the text was
+    // held 5px above the line, so the line lands 5px below the pointer —
+    // where the words themselves are.
+    expect(theEdge().data.points).toEqual([[200, 105]]);
+    expect(requestCommit).toHaveBeenCalled();
+  });
+
+  it("ignores the few px the text sits above the line — that is not a bend", async () => {
+    const { container } = mountEdge(edgeData({ label: "calls" }));
+    await waitFor(() => expect(labelOf(container)).toBeTruthy());
+    const label = labelOf(container);
+
+    // Straight along, with the same 5px head start the grab had.
+    fireEvent.pointerDown(label, { pointerId: 1, clientX: 200, clientY: 20, button: 0 });
+    fireEvent.pointerMove(label, { pointerId: 1, clientX: 230, clientY: 21 });
+    fireEvent.pointerUp(label, { pointerId: 1 });
+
+    expect(theEdge().data.points).toBeUndefined();
+  });
+
+  it("moves the bend it already made instead of stacking a second one", async () => {
+    const { container } = mountEdge(edgeData({ label: "calls", points: [[200, 105]] }));
+    await waitFor(() => expect(labelOf(container)).toBeTruthy());
+    const label = labelOf(container);
+    // The label now rides the bent line — grab it where it renders.
+    const at = { x: Number(label.getAttribute("x")), y: Number(label.getAttribute("y")) };
+
+    fireEvent.pointerDown(label, { pointerId: 1, clientX: at.x, clientY: at.y, button: 0 });
+    fireEvent.pointerMove(label, { pointerId: 1, clientX: at.x, clientY: at.y + 60 });
+    fireEvent.pointerUp(label, { pointerId: 1 });
+
+    const points = theEdge().data.points!;
+    expect(points).toHaveLength(1);
+    expect(points[0][1]).toBeGreaterThan(150);
+  });
+
+});
+
 describe("endpoint handles", () => {
   it("renders one handle at each end of a selected edge", async () => {
     const { container } = mountEdge();
@@ -390,7 +499,7 @@ describe("compare overlay", () => {
         { id: "a", label: "A", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 100, h: 50 },
         { id: "b", label: "B", kind: "service", icon: "box", description: "", parentId: null, x: 300, y: 0, w: 100, h: 50 },
       ],
-      edges: [{ id: "e1", source: "a", target: "b", label: "", style: "solid", color: "slate" }],
+      edges: [{ id: "e1", source: "a", target: "b", label: "calls", style: "solid", color: "slate" }],
     });
     const ctx: StudioContextValue = {
       registry: createRegistry(),
@@ -420,6 +529,12 @@ describe("compare overlay", () => {
     fireEvent.pointerMove(hit, { pointerId: 1, clientX: 200, clientY: 120 });
     fireEvent.pointerUp(hit, { pointerId: 1 });
     fireEvent.doubleClick(hit, { clientX: 200, clientY: 25 });
+
+    // Nor through its label, which on a live edge is a handle on the line.
+    const label = container.querySelector(".as-edge__label")!;
+    fireEvent.pointerDown(label, { pointerId: 2, clientX: 200, clientY: 20, button: 0 });
+    fireEvent.pointerMove(label, { pointerId: 2, clientX: 200, clientY: 120 });
+    fireEvent.pointerUp(label, { pointerId: 2 });
 
     expect(container.querySelector(".as-edge__stroke")!.getAttribute("d")).toBe(before);
     expect(requestCommit).not.toHaveBeenCalled();

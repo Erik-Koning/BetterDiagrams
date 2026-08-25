@@ -1714,6 +1714,34 @@ describe("ArchitectureStudio", () => {
     expect("plain" in latest.nodes.find((n) => n.id === "note")!).toBe(false);
   });
 
+  it("shows a note's description as a dim sub-line, and lets the inspector set one", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const withDesc = validateTemplate({
+      ...EXAMPLE_TEMPLATE,
+      nodes: EXAMPLE_TEMPLATE.nodes.map((n) =>
+        n.id === "note" ? { ...n, description: "Reviewed 2026-Q1" } : n,
+      ),
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={withDesc} onChange={onChange} />);
+
+    const desc = container.querySelector('[data-id="note"] .as-annotation__desc');
+    expect(desc).toHaveTextContent("Reviewed 2026-Q1");
+
+    // The note's own sentence stays the label; the description is editable
+    // from the inspector, which is the only place to type one.
+    fireEvent.click(screen.getByText(/Tenant isolation enforced/));
+    const input = await screen.findByLabelText("Node description");
+    expect(input).toHaveValue("Reviewed 2026-Q1");
+    await user.clear(input);
+    await user.type(input, "Owner: Platform");
+
+    await waitFor(() => {
+      const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+      expect(latest.nodes.find((n) => n.id === "note")!.description).toBe("Owner: Platform");
+    });
+  });
+
   it("commits inline annotation edits on blur", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -2709,6 +2737,24 @@ describe("ArchitectureStudio cloud packs", () => {
       expect(node.kind).toBe("aws-lambda");
       expect(node.icon).toBe("bolt");
     });
+  });
+
+  it("the welcome modal's scope picker offers the real pack behind each chip", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={{ version: 1, nodes: [], edges: [] }} />);
+
+    // A blank document starts unscoped — no cloud, so no checklist.
+    expect(screen.getByRole("button", { name: "Azure" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByLabelText(/Blob Storage/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Azure" }));
+    // The registry's own kinds, ticked whole — and only that cloud's.
+    expect(screen.getByLabelText(/Blob Storage/)).toBeChecked();
+    expect(screen.getByLabelText(/Key Vault/)).toBeChecked();
+    expect(screen.queryByLabelText(/^Lambda/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "None" }));
+    expect(screen.getByLabelText(/Blob Storage/)).not.toBeChecked();
   });
 
   it("cloud kinds survive a welcome-modal insert intact", async () => {

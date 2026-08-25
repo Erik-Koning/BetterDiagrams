@@ -26,6 +26,8 @@ import { providerDef, zoneFill, zoneInk } from "./registry-types";
 import {
   containZonePoints,
   outlineToSvgPoints,
+  zoneChipRadius,
+  zoneCornerRadius,
   zoneOutline,
   type DiagramZone,
   type ZonePoint,
@@ -113,6 +115,9 @@ export const ZoneNode = memo(function ZoneNode({ id, data, selected }: NodeProps
     // Precomputed rgba, byte-identical to what the exporters paint — deriving
     // it in CSS instead would be a second formula that could drift.
     "--as-zone-fill": zoneFill(registry, zone),
+    // The header chip traces this same corner where it overlaps it, so the
+    // two curves lie on top of each other instead of crossing.
+    "--as-zone-radius": `${zoneChipRadius(zone)}px`,
   } as CSSProperties;
 
   return (
@@ -165,7 +170,7 @@ export const ZoneNode = memo(function ZoneNode({ id, data, selected }: NodeProps
       ) : (
         <div
           className="as-zone__shape as-zone__shape--box"
-          style={{ borderRadius: zone.shape === "rounded" ? 18 : 2 }}
+          style={{ borderRadius: zoneCornerRadius(zone.shape) }}
           aria-hidden="true"
         />
       )}

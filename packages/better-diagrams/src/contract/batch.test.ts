@@ -14,6 +14,7 @@ import {
   isCollapsedEdgeId,
   templateBounds,
   toReactFlow,
+  EDGE_Z_INDEX,
   validateTemplate,
   visibleAnchor,
   type DiagramTemplate,
@@ -340,6 +341,143 @@ describe("new edge fields", () => {
     const doc = validateTemplate({ nodes: [node({ id: "a", locked: true })] });
     const { nodes } = toReactFlow(doc);
     expect((nodes[0] as { draggable?: boolean }).draggable).toBe(false);
+  });
+});
+
+describe("stacking: a node on top of a node", () => {
+  const z = (nodes: ReturnType<typeof toReactFlow>["nodes"], id: string) =>
+    nodes.find((n) => n.id === id)!.zIndex!;
+  const ez = (edges: ReturnType<typeof toReactFlow>["edges"], id: string) =>
+    edges.find((e) => e.id === id)!.zIndex!;
+
+  /** A big card with a small one sitting inside it, and a bystander. */
+  const nested = () =>
+    validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "big", label: "Big", kind: "service", x: 0, y: 0, w: 400, h: 300 },
+        { id: "small", label: "Small", kind: "service", x: 40, y: 40, w: 170, h: 76 },
+        { id: "far", label: "Far", kind: "service", x: 700, y: 0, w: 170, h: 76 },
+      ],
+      edges: [
+        { id: "in-out", source: "small", target: "far" },
+        { id: "out-out", source: "big", target: "far" },
+      ],
+    }) as DiagramTemplate;
+
+  it("paints the contained node above the one containing it", () => {
+    const { nodes } = toReactFlow(nested());
+    expect(z(nodes, "small")).toBeGreaterThan(z(nodes, "big"));
+    expect(z(nodes, "big")).toBe(z(nodes, "far"));
+  });
+
+  it("lifts that node's edges clear of the card it sits on", () => {
+    const { nodes, edges } = toReactFlow(nested());
+    // Above the card it has to escape…
+    expect(ez(edges, "in-out")).toBeGreaterThan(z(nodes, "big"));
+    // …and still under the cards in its own band.
+    expect(ez(edges, "in-out")).toBeLessThan(z(nodes, "small"));
+    // An edge between two unstacked nodes is where it always was.
+    expect(ez(edges, "out-out")).toBe(EDGE_Z_INDEX);
+  });
+
+  it("a chain of three stacks in order", () => {
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "outer", label: "O", kind: "service", x: 0, y: 0, w: 600, h: 400 },
+        { id: "mid", label: "M", kind: "service", x: 20, y: 20, w: 400, h: 300 },
+        { id: "inner", label: "I", kind: "service", x: 40, y: 40, w: 170, h: 76 },
+      ],
+      edges: [],
+    }) as DiagramTemplate;
+    const { nodes } = toReactFlow(doc);
+    expect(z(nodes, "inner")).toBeGreaterThan(z(nodes, "mid"));
+    expect(z(nodes, "mid")).toBeGreaterThan(z(nodes, "outer"));
+  });
+
+  it("a note dropped on a card rides above it", () => {
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "card", label: "Card", kind: "service", x: 0, y: 0, w: 400, h: 300 },
+        { id: "note", label: "A remark", kind: "text", x: 40, y: 40, w: 300, h: 60 },
+      ],
+      edges: [],
+    }) as DiagramTemplate;
+    const { nodes } = toReactFlow(doc);
+    expect(z(nodes, "note")).toBeGreaterThan(z(nodes, "card"));
+  });
+
+  it("a GROUP is not a stack: its children and their wiring stay put", () => {
+    // The common case, and the one that must not change — group frames are
+    // the band edges already travel over.
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "g", label: "G", kind: "group", x: 0, y: 0, w: 600, h: 400 },
+        { id: "a", label: "A", kind: "service", parentId: "g", x: 40, y: 40, w: 170, h: 76 },
+        { id: "b", label: "B", kind: "service", parentId: "g", x: 300, y: 40, w: 170, h: 76 },
+      ],
+      edges: [{ id: "e", source: "a", target: "b" }],
+    }) as DiagramTemplate;
+    const { nodes, edges } = toReactFlow(doc);
+    expect(z(nodes, "g")).toBeLessThan(EDGE_Z_INDEX);
+    expect(ez(edges, "e")).toBe(EDGE_Z_INDEX);
+    expect(z(nodes, "a")).toBeGreaterThan(EDGE_Z_INDEX);
+  });
+
+  it("a smaller card overlapping a bigger one sits on it, wiring included", () => {
+    // The half of the ask containment alone missed: dropped on another card
+    // and left hanging over its edge is still ON it.
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "host", label: "Host", kind: "service", x: 0, y: 0, w: 400, h: 300 },
+        // 70% of this box lies over `host`; the rest hangs off the right.
+        { id: "on", label: "On", kind: "service", x: 260, y: 40, w: 200, h: 100 },
+        { id: "far", label: "Far", kind: "service", x: 800, y: 0, w: 170, h: 76 },
+      ],
+      edges: [{ id: "e", source: "on", target: "far" }],
+    }) as DiagramTemplate;
+    const { nodes, edges } = toReactFlow(doc);
+    expect(z(nodes, "on")).toBeGreaterThan(z(nodes, "host"));
+    expect(ez(edges, "e")).toBeGreaterThan(z(nodes, "host"));
+    expect(ez(edges, "e")).toBeLessThan(z(nodes, "on"));
+  });
+
+  it("a card merely grazing another's corner is not on it", () => {
+    // Incidental overlap must not lift a node's wiring over its neighbour.
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "host", label: "Host", kind: "service", x: 0, y: 0, w: 400, h: 300 },
+        { id: "graze", label: "Graze", kind: "service", x: 380, y: 280, w: 170, h: 76 },
+      ],
+      edges: [],
+    }) as DiagramTemplate;
+    const { nodes } = toReactFlow(doc);
+    expect(z(nodes, "graze")).toBe(z(nodes, "host"));
+  });
+
+  it("same-size overlap is a tie — document order decides", () => {
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "a", label: "A", kind: "service", x: 0, y: 0, w: 200, h: 100 },
+        { id: "b", label: "B", kind: "service", x: 100, y: 50, w: 200, h: 100 },
+        // Same box as A: neither contains the other.
+        { id: "c", label: "C", kind: "service", x: 0, y: 0, w: 200, h: 100 },
+      ],
+      edges: [],
+    }) as DiagramTemplate;
+    const { nodes } = toReactFlow(doc);
+    expect(z(nodes, "a")).toBe(z(nodes, "b"));
+    expect(z(nodes, "a")).toBe(z(nodes, "c"));
+    // Later in the document still paints later.
+    expect(nodes.findIndex((n) => n.id === "c")).toBeGreaterThan(
+      nodes.findIndex((n) => n.id === "a"),
+    );
   });
 });
 

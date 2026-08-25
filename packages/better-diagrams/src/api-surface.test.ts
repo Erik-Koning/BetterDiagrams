@@ -200,6 +200,8 @@ const REACT_EXPORTS = [
   "buildMultiViewHtml",
   "buildTemplateSystemPrompt",
   "templatePromptContext",
+  "cloudResourceOptions",
+  "usedCloudResources",
   "silhouettePath",
   // theme
   "themeToStyle",
@@ -210,6 +212,10 @@ const REACT_EXPORTS = [
   "BrandMark",
   "DateChip",
   "WelcomeModal",
+  "SchemaCopyModal",
+  "CloudScopePicker",
+  "scopeFor",
+  "EMPTY_SCOPE",
   "TimelineScrubber",
 ];
 

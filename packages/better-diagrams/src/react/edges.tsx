@@ -8,11 +8,15 @@
  *     that matches the screen exactly
  *   - an edge loaded from JSON with no `sourceHandle` still renders
  *
- * The label slides along the curve by dragging it, persisted as `labelT`.
+ * The label slides along the curve by dragging it, persisted as `labelT` —
+ * and dragging it AWAY from the curve bends the line instead, the text acting
+ * as a handle on the line it names.
  *
  * Shaping the line, all direct manipulation:
  *   - drag anywhere on it to bend it there (a waypoint is born under the
  *     pointer); double-click does the same without the drag
+ *   - drag its label perpendicular to it for the same bend, without having to
+ *     hit the 2px line under the words
  *   - drag a waypoint to move it, double-click one to remove it
  *   - on a selected edge, drag an endpoint to pin where it attaches — or drop
  *     it on another node to re-attach the edge there
@@ -20,6 +24,7 @@
 import { memo, useCallback, useRef, useState } from "react";
 import {
   EdgeLabelRenderer,
+  ViewportPortal,
   useInternalNode,
   useReactFlow,
   type Edge,
@@ -74,6 +79,22 @@ function insertionIndex(
 
 /** How close (px) a dragged waypoint must come to a reference line to snap. */
 const SNAP_TOL = 6;
+
+/**
+ * How far the pointer must leave the line, dragging a label, before the drag
+ * starts bending the line instead of only sliding the label along it. Measured
+ * as CHANGE in the offset from the curve, not raw distance: the pointer grabs
+ * the text a few px off the line already, and that head start must not count
+ * as a bend.
+ */
+const LABEL_BEND_TOL = 6;
+
+/**
+ * A waypoint this close to the label's own point on the line is the one that
+ * bend put there — dragging the label again moves it rather than stacking a
+ * second bend beside the first.
+ */
+const LABEL_WAYPOINT_TOL = 14;
 
 /** The nearest reference within snapping distance, or nothing. */
 function snapAxis(v: number, refs: readonly number[]): number | null {
@@ -168,6 +189,22 @@ export const LabeledEdge = memo(function LabeledEdge({
     };
   };
 
+  /**
+   * Dragging the label is TWO gestures in one, split by direction:
+   *
+   *   along the line       → slide the label (labelT), as it always has
+   *   away from the line   → bend the line, the label riding it as a handle
+   *
+   * Both run at once, because both are just components of one drag: the
+   * pointer's foot on the curve gives the slide, its offset from the curve
+   * gives the bend. The line is bent through the pointer MINUS the offset the
+   * label was grabbed at, so the line lands where the text was, not where the
+   * text happens to hang above it.
+   *
+   * All of it is measured against the geometry AT GRAB TIME. Re-measuring a
+   * curve that the bend is currently reshaping would let the label chase its
+   * own waypoint down the line.
+   */
   const onLabelPointerDown = useCallback(
     (event: React.PointerEvent<SVGElement>) => {
       if (readOnly || !s || !t) return;
@@ -176,15 +213,64 @@ export const LabeledEdge = memo(function LabeledEdge({
       element.setPointerCapture(event.pointerId);
       draggingRef.current = true;
 
+      const grabGeo = edgeGeometryFor(data?.routingResolved, s, t, data?.labelT ?? 0.5, specOf(s, t));
+      const from = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const grabFoot = grabGeo.at(nearestTOnCurve(grabGeo, from));
+      // Where the pointer sits relative to the line at grab: subtracted from
+      // every later position, so a straight slide reads as zero bend.
+      const offset = { x: from.x - grabFoot.x, y: from.y - grabFoot.y };
+      const basePoints = data?.points ?? [];
+      // A bend already under the label belongs to this label — move it rather
+      // than piling a second one on top. That one is available even at the
+      // waypoint cap, since it adds nothing.
+      const reuseIndex = basePoints.findIndex(
+        (pt) => Math.hypot(pt[0] - grabFoot.x, pt[1] - grabFoot.y) <= LABEL_WAYPOINT_TOL,
+      );
+      const canBend =
+        !synthetic && (reuseIndex >= 0 || basePoints.length < MAX_EDGE_POINTS);
+      // Same soft snapping as dragging the line itself: level runs read as
+      // deliberate rather than nearly-aligned.
+      const refsX = [Math.round(grabGeo.at(0).x), Math.round(grabGeo.tip.x), ...basePoints.map((pt) => pt[0])];
+      const refsY = [Math.round(grabGeo.at(0).y), Math.round(grabGeo.tip.y), ...basePoints.map((pt) => pt[1])];
+      let bendIndex = -1;
+
       const move = (e: PointerEvent) => {
         if (!draggingRef.current) return;
         const point = screenToFlowPosition({ x: e.clientX, y: e.clientY });
-        // Recompute geometry each frame — the nodes may be moving too.
-        const geo = edgeGeometryFor(data?.routingResolved, s, t, data?.labelT ?? 0.5, specOf(s, t));
-        const nextT = nearestTOnCurve(geo, point);
+        const nextT = nearestTOnCurve(grabGeo, point);
+        const foot = grabGeo.at(nextT);
+        // How far the pointer has moved OFF the line since the grab.
+        const drift = Math.hypot(point.x - foot.x - offset.x, point.y - foot.y - offset.y);
+        if (canBend && bendIndex < 0 && drift >= LABEL_BEND_TOL) {
+          bendIndex =
+            reuseIndex >= 0
+              ? reuseIndex
+              : insertionIndex(grabGeo, basePoints, { x: point.x - offset.x, y: point.y - offset.y });
+        }
+        let points: Array<[number, number]> | undefined;
+        if (bendIndex >= 0) {
+          const wx = Math.round(point.x - offset.x);
+          const wy = Math.round(point.y - offset.y);
+          const sx = snapAxis(wx, refsX);
+          const sy = snapAxis(wy, refsY);
+          setGuides(
+            sx !== null || sy !== null
+              ? { ...(sx !== null ? { x: sx } : {}), ...(sy !== null ? { y: sy } : {}) }
+              : null,
+          );
+          points = [...basePoints];
+          const at: [number, number] = [sx ?? wx, sy ?? wy];
+          if (reuseIndex >= 0) points[bendIndex] = at;
+          else points.splice(bendIndex, 0, at);
+        }
         setEdges((edges) =>
           edges.map((edge) =>
-            edge.id === id ? { ...edge, data: { ...edge.data, labelT: nextT } } : edge,
+            edge.id === id
+              ? {
+                  ...edge,
+                  data: { ...edge.data, labelT: nextT, ...(points ? { points } : {}) },
+                }
+              : edge,
           ),
         );
       };
@@ -193,6 +279,8 @@ export const LabeledEdge = memo(function LabeledEdge({
         element.releasePointerCapture(event.pointerId);
         element.removeEventListener("pointermove", move as EventListener);
         element.removeEventListener("pointerup", up);
+        element.removeEventListener("pointercancel", up);
+        setGuides(null);
         // Without this the new labelT lives only in React Flow state — undo
         // and a controlled host would never see it until an unrelated edit
         // happened to commit.
@@ -200,8 +288,9 @@ export const LabeledEdge = memo(function LabeledEdge({
       };
       element.addEventListener("pointermove", move as EventListener);
       element.addEventListener("pointerup", up);
+      element.addEventListener("pointercancel", up);
     },
-    [readOnly, s, t, data?.labelT, data?.routingResolved, screenToFlowPosition, setEdges, id, requestCommit],
+    [readOnly, synthetic, s, t, data, screenToFlowPosition, setEdges, id, requestCommit],
   );
 
   /** Replace this edge's waypoints — always a NEW array; history clones shallowly. */
@@ -593,28 +682,6 @@ export const LabeledEdge = memo(function LabeledEdge({
           style={{ pointerEvents: "none" }}
         />
       ) : null}
-      {startLabelAt ? (
-        <text
-          className="as-edge__endlabel"
-          x={startLabelAt.x}
-          y={startLabelAt.y - 4}
-          textAnchor="middle"
-          style={{ pointerEvents: "none" }}
-        >
-          {data!.startLabel}
-        </text>
-      ) : null}
-      {endLabelAt ? (
-        <text
-          className="as-edge__endlabel"
-          x={endLabelAt.x}
-          y={endLabelAt.y - 4}
-          textAnchor="middle"
-          style={{ pointerEvents: "none" }}
-        >
-          {data!.endLabel}
-        </text>
-      ) : null}
       {selected && !readOnly && !synthetic
         ? (data?.points ?? []).map(([px, py], index) => (
             <circle
@@ -736,57 +803,95 @@ export const LabeledEdge = memo(function LabeledEdge({
           />
         </EdgeLabelRenderer>
       ) : null}
-      {hasLabel && !editingLabel ? (
-        <g
-          style={{ pointerEvents: readOnly ? "none" : "all" }}
-          onPointerDown={onLabelPointerDown}
-          onDoubleClick={onPathDoubleClick}
-        >
-          {data?.seq ? (
-            <>
-              <circle
-                className={`as-edge__seq as-edge--c-${data?.color ?? "slate"}`}
-                cx={geo.label.x - seqBadgeOffset(data.label)}
-                cy={geo.label.y - 9}
-                r={8}
-                fill={EDGE_COLOR_HEX[data?.color ?? "slate"]}
-              />
+      {startLabelAt || endLabelAt || (hasLabel && !editingLabel) ? (
+        // Every word an edge carries goes through the viewport portal, which
+        // React Flow renders AFTER the node layer: a connection's name is the
+        // one thing that must never be covered, and an edge whose line
+        // correctly passes under a card would otherwise take its text under
+        // with it. The portal carries the same pan/zoom transform, so these
+        // stay plain flow coordinates — the 0×0 `overflow: visible` svg is
+        // just the SVG context they need to live in.
+        <ViewportPortal>
+          {/* `as-future` rides the layer itself: the timeline's dimming is a
+              class on the edge WRAPPER, which this text no longer lives in. */}
+          <svg className={`as-edge__labellayer${data?.future ? " as-future" : ""}`}>
+            {startLabelAt ? (
               <text
-                className="as-edge__seqnum"
-                x={geo.label.x - seqBadgeOffset(data.label)}
-                y={geo.label.y - 5.6}
+                className="as-edge__endlabel"
+                x={startLabelAt.x}
+                y={startLabelAt.y - 4}
                 textAnchor="middle"
+                style={{ pointerEvents: "none" }}
               >
-                {data.seq}
+                {data!.startLabel}
               </text>
-            </>
-          ) : null}
-          {data?.label ? (
-            <text
-              className={`as-edge__label${selected ? " as-edge__label--selected" : ""}`}
-              x={geo.label.x + (data?.seq ? 6 : 0)}
-              y={geo.label.y - 5}
-              textAnchor="middle"
+            ) : null}
+            {endLabelAt ? (
+              <text
+                className="as-edge__endlabel"
+                x={endLabelAt.x}
+                y={endLabelAt.y - 4}
+                textAnchor="middle"
+                style={{ pointerEvents: "none" }}
+              >
+                {data!.endLabel}
+              </text>
+            ) : null}
+            {hasLabel && !editingLabel ? (
+            <g
+              className="as-edge__labelgroup"
+              style={{ pointerEvents: readOnly ? "none" : "all" }}
+              onPointerDown={onLabelPointerDown}
+              onDoubleClick={onPathDoubleClick}
             >
-              {data.label}
-            </text>
-          ) : null}
-          {data?.tech ? (
-            <text
-              className="as-edge__tech"
-              x={geo.label.x + (data?.seq && !data?.label ? 6 : 0)}
-              y={geo.label.y + (data?.label ? 8 : -5)}
-              textAnchor="middle"
-            >
-              [{data.tech}]
-            </text>
-          ) : null}
-          {data?.date ? (
-            <text className="as-edge__date" x={geo.label.x} y={geo.label.y + dateY} textAnchor="middle">
-              {formatDiagramDate(data.date)}
-            </text>
-          ) : null}
-        </g>
+              {data?.seq ? (
+                <>
+                  <circle
+                    className={`as-edge__seq as-edge--c-${data?.color ?? "slate"}`}
+                    cx={geo.label.x - seqBadgeOffset(data.label)}
+                    cy={geo.label.y - 9}
+                    r={8}
+                    fill={EDGE_COLOR_HEX[data?.color ?? "slate"]}
+                  />
+                  <text
+                    className="as-edge__seqnum"
+                    x={geo.label.x - seqBadgeOffset(data.label)}
+                    y={geo.label.y - 5.6}
+                    textAnchor="middle"
+                  >
+                    {data.seq}
+                  </text>
+                </>
+              ) : null}
+              {data?.label ? (
+                <text
+                  className={`as-edge__label${selected ? " as-edge__label--selected" : ""}`}
+                  x={geo.label.x + (data?.seq ? 6 : 0)}
+                  y={geo.label.y - 5}
+                  textAnchor="middle"
+                >
+                  {data.label}
+                </text>
+              ) : null}
+              {data?.tech ? (
+                <text
+                  className="as-edge__tech"
+                  x={geo.label.x + (data?.seq && !data?.label ? 6 : 0)}
+                  y={geo.label.y + (data?.label ? 8 : -5)}
+                  textAnchor="middle"
+                >
+                  [{data.tech}]
+                </text>
+              ) : null}
+              {data?.date ? (
+                <text className="as-edge__date" x={geo.label.x} y={geo.label.y + dateY} textAnchor="middle">
+                  {formatDiagramDate(data.date)}
+                </text>
+              ) : null}
+            </g>
+            ) : null}
+          </svg>
+        </ViewportPortal>
       ) : null}
     </g>
   );

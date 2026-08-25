@@ -129,12 +129,40 @@ each styled in its provider's brand palette with a role-appropriate icon and sil
   **using any of that cloud's kinds** (one `aws-lambda` node makes the whole AWS pack
   first-class). Every other cloud's components sit in a grayed, darkened **Other clouds**
   section at the bottom, still selectable.
-- **Adaptive prompts**: the welcome modal grows an AWS/Azure/GCP multi-select under the title;
-  **Copy Schema & System Prompt** appends the selected clouds' component sections after the
-  base prompt (none selected ⇒ the base prompt, with no cloud ids in the kind enum). The AI
-  panel's prompt adapts automatically to the providers the document references.
+- **Adaptive prompts**: both copy surfaces ask which clouds — and which of their services —
+  the schema should teach, and copy exactly that. The welcome modal grows an AWS/Azure/GCP
+  multi-select under the title; ticking a cloud reveals its resource checklist (with
+  **All / In this diagram / None** presets), and **Copy Schema & System Prompt** appends only
+  the ticked components' sections after the base prompt. The AI panel's own prompt adapts
+  automatically to the providers the document references.
+- **No cloud by default**: nothing selected ⇒ the base prompt — no cloud ids in the kind enum,
+  no component sections, and no provider standing in as the zone example (the skeleton shows
+  the `providers` enum instead). That is the correct output when the user hasn't said which
+  cloud they are on yet; they name it in their own prompt. The same rule runs deeper: a zone
+  saved with no provider resolves to `onprem`, not to a cloud, so silence can't quietly make a
+  document "reference" a cloud nobody chose.
 - Registry extensions treat cloud kinds like any builtin: override with a partial def, remove
-  with `null`.
+  with `null`. An extension kind tagged `provider: "aws"` is offered and advertised exactly
+  when AWS is.
+
+```jsx
+// Copying the schema from an OPEN document: ask first, seeded with the
+// document's own clouds. `templatePromptContext` derives everything the
+// dialog needs from the doc + registry.
+import { SchemaCopyModal, templatePromptContext } from "@mosphere/better-diagrams";
+
+const ctx = templatePromptContext(doc, registry);
+<SchemaCopyModal
+  clouds={ctx.cloudOptions}
+  resources={ctx.cloudResources}
+  initialClouds={ctx.referencedClouds}   // ticked at open
+  usedResources={ctx.usedResources}      // the "In this diagram" preset
+  buildPrompt={(scope, { geometry }) =>
+    ctx.promptForClouds(scope.clouds, { components: scope.components, geometry })
+  }
+  onClose={() => setOpen(false)}
+/>
+```
 
 ## The schema is the contract
 
@@ -160,6 +188,9 @@ if you need one of them, open an issue rather than vendoring the source.
 Text notes render **boxed by default** — a subtle outline and background, on screen and in image
 exports. Set `plain: true` (or untick **Outline** in the inspector) for bare text. Like every
 default, it is stored only when it differs, so pre-existing documents round-trip byte-identical.
+A note's `description` renders as a dim sub-line under its sentence (canvas and image exports
+alike), sized against the note's own `fontSize`; the sentence itself is the `label`, edited by
+double-clicking the note.
 
 ## Node text: alignment and wrapping
 
@@ -296,7 +327,12 @@ function drives the screen and every image export, so a routed edge exports exac
 In the editor, shaping a line is direct manipulation: **drag anywhere on it** to bend it there —
 a waypoint is born under the pointer and follows it until release, snapping softly to the
 endpoints' and other waypoints' reference lines (dashed guides show while a snap holds — level
-runs read as deliberate). **Double-click the line or its label to edit the label inline.**
+runs read as deliberate). **Its label is a handle on the same line**: drag the text ALONG the
+line and it slides (`labelT`, as always); drag it AWAY from the line and the line bends to
+follow, which is how you move a line without having to hit the 2px stroke hiding under the
+words. The bend lands where the text was, not where the pointer is, and a second drag of the
+same label moves that bend rather than stacking another beside it.
+**Double-click the line or its label to edit the label inline.**
 Drag a waypoint to move it, double-click the dot to remove it, or *Clear route* in the
 inspector. On a selected edge, **drag an endpoint handle** to pin exactly where
 the line attaches — anywhere along any side of its box — or drop it on another node to
@@ -552,7 +588,7 @@ The schema and editor cover C4's notational essentials:
 
 | Feature | Where |
 |---|---|
-| **Silhouettes** — `person` (client), `cylinder` (database), `pipe` (queue) | Registry-level `shape` on a kind; identical geometry in exports |
+| **Silhouettes** — `cylinder` (database), `pipe` (queue), `person` (opt-in actor) | Registry-level `shape` on a kind; identical geometry in exports |
 | **Edge tech label** — C4's `[JSON/HTTPS]` | `edge.tech`, second line under the label |
 | **Numbered dynamic flows** | `edge.seq` renders a circled step badge; C4-PlantUML export prefixes `1.` |
 | **Direction** — `forward` / `both` / `none` arrowheads | `edge.direction` |
@@ -620,8 +656,10 @@ from the active architecture — it never overwrites an existing document.
 
 The example app also carries a **⇄ mode switch** (flips a blank file between architecture and
 sequence in place; on a file with content it opens a new blank file of the other type) and a
-**✦ Copy schema** button that puts the active mode's schema contract on the clipboard for
-pasting into an external AI agent.
+**✦ Copy schema** button. On an architecture file that button opens the `SchemaCopyModal`
+described above — which clouds and which of their resources the copied contract should teach,
+seeded with the open document's own — rather than copying blind; sequence files have no
+provider vocabulary to scope, so they copy straight to the clipboard.
 
 **AI is optional, per editor.** Pass the same `generate` function the architecture editor takes
 (`createProxyGenerator` works unchanged — the sequence system prompt travels with each request)
@@ -809,10 +847,22 @@ Three places the conventions could not be copied verbatim, and why:
   moves the one node with DOM focus and can't move a multi-selection, so `disableKeyboardA11y`
   turns it off and the editor owns all four arrows. With nothing selected they fall through to
   the timeline.
-- **`⌘]`/`⌘[` restack zones only.** A node's z-index is *derived* from nesting depth into fixed
-  painting bands (zones < containers < edges < leaves); only zones carry a stored `z`. One press
-  swaps with the neighbour rather than incrementing, since equal `z` resolves by array order and
-  would look like nothing happened.
+- **`⌘]`/`⌘[` restack zones only.** A node's z-index is *derived* from nesting depth and overlap
+  into fixed painting bands (zones < containers < edges < leaves); only zones carry a stored `z`.
+  One press swaps with the neighbour rather than incrementing, since equal `z` resolves by array
+  order and would look like nothing happened.
+- **Edge text is the topmost layer, always.** A line passes *under* the cards it crosses by
+  design; its label, cardinality, tech and date do not — they render through React Flow's
+  viewport portal (and paint in a final pass in exports), above every node and every other line.
+  A connection whose name is hidden by whatever it happens to cross is a connection you can't read.
+- **A node sitting ON another node paints above it — and so do its edges.** "On" means inside
+  its box, or overlapping most of it (≥60% of the smaller card), so a card dropped on another
+  and left hanging over the edge still counts. The whole band lifts together
+  (`… edges(0) < leaves(0) < edges(1) < leaves(1) …`), because a stacked card whose wiring
+  stayed buried under the card it sits on would read as unconnected. Group frames are exempt:
+  they are the band edges already cross, so nesting in a group lifts nothing. Cards that merely
+  graze a corner, or match exactly in size, tie and resolve by document order as before. Image
+  exports paint in the same bands.
 
 Excalidraw's freedraw, eraser, laser, image and flip tools have no counterpart in a node graph,
 and copy-/paste-styles is near-empty here because colour is registry-level by kind rather than
@@ -822,8 +872,8 @@ Sequence mode binds the subset that means something there (`N` participant, `A` 
 `M` message, `T` note, plus the essentials and zoom); its `?` sheet lists only those.
 
 Mouse: drag from a node edge to connect. Drop a node onto a group to nest it, drag it out to
-un-nest. Drag an edge label to slide it along the curve. Drop a `.json` template file on the
-canvas to load it.
+un-nest. Drag an edge label along its curve to slide it, or away from the curve to bend the line
+itself. Drop a `.json` template file on the canvas to load it.
 
 ## Versioning
 

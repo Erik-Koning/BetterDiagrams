@@ -18,6 +18,18 @@
 export const ZONE_SHAPES = ["rect", "rounded", "ellipse", "hexagon", "polygon"] as const;
 export type ZoneShape = (typeof ZONE_SHAPES)[number];
 
+/**
+ * A box-shaped zone's corner radius, in px.
+ *
+ * Shared because the zone's HEADER chip has to trace the same arc where it
+ * overlaps that corner — on the canvas and in every export. Two independent
+ * numbers would drift, and the drift is visible: two curves crossing at the
+ * one corner a reader's eye lands on first.
+ */
+export function zoneCornerRadius(shape: ZoneShape): number {
+  return shape === "rounded" ? 18 : 2;
+}
+
 /** How a zone's outline draws. `solid` is the default and is never stored. */
 export const ZONE_OUTLINES = ["solid", "dashed", "dotted", "none"] as const;
 export type ZoneOutline = (typeof ZONE_OUTLINES)[number];
@@ -125,6 +137,16 @@ export function zoneOutline(zone: Pick<DiagramZone, "shape" | "points">): ZonePo
 }
 
 /** SVG `points` attribute for a normalised outline, scaled to a 100x100 viewBox. */
+/**
+ * The header chip's outer corner — the zone's own, so the two curves lie on
+ * top of each other where the chip sits on the boundary. An ellipse or a
+ * polygon has no rectangular corner there to trace, so the chip keeps its own
+ * curve. One function because the canvas and the exporters both ask.
+ */
+export function zoneChipRadius(zone: Pick<DiagramZone, "shape" | "points">): number {
+  return zoneOutline(zone) || zone.shape === "ellipse" ? 10 : zoneCornerRadius(zone.shape);
+}
+
 export function outlineToSvgPoints(points: ZonePoint[]): string {
   return points.map(([x, y]) => `${x * 100},${y * 100}`).join(" ");
 }

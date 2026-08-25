@@ -5,9 +5,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildTemplateSystemPrompt,
+  cloudResourceOptions,
   promptForCloudSelection,
   referencedCloudIds,
   templatePromptContext,
+  usedCloudResources,
 } from "./template-prompt";
 import { resolveRegistry } from "./registry";
 import { validateTemplate, type DiagramTemplate } from "../contract/schema";
@@ -102,5 +104,82 @@ describe("templatePromptContext", () => {
   it("registry promptExtraRules ride along", () => {
     const ctx = templatePromptContext(doc(), { promptExtraRules: "- Always use eu-west-1." });
     expect(ctx.systemPrompt).toContain("Always use eu-west-1.");
+  });
+
+  it("a cloudless document names no cloud anywhere in the prompt", () => {
+    // The end-to-end version of the schema audit: nothing in the pipeline —
+    // skeleton, rules, sections, kind enum — may pick a cloud on its own.
+    const prompt = templatePromptContext(doc()).systemPrompt;
+    expect(prompt).not.toContain('"provider":"azure"');
+    expect(prompt).not.toContain("azure-");
+    expect(prompt).not.toContain("aws-");
+    expect(prompt).not.toContain("gcp-");
+  });
+
+  it("a zone with no stated provider does not make the document cloudy", () => {
+    const registry = resolveRegistry();
+    const t = doc({ zones: [{ ...awsZone, providers: [], provider: "" }] });
+    expect(referencedCloudIds(t, registry)).toEqual([]);
+  });
+});
+
+describe("resource-level scoping", () => {
+  const registry = resolveRegistry();
+
+  it("narrows both the kind enum and the section to the chosen services", () => {
+    const prompt = promptForCloudSelection(registry, ["azure"], {
+      components: ["azure-blob", "azure-sql"],
+    });
+    expect(prompt).toContain("azure-blob");
+    expect(prompt).toContain("azure-sql");
+    expect(prompt).not.toContain("azure-functions");
+    expect(prompt).not.toContain("azure-openai");
+    expect(prompt).toContain("### Azure components");
+  });
+
+  it("a cloud with nothing ticked drops out entirely, example provider included", () => {
+    const prompt = promptForCloudSelection(registry, ["aws", "gcp"], {
+      components: ["gcp-storage"],
+    });
+    expect(prompt).toContain("gcp-storage");
+    expect(prompt).toContain('"providers":["gcp"],"provider":"gcp"');
+    expect(prompt).not.toContain("AWS components");
+    expect(prompt).not.toContain("aws-s3");
+  });
+
+  it("no components option means the whole pack, as before", () => {
+    expect(promptForCloudSelection(registry, ["aws"], {})).toBe(
+      promptForCloudSelection(registry, ["aws"]),
+    );
+  });
+
+  it("cloudResourceOptions lists the packs' services, narrowable by cloud", () => {
+    const all = cloudResourceOptions(registry);
+    expect(all.find((r) => r.id === "azure-blob")).toMatchObject({
+      cloud: "azure",
+      label: "Blob Storage",
+      hint: "object storage container",
+    });
+    const gcpOnly = cloudResourceOptions(registry, ["gcp"]);
+    expect(gcpOnly.every((r) => r.cloud === "gcp")).toBe(true);
+    expect(gcpOnly.length).toBeLessThan(all.length);
+  });
+
+  it("cloudResourceOptions includes an extension kind tagged with a cloud", () => {
+    const extended = resolveRegistry({
+      nodeKinds: { "aws-athena": { label: "Athena", provider: "aws" } },
+    });
+    const rows = cloudResourceOptions(extended, ["aws"]);
+    expect(rows.find((r) => r.id === "aws-athena")).toMatchObject({ label: "Athena" });
+    // The pack has no hint for a host's own kind, and none is invented.
+    expect(rows.find((r) => r.id === "aws-athena")?.hint).toBeUndefined();
+  });
+
+  it("usedResources reports only the cloud kinds the document actually uses", () => {
+    const t = doc();
+    t.nodes[0].kind = "azure-functions";
+    const validated = validateTemplate(t);
+    expect(usedCloudResources(validated, registry)).toEqual(["azure-functions"]);
+    expect(templatePromptContext(validated).usedResources).toEqual(["azure-functions"]);
   });
 });

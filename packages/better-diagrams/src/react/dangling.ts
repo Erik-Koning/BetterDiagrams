@@ -23,10 +23,13 @@ export interface DropProbeFlow {
 
 /**
  * The VISUALLY topmost node under a canvas point that an edge may attach to:
- * highest zIndex wins (the canvas paints leaf nodes at 1000+ over containers
- * at their depth), later entry on a tie — children follow their parents in
- * the array. Zones and view artifacts (ghosts, drill-in boundaries) are not
- * attachable: an edge to one could never persist.
+ * highest zIndex wins (the canvas paints leaf nodes at LEAF_Z_INDEX+ over
+ * containers at their depth, and lifts a node sitting inside another by a
+ * whole STACK_BAND), later entry on a tie — children follow their parents in
+ * the array. Reading the same z the eye does is what makes a drop land on the
+ * card on top rather than the one it covers. Zones and view artifacts
+ * (ghosts, drill-in boundaries) are not attachable: an edge to one could
+ * never persist.
  */
 export function topDropTarget(flow: DropProbeFlow, point: { x: number; y: number }): string | null {
   let hit: string | null = null;

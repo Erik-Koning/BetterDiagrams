@@ -7,6 +7,7 @@ import {
   CLOUD_PROVIDER_IDS,
   buildCloudPromptSections,
   cloudKindIds,
+  cloudResources,
 } from "./cloud";
 
 describe("CLOUD_COMPONENTS", () => {
@@ -68,6 +69,45 @@ describe("buildCloudPromptSections", () => {
 
   it("is empty for no selection", () => {
     expect(buildCloudPromptSections([])).toBe("");
+  });
+
+  it("narrows a section to the chosen components", () => {
+    const text = buildCloudPromptSections(["azure"], {
+      components: ["azure-blob", "azure-app-service"],
+    });
+    expect(text).toContain("### Azure components");
+    expect(text).toContain("azure-blob — Blob Storage");
+    expect(text).toContain("azure-app-service — App Service");
+    expect(text).not.toContain("azure-cosmos");
+    expect(text).not.toContain("azure-openai");
+  });
+
+  it("drops a provider whose components were all deselected", () => {
+    // Not "Azure with an empty list" — no Azure heading at all, so an empty
+    // pick can't reintroduce the cloud through its section title.
+    const text = buildCloudPromptSections(["aws", "azure"], { components: ["aws-s3"] });
+    expect(text).toContain("### AWS components");
+    expect(text).toContain("aws-s3 — S3");
+    expect(text).not.toContain("aws-lambda");
+    expect(text).not.toContain("Azure");
+  });
+
+  it("an empty component list yields nothing at all", () => {
+    expect(buildCloudPromptSections(["aws", "gcp"], { components: [] })).toBe("");
+  });
+});
+
+describe("cloudResources", () => {
+  it("flattens the packs into rows carrying their provider", () => {
+    const rows = cloudResources(["gcp"]);
+    expect(rows).toHaveLength(CLOUD_COMPONENTS.gcp.length);
+    expect(rows.every((row) => row.provider === "gcp")).toBe(true);
+    expect(rows[0]).toMatchObject({ id: "gcp-cloud-run", label: "Cloud Run" });
+  });
+
+  it("ignores non-cloud providers and an empty selection", () => {
+    expect(cloudResources(["onprem", "k8s"])).toEqual([]);
+    expect(cloudResources([])).toEqual([]);
   });
 });
 
