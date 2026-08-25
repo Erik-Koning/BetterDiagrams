@@ -328,10 +328,12 @@ In the editor, shaping a line is direct manipulation: **drag anywhere on it** to
 a waypoint is born under the pointer and follows it until release, snapping softly to the
 endpoints' and other waypoints' reference lines (dashed guides show while a snap holds — level
 runs read as deliberate). **Its label is a handle on the same line**: drag the text ALONG the
-line and it slides (`labelT`, as always); drag it AWAY from the line and the line bends to
-follow, which is how you move a line without having to hit the 2px stroke hiding under the
-words. The bend lands where the text was, not where the pointer is, and a second drag of the
-same label moves that bend rather than stacking another beside it.
+line and it slides (`labelT`, as always); drag it AWAY from the line and the line follows,
+which is how you move a line without having to hit the 2px stroke hiding under the words.
+Where the line already has a waypoint, the drag MOVES the one governing the label's stretch of
+line — travelling by the drag, so a dot further along doesn't teleport under the text — and
+only a line with no waypoints at all gets a new one, at a deliberately blunt threshold. Nudging
+the same line by its label repeatedly moves one dot instead of leaving a trail of them.
 **Double-click the line or its label to edit the label inline.**
 Drag a waypoint to move it, double-click the dot to remove it, or *Clear route* in the
 inspector. On a selected edge, **drag an endpoint handle** to pin exactly where

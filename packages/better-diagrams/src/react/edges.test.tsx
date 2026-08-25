@@ -262,6 +262,22 @@ describe("label layer", () => {
     expect(present.querySelector(".as-edge__labellayer")!.classList).not.toContain("as-future");
   });
 
+  it("gives the label layer a real size — a 0×0 svg paints nothing", async () => {
+    // This layer went invisible in a browser once and no DOM test could see
+    // it: jsdom has no paint, so the labels were present, correct, and blank
+    // on screen. Chrome renders NOTHING from an outermost svg sized 0×0,
+    // `overflow: visible` or not. The geometry is inline for exactly this
+    // reason — so the invariant is assertable here.
+    const { container } = mountEdge(edgeData({ label: "calls" }));
+    await waitFor(() => expect(container.querySelector(".as-edge__labellayer")).toBeTruthy());
+    const layer = container.querySelector(".as-edge__labellayer") as SVGElement;
+    expect(layer.style.width).toBe("100%");
+    expect(layer.style.height).toBe("100%");
+    expect(layer.style.overflow).toBe("visible");
+    // …and it must not become a hit target at that size.
+    expect(layer.style.pointerEvents).toBe("none");
+  });
+
   it("adds nothing to the portal for an edge that carries no text", async () => {
     const { container } = mountEdge();
     await waitFor(() => expect(container.querySelector(".as-edge__hit")).toBeTruthy());
@@ -303,6 +319,40 @@ describe("dragging the label", () => {
     expect(requestCommit).toHaveBeenCalled();
   });
 
+  it("takes a deliberate pull to mint a dot — a small wobble does not", async () => {
+    const { container } = mountEdge(edgeData({ label: "calls" }));
+    await waitFor(() => expect(labelOf(container)).toBeTruthy());
+    const label = labelOf(container);
+
+    // 12px off the line: enough to have bent it before, not any more.
+    fireEvent.pointerDown(label, { pointerId: 1, clientX: 200, clientY: 20, button: 0 });
+    fireEvent.pointerMove(label, { pointerId: 1, clientX: 200, clientY: 32 });
+    fireEvent.pointerUp(label, { pointerId: 1 });
+    expect(theEdge().data.points).toBeUndefined();
+
+    // …and the label still slid along the line while it refused to bend.
+    expect(theEdge().data.labelT).toBeCloseTo(0.5, 1);
+  });
+
+  it("moves the dot the line already has, wherever on the line it sits", async () => {
+    // The line's shape is already someone's decision — a nudge by the label
+    // should move THAT dot, not leave a second one beside it.
+    const { container } = mountEdge(edgeData({ label: "calls", points: [[120, 60]] }));
+    await waitFor(() => expect(labelOf(container)).toBeTruthy());
+    const label = labelOf(container);
+    const at = { x: Number(label.getAttribute("x")), y: Number(label.getAttribute("y")) };
+
+    fireEvent.pointerDown(label, { pointerId: 1, clientX: at.x, clientY: at.y, button: 0 });
+    fireEvent.pointerMove(label, { pointerId: 1, clientX: at.x, clientY: at.y + 40 });
+    fireEvent.pointerUp(label, { pointerId: 1 });
+
+    const points = theEdge().data.points!;
+    expect(points).toHaveLength(1);
+    // Moved BY the drag, not TO the pointer — a dot elsewhere on the line must
+    // not teleport under the text.
+    expect(points[0]).toEqual([120, 100]);
+  });
+
   it("ignores the few px the text sits above the line — that is not a bend", async () => {
     const { container } = mountEdge(edgeData({ label: "calls" }));
     await waitFor(() => expect(labelOf(container)).toBeTruthy());
@@ -316,7 +366,7 @@ describe("dragging the label", () => {
     expect(theEdge().data.points).toBeUndefined();
   });
 
-  it("moves the bend it already made instead of stacking a second one", async () => {
+  it("keeps moving the same dot on a second drag, not stacking another", async () => {
     const { container } = mountEdge(edgeData({ label: "calls", points: [[200, 105]] }));
     await waitFor(() => expect(labelOf(container)).toBeTruthy());
     const label = labelOf(container);

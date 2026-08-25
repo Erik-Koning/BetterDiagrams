@@ -1468,17 +1468,10 @@
   pointer-events: none;
 }
 
-/* A 0×0 window onto the flow plane: the labels inside carry absolute flow
-   coordinates, and the portal's transform is what places them. Zero-sized so
-   the svg box itself can never intercept a click meant for the canvas. */
-.as-edge__labellayer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 0;
-  height: 0;
-  overflow: visible;
-}
+/* `.as-edge__labellayer` — the per-edge window onto the flow plane — carries
+   its geometry INLINE (see LABEL_LAYER_STYLE in edges.tsx). It is not styling:
+   a zero-sized outermost svg paints nothing at all, so the rule lives where a
+   test can assert it. Nothing themable belongs here. */
 
 /* The label is a handle on its line: along it slides the text, away from it
    bends the line. `move` says both directions are live. */

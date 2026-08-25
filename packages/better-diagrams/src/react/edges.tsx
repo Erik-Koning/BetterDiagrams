@@ -15,13 +15,15 @@
  * Shaping the line, all direct manipulation:
  *   - drag anywhere on it to bend it there (a waypoint is born under the
  *     pointer); double-click does the same without the drag
- *   - drag its label perpendicular to it for the same bend, without having to
- *     hit the 2px line under the words
+ *   - drag its label perpendicular to it to shape the line without having to
+ *     hit the 2px stroke under the words — it moves the dot that governs the
+ *     label's stretch of line where there is one, and only mints a new dot on
+ *     a line that has none, so nudging a line repeatedly cannot litter it
  *   - drag a waypoint to move it, double-click one to remove it
  *   - on a selected edge, drag an endpoint to pin where it attaches — or drop
  *     it on another node to re-attach the edge there
  */
-import { memo, useCallback, useRef, useState } from "react";
+import { memo, useCallback, useRef, useState, type CSSProperties } from "react";
 import {
   EdgeLabelRenderer,
   ViewportPortal,
@@ -82,19 +84,42 @@ const SNAP_TOL = 6;
 
 /**
  * How far the pointer must leave the line, dragging a label, before the drag
- * starts bending the line instead of only sliding the label along it. Measured
- * as CHANGE in the offset from the curve, not raw distance: the pointer grabs
- * the text a few px off the line already, and that head start must not count
- * as a bend.
+ * MINTS a waypoint on a line that has none. Deliberately blunt: a new bend is
+ * a new thing in the document, and a label nudged along its line must not keep
+ * leaving dots behind. Measured as CHANGE in the offset from the curve, not
+ * raw distance — the pointer grabs the text a few px off the line already, and
+ * that head start must not count as a bend.
  */
-const LABEL_BEND_TOL = 6;
+const LABEL_BEND_TOL = 18;
 
 /**
- * A waypoint this close to the label's own point on the line is the one that
- * bend put there — dragging the label again moves it rather than stacking a
- * second bend beside the first.
+ * The same threshold when the drag will MOVE a waypoint the line already has.
+ * Nothing is created, so nothing is lost by being responsive.
  */
-const LABEL_WAYPOINT_TOL = 14;
+const LABEL_MOVE_TOL = 6;
+
+/**
+ * The label layer's geometry. Inline rather than in the stylesheet because it
+ * is load-bearing, not decorative: an outermost svg sized 0×0 paints NOTHING
+ * in Chrome — `overflow: visible` or not — which is exactly how every edge
+ * label went invisible the first time they moved into this portal. A DOM test
+ * can see an inline style; it cannot see a stylesheet, and jsdom cannot see
+ * paint at all.
+ *
+ * `pointerEvents: none` is what stops a full-size layer (one per edge, all
+ * stacked over the canvas) from swallowing clicks meant for nodes; the label
+ * group inside re-enables them for itself, and hit-testing still reaches it
+ * where it paints outside this box.
+ */
+const LABEL_LAYER_STYLE: CSSProperties = {
+  position: "absolute",
+  top: 0,
+  left: 0,
+  width: "100%",
+  height: "100%",
+  overflow: "visible",
+  pointerEvents: "none",
+};
 
 /** The nearest reference within snapping distance, or nothing. */
 function snapAxis(v: number, refs: readonly number[]): number | null {
@@ -193,7 +218,9 @@ export const LabeledEdge = memo(function LabeledEdge({
    * Dragging the label is TWO gestures in one, split by direction:
    *
    *   along the line       → slide the label (labelT), as it always has
-   *   away from the line   → bend the line, the label riding it as a handle
+   *   away from the line   → shape the line, the label riding it as a handle:
+   *                          it moves the dot governing the label's stretch of
+   *                          line, or mints one if the line has none
    *
    * Both run at once, because both are just components of one drag: the
    * pointer's foot on the curve gives the slide, its offset from the curve
@@ -220,12 +247,32 @@ export const LabeledEdge = memo(function LabeledEdge({
       // every later position, so a straight slide reads as zero bend.
       const offset = { x: from.x - grabFoot.x, y: from.y - grabFoot.y };
       const basePoints = data?.points ?? [];
-      // A bend already under the label belongs to this label — move it rather
-      // than piling a second one on top. That one is available even at the
-      // waypoint cap, since it adds nothing.
-      const reuseIndex = basePoints.findIndex(
-        (pt) => Math.hypot(pt[0] - grabFoot.x, pt[1] - grabFoot.y) <= LABEL_WAYPOINT_TOL,
-      );
+      /**
+       * Which dot this drag will move. A line is divided into sections by its
+       * waypoints; the label sits on one of them, and the dots bounding that
+       * section are the ones that shape it. Reuse the nearer of those rather
+       * than minting another — a line the user keeps nudging by its label
+       * should end up with ONE bend they move, not a trail of them.
+       *
+       * Only a line with no dots at all gets a new one.
+       */
+      const grabT = nearestTOnCurve(grabGeo, from);
+      const along = basePoints
+        .map((pt, index) => ({ index, pt, t: nearestTOnCurve(grabGeo, { x: pt[0], y: pt[1] }) }))
+        .sort((a, b) => a.t - b.t);
+      const before = [...along].reverse().find((dot) => dot.t <= grabT);
+      const after = along.find((dot) => dot.t > grabT);
+      const nearer =
+        before && after
+          ? Math.hypot(before.pt[0] - grabFoot.x, before.pt[1] - grabFoot.y) <=
+            Math.hypot(after.pt[0] - grabFoot.x, after.pt[1] - grabFoot.y)
+            ? before
+            : after
+          : (before ?? after);
+      const reuseIndex = nearer?.index ?? -1;
+      const reusePoint = nearer?.pt;
+      // Moving an existing dot is always available — it adds nothing, so the
+      // waypoint cap does not apply to it.
       const canBend =
         !synthetic && (reuseIndex >= 0 || basePoints.length < MAX_EDGE_POINTS);
       // Same soft snapping as dragging the line itself: level runs read as
@@ -241,7 +288,7 @@ export const LabeledEdge = memo(function LabeledEdge({
         const foot = grabGeo.at(nextT);
         // How far the pointer has moved OFF the line since the grab.
         const drift = Math.hypot(point.x - foot.x - offset.x, point.y - foot.y - offset.y);
-        if (canBend && bendIndex < 0 && drift >= LABEL_BEND_TOL) {
+        if (canBend && bendIndex < 0 && drift >= (reusePoint ? LABEL_MOVE_TOL : LABEL_BEND_TOL)) {
           bendIndex =
             reuseIndex >= 0
               ? reuseIndex
@@ -249,8 +296,11 @@ export const LabeledEdge = memo(function LabeledEdge({
         }
         let points: Array<[number, number]> | undefined;
         if (bendIndex >= 0) {
-          const wx = Math.round(point.x - offset.x);
-          const wy = Math.round(point.y - offset.y);
+          // An existing dot travels BY the drag; a new one lands where the
+          // text is. Sending a dot from further down the line to the pointer
+          // would teleport it, yanking a stretch of line nobody grabbed.
+          const wx = Math.round(reusePoint ? reusePoint[0] + (point.x - from.x) : point.x - offset.x);
+          const wy = Math.round(reusePoint ? reusePoint[1] + (point.y - from.y) : point.y - offset.y);
           const sx = snapAxis(wx, refsX);
           const sy = snapAxis(wy, refsY);
           setGuides(
@@ -814,7 +864,10 @@ export const LabeledEdge = memo(function LabeledEdge({
         <ViewportPortal>
           {/* `as-future` rides the layer itself: the timeline's dimming is a
               class on the edge WRAPPER, which this text no longer lives in. */}
-          <svg className={`as-edge__labellayer${data?.future ? " as-future" : ""}`}>
+          <svg
+            className={`as-edge__labellayer${data?.future ? " as-future" : ""}`}
+            style={LABEL_LAYER_STYLE}
+          >
             {startLabelAt ? (
               <text
                 className="as-edge__endlabel"
