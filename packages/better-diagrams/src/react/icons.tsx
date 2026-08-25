@@ -51,6 +51,12 @@ export const BUILTIN_ICON_PATHS: Record<string, IconPaths> = {
   mail: ["M3 5h18v14H3z", "M3 6l9 7 9-7"],
   box: ["M12 2l9 5v10l-9 5-9-5V7z", "M3 7l9 5 9-5", "M12 12v10"],
   shield: ["M12 2l8 3v6c0 5-3.4 9.4-8 11-4.6-1.6-8-6-8-11V5z"],
+  // Two sparkles — the glyph everything AI-shaped has converged on, and the
+  // one thing on this list that reads as "a model" without a brain cliché.
+  sparkle: [
+    "M11 3l1.7 4.3L17 9l-4.3 1.7L11 15l-1.7-4.3L5 9l4.3-1.7z",
+    "M18 14l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z",
+  ],
 };
 
 export interface SvgIconProps {

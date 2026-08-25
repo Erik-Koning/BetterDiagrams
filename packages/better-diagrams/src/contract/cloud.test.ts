@@ -13,7 +13,7 @@ import {
 describe("CLOUD_COMPONENTS", () => {
   it("ships the curated component counts per cloud", () => {
     // Deliberate pins — growing a pack should be a conscious edit here too.
-    expect(CLOUD_COMPONENTS.aws).toHaveLength(10);
+    expect(CLOUD_COMPONENTS.aws).toHaveLength(11);
     expect(CLOUD_COMPONENTS.azure).toHaveLength(16);
     expect(CLOUD_COMPONENTS.gcp).toHaveLength(15);
   });
@@ -26,6 +26,18 @@ describe("CLOUD_COMPONENTS", () => {
         expect(component.id.startsWith(`${provider}-`)).toBe(true);
       }
     }
+  });
+
+  it("gives every cloud a model service — the packs stay comparable", () => {
+    // A gap here reads as "this cloud can't do it", which is not what an
+    // absent entry meant: AWS had no AI kind while the other two did.
+    for (const provider of CLOUD_PROVIDER_IDS) {
+      expect(CLOUD_COMPONENTS[provider].some((c) => c.role === "ai"), provider).toBe(true);
+    }
+    expect(CLOUD_COMPONENTS.aws.find((c) => c.id === "aws-bedrock")).toMatchObject({
+      label: "Bedrock",
+      role: "ai",
+    });
   });
 
   it("never collides with the generic builtin kinds", () => {

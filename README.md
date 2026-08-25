@@ -117,7 +117,7 @@ keeps a single copy of `@codemirror/state`.
 ### Cloud provider packs
 
 A curated set of components per big cloud ships as first-class node kinds — AWS (`aws-lambda`,
-`aws-s3`, `aws-dynamodb`, …), Azure (`azure-functions`, `azure-app-service`, `azure-cosmos`,
+`aws-s3`, `aws-dynamodb`, `aws-bedrock`, …), Azure (`azure-functions`, `azure-app-service`, `azure-cosmos`,
 `azure-openai`, …), GCP (`gcp-cloud-run`, `gcp-pubsub`, `gcp-bigquery`, `gcp-vertex-ai`, …) —
 each styled in its provider's brand palette with a role-appropriate icon and silhouette
 (databases are cylinders, queues are pipes).
@@ -238,7 +238,8 @@ collapses to a chip, and still drills in. Selecting it restores a visible border
 you have hold of it. `⌘G` wraps the current selection in a new container and `⌘⇧G` unwraps one,
 converting between absolute and parent-relative coordinates in the same pass.
 
-Note the deliberate split: **groups nest, zones don't.** A zone is a shaped infra *background*
+Note the deliberate split: **groups nest, zones don't.** (And only groups can be nested a level
+deeper — see below; a zone is a backdrop, not a box with insides.) A zone is a shaped infra *background*
 that nodes reference by `zoneId` (so a node can be in one zone and one group at once); zones
 resolve overlap by `z`, not by containment. If you want boxes inside boxes, they are groups.
 
@@ -259,6 +260,27 @@ derived rather than maintained — an edge from a grandchild to an outsider auto
 on every level between them, rerouted to whatever box represents each end. Deleting a ghost is
 refused (it lives on another level); dragging one to tidy a view is saved per-view under
 `meta.views` and never counts as an architecture change in `diffTemplates`.
+
+**Moving between the two shapes.** A group draws its children on this level; any other kind's
+children are a level down. Those are the same relationship rendered two ways, so the editor
+converts between them: with a container selected, *Arrange ▸ Nest contents a level deeper* (or
+the inspector's **Nest…**) turns the frame into one card and pushes everything inside it to its
+own C4 level, and *Show contents inline* brings them back. A confirmation dialog says how many
+nodes move and lets you pick what the frame becomes — `service` by default, C4's "container".
+
+No edge is rewritten by either direction: cross-level connections are derived, so arrows that
+pointed into the contents simply land on the card, and the internal wiring reappears when you
+drill in. That is also why it is exactly one undo. As transforms:
+
+```ts
+import { nestContents, inlineContents } from "@mosphere/better-diagrams";
+
+nestContents(template, "vpc", { kind: "azure-app-service" });  // frame → card, contents a level down
+inlineContents(template, "vpc");                               // card → frame, contents back inline
+```
+
+A stand-in for hidden contents keeps its words when it stands for exactly ONE edge, and goes
+blank only when it is summarising several — the same rule at every level, and in exports.
 
 The AI knows the convention but is told to keep levels flat unless you ask: refine while
 drilled in and the request is scoped to that component ("split the parser" decomposes the
@@ -598,6 +620,7 @@ The schema and editor cover C4's notational essentials:
 | **Self-loops** | `source === target` draws a retry arrow out one face and back into an adjacent one; drag an edge's endpoint onto its own source to make one |
 | **Routing** — curved / right-angle / straight | `meta.routing` sets the diagram default (Arrange ▾ → connector picker); `edge.routing` overrides per edge. Right-angle elbows are rounded |
 | **Flow-chart kinds** — `decision` (diamond), `terminator` (stadium), `io` (parallelogram) | Insert ▾ or the kind picker; Mermaid exports each by its shape |
+| **Language models** — `lm-small`, `lm-medium`, `llm` | One hue at three strengths, so the weight class is legible at a glance: a 1B router never looks like a frontier model. Provider-neutral — name the model in `description` ("Phi-3 mini", "Claude Opus 5"); use a cloud's own kind (`azure-openai`, `aws-bedrock`, `gcp-vertex-ai`) when the box is the hosting *service* |
 | **Collapsible groups** | ▾ on a group collapses it to a chip; contents hide, their edges re-route to the chip, and the stored size survives expand. Never destructive — collapse is view state that rides the undo stack |
 | **Tags + filter** | `node.tags`; the View ▾ tag filter dims non-matching nodes — dim only, never hide, so the filter can't touch what persists |
 | **Doc links** | `node.url` renders an ↗ affix (a real link in read-only) |
@@ -662,6 +685,15 @@ sequence in place; on a file with content it opens a new blank file of the other
 described above — which clouds and which of their resources the copied contract should teach,
 seeded with the open document's own — rather than copying blind; sequence files have no
 provider vocabulary to scope, so they copy straight to the clipboard.
+
+**Auto-save to the repo, while developing.** `npm run dev` mounts a small dev-only route
+(`example/vite-plugin-templates.js`) that writes every open file to `templates/` at the repo
+root, one plain `.json` per document, debounced. Renaming a file renames the JSON and deletes
+the old one; deleting a file deletes it. They are ordinary templates — the same shape Import
+and the paste box accept — so you can diff them, commit them, hand-edit them, or drop new ones
+in, and they all appear under **Settings ▾ → Saved templates** (re-read each time the menu
+opens). The route exists only in the dev server: a built app finds nothing there and carries on
+with localStorage, which is still the app's own source of truth.
 
 **AI is optional, per editor.** Pass the same `generate` function the architecture editor takes
 (`createProxyGenerator` works unchanged — the sequence system prompt travels with each request)

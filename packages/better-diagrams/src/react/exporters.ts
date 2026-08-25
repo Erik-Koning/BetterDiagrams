@@ -13,6 +13,7 @@
 import {
   ghostSourceId,
   hiddenInline,
+  onlyEdgeBetween,
   isBoundaryNodeId,
   isGhostNodeId,
   POINT_KINDS,
@@ -103,6 +104,7 @@ function rootLevelProjection(template: DiagramTemplate): DiagramTemplate {
   if (!hidden.size) return template;
   const byId = new Map(template.nodes.map((n) => [n.id, n]));
   const seen = new Set<string>();
+  const alone = onlyEdgeBetween(template.edges, (id) => visibleAnchor(id, byId, hidden));
   return {
     ...template,
     nodes: template.nodes.filter((n) => !hidden.has(n.id)),
@@ -114,8 +116,9 @@ function rootLevelProjection(template: DiagramTemplate): DiagramTemplate {
       const key = `${source}→${target}`;
       if (seen.has(key)) return [];
       seen.add(key);
-      // A stand-in summarising hidden originals shows no one edge's label.
-      return [{ ...e, source, target, label: "" }];
+      // A stand-in summarising SEVERAL hidden originals shows none of their
+      // labels; standing in for one, it keeps that one's.
+      return [alone(e) ? { ...e, source, target } : { ...e, source, target, label: "" }];
     }),
   };
 }

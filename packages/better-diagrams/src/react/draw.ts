@@ -32,6 +32,7 @@ import {
   fieldListTop,
   resolveRouting,
   type DiagramEdge,
+  onlyEdgeBetween,
   stackLevels,
   type DiagramNode,
   type DiagramTemplate,
@@ -326,9 +327,12 @@ function layout(template: DiagramTemplate, containerKinds?: readonly string[]): 
   // Same collapse re-routing as toReactFlow: edges into hidden contents attach
   // to the chip; parallels converge to one; internal wiring disappears.
   const rerouteSeen = new Set<string>();
-  const edges = template.edges
-    .filter((e) => visible.edges.has(e.id))
-    .flatMap((e) => {
+  const shown = template.edges.filter((e) => visible.edges.has(e.id));
+  // …including the rule about which re-routes keep their words: a lone edge
+  // summarises nothing. Shared with the canvas so a PNG cannot say less than
+  // the screen it was exported from.
+  const alone = onlyEdgeBetween(shown, (id) => visibleAnchor(id, nodeById, collapseHidden));
+  const edges = shown.flatMap((e) => {
       const source = visibleAnchor(e.source, nodeById, collapseHidden);
       const target = visibleAnchor(e.target, nodeById, collapseHidden);
       if (!placedIds.has(source) || !placedIds.has(target) || source === target) return [];
@@ -337,6 +341,7 @@ function layout(template: DiagramTemplate, containerKinds?: readonly string[]): 
         const key = `${source}→${target}`;
         if (rerouteSeen.has(key)) return [];
         rerouteSeen.add(key);
+        const summarising = !alone(e);
         // Anchors/waypoints describe the ORIGINAL endpoints' boxes — the
         // canvas drops them on re-route (toReactFlow), so exports must too.
         return [
@@ -344,9 +349,7 @@ function layout(template: DiagramTemplate, containerKinds?: readonly string[]): 
             ...e,
             source,
             target,
-            label: "",
-            tech: undefined,
-            seq: undefined,
+            ...(summarising ? { label: "", tech: undefined, seq: undefined } : {}),
             start: undefined,
             end: undefined,
             points: undefined,

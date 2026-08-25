@@ -292,6 +292,33 @@ describe("templateBounds", () => {
   });
 });
 
+describe("language model kinds", () => {
+  it("are first-class vocabulary the validator accepts as authored", () => {
+    const t = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "r", label: "Intent router", kind: "lm-small", description: "Phi-3 mini" },
+        { id: "s", label: "Summariser", kind: "lm-medium", description: "Llama 3 8B" },
+        { id: "a", label: "Planning agent", kind: "llm", description: "Claude Opus 5" },
+      ],
+      edges: [],
+    });
+    // Not coerced to `service` — the weight class is the point.
+    expect(t.nodes.map((n) => n.kind)).toEqual(["lm-small", "lm-medium", "llm"]);
+  });
+
+  it("are offered to the model, without naming a cloud to do it", () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain("lm-small|lm-medium|llm");
+    expect(prompt).toContain("LANGUAGE MODELS:");
+    // The base prompt stays provider-neutral: the cross-reference to a cloud's
+    // own model service must not name kinds this prompt hasn't offered.
+    expect(prompt).not.toContain("azure-openai");
+    expect(prompt).not.toContain("aws-bedrock");
+    expect(prompt).not.toContain("gcp-vertex-ai");
+  });
+});
+
 describe("buildSystemPrompt", () => {
   it("advertises exactly the vocabulary the validator accepts", () => {
     const prompt = buildSystemPrompt();

@@ -33,7 +33,7 @@ const ROLE_ICON: Record<CloudComponentRole, IconName> = {
   events: "mail",
   gateway: "shield",
   cdn: "globe",
-  ai: "code",
+  ai: "sparkle",
   security: "lock",
 };
 

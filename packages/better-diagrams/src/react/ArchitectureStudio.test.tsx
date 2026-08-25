@@ -1516,6 +1516,56 @@ describe("ArchitectureStudio", () => {
     expect(db.x).toBe(EXAMPLE_TEMPLATE.nodes.find((n) => n.id === "db")!.x);
   });
 
+  it("nests a group's contents a level deeper, and brings them back", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />,
+    );
+
+    // The VPC frame holds api/wrk/q, with `gw → api` crossing into it.
+    fireEvent.click(screen.getByText("Application VPC"));
+    await user.click(await screen.findByRole("button", { name: "Nest…" }));
+    // The dialog names what moves before it moves it.
+    expect(screen.getByRole("dialog", { name: /Nest .Application VPC./ })).toBeInTheDocument();
+    expect(screen.getByText(/Its 3 nodes move to a level of their own/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Nest contents" }));
+
+    let latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    // A card now — and its contents are still its contents, untouched.
+    expect(latest.nodes.find((n) => n.id === "vpc")!.kind).toBe("service");
+    for (const id of ["api", "wrk", "q"]) {
+      expect(latest.nodes.find((n) => n.id === id)!.parentId).toBe("vpc");
+    }
+    // The document keeps every edge; the CANVAS is what stops showing them.
+    expect(latest.edges.map((e) => e.id)).toEqual(EXAMPLE_TEMPLATE.edges.map((e) => e.id));
+    expect(container.querySelector('[data-id="api"]')).toBeNull();
+    expect(screen.getByText("Application VPC")).toBeInTheDocument();
+
+    // Undo puts the frame back.
+    await user.keyboard("{Meta>}z{/Meta}");
+    latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "vpc")!.kind).toBe("group");
+
+    // And the inverse is offered on the nested card.
+    await user.keyboard("{Meta>}{Shift>}z{/Shift}{/Meta}");
+    fireEvent.click(screen.getByText("Application VPC"));
+    await user.click(await screen.findByRole("button", { name: "Inline…" }));
+    await user.click(screen.getByRole("button", { name: "Show inline" }));
+
+    latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "vpc")!.kind).toBe("group");
+    // Back on the canvas, inside the frame.
+    await waitFor(() => expect(container.querySelector('[data-id="api"]')).toBeTruthy());
+  });
+
+  it("offers neither nesting verb for a node with nothing inside it", async () => {
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    fireEvent.click(screen.getByText("Postgres"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /Nest…|Inline…/ })).toBeNull();
+  });
+
   it("locks and unlocks the selection with ⌘⇧L", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

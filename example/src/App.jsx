@@ -37,6 +37,14 @@ import {
 } from "@mosphere/better-diagrams";
 import "@mosphere/better-diagrams/styles.css";
 import { registry } from "./extensions.js";
+import {
+  listTemplates,
+  probeTemplates,
+  readTemplate,
+  removeTemplate,
+  templateFile,
+  writeTemplate,
+} from "./templates.js";
 
 const WORKSPACE_KEY = "better-diagrams:workspace";
 // Storage keys from earlier builds, read once so saved work survives a rename.
@@ -468,6 +476,85 @@ export default function App() {
     [editJsonOpen, active],
   );
 
+  // ── Auto-save to the repo's templates folder ──────────────────────────────
+  //
+  // Only while developing: the route lives in the vite dev server, so a built
+  // app finds nothing and this whole section stays dark (see templates.js).
+  // The point is that the diagrams you make are FILES — readable, diffable,
+  // committable — rather than rows in localStorage nobody can see.
+
+  /** null until probed; then the folder path the dev server is writing to. */
+  const [templatesDir, setTemplatesDir] = useState(null);
+  const [savedTemplates, setSavedTemplates] = useState([]);
+  /** id → what we last wrote for it, so an idle app writes nothing at all. */
+  const writtenRef = useRef(new Map());
+
+  const refreshTemplates = useCallback(async () => {
+    setSavedTemplates(await listTemplates());
+  }, []);
+
+  useEffect(() => {
+    let live = true;
+    probeTemplates().then((probe) => {
+      if (!live || !probe) return;
+      setTemplatesDir(probe.dir);
+      setSavedTemplates(probe.templates);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!templatesDir) return undefined;
+    // Debounced: a drag fires dozens of changes and none of them is a moment
+    // worth writing to disk on its own.
+    const timer = setTimeout(async () => {
+      let touched = false;
+      // Two files can carry the same name; their slugs must not collide, or
+      // one would silently overwrite the other on disk.
+      const claimed = new Map();
+      for (const file of files) {
+        const base = templateFile(file.name, file.id);
+        const owner = claimed.get(base);
+        const name = owner && owner !== file.id ? templateFile(`${file.name}-${file.id}`, file.id) : base;
+        claimed.set(base, claimed.get(base) ?? file.id);
+        const json = JSON.stringify(file.doc);
+        const before = writtenRef.current.get(file.id);
+        if (before?.file === name && before.json === json) continue;
+        if (!(await writeTemplate(name, file.doc))) continue;
+        // A rename writes the new name and takes the old file with it, rather
+        // than leaving a stale twin behind.
+        if (before && before.file !== name) await removeTemplate(before.file);
+        writtenRef.current.set(file.id, { file: name, json });
+        touched = true;
+      }
+      // Deleted in the app ⇒ deleted on disk. The workspace is the authority
+      // while it is open; a file the user removed must not come back in the
+      // dropdown.
+      for (const [id, record] of [...writtenRef.current]) {
+        if (files.some((f) => f.id === id)) continue;
+        await removeTemplate(record.file);
+        writtenRef.current.delete(id);
+        touched = true;
+      }
+      if (touched) await refreshTemplates();
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [files, templatesDir, refreshTemplates]);
+
+  /** Load one back into the active file, the way the examples do. */
+  const openTemplate = useCallback(
+    async (entry) => {
+      const doc = await readTemplate(entry.file);
+      if (!doc) return;
+      setActiveDoc(entry.kind === "sequence" ? validateSequence(doc) : validateTemplate(doc));
+      setSettingsOpen(false);
+      toast.success(`Loaded ${entry.name}`, { description: entry.file });
+    },
+    [setActiveDoc],
+  );
+
   // Guard against a stale-looking UI if another tab saves the workspace.
   useEffect(() => {
     const onStorage = (event) => {
@@ -613,7 +700,15 @@ export default function App() {
             <button
               type="button"
               className="app__btn"
-              onClick={() => setSettingsOpen((on) => !on)}
+              onClick={() => {
+                setSettingsOpen((on) => {
+                  // Re-read the folder on the way open: a template pulled from
+                  // git or written by hand is a file like any other, and the
+                  // menu is the only place it can announce itself.
+                  if (!on && templatesDir) void refreshTemplates();
+                  return !on;
+                });
+              }}
               aria-haspopup="menu"
               aria-expanded={settingsOpen}
             >
@@ -621,6 +716,38 @@ export default function App() {
             </button>
             {settingsOpen ? (
               <div className="app__dropdown" role="menu" aria-label="Settings">
+                {templatesDir ? (
+                  <>
+                    <span className="app__dropdown-caption" title={templatesDir}>
+                      Saved templates
+                    </span>
+                    {savedTemplates.length ? (
+                      savedTemplates.map((entry) => (
+                        <button
+                          key={entry.file}
+                          type="button"
+                          role="menuitem"
+                          className="app__dropdown-item"
+                          // A sequence template cannot land in the architecture
+                          // editor, and the reverse — say so rather than
+                          // failing on click.
+                          disabled={!active || entry.kind === "unreadable" || entry.kind !== active.kind}
+                          onClick={() => openTemplate(entry)}
+                        >
+                          {entry.name}
+                          <span className="app__dropdown-desc">
+                            {entry.kind === "unreadable"
+                              ? `${entry.file} — not readable as JSON`
+                              : `${entry.file} · ${entry.nodes} ${entry.kind === "sequence" ? "participants" : "nodes"}`}
+                          </span>
+                        </button>
+                      ))
+                    ) : null}
+                    <span className="app__dropdown-note">
+                      Auto-saving every open file to <code>/templates</code> as you work.
+                    </span>
+                  </>
+                ) : null}
                 <span className="app__dropdown-caption">Examples</span>
                 <button
                   type="button"

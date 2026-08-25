@@ -259,7 +259,9 @@ describe("buildMultiViewHtml — the drill-down page", () => {
   it("mermaid and c4puml project drill detail onto its card", () => {
     const mermaid = renderTemplateToMermaid(DOC);
     expect(mermaid).not.toContain("Pay API");
-    expect(mermaid).toContain("web --> pay");
+    // Re-anchored onto the card — and since it is the ONLY edge landing on
+    // that pair, it still says what it does (see `onlyEdgeBetween`).
+    expect(mermaid).toContain("web -->|buys| pay");
     const puml = renderTemplateToC4Puml(DOC);
     expect(puml).not.toContain("Pay API");
     expect(puml).toContain("Rel(web, pay");

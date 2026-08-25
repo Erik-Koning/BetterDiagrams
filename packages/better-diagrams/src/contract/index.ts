@@ -141,6 +141,9 @@ export type {
 // ── Scoped views (C4 drill-down) ─────────────────────────────────────────────
 export { scopedView, liftScopedReactFlow, drillableIds, focusPath } from "./scope";
 export type { ScopedViewOptions } from "./scope";
+// Moving contents BETWEEN levels — the edit the views above only display.
+export { nestContents, inlineContents } from "./nesting";
+export type { NestOptions, InlineOptions } from "./nesting";
 export {
   BOUNDARY_NODE_PREFIX,
   GHOST_NODE_PREFIX,

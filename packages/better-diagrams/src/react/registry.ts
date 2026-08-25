@@ -86,6 +86,12 @@ export const BUILTIN_NODE_KINDS: Record<string, NodeKindDef> = {
   terminator: { label: "Start / End", fill: "#052e16", accent: "#4ade80", text: "#bbf7d0", icon: "none", shape: "pipe" },
   io: { label: "Input / Output", fill: "#172554", accent: "#60a5fa", text: "#bfdbfe", icon: "none", shape: "parallelogram" },
   point: { label: "Point", fill: "transparent", accent: "#64748b", text: "#94a3b8", icon: "none", point: true },
+  // One hue at three strengths: a family the eye groups instantly, where the
+  // brightness IS the weight class. Fuchsia because every neighbouring hue is
+  // already spoken for (violet = queue, sky = service, amber = database).
+  "lm-small": { label: "Small LM", fill: "#2a0f2c", accent: "#e9a8f5", text: "#f5d0fe", icon: "sparkle" },
+  "lm-medium": { label: "Medium LM", fill: "#3b0f45", accent: "#e879f9", text: "#f5d0fe", icon: "sparkle" },
+  llm: { label: "LLM", fill: "#4a1157", accent: "#d946ef", text: "#fae8ff", icon: "sparkle" },
 };
 
 /** Order the built-ins appear in the inspector. Extensions append after these. */
@@ -103,6 +109,9 @@ const BUILTIN_KIND_ORDER = [
   "terminator",
   "io",
   "point",
+  "lm-small",
+  "lm-medium",
+  "llm",
 ];
 
 /**

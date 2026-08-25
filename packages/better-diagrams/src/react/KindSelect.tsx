@@ -17,6 +17,12 @@ export interface KindSelectProps {
   onChange: (kind: string) => void;
   /** Providers the document references — these clouds list un-demoted. */
   relevantProviders: ReadonlySet<string>;
+  /**
+   * Kinds this picker must not offer. Used where a kind would be a category
+   * error rather than a bad choice — nesting a group cannot turn it into
+   * another container, or the contents would stay inline.
+   */
+  omit?: (kind: string) => boolean;
 }
 
 interface CloudGroup {
@@ -26,7 +32,7 @@ interface CloudGroup {
   kinds: string[];
 }
 
-export function KindSelect({ registry, value, onChange, relevantProviders }: KindSelectProps) {
+export function KindSelect({ registry, value, onChange, relevantProviders, omit }: KindSelectProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -49,6 +55,7 @@ export function KindSelect({ registry, value, onChange, relevantProviders }: Kin
   const coreKinds: string[] = [];
   const byProvider = new Map<string, string[]>();
   for (const kind of registry.kindOrder) {
+    if (omit?.(kind)) continue;
     const provider = registry.nodeKinds[kind]?.provider;
     if (!provider) {
       coreKinds.push(kind);

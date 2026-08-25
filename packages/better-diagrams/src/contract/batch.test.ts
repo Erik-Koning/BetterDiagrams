@@ -27,6 +27,8 @@ import {
   startAngle,
 } from "./geometry";
 import { autoLayout, hasOverlaps, placeUnpositioned } from "./layout";
+import { inlineContents, nestContents } from "./nesting";
+import { scopedView } from "./scope";
 
 const node = (over: Record<string, unknown> = {}) => ({
   id: "n",
@@ -632,6 +634,104 @@ describe("collapse", () => {
     for (const n of out.nodes) {
       expect(Number.isFinite(n.x) && Number.isFinite(n.y)).toBe(true);
     }
+  });
+});
+
+describe("nesting a group's contents one level deeper", () => {
+  // The point of the transform is what the RENDERERS then do with it, which
+  // nothing in the transform itself arranges: it only changes a kind.
+  const doc = () =>
+    validateTemplate({
+      nodes: [
+        node({ id: "out", x: 0, y: 0 }),
+        { id: "g", label: "G", kind: "group", icon: "none", description: "", parentId: null, x: 300, y: 0, w: 400, h: 300 },
+        node({ id: "a", parentId: "g", x: 24, y: 48 }),
+        node({ id: "b", parentId: "g", x: 24, y: 160 }),
+      ],
+      edges: [
+        { id: "in", source: "out", target: "a", label: "calls" },
+        { id: "wire", source: "a", target: "b", label: "enqueue" },
+      ],
+    }) as DiagramTemplate;
+
+  it("hides the contents on this level and lands the arrow on the card", () => {
+    const nested = nestContents(doc(), "g");
+    const { nodes, edges } = toReactFlow(nested);
+
+    expect(nodes.map((n) => n.id)).toEqual(["out", "g"]);
+    // The crossing edge now reaches the card; the internal wiring is gone
+    // from this level entirely.
+    expect(edges).toHaveLength(1);
+    expect({ source: edges[0].source, target: edges[0].target }).toEqual({ source: "out", target: "g" });
+    // …and being the only edge on that pair, it still says what it does.
+    expect(edges[0].data.label).toBe("calls");
+    expect(isCollapsedEdgeId(edges[0].id)).toBe(true);
+  });
+
+  it("shows the same contents, wired as before, one level down", () => {
+    const level = scopedView(nestContents(doc(), "g"), "g");
+
+    expect(level.nodes.map((n) => n.id)).toEqual(["boundary:g", "a", "b", "ghost:out"]);
+    // The interior edge is emitted verbatim — it is this level's own wiring.
+    expect(level.edges.find((e) => e.id === "wire")).toMatchObject({
+      source: "a",
+      target: "b",
+      label: "enqueue",
+    });
+  });
+
+  it("puts everything back", () => {
+    const back = inlineContents(nestContents(doc(), "g"), "g");
+    const { nodes, edges } = toReactFlow(back);
+
+    expect(nodes.map((n) => n.id)).toEqual(["out", "g", "a", "b"]);
+    // Both edges land on the real nodes again, with their own ids.
+    expect(edges.map((e) => e.id).sort()).toEqual(["in", "wire"]);
+  });
+});
+
+describe("what a re-routed edge is allowed to say", () => {
+  /** Two nodes inside a collapsed group; `fan` decides how many arrows cross. */
+  const doc = (fan: 1 | 2) =>
+    validateTemplate({
+      nodes: [
+        node({ id: "out", x: 0, y: 0 }),
+        { id: "g", label: "G", kind: "group", icon: "none", description: "", parentId: null, collapsed: true, x: 300, y: 0, w: 400, h: 300 },
+        node({ id: "a", parentId: "g", x: 24, y: 48 }),
+        node({ id: "b", parentId: "g", x: 24, y: 160 }),
+      ],
+      edges: [
+        { id: "e1", source: "out", target: "a", label: "reads", tech: "SQL" },
+        ...(fan === 2 ? [{ id: "e2", source: "out", target: "b", label: "writes" }] : []),
+      ],
+    }) as DiagramTemplate;
+
+  it("keeps its own words when it is the only edge on the pair", () => {
+    const [edge] = toReactFlow(doc(1)).edges;
+    expect({ source: edge.source, target: edge.target }).toEqual({ source: "out", target: "g" });
+    expect(edge.data.label).toBe("reads");
+    expect(edge.data.tech).toBe("SQL");
+  });
+
+  it("says nothing when it is standing in for several", () => {
+    // "reads" would be a claim about one of the two lines it now draws.
+    const edges = toReactFlow(doc(2)).edges;
+    expect(edges).toHaveLength(1);
+    expect(edges[0].data.label).toBe("");
+    expect(edges[0].data.tech).toBeUndefined();
+  });
+
+  it("still drops what describes the boxes it no longer touches", () => {
+    const withAnchors = doc(1);
+    Object.assign(withAnchors.edges[0], {
+      start: { side: "right", t: 0.5 },
+      startLabel: "0..*",
+      points: [[100, 100]],
+    });
+    const [edge] = toReactFlow(withAnchors).edges;
+    expect(edge.data.start).toBeUndefined();
+    expect(edge.data.startLabel).toBeUndefined();
+    expect(edge.data.points).toBeUndefined();
   });
 });
 

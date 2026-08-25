@@ -49,6 +49,12 @@ export const NODE_KINDS = [
   "decision", // flow-chart branch — renders as a diamond
   "terminator", // flow-chart start/end — renders as a stadium
   "io", // flow-chart input/output — renders as a parallelogram
+  // Language models, by weight class. Three kinds rather than one with a
+  // size field: what a reader needs at a glance is whether this box is a
+  // 1B router or a frontier model, and a kind is what the eye reads.
+  "lm-small", // on-device / a few B params
+  "lm-medium", // self-hosted mid-size
+  "llm", // frontier, typically hosted
 ] as const;
 export type NodeKind = (typeof NODE_KINDS)[number] | (string & {});
 
@@ -84,6 +90,7 @@ export const ICON_NAMES = [
   "mail",
   "box",
   "shield",
+  "sparkle",
 ] as const;
 export type IconName = (typeof ICON_NAMES)[number] | (string & {});
 
@@ -749,6 +756,7 @@ Rules:
 - "text" = free annotation; put the sentence in label, fontSize 12-16${geo ? ", w~300 h~60" : ""}, no edges.
 - "point" = the bare endpoint of a dangling arrow: a tiny dot an edge can end on, for an arrow into empty space (a dependency on something that doesn't exist yet). label ""${geo ? ", w=h=12" : ""}; use ONLY as an edge's source/target, and only when the user asks for an open-ended/abstract arrow.
 - FLOW CHARTS: "terminator" (stadium) for start/end, "decision" (diamond) for branches — label its outgoing edges "yes"/"no" — "io" (parallelogram) for input/output, "service" for process steps. An edge may target its own source ("source"==="target") to draw a retry/self loop. Use these kinds only for flow charts, not architecture.
+- LANGUAGE MODELS: "lm-small" (on-device or a few B params), "lm-medium" (self-hosted mid-size), "llm" (frontier, typically hosted) — pick by the weight class the design depends on, and name the actual model in the description ("Phi-3 mini", "Llama 3 8B", "Claude Opus 5"). When the box is the cloud SERVICE hosting a model rather than the model itself, prefer that provider's own model kind where one is listed below.
 - Edge "startHead"/"endHead" (${EDGE_HEADS.join("|")}) override the glyph at each end when the user asks for UML-style notation (hollow "diamond" at the source = aggregation, "open" arrow = dependency); omit for normal arrows.
 - ${geo ? "Regular nodes: w 160-200, h 64-84. Pick" : "Pick"} a fitting icon. description is an optional one-line tech detail (C4 style, e.g. "Node.js / Express").
 - Edge style semantics: dashed = async/event-driven, dotted = cache/optional/telemetry, solid = synchronous. Vary color by concern (e.g. amber = data, violet = messaging).${geo ? " labelT (0.15-0.85) slides the label along the arrow to avoid collisions." : ""}
@@ -1427,6 +1435,28 @@ export function hiddenInline(
   containerKinds?: readonly string[],
 ): Set<string> {
   return hiddenBelow(t, cardParentIds(t, containerKinds));
+}
+
+/**
+ * "Is this the only edge running between those two boxes?" — asked of an edge
+ * list under some anchoring, so the caller decides what counts as an endpoint.
+ *
+ * A re-routed edge usually summarises several originals, which is why the
+ * derivations blank its label: "read/write" is a claim about one of the six
+ * lines converging on a chip, not about the bundle. But when exactly ONE edge
+ * lands on a pair there is nothing to summarise, and dropping its words loses
+ * information for no reason. `scopedView` has always drawn that distinction
+ * (`keepPayload = single && crossing`); this is the same rule, shared so the
+ * canvas and the image exporters cannot answer it differently.
+ */
+export function onlyEdgeBetween(
+  edges: readonly DiagramEdge[],
+  anchor: (nodeId: string) => string,
+): (edge: DiagramEdge) => boolean {
+  const key = (edge: DiagramEdge) => `${anchor(edge.source)}\u0000${anchor(edge.target)}`;
+  const counts = new Map<string, number>();
+  for (const edge of edges) counts.set(key(edge), (counts.get(key(edge)) ?? 0) + 1);
+  return (edge) => counts.get(key(edge)) === 1;
 }
 
 /**
@@ -2401,19 +2431,21 @@ export function toReactFlow(
   const defaultRouting = resolveRouting(t.meta?.routing);
 
   const rerouteSeen = new Set<string>();
-  const edges: RFEdge[] = t.edges
-    // Provider hiding drops an edge; collapse RE-ROUTES it (below). In ghost
-    // mode an edge renders whenever both ends are on the canvas, so a ghosted
-    // node still shows what it connects to.
-    .filter((e) => {
-      const providerOk = !visible
-        ? true
-        : showHidden
-          ? renderedNodeIds.has(visibleAnchor(e.source, byId, collapseHidden)) &&
-            renderedNodeIds.has(visibleAnchor(e.target, byId, collapseHidden))
-          : visible.edges.has(e.id);
-      return providerOk;
-    })
+  // Provider hiding drops an edge; collapse RE-ROUTES it (below). In ghost
+  // mode an edge renders whenever both ends are on the canvas, so a ghosted
+  // node still shows what it connects to.
+  const shown = t.edges.filter((e) =>
+    !visible
+      ? true
+      : showHidden
+        ? renderedNodeIds.has(visibleAnchor(e.source, byId, collapseHidden)) &&
+          renderedNodeIds.has(visibleAnchor(e.target, byId, collapseHidden))
+        : visible.edges.has(e.id),
+  );
+  // Asked of the edges that actually render: a hidden sibling must not talk
+  // this one out of its own label.
+  const alone = onlyEdgeBetween(shown, (id) => visibleAnchor(id, byId, collapseHidden));
+  const edges: RFEdge[] = shown
     .flatMap((e) => {
       // Edges into a collapsed group attach to its chip instead of vanishing —
       // the chip must still show what the hidden contents talk to.
@@ -2426,6 +2458,9 @@ export function toReactFlow(
       if (source === target && (source !== e.source || target !== e.target)) return [];
 
       const rerouted = source !== e.source || target !== e.target;
+      // A re-route that summarises nothing keeps its words — the same rule
+      // scopedView applies (`keepPayload = single && crossing`).
+      const summarising = rerouted && !alone(e);
       if (rerouted) {
         // Many hidden edges can converge on one chip pair; draw it once.
         const key = `${source}→${target}`;
@@ -2452,16 +2487,17 @@ export function toReactFlow(
             style: e.style,
             color: e.color,
             labelT: e.labelT ?? 0.5,
-            // A re-routed edge summarises possibly many originals; a specific
-            // label/tech/seq from one of them would be misleading.
-            label: rerouted ? "" : e.label,
+            // A re-route that summarises SEVERAL originals cannot wear one of
+            // their labels; a lone one has nothing to summarise and keeps its
+            // own words.
+            label: summarising ? "" : e.label,
             ...(e.providers?.length ? { providers: e.providers } : {}),
-            ...(!rerouted && e.tech ? { tech: e.tech } : {}),
-            ...(!rerouted && e.date ? { date: e.date } : {}),
+            ...(!summarising && e.tech ? { tech: e.tech } : {}),
+            ...(!summarising && e.date ? { date: e.date } : {}),
             ...(e.direction ? { direction: e.direction } : {}),
             ...(e.startHead ? { startHead: e.startHead } : {}),
             ...(e.endHead ? { endHead: e.endHead } : {}),
-            ...(!rerouted && e.seq ? { seq: e.seq } : {}),
+            ...(!summarising && e.seq ? { seq: e.seq } : {}),
             ...(e.routing ? { routing: e.routing } : {}),
             // Anchors/waypoints describe the ORIGINAL endpoints' boxes; a
             // re-routed edge connects different boxes, so they don't apply.

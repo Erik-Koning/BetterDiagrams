@@ -51,6 +51,7 @@ export const CLOUD_COMPONENTS: Record<CloudProviderId, CloudComponentDef[]> = {
     { id: "aws-sns", label: "SNS", hint: "pub/sub topic and fan-out", role: "events" },
     { id: "aws-api-gateway", label: "API Gateway", hint: "managed API front door", role: "gateway" },
     { id: "aws-cloudfront", label: "CloudFront", hint: "CDN / edge distribution", role: "cdn" },
+    { id: "aws-bedrock", label: "Bedrock", hint: "hosted foundation models / LLM inference", role: "ai" },
   ],
   azure: [
     { id: "azure-functions", label: "Functions", hint: "serverless function", role: "compute" },

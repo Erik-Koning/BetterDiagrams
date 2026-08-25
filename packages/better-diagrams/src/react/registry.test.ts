@@ -54,7 +54,7 @@ describe("resolveRegistry", () => {
 
   it("orders kinds: built-ins, then cloud packs, then extensions", () => {
     const r = resolveRegistry({ nodeKinds: { zeta: {}, alpha: {} } });
-    expect(r.kindOrder.slice(0, 13)).toEqual([
+    const builtins = [
       "service",
       "database",
       "queue",
@@ -68,9 +68,13 @@ describe("resolveRegistry", () => {
       "terminator",
       "io",
       "point",
-    ]);
+      "lm-small",
+      "lm-medium",
+      "llm",
+    ];
+    expect(r.kindOrder.slice(0, builtins.length)).toEqual(builtins);
     // The cloud pack kinds sit between built-ins and extensions.
-    expect(r.kindOrder[13]).toBe("aws-lambda");
+    expect(r.kindOrder[builtins.length]).toBe("aws-lambda");
     expect(r.kindOrder.slice(-2)).toEqual(["zeta", "alpha"]);
   });
 
@@ -616,6 +620,28 @@ describe("text exporters", () => {
     // And no page-coloured rectangle standing in for one.
     const upTo = svg.slice(0, svg.indexOf(">calls<"));
     expect(upTo.slice(-300)).not.toContain(`<rect`);
+  });
+
+  it("re-routes edge text exactly as the canvas does", () => {
+    // Two derivations, one rule: a PNG must not say less than the screen it
+    // was exported from (see `onlyEdgeBetween`).
+    const doc = (fan: 1 | 2): DiagramTemplate =>
+      validateTemplate({
+        version: 1,
+        nodes: [
+          { id: "out", label: "Out", kind: "service", x: 0, y: 0, w: 170, h: 76 },
+          { id: "g", label: "G", kind: "group", collapsed: true, x: 400, y: 0, w: 400, h: 300 },
+          { id: "a", label: "A", kind: "service", parentId: "g", x: 24, y: 48, w: 170, h: 76 },
+          { id: "b", label: "B", kind: "service", parentId: "g", x: 24, y: 160, w: 170, h: 76 },
+        ],
+        edges: [
+          { id: "e1", source: "out", target: "a", label: "reads" },
+          ...(fan === 2 ? [{ id: "e2", source: "out", target: "b", label: "writes" }] : []),
+        ],
+      }) as DiagramTemplate;
+
+    expect(renderTemplateToSvg(doc(1), resolveRegistry())).toContain(">reads</text>");
+    expect(renderTemplateToSvg(doc(2), resolveRegistry())).not.toContain(">reads</text>");
   });
 
   it("renders the whole example diagram to SVG", () => {

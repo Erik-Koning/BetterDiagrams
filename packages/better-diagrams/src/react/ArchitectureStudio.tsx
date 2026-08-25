@@ -150,6 +150,8 @@ import {
   welcomeSuppressed,
 } from "./WelcomeModal";
 import { buildArchitectureLint } from "./schema-lint";
+import { NestingModal } from "./NestingModal";
+import { inlineContents, nestContents } from "../contract/nesting";
 import { KindSelect } from "./KindSelect";
 import { CLOUD_PROVIDER_IDS } from "../contract/cloud";
 import {
@@ -2838,6 +2840,50 @@ function StudioInner({
     showToast(`Ungrouped ${groupIds.length} container${groupIds.length === 1 ? "" : "s"}`);
   }, [readOnly, selectedNodeIds, flow, registry, setNodes, commitLater, showToast]);
 
+  // ── Nesting: moving contents between C4 levels ────────────────────────────
+  //
+  // Both directions are pure document transforms (contract/nesting.ts) that
+  // only change a node's KIND and geometry — which is enough, because "renders
+  // inside the frame" versus "is a level deeper" is decided by nothing else.
+  // They go through `applyTemplate` rather than `setNodes`: this changes which
+  // nodes exist on the canvas, so the whole document is the honest unit, and
+  // one undo entry covers the restructure. `fit: false` keeps the viewport
+  // where the user left it.
+
+  /** The dialog's subject, or null when it is closed. */
+  const [pendingNest, setPendingNest] = useState<{
+    id: string;
+    label: string;
+    count: number;
+    mode: "nest" | "inline";
+  } | null>(null);
+
+  const runNesting = useCallback(
+    (kind: string) => {
+      const pending = pendingNest;
+      setPendingNest(null);
+      if (!pending || readOnly) return;
+      const opts = { containerKinds: registry.containerKinds };
+      const next =
+        pending.mode === "nest"
+          ? nestContents(templateRef.current, pending.id, {
+              ...opts,
+              kind,
+              icon: kindDef(registry, kind).icon,
+            })
+          : inlineContents(templateRef.current, pending.id, opts);
+      if (next === templateRef.current) return;
+      applyTemplate(next, { fit: false });
+      const nodes = `${pending.count} node${pending.count === 1 ? "" : "s"}`;
+      showToast(
+        pending.mode === "nest"
+          ? `Nested ${nodes} a level deeper`
+          : `Brought ${nodes} back to this level`,
+      );
+    },
+    [pendingNest, readOnly, registry, applyTemplate, showToast],
+  );
+
   // ── Keyboard ──────────────────────────────────────────────────────────────
   //
   // One window-level handler owns every binding, so precedence is readable top
@@ -3138,6 +3184,25 @@ function StudioInner({
     return counts;
   }, [childCountsSig]);
 
+  /**
+   * What the selected node affords about nesting, or nothing. A container
+   * with contents can push them a level deeper; a card that already has
+   * contents can bring them back. A node with no children affords neither —
+   * there is nothing to move either way.
+   */
+  const nesting = useMemo(() => {
+    if (readOnly || !selectedNode || isGhostNodeId(selectedNode.id)) return null;
+    const count = childCounts.get(selectedNode.id) ?? 0;
+    if (!count) return null;
+    const data = selectedNode.data as DiagramNodeData;
+    return {
+      id: selectedNode.id,
+      label: data.label,
+      count,
+      mode: kindDef(registry, data.kind).container ? ("nest" as const) : ("inline" as const),
+    };
+  }, [readOnly, selectedNode, childCounts, registry]);
+
   const focusContext = useMemo(
     () => (focusId ? { id: focusId, depth: focusStack.length } : null),
     [focusId, focusStack.length],
@@ -3254,6 +3319,28 @@ function StudioInner({
                   <div className="as-menu__hint">A free-floating annotation</div>
                 </button>
                 <div className="as-menu__sep" role="separator" />
+                {(
+                  [
+                    ["llm", "LLM", "Frontier model, typically hosted"],
+                    ["lm-medium", "Medium LM", "Self-hosted mid-size model"],
+                    ["lm-small", "Small LM", "On-device or a few B params"],
+                  ] as const
+                ).map(([kind, label, hint]) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    role="menuitem"
+                    className="as-menu__item"
+                    onClick={() => {
+                      addNode(kind);
+                      setOpenMenu(null);
+                    }}
+                  >
+                    <div className="as-menu__label">{label}</div>
+                    <div className="as-menu__hint">{hint}</div>
+                  </button>
+                ))}
+                <div className="as-menu__sep" role="separator" />
                 <button
                   type="button"
                   role="menuitem"
@@ -3322,6 +3409,47 @@ function StudioInner({
                 >
                   <div className="as-menu__label">Tidy</div>
                   <div className="as-menu__hint">Arrange nodes within their zones and groups</div>
+                </button>
+                <div className="as-menu__sep" role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  disabled={nesting?.mode !== "nest"}
+                  title={
+                    nesting?.mode === "nest"
+                      ? undefined
+                      : "Select a group that has something in it"
+                  }
+                  onClick={() => {
+                    if (nesting?.mode === "nest") setPendingNest(nesting);
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">Nest contents a level deeper</div>
+                  <div className="as-menu__hint">
+                    The frame becomes one card; its contents move to their own C4 level
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  disabled={nesting?.mode !== "inline"}
+                  title={
+                    nesting?.mode === "inline"
+                      ? undefined
+                      : "Select a card that has a level inside it"
+                  }
+                  onClick={() => {
+                    if (nesting?.mode === "inline") setPendingNest(nesting);
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">Show contents inline</div>
+                  <div className="as-menu__hint">
+                    Bring a card's internals back onto this level, inside a frame
+                  </div>
                 </button>
                 <div className="as-menu__sep" role="separator" />
                 {(
@@ -4029,6 +4157,22 @@ function StudioInner({
                 />
               ) : null}
               {renderSlot(inspectorExtras)}
+              {nesting ? (
+                <button
+                  type="button"
+                  className="as-btn"
+                  onClick={() => setPendingNest(nesting)}
+                  title={
+                    nesting.mode === "nest"
+                      ? `Move the ${nesting.count} nodes inside this frame to their own level`
+                      : `Bring this card's ${nesting.count} internal nodes back to this level`
+                  }
+                >
+                  {/* An ellipsis, not a caret: this opens a dialog, and the
+                      caret would promise a dropdown. */}
+                  {nesting.mode === "nest" ? "Nest…" : "Inline…"}
+                </button>
+              ) : null}
               {(selectedNode && !isGhostNodeId(selectedNode.id)) || selectedZoneNode ? (
                 <button
                   type="button"
@@ -4135,6 +4279,16 @@ function StudioInner({
           />
         ) : null}
 
+        {pendingNest ? (
+          <NestingModal
+            subject={pendingNest}
+            mode={pendingNest.mode}
+            registry={registry}
+            relevantProviders={referencedProviderSet}
+            onCancel={() => setPendingNest(null)}
+            onConfirm={runNesting}
+          />
+        ) : null}
         {shortcutsOpen ? <ShortcutsModal onClose={() => setShortcutsOpen(false)} /> : null}
       </div>
     </StudioContext.Provider>

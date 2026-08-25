@@ -91,6 +91,8 @@ const CONTRACT_EXPORTS = [
   "liftScopedReactFlow",
   "drillableIds",
   "focusPath",
+  "nestContents",
+  "inlineContents",
   "BOUNDARY_NODE_PREFIX",
   "GHOST_NODE_PREFIX",
   "GHOST_EDGE_PREFIX",
