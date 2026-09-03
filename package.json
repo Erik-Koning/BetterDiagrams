@@ -12,6 +12,12 @@
     "test": "npm run test -w @mosphere/better-diagrams",
     "typecheck": "npm run typecheck -w @mosphere/better-diagrams",
     "release": "npm publish -w @mosphere/better-diagrams",
-    "release:dry": "npm publish --dry-run -w @mosphere/better-diagrams"
+    "release:dry": "npm publish --dry-run -w @mosphere/better-diagrams",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
   }
 }

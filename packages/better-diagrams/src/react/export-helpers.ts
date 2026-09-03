@@ -12,19 +12,61 @@ export interface RenderedCanvas {
   height: number;
 }
 
-/** Replay an emitted command list onto an offscreen canvas. */
+/**
+ * What a browser will actually allocate. Every current engine refuses a
+ * dimension past 16384px or a total area past 256 megapixels, and it refuses
+ * by handing back a blank canvas rather than by throwing — which is how an
+ * oversized diagram used to surface as "Canvas produced no image data".
+ */
+const MAX_CANVAS_DIM = 16384;
+const MAX_CANVAS_AREA = 268_435_456;
+
+/** Oversampling steps, largest first: sharpness is worth giving up for a file. */
+const SCALE_STEPS = [2, 1.5, 1];
+
+/**
+ * The largest of `SCALE_STEPS` at or below `requested` that a browser canvas
+ * can hold — or null when even 1:1 is too big for one.
+ */
+function fittingScale(width: number, height: number, requested: number): number | null {
+  const steps = SCALE_STEPS.filter((s) => s <= requested);
+  for (const scale of steps.length ? steps : [requested]) {
+    const w = Math.ceil(width * scale);
+    const h = Math.ceil(height * scale);
+    if (w <= MAX_CANVAS_DIM && h <= MAX_CANVAS_DIM && w * h <= MAX_CANVAS_AREA) return scale;
+  }
+  return null;
+}
+
+/**
+ * Replay an emitted command list onto an offscreen canvas.
+ *
+ * The oversampling drops to 1.5x and then to 1x rather than the export
+ * failing: a large diagram at a lower resolution is a usable file, and a
+ * diagram too large even at 1:1 gets told so in words instead of failing later
+ * with a message about missing image data.
+ */
 export function emittedToCanvas(emitted: Emitted, scale = 2): RenderedCanvas {
   if (typeof document === "undefined") {
     throw new Error("Image export requires a browser environment");
   }
   const { cmds, width, height, originX, originY } = emitted;
+  const fitted = fittingScale(width, height, scale);
+  if (fitted === null) {
+    throw new Error(
+      `This diagram is ${Math.ceil(width)}×${Math.ceil(height)} pixels — larger than a browser ` +
+        `canvas can hold, so it cannot be rendered as an image. Export it as SVG (which has no ` +
+        `size limit), or make the picture smaller by collapsing a group or hiding a zone's ` +
+        `alternatives before exporting again.`,
+    );
+  }
   const canvas = document.createElement("canvas");
-  canvas.width = Math.ceil(width * scale);
-  canvas.height = Math.ceil(height * scale);
+  canvas.width = Math.ceil(width * fitted);
+  canvas.height = Math.ceil(height * fitted);
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Could not acquire a 2D canvas context");
 
-  ctx.scale(scale, scale);
+  ctx.scale(fitted, fitted);
   ctx.translate(originX, originY);
   drawToCanvas(ctx, cmds);
   return { canvas, width, height };
@@ -48,7 +90,17 @@ export function canvasToBlob(
 ): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
-      (blob) => (blob ? resolve(blob) : reject(new Error("Canvas produced no image data"))),
+      (blob) =>
+        blob
+          ? resolve(blob)
+          : // Size is the usual cause, so the message names it: a bare
+            // "no image data" left the user with nothing to act on.
+            reject(
+              new Error(
+                `Could not encode the ${canvas.width}×${canvas.height} image — it is probably ` +
+                  `too large for this browser. Try the SVG export instead.`,
+              ),
+            ),
       type,
       quality,
     );

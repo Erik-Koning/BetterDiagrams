@@ -1716,7 +1716,11 @@ describe("ArchitectureStudio", () => {
 
     await fromMenu(user, /^View/, /Set version tag/);
     expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).meta?.versionTag).toBe("v0.1");
-    expect(screen.getByRole("button", { name: "v0.1" })).toBeInTheDocument();
+    // The menu item's ellipsis promises somewhere to type, so the chip it
+    // creates opens straight into its field rather than leaving a placeholder
+    // in a corner for the user to go and find.
+    const field = await screen.findByLabelText("Version tag");
+    expect(field).toHaveValue("v0.1");
   });
 
   it("surfaces lint findings in Checks and jumps to the offender", async () => {
@@ -3371,8 +3375,11 @@ describe("drill-down under StrictMode + controlled mode", () => {
       { timeout: 2000 },
     );
 
-    // Edit inside the level, then leave it.
+    // Edit inside the level, then leave it. Two presses: Escape does ONE
+    // thing at a time, and the node just inserted is selected — dropping the
+    // selection is what the first press means everywhere else in the editor.
     await fromMenu(user, "Insert ▾", /^Node /);
+    fireEvent.keyDown(window, { key: "Escape" });
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() =>
       expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument(),

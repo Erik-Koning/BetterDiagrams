@@ -55,11 +55,13 @@ export async function runStateExport<TDoc>(job: StateExportJob<TDoc>): Promise<E
   if (format === "pdf" && job.pdfLayout === "single") {
     const pages: PdfPageImage[] = [];
     for (const combo of combos) {
-      const { canvas } = requireCanvas(job)(materialize(combo));
+      // CSS pixels, not the 2x backing store — see `PdfPageImage`. Passing the
+      // backing-store size prints every page at twice its physical size.
+      const { canvas, width, height } = requireCanvas(job)(materialize(combo));
       pages.push({
         jpeg: await blobToUint8(await canvasToBlob(canvas, "image/jpeg", JPEG_QUALITY)),
-        pxWidth: canvas.width,
-        pxHeight: canvas.height,
+        pxWidth: width,
+        pxHeight: height,
       });
       await breathe();
     }
@@ -108,9 +110,9 @@ async function renderComboBytes<TDoc>(
       return blobToUint8(await canvasToBlob(canvas, "image/png"));
     }
     case "pdf": {
-      const { canvas } = requireCanvas(job)(doc);
+      const { canvas, width, height } = requireCanvas(job)(doc);
       const jpeg = await blobToUint8(await canvasToBlob(canvas, "image/jpeg", JPEG_QUALITY));
-      const pdf = buildJpegPdf([{ jpeg, pxWidth: canvas.width, pxHeight: canvas.height }]);
+      const pdf = buildJpegPdf([{ jpeg, pxWidth: width, pxHeight: height }]);
       return blobToUint8(pdf);
     }
   }

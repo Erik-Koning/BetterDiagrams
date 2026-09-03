@@ -68,6 +68,13 @@ export const BUILTIN_PROVIDERS: Record<string, ProviderDef> = {
 
 const BUILTIN_PROVIDER_ORDER = ["azure", "aws", "gcp", "onprem", "k8s", "saas"];
 
+/*
+ * The built-in vocabulary. Every `accent` here is a dark-canvas colour and is
+ * the fallback a theme overrides per kind (see `NodeKindDef.accent` and
+ * `Theme.nodeAccents`) — nothing in this file changes with the theme, so a
+ * host that swaps only the palette still gets these hues for anything it has
+ * not renamed.
+ */
 export const BUILTIN_NODE_KINDS: Record<string, NodeKindDef> = {
   service: { label: "Service", fill: "#082f49", accent: "#38bdf8", text: "#bae6fd", icon: "box" },
   database: { label: "Database", fill: "#451a03", accent: "#f59e0b", text: "#fde68a", icon: "database", shape: "cylinder" },

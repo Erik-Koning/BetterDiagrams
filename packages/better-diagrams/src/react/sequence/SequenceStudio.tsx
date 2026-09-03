@@ -37,6 +37,7 @@ import {
 import {
   ACT_ID_PREFIX,
   EMPTY_SEQUENCE,
+  FRAGMENT_KINDS,
   FRAG_ID_PREFIX,
   MESSAGE_STYLES,
   NOTE_SIDES,
@@ -45,7 +46,11 @@ import {
   buildSequencePrompt,
   buildSequenceRefineMessage,
   fromSequenceFlow,
+  moveMessage,
+  moveParticipant,
   parseLlmSequence,
+  parseLlmSequenceReport,
+  removeMessages,
   toSequenceFlow,
   validateSequence,
   type SeqActivation,
@@ -60,11 +65,13 @@ import {
 import {
   BAR_OVERHANG,
   BAR_W,
+  FIRST_MSG_Y,
   FRAG_HEAD_H,
   HEADER_H,
   HEADER_W,
   MIN_BAR_H,
   ROW_HEIGHT,
+  columnAt,
   messageRowAt,
 } from "../../contract/sequence-layout";
 import {
@@ -94,6 +101,7 @@ import { useHistory, type Snapshot } from "../history";
 import {
   FileMenu,
   InspectorSection,
+  Modal,
   ShortcutsModal,
   TimelineScrubber,
   ToolbarMenu,
@@ -137,6 +145,21 @@ export interface SequenceSelection {
   activations: string[];
   fragments: string[];
   notes: string[];
+}
+
+/**
+ * What one delete would take with it, resolved BEFORE anything is applied so
+ * the confirmation can name it. `cascaded` is the messages that go only
+ * because a participant they touch is going — the part that used to vanish
+ * without a word.
+ */
+interface DeletionPlan {
+  participants: SeqParticipant[];
+  messages: Set<string>;
+  cascaded: string[];
+  activations: Set<string>;
+  fragments: Set<string>;
+  notes: Set<string>;
 }
 
 export interface SequenceStudioProps {
@@ -282,6 +305,8 @@ function SequenceInner({
   const [timelineFuture, setTimelineFuture] = useState<TimelineFutureMode>("dim");
   /** A PNG/SVG/PDF export waiting on the states modal. Null = no modal open. */
   const [pendingExport, setPendingExport] = useState<StateExportFormat | null>(null);
+  /** A delete that would take messages with it, waiting on a confirmation. */
+  const [pendingDelete, setPendingDelete] = useState<DeletionPlan | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const templateRef = useRef<SequenceTemplate>(initial);
@@ -410,6 +435,28 @@ function SequenceInner({
     [flow, setNodes, showToast, commitLater],
   );
 
+  /**
+   * End a message-label drag on the row it landed on.
+   *
+   * Through `moveMessage`, not through the canvas: deriving order from the
+   * edges' y meant dragging a loop's first message to the bottom dragged the
+   * loop's top edge with it, swallowing every row in between. The document
+   * move keeps each frame over the rows it framed.
+   */
+  const commitMessageOrder = useCallback(
+    (messageId: string, y: number) => {
+      const t = templateRef.current;
+      if (!t.messages.some((m) => m.id === messageId)) return;
+      const to = Math.max(0, Math.min(t.messages.length - 1, messageRowAt(y)));
+      const next = moveMessage(t, messageId, to);
+      // Same row after all: nothing to record, but the arrow is still sitting
+      // wherever the pointer left it — re-materialize so it snaps back.
+      if (next === t) adopt(t, {});
+      else adopt(next, { record: true, emit: true });
+    },
+    [adopt],
+  );
+
   /** Bars only move vertically along their own lifeline. */
   const onNodeDrag = useCallback(
     (_event: unknown, node: Node) => {
@@ -435,38 +482,70 @@ function SequenceInner({
     (_event: unknown, node: Node) => {
       if (readOnly) return;
       if (node.type === "participant") {
-        // Derivation sorts columns by x and renormalizes their positions.
-        commitLater();
+        // Past the halfway point and it swaps. Deriving column order from a
+        // stable sort on x meant a header had to travel a FULL column past
+        // its neighbour before anything moved — a 150px drag snapped back,
+        // and an exact 200px one tied and stayed put.
+        const t = templateRef.current;
+        const target = Math.max(
+          0,
+          Math.min(t.participants.length - 1, columnAt(node.position.x)),
+        );
+        const next = moveParticipant(t, node.id, target);
+        if (next === t) adopt(t, {});
+        else adopt(next, { record: true, emit: true });
       } else if (node.type === "activation" || node.type === "fragment") {
         commitSpanGeometry(node.id);
       } else if (node.type === "seqnote") {
-        // A dropped note re-reads its side and row from where it landed.
+        // A dropped note re-reads its participant, side and row from where it
+        // landed. The anchor used to be looked up by the note's ORIGINAL
+        // participant, so a card dropped over another lifeline computed its
+        // side against the column it came from and sprang back.
         const note = (node.data as { note: SeqNote }).note;
-        const anchor = flow.getNodes().find((n) => n.id === note.participant);
         const rows = [...flow.getEdges()].sort(
           (a, b) => ((a.data?.y as number) ?? 0) - ((b.data?.y as number) ?? 0),
         );
-        const lifeX = (anchor?.position.x ?? 0) + HEADER_W / 2;
         const cx = node.position.x + ((node.width ?? 168) as number) / 2;
+        const columns = flow.getNodes().filter((n) => n.type === "participant");
+        const lifelineOf = (n: Node) => n.position.x + HEADER_W / 2;
+        const landedOn = columns.reduce<Node | undefined>(
+          (best, n) =>
+            !best || Math.abs(cx - lifelineOf(n)) < Math.abs(cx - lifelineOf(best)) ? n : best,
+          undefined,
+        );
+        const participant = landedOn?.id ?? note.participant;
+        const lifeX = landedOn ? lifelineOf(landedOn) : cx;
         const side = Math.abs(cx - lifeX) < 50 ? "over" : cx < lifeX ? "left" : "right";
-        const rowIdx = rows.length
-          ? Math.max(0, Math.min(rows.length - 1, messageRowAt(node.position.y + 16)))
-          : undefined;
+        // Dropped above the first row the note goes back to floating over the
+        // head of the flow — clamping it onto message 1 made "above the first
+        // row" a state the canvas could show but never reach.
+        const top = node.position.y + 16;
         const at =
-          rowIdx !== undefined
-            ? (rows[rowIdx].data as { message: SeqMessage }).message.id
+          rows.length && top >= FIRST_MSG_Y - ROW_HEIGHT / 2
+            ? (
+                rows[Math.min(rows.length - 1, messageRowAt(top))].data as {
+                  message: SeqMessage;
+                }
+              ).message.id
             : undefined;
+        const { at: _dropped, ...rest } = note;
         setNodes((cur) =>
           cur.map((n) =>
             n.id === node.id
-              ? { ...n, data: { ...n.data, note: { ...note, side, ...(at ? { at } : {}) } } }
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    note: { ...rest, participant, side, ...(at ? { at } : {}) },
+                  },
+                }
               : n,
           ),
         );
         commitLater();
       }
     },
-    [readOnly, flow, setNodes, commitLater, commitSpanGeometry],
+    [readOnly, flow, setNodes, adopt, commitLater, commitSpanGeometry],
   );
 
   const onConnect = useCallback(
@@ -561,28 +640,65 @@ function SequenceInner({
     );
   }, [selectedNodeIds, nodes]);
 
+  /** Put the selection on freshly created messages so the inspector opens. */
+  const selectMessagesOnly = useCallback(
+    (ids: readonly string[]) => {
+      const wanted = new Set(ids);
+      setEdges((cur) => cur.map((e) => ({ ...e, selected: wanted.has(e.id) })));
+      setNodes((cur) => cur.map((n) => (n.selected ? { ...n, selected: false } : n)));
+    },
+    [setEdges, setNodes],
+  );
+
   const addMessage = useCallback(
     (self: boolean) => {
       const t = templateRef.current;
-      const from = self ? selectedParticipantId : t.participants[0]?.id;
-      const to = self ? selectedParticipantId : t.participants[1]?.id;
+      const index = new Map(t.messages.map((m, i) => [m.id, i]));
+      // Where the user is looking: the last selected step, if any.
+      const anchorIdx = selectedEdgeIds
+        .map((id) => index.get(id))
+        .filter((i): i is number => i !== undefined)
+        .reduce<number | undefined>((max, i) => (max === undefined || i > max ? i : max), undefined);
+      const anchor = anchorIdx !== undefined ? t.messages[anchorIdx] : undefined;
+      const picked = t.participants.filter((p) => selectedNodeIds.includes(p.id));
+
+      // Two columns selected ARE the answer to "between whom?"; one selected
+      // message answers it too. Falling straight through to participants 0
+      // and 1 ignored both, so `M` kept making the same Customer → Web App
+      // row at the bottom of the diagram.
+      let from: string | null | undefined;
+      let to: string | null | undefined;
+      if (self) {
+        from = to = picked[0]?.id ?? selectedParticipantId;
+      } else if (picked.length >= 2) {
+        from = picked[0].id;
+        to = picked[1].id;
+      } else if (anchor && anchor.from && anchor.to) {
+        from = anchor.from;
+        to = anchor.to;
+      } else if (picked.length === 1) {
+        from = picked[0].id;
+        to = t.participants.find((p) => p.id !== from)?.id;
+      } else {
+        from = t.participants[0]?.id;
+        to = t.participants[1]?.id;
+      }
       if (!from || !to) return;
-      applyTemplate({
-        ...t,
-        messages: [
-          ...t.messages,
-          {
-            id: nextId("m"),
-            from,
-            to,
-            label: self ? "do work" : "message",
-            style: "sync",
-            ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
-          },
-        ],
+
+      const id = nextId("m");
+      const messages = [...t.messages];
+      messages.splice(anchorIdx !== undefined ? anchorIdx + 1 : messages.length, 0, {
+        id,
+        from,
+        to,
+        label: self ? "do work" : "message",
+        style: "sync",
+        ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
       });
+      applyTemplate({ ...t, messages });
+      selectMessagesOnly([id]);
     },
-    [applyTemplate, selectedParticipantId],
+    [applyTemplate, selectMessagesOnly, selectedEdgeIds, selectedNodeIds, selectedParticipantId],
   );
 
   const addNote = useCallback(() => {
@@ -603,6 +719,27 @@ function SequenceInner({
     const covered = selectedEdgeIds.filter((id) => index.has(id));
     if (!covered.length) return;
     const sorted = [...covered].sort((a, b) => index.get(a)! - index.get(b)!);
+    const lo = index.get(sorted[0])!;
+    const hi = index.get(sorted[sorted.length - 1])!;
+    // Frames must nest or stay apart. One that opens inside another and
+    // closes outside it exports as interleaved blocks, which neither Mermaid
+    // nor PlantUML can parse — so it is refused where it is asked for rather
+    // than discovered at export time.
+    const crossed = (t.fragments ?? []).find((f) => {
+      const a = index.get(f.from) ?? 0;
+      const b = index.get(f.to) ?? a;
+      const olo = Math.min(a, b);
+      const ohi = Math.max(a, b);
+      const disjoint = hi < olo || lo > ohi;
+      const nested = (lo >= olo && hi <= ohi) || (olo >= lo && ohi <= hi);
+      return !disjoint && !nested;
+    });
+    if (crossed) {
+      showToast(
+        `That selection crosses the ${crossed.kind} fragment — fragments must nest or stay apart`,
+      );
+      return;
+    }
     applyTemplate({
       ...t,
       fragments: [
@@ -610,30 +747,112 @@ function SequenceInner({
         { id: nextId("f"), kind: "opt", label: "condition", from: sorted[0], to: sorted[sorted.length - 1] },
       ],
     });
-  }, [applyTemplate, selectedEdgeIds]);
+  }, [applyTemplate, selectedEdgeIds, showToast]);
 
-  const deleteSelection = useCallback(() => {
-    if (readOnly) return;
-    if (!selectedNodeIds.length && !selectedEdgeIds.length) return;
+  /** Everything the current selection would actually take with it. */
+  const deletionPlan = useCallback((): DeletionPlan => {
     const t = templateRef.current;
     const nodeIds = new Set(selectedNodeIds);
-    const edgeIds = new Set(selectedEdgeIds);
     const stripped = (prefix: string) =>
       new Set(
         selectedNodeIds.filter((id) => id.startsWith(prefix)).map((id) => id.slice(prefix.length)),
       );
-    const acts = stripped(ACT_ID_PREFIX);
-    const frags = stripped(FRAG_ID_PREFIX);
-    const notes = stripped(NOTE_ID_PREFIX);
-    applyTemplate({
-      ...t,
-      participants: t.participants.filter((p) => !nodeIds.has(p.id)),
-      messages: t.messages.filter((m) => !edgeIds.has(m.id)),
-      activations: (t.activations ?? []).filter((a) => !acts.has(a.id)),
-      fragments: (t.fragments ?? []).filter((f) => !frags.has(f.id)),
-      notes: (t.notes ?? []).filter((n) => !notes.has(n.id)),
-    });
-  }, [readOnly, selectedNodeIds, selectedEdgeIds, applyTemplate]);
+    const participants = t.participants.filter((p) => nodeIds.has(p.id));
+    const columns = new Set(participants.map((p) => p.id));
+    const chosen = new Set(selectedEdgeIds);
+    const messages = new Set<string>();
+    const cascaded: string[] = [];
+    for (const m of t.messages) {
+      const touches =
+        (m.from !== null && columns.has(m.from)) || (m.to !== null && columns.has(m.to));
+      if (chosen.has(m.id)) messages.add(m.id);
+      else if (touches) {
+        messages.add(m.id);
+        cascaded.push(m.id);
+      }
+    }
+    return {
+      participants,
+      messages,
+      cascaded,
+      activations: stripped(ACT_ID_PREFIX),
+      fragments: stripped(FRAG_ID_PREFIX),
+      notes: stripped(NOTE_ID_PREFIX),
+    };
+  }, [selectedNodeIds, selectedEdgeIds]);
+
+  const performDelete = useCallback(
+    (plan: DeletionPlan) => {
+      const t = templateRef.current;
+      // Messages leave through `removeMessages`, which re-hangs every
+      // fragment, bar and note onto the rows they still cover. Filtering the
+      // array and letting validation drop whatever dangled deleted a loop the
+      // user could still see the inside of, in the same undo step.
+      const pruned = removeMessages(t, plan.messages);
+      const gone = new Set(plan.participants.map((p) => p.id));
+      applyTemplate({
+        ...pruned,
+        participants: pruned.participants.filter((p) => !gone.has(p.id)),
+        activations: (pruned.activations ?? []).filter((a) => !plan.activations.has(a.id)),
+        fragments: (pruned.fragments ?? []).filter((f) => !plan.fragments.has(f.id)),
+        notes: (pruned.notes ?? []).filter((n) => !plan.notes.has(n.id)),
+      });
+      // Deleting a column silently took most of the diagram with it. Say what
+      // went, so the undo that gets it back is an informed one.
+      if (plan.cascaded.length) {
+        const who = plan.participants.map((p) => p.label).join(", ");
+        showToast(
+          `Removed ${who} and ${plan.cascaded.length} message${plan.cascaded.length === 1 ? "" : "s"}`,
+        );
+      }
+    },
+    [applyTemplate, showToast],
+  );
+
+  const deleteSelection = useCallback(() => {
+    if (readOnly) return;
+    if (!selectedNodeIds.length && !selectedEdgeIds.length) return;
+    const plan = deletionPlan();
+    // A column that carries messages asks before it takes them.
+    if (plan.participants.length && plan.cascaded.length) {
+      setPendingDelete(plan);
+      return;
+    }
+    performDelete(plan);
+  }, [readOnly, selectedNodeIds, selectedEdgeIds, deletionPlan, performDelete]);
+
+  /**
+   * ⌘D — a copy of the selected messages (each directly under its original,
+   * so it reads as the next step) or of the selected participants.
+   */
+  const duplicateSelection = useCallback(() => {
+    if (readOnly) return;
+    const t = templateRef.current;
+    const index = new Map(t.messages.map((m, i) => [m.id, i]));
+    const chosen = selectedEdgeIds.filter((id) => index.has(id));
+    if (chosen.length) {
+      const messages = [...t.messages];
+      const created: string[] = [];
+      for (const id of [...chosen].sort((a, b) => index.get(b)! - index.get(a)!)) {
+        const copy = { ...t.messages[index.get(id)!], id: nextId("m") };
+        created.push(copy.id);
+        messages.splice(messages.findIndex((m) => m.id === id) + 1, 0, copy);
+      }
+      applyTemplate({ ...t, messages });
+      selectMessagesOnly(created);
+      showToast(created.length === 1 ? "Duplicated message" : `Duplicated ${created.length} messages`);
+      return;
+    }
+    const picked = t.participants.filter((p) => selectedNodeIds.includes(p.id));
+    if (!picked.length) return;
+    const participants = [...t.participants];
+    for (const p of [...picked].reverse()) {
+      const at = participants.findIndex((x) => x.id === p.id);
+      participants.splice(at + 1, 0, { ...p, id: nextId("p"), label: `${p.label} copy` });
+    }
+    applyTemplate({ ...t, participants });
+    showToast(picked.length === 1 ? "Duplicated participant" : `Duplicated ${picked.length} participants`);
+  }, [readOnly, selectedEdgeIds, selectedNodeIds, applyTemplate, selectMessagesOnly, showToast]);
 
   // ── Timeline mode ─────────────────────────────────────────────────────────
   // Same contract as the architecture editor: the document's own dates are the
@@ -858,6 +1077,11 @@ function SequenceInner({
         setEdges((current) => current.map((e) => ({ ...e, selected: true })));
         return;
       }
+      if (mod && event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        duplicateSelection();
+        return;
+      }
       if (mod && (event.key === "=" || event.key === "+")) {
         event.preventDefault();
         void flow.zoomIn({ duration: 120 });
@@ -904,14 +1128,17 @@ function SequenceInner({
         return;
       }
       if (event.key === "Escape") {
+        // The `?` sheet promises "Esc — Close panels", and the AI panel is a
+        // panel: leaving it out made the sheet lie about its own binding.
         setOpenMenu(null);
+        setPanelOpen(false);
         setTimelineCursor(null);
         setShortcutsOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [doUndo, doRedo, deleteSelection, handleSave, onSave, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, readOnly, flow, setNodes, setEdges, addParticipant, addMessage, addNote]);
+  }, [doUndo, doRedo, deleteSelection, duplicateSelection, handleSave, onSave, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, readOnly, flow, setNodes, setEdges, addParticipant, addMessage, addNote]);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -1098,12 +1325,21 @@ function SequenceInner({
           },
           controller.signal,
         );
-        const next =
-          typeof result === "string" ? parseLlmSequence(result) : validateSequence(result);
-        applyTemplate(next);
+        const report = typeof result === "string" ? parseLlmSequenceReport(result) : null;
+        applyTemplate(report ? report.sequence : validateSequence(result));
         if (mode === "refine") setRefineInput("");
-        setPanelOpen(false);
-        showToast(mode === "create" ? "Sequence generated" : "Refinement applied");
+        if (report?.truncated) {
+          // A cut-off reply looks EXACTLY like the model deleting the steps
+          // that never arrived — and a refine merges that as a deletion. Say
+          // so, and keep the panel open so the warning is read.
+          setGenError(
+            "The model's reply was cut off, so anything after the last step it managed to send is missing. Undo (⌘Z) and try a smaller request.",
+          );
+          showToast("Reply was cut off — the result is incomplete");
+        } else {
+          setPanelOpen(false);
+          showToast(mode === "create" ? "Sequence generated" : "Refinement applied");
+        }
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         setGenError((err as Error).message || "Generation failed — try a shorter input.");
@@ -1116,8 +1352,14 @@ function SequenceInner({
   );
 
   const context = useMemo<SequenceContextValue>(
-    () => ({ readOnly, autonumber, requestCommit: commitLater, commitSpanGeometry }),
-    [readOnly, autonumber, commitLater, commitSpanGeometry],
+    () => ({
+      readOnly,
+      autonumber,
+      requestCommit: commitLater,
+      commitSpanGeometry,
+      commitMessageOrder,
+    }),
+    [readOnly, autonumber, commitLater, commitSpanGeometry, commitMessageOrder],
   );
 
   // ── Inspector helpers ─────────────────────────────────────────────────────
@@ -1282,6 +1524,18 @@ function SequenceInner({
                 />
                 Autonumber messages
               </label>
+              <button
+                type="button"
+                role="menuitem"
+                className="as-menu__item"
+                onClick={() => {
+                  setShortcutsOpen(true);
+                  setOpenMenu(null);
+                }}
+              >
+                <div className="as-menu__label">Keyboard shortcuts</div>
+                <div className="as-menu__hint">Or press ?</div>
+              </button>
               {!readOnly && !versionTag ? (
                 <button
                   type="button"
@@ -1510,7 +1764,11 @@ function SequenceInner({
                 </InspectorSection>
               ) : null}
               {singleEdge ? (
-                <MessageInspector edge={singleEdge} onPatch={(patch) => patchMessage(singleEdge.id, patch)} />
+                <MessageInspector
+                  edge={singleEdge}
+                  participants={template.participants}
+                  onPatch={(patch) => patchMessage(singleEdge.id, patch)}
+                />
               ) : null}
               {inspectorExtras}
               <button type="button" className="as-btn as-btn--danger" onClick={deleteSelection}>
@@ -1521,10 +1779,14 @@ function SequenceInner({
 
           <div className="as-status">
             {toast ? <div className="as-toast">{toast}</div> : null}
-            <div className="as-hint">
-              drag between headers to connect · press-drag a lifeline to add a bar · drag a
-              message label up/down to reorder · ⌘Z undo
-            </div>
+            {/* Every one of these is an editing gesture, so read-only mode
+                has nothing to say here. */}
+            {!readOnly ? (
+              <div className="as-hint">
+                drag between headers to connect · press-drag a lifeline to add a bar · drag a
+                message label up/down to reorder · ⌘Z undo
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -1555,6 +1817,39 @@ function SequenceInner({
             onCancel={() => setPendingExport(null)}
             onConfirm={(choice) => void onExportStatesChoice(choice)}
           />
+        ) : null}
+
+        {pendingDelete ? (
+          <Modal
+            title={`Delete ${pendingDelete.participants.map((p) => p.label).join(", ")}?`}
+            onClose={() => setPendingDelete(null)}
+          >
+            <p className="as-modal__body">
+              <strong>{pendingDelete.participants.map((p) => p.label).join(", ")}</strong>{" "}
+              {pendingDelete.participants.length === 1 ? "is an endpoint of" : "are endpoints of"}{" "}
+              <strong>
+                {pendingDelete.cascaded.length} message
+                {pendingDelete.cascaded.length === 1 ? "" : "s"}
+              </strong>
+              , which go too — along with anything anchored only to them. One ⌘Z brings it all
+              back.
+            </p>
+            <div className="as-modal__actions">
+              <button type="button" className="as-btn" onClick={() => setPendingDelete(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="as-btn as-btn--danger"
+                onClick={() => {
+                  performDelete(pendingDelete);
+                  setPendingDelete(null);
+                }}
+              >
+                Delete participant
+              </button>
+            </div>
+          </Modal>
         ) : null}
 
         {shortcutsOpen ? (
@@ -1737,14 +2032,48 @@ function SeqDateSection({
   );
 }
 
+/**
+ * The select value that means "no participant" — a lost or found message,
+ * whose other end floats in the environment. `validateSequence` reads an
+ * empty endpoint as exactly that null.
+ */
+const ENVIRONMENT = "";
+
 function MessageInspector({
   edge,
+  participants,
   onPatch,
 }: {
   edge: Edge;
+  participants: SeqParticipant[];
   onPatch: (patch: Partial<SeqMessage>) => void;
 }) {
   const m = (edge.data as { message: SeqMessage }).message;
+  const endpoint = (
+    value: string | null,
+    other: string | null,
+    label: string,
+    apply: (end: string | null) => void,
+  ) => (
+    <select
+      className="as-select"
+      value={value ?? ENVIRONMENT}
+      onChange={(e) => apply(e.target.value === ENVIRONMENT ? null : e.target.value)}
+      aria-label={label}
+    >
+      {participants.map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.label}
+        </option>
+      ))}
+      {/* Both ends in the environment is not a message — validation drops it
+          — so the option is offered only while the other end is a real
+          participant. */}
+      <option value={ENVIRONMENT} disabled={other === null}>
+        (environment)
+      </option>
+    </select>
+  );
   return (
     <>
       <InspectorSection caption="Message">
@@ -1762,6 +2091,21 @@ function MessageInspector({
           aria-label="Message technology"
         />
       </InspectorSection>
+      <InspectorSection caption="Ends">
+        {endpoint(m.from, m.to, "Message from", (from) => onPatch({ from }))}
+        <span className="as-inspector__caption">→</span>
+        {endpoint(m.to, m.from, "Message to", (to) => onPatch({ to }))}
+        <button
+          type="button"
+          className="as-btn as-btn--icon"
+          disabled={m.from === m.to}
+          onClick={() => onPatch({ from: m.to, to: m.from })}
+          title="Swap direction"
+          aria-label="Swap message direction"
+        >
+          ⇄
+        </button>
+      </InspectorSection>
       <InspectorSection caption="Style">
         <select
           className="as-select"
@@ -1775,16 +2119,6 @@ function MessageInspector({
             </option>
           ))}
         </select>
-        <button
-          type="button"
-          className="as-btn as-btn--icon"
-          disabled={m.from === m.to}
-          onClick={() => onPatch({ from: m.to, to: m.from })}
-          title="Swap direction"
-          aria-label="Swap message direction"
-        >
-          ⇄
-        </button>
       </InspectorSection>
       <SeqDateSection
         date={m.date}
@@ -1796,6 +2130,13 @@ function MessageInspector({
   );
 }
 
+/**
+ * Kinds that can carry a branch divider. Mermaid takes `else` only inside
+ * `alt` and `and` only inside `par`; a divider anywhere else exports as text
+ * no renderer will parse, so it is not offered.
+ */
+const BRANCHING_KINDS: ReadonlyArray<SeqFragment["kind"]> = ["alt", "par"];
+
 function FragmentInspector({
   node,
   messages,
@@ -1806,11 +2147,13 @@ function FragmentInspector({
   onPatch: (patch: Partial<SeqFragment>) => void;
 }) {
   const f = (node.data as { fragment: SeqFragment }).fragment;
+  const branches = f.elses ?? [];
+  const canBranch = BRANCHING_KINDS.includes(f.kind);
   const index = new Map(messages.map((m, i) => [m.id, i]));
   const fromIdx = index.get(f.from) ?? 0;
   const toIdx = index.get(f.to) ?? fromIdx;
   // First message strictly inside the span not already used by a branch.
-  const usedAts = new Set((f.elses ?? []).map((e) => e.at));
+  const usedAts = new Set(branches.map((e) => e.at));
   const nextBranchAt = messages
     .slice(fromIdx + 1, toIdx + 1)
     .find((m) => !usedAts.has(m.id))?.id;
@@ -1821,10 +2164,17 @@ function FragmentInspector({
         <select
           className="as-select"
           value={f.kind}
-          onChange={(e) => onPatch({ kind: e.target.value as SeqFragment["kind"] })}
+          onChange={(e) => {
+            const kind = e.target.value as SeqFragment["kind"];
+            // A loop with an `else` in it is not exportable, so the branches
+            // leave with the kind that could hold them.
+            onPatch(
+              BRANCHING_KINDS.includes(kind) ? { kind } : { kind, elses: undefined },
+            );
+          }}
           aria-label="Fragment kind"
         >
-          {["loop", "alt", "opt", "par", "break"].map((k) => (
+          {FRAGMENT_KINDS.map((k) => (
             <option key={k} value={k}>
               {k}
             </option>
@@ -1838,31 +2188,70 @@ function FragmentInspector({
           aria-label="Fragment guard"
         />
       </InspectorSection>
-      <InspectorSection caption="Branches">
-        <button
-          type="button"
-          className="as-btn"
-          disabled={!nextBranchAt}
-          title={nextBranchAt ? "Add an else/and branch" : "No free message row inside the span"}
-          onClick={() =>
-            onPatch({ elses: [...(f.elses ?? []), { label: "else", at: nextBranchAt! }] })
-          }
-        >
-          + branch
-        </button>
-        {(f.elses ?? []).length ? (
+      {canBranch ? (
+        <InspectorSection caption="Branches">
+          {branches.map((branch, i) => (
+            <span
+              key={branch.at}
+              className="as-inspector__branch"
+              // Inline, because the stylesheet has no rule for this row yet
+              // and a branch guard that wrapped under its own − button would
+              // be worse than no styling at all.
+              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+            >
+              {/* Every branch was born "else" and could never be renamed —
+                  for an `alt` the guard IS the point of the branch. */}
+              <input
+                className="as-input as-inspector__name"
+                value={branch.label}
+                placeholder={f.kind === "par" ? "and…" : "else…"}
+                onChange={(e) =>
+                  onPatch({
+                    elses: branches.map((b, j) =>
+                      j === i ? { ...b, label: e.target.value } : b,
+                    ),
+                  })
+                }
+                aria-label={`Branch ${i + 1} guard`}
+              />
+              {/* Each branch removable where it is — "− branch" only ever
+                  took the last one, so the middle branch of three was stuck. */}
+              <button
+                type="button"
+                className="as-btn as-btn--icon"
+                onClick={() => {
+                  const elses = branches.filter((_, j) => j !== i);
+                  onPatch({ elses: elses.length ? elses : undefined });
+                }}
+                aria-label={`Remove branch ${i + 1}`}
+                title="Remove this branch"
+              >
+                −
+              </button>
+            </span>
+          ))}
           <button
             type="button"
             className="as-btn"
-            onClick={() => {
-              const elses = (f.elses ?? []).slice(0, -1);
-              onPatch({ elses: elses.length ? elses : undefined });
-            }}
+            disabled={!nextBranchAt}
+            title={
+              nextBranchAt
+                ? `Add ${f.kind === "par" ? "an and" : "an else"} branch`
+                : "No free message row inside the span"
+            }
+            onClick={() =>
+              onPatch({
+                elses: [
+                  ...branches,
+                  { label: f.kind === "par" ? "and" : "else", at: nextBranchAt! },
+                ],
+              })
+            }
           >
-            − branch
+            + branch
           </button>
-        ) : null}
-      </InspectorSection>
+        </InspectorSection>
+      ) : null}
     </>
   );
 }

@@ -10,7 +10,9 @@
  */
 import { memo, useCallback, useRef, useState } from "react";
 import {
+  NodeResizeControl,
   NodeResizer,
+  ResizeControlVariant,
   useInternalNode,
   useReactFlow,
   type Node,
@@ -41,6 +43,14 @@ import {
 
 let barCounter = 0;
 
+/**
+ * How far the pointer must travel before a press becomes a drag — the same
+ * 4px the architecture editor's edge-bend gesture uses. Below it the press is
+ * a CLICK, and a click must never leave a document edit (and an undo entry)
+ * behind.
+ */
+const DRAG_THRESHOLD = 4;
+
 // ─── Participant ─────────────────────────────────────────────────────────────
 
 export type ParticipantNodeType = Node<
@@ -54,44 +64,58 @@ export const ParticipantNode = memo(function ParticipantNode({
   selected,
 }: NodeProps<ParticipantNodeType>) {
   const { readOnly, commitSpanGeometry } = useSequence();
-  const { setNodes, screenToFlowPosition } = useReactFlow();
+  const { setEdges, setNodes, screenToFlowPosition } = useReactFlow();
   const p = data.participant;
   // Resolved through a per-kind variable so a light theme can darken it; the
   // table hex rides along as the fallback.
   const accent = `var(--as-seq-${p.kind}, ${SEQ_KIND_ACCENT[p.kind] ?? "#64748b"})`;
 
   /**
-   * Press on the lifeline creates an activation bar at that row and, while
-   * still holding, drags its extent — release anchors it to the covered
-   * message rows (the polygon editor's press-drag recipe).
+   * Press-DRAG on the lifeline creates an activation bar over the rows the
+   * gesture covers (the polygon editor's press-drag recipe).
+   *
+   * The bar is born on the first movement past {@link DRAG_THRESHOLD}, never
+   * on the press itself: a plain click on a lifeline used to commit a one-row
+   * bar plus an undo entry that nobody asked for. Below the threshold the
+   * press is a click, and a click on a column selects that column — the strip
+   * covers the whole lifeline, so swallowing it left a participant
+   * unselectable everywhere below its header.
    */
   const startBar = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (readOnly) return;
+      if (readOnly || event.button !== 0) return;
       event.stopPropagation();
       const strip = event.currentTarget;
+      const origin = { x: event.clientX, y: event.clientY };
+      const additive = event.shiftKey || event.metaKey || event.ctrlKey;
       const startY = screenToFlowPosition({ x: event.clientX, y: event.clientY }).y;
       const barId = `${ACT_ID_PREFIX}bar_${Date.now().toString(36)}${(barCounter++).toString(36)}`;
-
-      // The document object is a stub until the gesture ends —
-      // commitSpanGeometry rewrites the anchors before anything persists.
-      setNodes((nodes) => [
-        ...nodes,
-        {
-          id: barId,
-          type: "activation" as const,
-          position: { x: (HEADER_W - BAR_W) / 2, y: startY },
-          width: BAR_W,
-          height: MIN_BAR_H,
-          style: { width: BAR_W, height: MIN_BAR_H },
-          parentId: id,
-          zIndex: 600,
-          data: { activation: { id: barId.slice(ACT_ID_PREFIX.length), participant: id, from: "" } },
-        },
-      ]);
+      let dragging = false;
 
       strip.setPointerCapture(event.pointerId);
       const move = (e: PointerEvent) => {
+        if (!dragging) {
+          if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < DRAG_THRESHOLD) return;
+          dragging = true;
+          // The document object is a stub until the gesture ends —
+          // commitSpanGeometry rewrites the anchors before anything persists.
+          setNodes((nodes) => [
+            ...nodes,
+            {
+              id: barId,
+              type: "activation" as const,
+              position: { x: (HEADER_W - BAR_W) / 2, y: startY },
+              width: BAR_W,
+              height: MIN_BAR_H,
+              style: { width: BAR_W, height: MIN_BAR_H },
+              parentId: id,
+              zIndex: 600,
+              data: {
+                activation: { id: barId.slice(ACT_ID_PREFIX.length), participant: id, from: "" },
+              },
+            },
+          ]);
+        }
         const y = screenToFlowPosition({ x: e.clientX, y: e.clientY }).y;
         const top = Math.min(startY, y);
         const height = Math.max(MIN_BAR_H, Math.abs(y - startY));
@@ -107,12 +131,30 @@ export const ParticipantNode = memo(function ParticipantNode({
         strip.releasePointerCapture(event.pointerId);
         strip.removeEventListener("pointermove", move as EventListener);
         strip.removeEventListener("pointerup", up);
-        commitSpanGeometry(barId);
+        strip.removeEventListener("pointercancel", up);
+        if (dragging) {
+          commitSpanGeometry(barId);
+          return;
+        }
+        // A click: select this column, exactly as clicking its header does.
+        setNodes((nodes) =>
+          nodes.map((n) =>
+            n.id === id
+              ? { ...n, selected: true }
+              : additive
+                ? n
+                : n.selected
+                  ? { ...n, selected: false }
+                  : n,
+          ),
+        );
+        if (!additive) setEdges((edges) => edges.map((e) => (e.selected ? { ...e, selected: false } : e)));
       };
       strip.addEventListener("pointermove", move as EventListener);
       strip.addEventListener("pointerup", up);
+      strip.addEventListener("pointercancel", up);
     },
-    [readOnly, id, setNodes, screenToFlowPosition, commitSpanGeometry],
+    [readOnly, id, setNodes, setEdges, screenToFlowPosition, commitSpanGeometry],
   );
 
   return (
@@ -238,8 +280,24 @@ export const FragmentNode = memo(function FragmentNode({
         const fromIdx = index.get(frag.from) ?? 0;
         const toIdx = index.get(frag.to) ?? fromIdx;
         // A divider lives strictly inside (from .. to].
-        const target = Math.max(fromIdx + 1, Math.min(toIdx, messageRowAt(y + 20)));
-        const at = rowId(target);
+        const wanted = Math.max(fromIdx + 1, Math.min(toIdx, messageRowAt(y + 20)));
+        // Two dividers on the same row is not a diagram — validation drops the
+        // duplicate, so dropping one branch onto another used to DELETE that
+        // branch. Land on the nearest row nobody else is holding instead.
+        const taken = new Set(
+          (frag.elses ?? []).flatMap((b) => (b.at === branchAt ? [] : [index.get(b.at)])),
+        );
+        let target = -1;
+        for (let d = 0; d <= toIdx - fromIdx; d++) {
+          for (const candidate of [wanted - d, wanted + d]) {
+            if (candidate < fromIdx + 1 || candidate > toIdx) continue;
+            if (taken.has(candidate)) continue;
+            target = candidate;
+            break;
+          }
+          if (target >= 0) break;
+        }
+        const at = target >= 0 ? rowId(target) : undefined;
         if (!at) return;
         setNodes((cur) =>
           cur.map((n) =>
@@ -267,11 +325,27 @@ export const FragmentNode = memo(function FragmentNode({
 
   return (
     <>
-      <NodeResizer
-        isVisible={!!selected && !readOnly}
-        minHeight={40}
-        onResizeEnd={() => commitSpanGeometry(id)}
-      />
+      {/* Top and bottom only. A fragment's x-extent is DERIVED from the
+          columns its messages touch, so side and corner handles moved during
+          the drag and snapped back on release — a control that lies about
+          what it does. Vertical resizing is the one that means something:
+          it re-anchors the frame to different message rows. */}
+      {selected && !readOnly ? (
+        <>
+          <NodeResizeControl
+            position="top"
+            variant={ResizeControlVariant.Line}
+            minHeight={40}
+            onResizeEnd={() => commitSpanGeometry(id)}
+          />
+          <NodeResizeControl
+            position="bottom"
+            variant={ResizeControlVariant.Line}
+            minHeight={40}
+            onResizeEnd={() => commitSpanGeometry(id)}
+          />
+        </>
+      ) : null}
       <div className={`as-seq-frag${selected ? " as-seq-frag--selected" : ""}`}>
         <div className="as-seq-frag__head">
           <span className="as-seq-frag__tab">{frag.kind}</span>

@@ -179,8 +179,9 @@ describe("text exporters", () => {
     expect(mermaid).toContain('start(["Start"])');
     expect(mermaid).toContain('ask{"Approved?"}');
     expect(mermaid).toContain('form[/"Read form"/]');
-    // The retry loop survives as a self-edge.
-    expect(mermaid).toContain("ask -->|retry| ask");
+    // The retry loop survives as a self-edge. Edge text is quoted: an
+    // unquoted label breaks on any punctuation Mermaid uses itself.
+    expect(mermaid).toContain('ask -->|"retry"| ask');
   });
 
   it("cuts flow-chart silhouettes the canvas and exports share", () => {
@@ -204,7 +205,7 @@ describe("text exporters", () => {
     const mermaid = renderTemplateToMermaid(doc);
     // The dot is mermaid's smallest circle; the arrow to it survives.
     expect(mermaid).toContain('pt((" "))');
-    expect(mermaid).toContain("api -.->|future| pt");
+    expect(mermaid).toContain('api -.->|"future"| pt');
 
     // C4 is a strict semantic model: no dot, no dangling Rel — but the rest
     // of the diagram is untouched.
@@ -265,7 +266,10 @@ describe("text exporters", () => {
     const out = renderTemplateToC4Puml(EXAMPLE_ZONED_TEMPLATE);
     expect(out).toMatch(/^@startuml/);
     expect(out.trimEnd()).toMatch(/@enduml$/);
-    expect(out).toContain("C4_Container.puml");
+    // Zones emit Deployment_Node, which the container library does not define
+    // — the deployment one does, and includes the container one itself.
+    expect(out).toContain("C4_Deployment.puml");
+    expect(out).not.toContain("C4_Container.puml");
     expect(out).toContain('title Multi-cloud deployment');
     // Kinds map to C4 macros; zones become deployment nodes.
     expect(out).toContain('ContainerDb(sql_az, "Azure SQL"');
@@ -781,10 +785,14 @@ describe("colour theming", () => {
 
   it("themeToStyle fans the record tokens out to per-entry variables", () => {
     const style = themeToStyle(LIGHT_THEME) as Record<string, string>;
-    expect(style["--as-edge-sky"]).toBe("#0284c7");
-    expect(style["--as-seq-database"]).toBe("#d97706");
-    expect(style["--as-warn"]).toBe("#e0674f");
-    expect(style["--as-diff-removed"]).toBe("#e11d48");
+    // The hexes moved one step darker when the light palette was measured
+    // against WCAG AA — see theme-fixes.test.ts. What is pinned here is the
+    // mapping: one custom property per record entry, named after its key.
+    expect(style["--as-edge-sky"]).toBe("#0369a1");
+    expect(style["--as-seq-database"]).toBe("#b45309");
+    expect(style["--as-node-service"]).toBe("#0369a1");
+    expect(style["--as-warn"]).toBe("#c2410c");
+    expect(style["--as-diff-removed"]).toBe("#be123c");
   });
 
   it("light exports darken the edge palette", () => {
@@ -798,8 +806,9 @@ describe("colour theming", () => {
     });
     // Edge strokes are the only 1.8-wide strokes — a clean discriminator.
     expect(renderTemplateToSvg(doc, registry)).toContain('stroke="#38bdf8" stroke-width="1.8"');
+    // sky-700, matching LIGHT_THEME — the dark sky is ~2.2:1 on a light page.
     expect(renderTemplateToSvg(doc, registry, LIGHT_EXPORT_PALETTE)).toContain(
-      'stroke="#0284c7" stroke-width="1.8"',
+      'stroke="#0369a1" stroke-width="1.8"',
     );
   });
 

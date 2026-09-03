@@ -33,6 +33,13 @@ body {
   /* Canvas-selection highlight in the JSON panel: LIGHTER than the dark
      panel here, darker than the white one in light mode. */
   --shell-json-hit: rgb(226 232 240 / 11%);
+  /* Shadows are a colour too — 35% black over a white page reads as soot. */
+  --shell-shadow: rgb(0 0 0 / 35%);
+
+  /* The shell's own native widgets (the accent colour input, scrollbars,
+     select popups) follow the toggle, the same way the editor's do — see
+     `color-scheme` in the library's styles.css. */
+  color-scheme: dark;
 
   display: flex;
   flex-direction: column;
@@ -53,6 +60,9 @@ body {
   --shell-text-faint: #94a3b8;
   --shell-code: #4f46e5;
   --shell-json-hit: rgb(15 23 42 / 8%);
+  --shell-shadow: rgb(15 23 42 / 14%);
+
+  color-scheme: light;
 }
 
 .app__bar {
@@ -84,8 +94,10 @@ body {
   --as-border: var(--shell-border-2);
 }
 
+/* Matches LIGHT_THEME.accent, which moved to sky-700 so white-on-accent
+   button text clears AA. */
 .app[data-theme="light"] .app__logo {
-  --as-accent: #0284c7;
+  --as-accent: #0369a1;
 }
 
 .app__title {
@@ -193,7 +205,7 @@ body {
   border: 1px solid var(--shell-border-2);
   border-radius: 10px;
   background: var(--shell-surface);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 35%);
+  box-shadow: 0 12px 32px var(--shell-shadow);
 }
 
 .app__dropdown-caption {
@@ -335,7 +347,7 @@ body {
   border: 1px solid var(--shell-border-2);
   border-radius: 10px;
   background: var(--shell-surface);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 35%);
+  box-shadow: 0 12px 32px var(--shell-shadow);
   transform: translateY(-50%);
   opacity: 0;
   visibility: hidden;

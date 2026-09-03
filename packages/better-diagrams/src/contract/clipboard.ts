@@ -154,15 +154,25 @@ export function pasteFragment(
     ...(template.zones ?? []).map((z) => z.id),
   ]);
 
-  const remap = new Map<string, string>();
-  const fresh = (oldId: string, prefix: string) => {
+  // Three maps, not one. Zones, nodes and edges are SEPARATE namespaces — the
+  // schema prefixes zone ids on the canvas precisely so a zone and a node may
+  // share one — and a single map keyed by the bare id lets whichever came
+  // last overwrite the others. The visible damage: a zone "aws" holding a
+  // group "aws" pastes with every member un-zoned (the node's entry answers
+  // the zone lookup), and an edge whose id matches a node's is dropped for
+  // pointing at itself.
+  const zoneMap = new Map<string, string>();
+  const nodeMap = new Map<string, string>();
+  const edgeMap = new Map<string, string>();
+
+  const fresh = (into: Map<string, string>, oldId: string, prefix: string) => {
     let id = makeId(prefix);
     // A caller-supplied `makeId` may be deterministic (tests pass
     // `p => `${p}_copy``), in which case re-calling it can never resolve a
     // collision. Suffix instead of spinning.
     for (let bump = 2; existing.has(id); bump++) id = `${makeId(prefix)}_${bump}`;
     existing.add(id);
-    remap.set(oldId, id);
+    into.set(oldId, id);
     return id;
   };
 
@@ -174,21 +184,21 @@ export function pasteFragment(
   const zoneIds = new Set((template.zones ?? []).map((z) => z.id));
   const newZones = (fragment.zones ?? []).filter((z) => subjects.has(z.id) || !zoneIds.has(z.id));
   for (const zone of fragment.zones ?? []) {
-    if (!subjects.has(zone.id) && zoneIds.has(zone.id)) remap.set(zone.id, zone.id);
-    else fresh(zone.id, zone.id);
+    if (!subjects.has(zone.id) && zoneIds.has(zone.id)) zoneMap.set(zone.id, zone.id);
+    else fresh(zoneMap, zone.id, zone.id);
   }
 
-  for (const node of fragment.nodes) fresh(node.id, node.id);
-  for (const edge of fragment.edges) fresh(edge.id, edge.id);
+  for (const node of fragment.nodes) fresh(nodeMap, node.id, node.id);
+  for (const edge of fragment.edges) fresh(edgeMap, edge.id, edge.id);
 
   const inFragment = new Set(fragment.nodes.map((n) => n.id));
 
   const nodes = fragment.nodes.map((node) => ({
     ...node,
-    id: remap.get(node.id)!,
+    id: nodeMap.get(node.id)!,
     // Keep the parent only if it came along; otherwise the copy becomes root.
-    parentId: node.parentId && inFragment.has(node.parentId) ? remap.get(node.parentId)! : null,
-    zoneId: node.zoneId ? (remap.get(node.zoneId) ?? null) : null,
+    parentId: node.parentId && inFragment.has(node.parentId) ? nodeMap.get(node.parentId)! : null,
+    zoneId: node.zoneId ? (zoneMap.get(node.zoneId) ?? null) : null,
     // Offset only the roots — a child is positioned relative to its parent,
     // which has already moved, so offsetting it too would double the shift.
     ...(node.parentId && inFragment.has(node.parentId)
@@ -198,9 +208,9 @@ export function pasteFragment(
 
   const edges = fragment.edges.map((edge) => ({
     ...edge,
-    id: remap.get(edge.id)!,
-    source: remap.get(edge.source)!,
-    target: remap.get(edge.target)!,
+    id: edgeMap.get(edge.id)!,
+    source: nodeMap.get(edge.source)!,
+    target: nodeMap.get(edge.target)!,
     // Waypoints are canvas-absolute; both endpoints moved by the offset
     // (fragment edges are wholly inside the selection), so the route must too.
     ...(edge.points
@@ -219,7 +229,7 @@ export function pasteFragment(
     ...(template.zones ?? []),
     ...newZones.map((zone, index) => ({
       ...zone,
-      id: remap.get(zone.id)!,
+      id: zoneMap.get(zone.id)!,
       x: zone.x + offset,
       y: zone.y + offset,
       z: topZ + 1 + index,
@@ -237,8 +247,12 @@ export function pasteFragment(
       options,
     ),
     newNodeIds: nodes.map((n) => n.id),
-    newZoneIds: newZones.map((z) => remap.get(z.id)!),
-    idMap: Object.fromEntries(remap),
+    newZoneIds: newZones.map((z) => zoneMap.get(z.id)!),
+    // The public map is about NODES: every consumer looks up a node id in
+    // it (a re-attached boundary edge, the editor's selection carry-over).
+    // Zone entries ride along for a caller that copied a region, and node
+    // entries win a collision because that is what the field is read for.
+    idMap: { ...Object.fromEntries(zoneMap), ...Object.fromEntries(nodeMap) },
   };
 }
 
@@ -287,12 +301,20 @@ export function duplicateWithConnections(
     return id;
   };
 
-  const reattached = boundary.map((e) => ({
-    ...e,
-    id: freshEdgeId(e.id),
-    source: pasted.idMap[e.source] ?? e.source,
-    target: pasted.idMap[e.target] ?? e.target,
-  }));
+  const reattached = boundary.map((e) => {
+    // A boundary edge keeps ONE endpoint and moves the other to the clone, so
+    // whatever route was drawn for it no longer describes the line it is now:
+    // the waypoints still bend toward the original, which reads as the copy's
+    // arrow reaching back into its source. Pinned anchors survive — a side is
+    // intent, and both boxes still have that side.
+    const { points: _staleRoute, ...rest } = e;
+    return {
+      ...rest,
+      id: freshEdgeId(e.id),
+      source: pasted.idMap[e.source] ?? e.source,
+      target: pasted.idMap[e.target] ?? e.target,
+    };
+  });
 
   return {
     ...pasted,

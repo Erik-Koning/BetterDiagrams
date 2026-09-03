@@ -55,6 +55,9 @@ export {
   buildSystemPrompt,
   DIAGRAM_SYSTEM_PROMPT,
   parseLlmTemplate,
+  parseLlmTemplateReport,
+  safeUrl,
+  FILE_LINK_PREFIX,
   toReactFlow,
   fromReactFlow,
   // Data-model rows: the metrics, the row→anchor maths, and the resolver both
@@ -184,16 +187,23 @@ export { repairJsonText } from "./json-repair";
 export type { JsonRepairResult, JsonRepairOptions, JsonApproximation } from "./json-repair";
 
 // ── Lint ─────────────────────────────────────────────────────────────────────
-export { BUILTIN_LINT_RULES, lintTemplate } from "./lint";
+export { BUILTIN_LINT_RULES, lintTemplate, LINT_IGNORE_TAG, lintIgnored } from "./lint";
 export type { LintSeverity, LintIssue, LintRuleDef, LintFinding } from "./lint";
 
 // ── Diff ─────────────────────────────────────────────────────────────────────
-export { POSITIONAL_FIELDS, diffTemplates } from "./diff";
+export {
+  POSITIONAL_FIELDS,
+  VIEW_FIELDS,
+  DEFAULT_DIFF_IGNORE,
+  diffTemplates,
+  diffSequences,
+} from "./diff";
 export type {
   DiffState,
   ChangedEntry,
   CollectionDiff,
   TemplateDiff,
+  SequenceDiff,
 } from "./diff";
 
 // ── Sequence diagrams ────────────────────────────────────────────────────────
@@ -209,8 +219,12 @@ export {
   EXAMPLE_SEQUENCE,
   validateSequence,
   sequenceFromTemplate,
+  removeMessages,
+  moveMessage,
+  moveParticipant,
   buildSequencePrompt,
   parseLlmSequence,
+  parseLlmSequenceReport,
   buildSequenceRefineMessage,
   toSequenceFlow,
   fromSequenceFlow,

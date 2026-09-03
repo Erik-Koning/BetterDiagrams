@@ -27,20 +27,49 @@ export interface Snapshot {
   template?: unknown;
 }
 
+export interface CommitOptions {
+  /**
+   * Identifies a RUN of edits that should undo as one — typically one field of
+   * one element, e.g. `node:api:label`.
+   *
+   * Typing into an inspector field commits on every keystroke, because the
+   * host is told about every committed edit and a controlled document must
+   * stay live. But "one keystroke, one undo entry" makes ⌘Z delete a character
+   * at a time, and fixing a typo becomes a dozen presses. Consecutive commits
+   * carrying the same key REPLACE the current entry instead of pushing a new
+   * one, so a run of typing collapses into the edit it was. Moving to another
+   * field, or pausing longer than `COALESCE_MS`, starts a new entry — which is
+   * where a person would expect undo to stop.
+   */
+  coalesce?: string;
+}
+
 export interface History {
   canUndo: boolean;
   canRedo: boolean;
   /** Record a new state. The state it replaces becomes the undo target. */
-  commit: (snapshot: Snapshot) => void;
+  commit: (snapshot: Snapshot, opts?: CommitOptions) => void;
   /** Step back; returns the state to apply, or null when there is none. */
   undo: () => Snapshot | null;
   /** Step forward; returns the state to apply, or null. */
   redo: () => Snapshot | null;
   /** Drop all history and set a new baseline — used when the document is replaced. */
   reset: (snapshot: Snapshot) => void;
+  /**
+   * End any open coalescing run. Call it where a person would consider the
+   * edit finished — leaving a field, or starting a different kind of action —
+   * so the next keystroke cannot join a run it has nothing to do with.
+   */
+  endRun: () => void;
 }
 
 const LIMIT = 100;
+
+/**
+ * How long a coalescing run stays open. Long enough to cover ordinary typing,
+ * short enough that going back to a field after a pause is its own edit.
+ */
+const COALESCE_MS = 1200;
 
 /** Structural clone so later mutation of live state cannot corrupt history. */
 function clone(snapshot: Snapshot): Snapshot {
@@ -78,20 +107,32 @@ export function useHistory(initial?: Snapshot): History {
   const future = useRef<Snapshot[]>([]);
   const present = useRef<Snapshot | null>(initial ? clone(initial) : null);
   const presentSig = useRef<string | null>(initial ? signature(initial) : null);
+  /** The coalescing run in progress: which field, and when it last grew. */
+  const run = useRef<{ key: string | null; at: number }>({ key: null, at: 0 });
   const [, force] = useState(0);
   const rerender = useCallback(() => force((n) => n + 1), []);
 
   const commit = useCallback(
-    (snapshot: Snapshot) => {
+    (snapshot: Snapshot, opts?: CommitOptions) => {
       const sig = signature(snapshot);
       // Nothing persisted actually changed — collapse into the current entry.
       if (sig === presentSig.current) return;
 
-      if (present.current) {
-        past.current.push(present.current);
-        if (past.current.length > LIMIT) past.current.shift();
+      const now = Date.now();
+      const key = opts?.coalesce;
+      const continuing =
+        !!key && key === run.current.key && now - run.current.at < COALESCE_MS && !!present.current;
+
+      // A continuing run overwrites its own entry: the undo target stays the
+      // state from BEFORE the run started, which is the state the user means.
+      if (!continuing) {
+        if (present.current) {
+          past.current.push(present.current);
+          if (past.current.length > LIMIT) past.current.shift();
+        }
+        future.current = [];
       }
-      future.current = [];
+      run.current = { key: key ?? null, at: now };
       present.current = clone(snapshot);
       presentSig.current = sig;
       rerender();
@@ -99,7 +140,13 @@ export function useHistory(initial?: Snapshot): History {
     [rerender],
   );
 
+  /** Close any open coalescing run, so the next commit starts a new entry. */
+  const endRun = useCallback(() => {
+    run.current = { key: null, at: 0 };
+  }, []);
+
   const undo = useCallback(() => {
+    run.current = { key: null, at: 0 };
     const previous = past.current.pop();
     if (!previous) return null;
     if (present.current) future.current.push(present.current);
@@ -110,6 +157,7 @@ export function useHistory(initial?: Snapshot): History {
   }, [rerender]);
 
   const redo = useCallback(() => {
+    run.current = { key: null, at: 0 };
     const next = future.current.pop();
     if (!next) return null;
     if (present.current) past.current.push(present.current);
@@ -121,6 +169,7 @@ export function useHistory(initial?: Snapshot): History {
 
   const reset = useCallback(
     (snapshot: Snapshot) => {
+      run.current = { key: null, at: 0 };
       past.current = [];
       future.current = [];
       present.current = clone(snapshot);
@@ -137,5 +186,6 @@ export function useHistory(initial?: Snapshot): History {
     undo,
     redo,
     reset,
+    endRun,
   };
 }

@@ -38,6 +38,16 @@ import {
   slotX,
 } from "../contract/sequence-layout";
 import { dateToDay, formatDiagramDate, isOverdue, laterDate } from "../contract/timeline";
+
+/**
+ * Dates in an EXPORT always carry the year.
+ *
+ * On screen the year is dropped while it matches today's — a roadmap inside
+ * one year should not repeat it on every row. An exported picture outlives
+ * the calendar: opened next January, "Sep 30" no longer says which year, and
+ * nothing in the file can tell you.
+ */
+const exportDate = (date: string) => formatDiagramDate(date, { year: "always" });
 import { teamColor } from "./shapes";
 
 const PAD = 48;
@@ -266,7 +276,7 @@ export function emitSequence(
     }
     if (p.date) {
       segments.push({
-        text: ` · ${formatDiagramDate(p.date)}`,
+        text: ` · ${exportDate(p.date)}`,
         color: isOverdue(p.date, p.status) ? (palette.overdue ?? "#f59e0b") : accent,
       });
     }
@@ -384,7 +394,7 @@ function pushMessage(
     cmds.push({ op: "text", x: x + 12, y: y - 16, text: labelText, size: 11, font: "mono", color: palette.textDim, knockout: { color: palette.bg, padX: 4, height: 15 } });
     if (m.tech) cmds.push({ op: "text", x: x + 12, y: y + 26, text: `[${m.tech}]`, size: 9, font: "mono", color: palette.textDim, alpha: 0.8 });
     if (m.date) {
-      cmds.push({ op: "text", x: x + 12, y: y + (m.tech ? 37 : 26), text: formatDiagramDate(m.date), size: 9, font: "mono", color: palette.textDim, alpha: 0.7 });
+      cmds.push({ op: "text", x: x + 12, y: y + (m.tech ? 37 : 26), text: exportDate(m.date), size: 9, font: "mono", color: palette.textDim, alpha: 0.7 });
     }
     return;
   }
@@ -409,6 +419,6 @@ function pushMessage(
     cmds.push({ op: "text", x: midX, y: y + 13, text: `[${m.tech}]`, size: 9, font: "mono", color: palette.textDim, alpha: 0.8, anchor: "middle", knockout: { color: palette.bg, padX: 3, height: 11 } });
   }
   if (m.date) {
-    cmds.push({ op: "text", x: midX, y: y + (m.tech ? 24 : 13), text: formatDiagramDate(m.date), size: 9, font: "mono", color: palette.textDim, alpha: 0.7, anchor: "middle", knockout: { color: palette.bg, padX: 3, height: 11 } });
+    cmds.push({ op: "text", x: midX, y: y + (m.tech ? 24 : 13), text: exportDate(m.date), size: 9, font: "mono", color: palette.textDim, alpha: 0.7, anchor: "middle", knockout: { color: palette.bg, padX: 3, height: 11 } });
   }
 }

@@ -61,7 +61,11 @@ export function ExportStatesModal({
 
   const selection: StateSelection | undefined = mode === "all" ? undefined : { providers, stops };
   const count = mode === "current" ? 1 : countStateCombos(axes, selection);
-  const blocked = mode !== "custom" ? false : count === 0 || count > MAX_COMBOS;
+  // The limit is about the WORK, not about which control asked for it: "all
+  // states" on a document with three switchable zones and five dates is the
+  // same 270 renders a custom selection of them would be, and the count line
+  // said so while the button happily started them.
+  const blocked = count === 0 || count > MAX_COMBOS;
 
   const toggle = (zoneId: string, provider: string) => {
     setProviders((prev) => {

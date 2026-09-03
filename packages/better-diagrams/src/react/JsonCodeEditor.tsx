@@ -19,6 +19,7 @@ import {
 } from "@codemirror/language";
 import { json, jsonParseLinter } from "@codemirror/lang-json";
 import { linter, lintGutter } from "@codemirror/lint";
+import { Compartment } from "@codemirror/state";
 import { tags } from "@lezer/highlight";
 import { docDiagnostics, type JsonDocLint } from "./schema-lint";
 import { approximateJsonFix, repairJsonText } from "../contract/json-repair";
@@ -32,10 +33,16 @@ export interface JsonCodeEditorProps {
   autoFocus?: boolean;
   /**
    * Warn (yellow, never an error) about keys, values, references, and dates
-   * the schema doesn't know — see schema-lint.ts. Fixed at mount, like the
+   * the schema doesn't know — see schema-lint.ts. Reconfigurable, because
    * other extensions.
    */
   lint?: JsonDocLint;
+  /**
+   * Every diagnostic the schema lint currently finds, whenever it re-runs.
+   * The host lists them; the gutter alone only tells a reader that SOMETHING
+   * is wrong somewhere.
+   */
+  onDiagnostics?: (found: Array<{ severity: string; message: string }>) => void;
 }
 
 const jsonHighlight = HighlightStyle.define([
@@ -196,6 +203,7 @@ export function JsonCodeEditor({
   ariaLabel,
   autoFocus,
   lint,
+  onDiagnostics,
 }: JsonCodeEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -203,6 +211,24 @@ export function JsonCodeEditor({
   useEffect(() => {
     onChangeRef.current = onChange;
   });
+  const onDiagnosticsRef = useRef(onDiagnostics);
+  useEffect(() => {
+    onDiagnosticsRef.current = onDiagnostics;
+  });
+
+  /**
+   * The schema linter, swappable after mount.
+   *
+   * It used to be baked into the extension list at creation. Pasting a
+   * SEQUENCE document into the architecture modal flips the type chip
+   * automatically — but the editor kept the architecture rules, so every
+   * correct key (`participants`, `messages`) was underlined as unknown while
+   * Insert quietly routed to the sequence parser.
+   */
+  const lintCompartment = useRef(new Compartment());
+  const placeholderCompartment = useRef(new Compartment());
+  const lintRef = useRef(lint);
+  lintRef.current = lint;
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -218,18 +244,31 @@ export function JsonCodeEditor({
         json(),
         healingPaste,
         jsonLinter,
-        lint
-          ? linter(
-              (view) =>
-                view.state.doc.toString().trim() ? docDiagnostics(view.state, lint) : [],
-              { delay: 250 },
-            )
-          : [],
+        lintCompartment.current.of(
+          linter(
+            (view) => {
+              const active = lintRef.current;
+              const found =
+                active && view.state.doc.toString().trim()
+                  ? docDiagnostics(view.state, active)
+                  : [];
+              // Reported out as well as drawn, so the modal can LIST what it
+              // found. A squiggle plus a hover tooltip is invisible to anyone
+              // who does not happen to hover exactly the right word, and
+              // these messages say what the document will lose on insert.
+              onDiagnosticsRef.current?.(
+                found.map((d) => ({ severity: d.severity, message: d.message })),
+              );
+              return found;
+            },
+            { delay: 250 },
+          ),
+        ),
         lintGutter(),
         syntaxHighlighting(jsonHighlight),
         editorTheme,
         keymap.of([...defaultKeymap, ...historyKeymap, ...foldKeymap]),
-        placeholder ? cmPlaceholder(placeholder) : [],
+        placeholderCompartment.current.of(placeholder ? cmPlaceholder(placeholder) : []),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) onChangeRef.current(update.state.doc.toString());
         }),
@@ -254,6 +293,33 @@ export function JsonCodeEditor({
       view.dispatch({ changes: { from: 0, to: current.length, insert: value } });
     }
   }, [value]);
+
+  // Re-run the linter against the new rules the moment the schema changes.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: [
+        lintCompartment.current.reconfigure(
+          linter(
+            (v) => {
+              const active = lintRef.current;
+              const found =
+                active && v.state.doc.toString().trim() ? docDiagnostics(v.state, active) : [];
+              onDiagnosticsRef.current?.(
+                found.map((d) => ({ severity: d.severity, message: d.message })),
+              );
+              return found;
+            },
+            { delay: 250 },
+          ),
+        ),
+        placeholderCompartment.current.reconfigure(
+          placeholder ? cmPlaceholder(placeholder) : [],
+        ),
+      ],
+    });
+  }, [lint, placeholder]);
 
   return <div ref={hostRef} className="as-jsoneditor" />;
 }

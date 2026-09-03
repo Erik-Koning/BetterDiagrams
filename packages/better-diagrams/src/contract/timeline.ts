@@ -84,8 +84,20 @@ export function normalizeDate(raw: unknown): DiagramDate | undefined {
   const text = raw.trim();
   if (!text) return undefined;
 
-  const match = /^(\d{4})[-/.](\d{1,2})(?:[-/.](\d{1,2}))?/.exec(text);
-  if (!match) return undefined;
+  // Anchored at BOTH ends: an unanchored pattern accepts "2026-06-15garbage"
+  // as a date, which is exactly the input that most deserves to be refused.
+  // A trailing time-of-day is the one exception worth keeping — an ISO
+  // timestamp is a date somebody wrote, and dropping it would silently
+  // un-date the element.
+  const match = /^(\d{4})[-/.](\d{1,2})(?:[-/.](\d{1,2}))?(?:[T ][\d:.]+(?:Z|[+-][\d:]+)?)?$/.exec(
+    text,
+  );
+  if (!match) {
+    // Day-first and month-first slips ("15/06/2026", "06/15/2026") are common
+    // enough to name rather than swallow: both readings are plausible, so
+    // guessing one would move the element to a date nobody wrote.
+    return undefined;
+  }
 
   const year = Number(match[1]);
   const month = Number(match[2]);

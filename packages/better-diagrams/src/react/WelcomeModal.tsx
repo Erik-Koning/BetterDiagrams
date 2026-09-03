@@ -100,6 +100,9 @@ export interface WelcomeModalProps {
 }
 
 const ARCH_PLACEHOLDER = JSON.stringify({ version: 1, nodes: [], edges: [] }, null, 2);
+/** How many lint notices the modal lists before summarising the rest. */
+const MAX_NOTICES = 6;
+
 const SEQ_PLACEHOLDER = JSON.stringify({ version: 1, participants: [], messages: [] }, null, 2);
 
 /** Builtin-vocabulary fallback when the studio doesn't pass a registry-aware spec. */
@@ -200,6 +203,10 @@ export function WelcomeModal({
   const [error, setError] = useState<string | null>(null);
   /** Lossy rescue for a failed Insert — offered, never applied on its own. */
   const [approxFix, setApproxFix] = useState<{ text: string; sites: number } | null>(null);
+  /** What the schema lint currently finds, listed under the editor. */
+  const [notices, setNotices] = useState<Array<{ severity: string; message: string }>>([]);
+  /** Whether the copy button's form picker is open. See its comment below. */
+  const [copyFormOpen, setCopyFormOpen] = useState(false);
   const [copied, setCopied] = useState<null | "full" | "content">(null);
   const [pickedKind, setPickedKind] = useState<WelcomeModalProps["kind"]>(kind);
   /** A manual pick wins over auto-detect for the rest of the session. */
@@ -341,13 +348,33 @@ export function WelcomeModal({
           </button>
           {/* Hover (or keyboard focus) reveals the form picker; a plain click
               keeps the historical behaviour and copies the full schema. */}
-          <div className={`as-welcome__copy${contentPromptAvailable ? " as-menu-wrap" : ""}`}>
+          <div
+            className={`as-welcome__copy${contentPromptAvailable ? " as-menu-wrap" : ""}${
+              copyFormOpen ? " as-welcome__copy--open" : ""
+            }`}
+          >
             <button type="button" className="as-btn as-welcome__cta" onClick={() => handleCopy("full")}>
               <span>{copied === "full" ? "Copied ✓" : "Copy Schema & System Prompt"}</span>
               <span className="as-welcome__arrow" aria-hidden="true">
                 →
               </span>
             </button>
+            {contentPromptAvailable ? (
+              // A real disclosure button, not hover alone. On a touch device
+              // there is no hover, and the first tap already copied the full
+              // schema — so the "elements only" form, which is the right
+              // answer for a complex diagram, could not be reached at all.
+              <button
+                type="button"
+                className="as-btn as-btn--icon as-welcome__copy-toggle"
+                aria-expanded={copyFormOpen}
+                aria-label="Choose which form of the schema to copy"
+                title="Choose the form: elements only, or elements and positioning"
+                onClick={() => setCopyFormOpen((open) => !open)}
+              >
+                ▾
+              </button>
+            ) : null}
             {contentPromptAvailable ? (
               <div className="as-menu as-menu--left as-welcome__copy-menu" role="menu">
                 <button
@@ -404,8 +431,30 @@ export function WelcomeModal({
                   ? SEQUENCE_LINT
                   : DEFAULT_ARCH_LINT
             }
+            onDiagnostics={setNotices}
           />
         </div>
+
+        {/* The warnings, in words, under the editor.
+            The gutter marker and its hover tooltip are the whole story
+            otherwise — and every one of these messages says what the document
+            is about to LOSE on insert ("the whole edge will be dropped",
+            "inserted as \"service\""), which is not something to leave behind
+            a hover. Insert always proceeds; these are never errors. */}
+        {notices.length ? (
+          <ul className="as-welcome__notices">
+            {notices.slice(0, MAX_NOTICES).map((notice, i) => (
+              <li key={`${notice.message}-${i}`} className={`as-welcome__notice as-welcome__notice--${notice.severity}`}>
+                {notice.message}
+              </li>
+            ))}
+            {notices.length > MAX_NOTICES ? (
+              <li className="as-welcome__notice as-welcome__notice--more">
+                …and {notices.length - MAX_NOTICES} more
+              </li>
+            ) : null}
+          </ul>
+        ) : null}
 
         {error ? (
           <div className="as-welcome__error" role="alert">

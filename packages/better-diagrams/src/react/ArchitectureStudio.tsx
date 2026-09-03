@@ -24,11 +24,12 @@ import {
   BackgroundVariant,
   ConnectionMode,
   Controls,
+  SelectionMode,
   MiniMap,
   Panel,
   ReactFlow,
   ReactFlowProvider,
-  addEdge,
+  ViewportPortal,
   useEdgesState,
   useNodesState,
   useReactFlow,
@@ -130,7 +131,7 @@ import {
 } from "../contract/states";
 import { focusPath, liftScopedReactFlow, scopedView } from "../contract/scope";
 import { DiffCanvas } from "./DiffCanvas";
-import { isTypingTarget } from "./keys";
+import { isMac, isTypingTarget } from "./keys";
 import {
   FileMenu,
   Breadcrumbs,
@@ -206,6 +207,16 @@ const DEFAULT_EDGE_OPTIONS = { zIndex: EDGE_Z_INDEX };
  * — a lift of one band would only reach the things nested on top of it.
  */
 const SELECT_ELEVATION = 100_000;
+
+/**
+ * How far a SELECTED edge floats — above a selected node, so its endpoint and
+ * waypoint handles are the topmost thing under the pointer while it is the
+ * element being worked on.
+ */
+const SELECTED_EDGE_ELEVATION = SELECT_ELEVATION * 2;
+
+/** How close an edge has to come to a neighbour's before the guide catches. */
+const ALIGN_TOL = 6;
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -345,6 +356,55 @@ function download(blob: Blob, filename: string): void {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
+/**
+ * Fields a person edits by TYPING, where the inspector commits on every
+ * keystroke so a controlled host stays live.
+ *
+ * A run of commits into one of these collapses into a single undo entry (see
+ * CommitOptions in history.ts); everything else — a kind, a status, a colour —
+ * is one deliberate action per commit and undoes on its own.
+ */
+/**
+ * The editor the keyboard belongs to while nothing has DOM focus.
+ *
+ * Clicking a canvas leaves focus on <body>, so focus alone cannot tell two
+ * mounted studios apart — or tell either of them from the host's own page.
+ * The most recently pointed-at editor holds the claim; the first to mount
+ * takes it so a lone editor works before anyone has touched it.
+ */
+let activeStudio: symbol | null = null;
+
+/**
+ * Whether a canvas node is pinned.
+ *
+ * Zone nodes carry their document under `data.zone`, every other kind spreads
+ * its fields onto `data` directly — so a bare `data.locked` reads `undefined`
+ * for every zone, and a locked region could still be nudged with the arrows
+ * while ⌘⇧L could only ever re-lock it.
+ */
+function isNodeLocked(node: { data?: unknown } | undefined | null): boolean {
+  const data = node?.data as { locked?: boolean; zone?: { locked?: boolean } } | undefined;
+  return !!(data?.zone ? data.zone.locked : data?.locked);
+}
+
+const TYPED_FIELDS = new Set([
+  "label",
+  "description",
+  "tech",
+  "team",
+  "url",
+  "startLabel",
+  "endLabel",
+  "fields",
+]);
+
+/** The coalescing key for a patch, or nothing when it is not a typing run. */
+function typingRunKey(scope: string, id: string, patch: object): string | undefined {
+  const keys = Object.keys(patch);
+  return keys.length === 1 && TYPED_FIELDS.has(keys[0]!) ? `${scope}:${id}:${keys[0]}` : undefined;
+}
+
+
 export function ArchitectureStudio(props: ArchitectureStudioProps) {
   // React Flow hooks require the provider to be an ancestor, so the real
   // implementation lives one level down.
@@ -422,10 +482,24 @@ function StudioInner({
     reset: resetHistory,
     undo: undoHistory,
     redo: redoHistory,
+    endRun: endHistoryRun,
   } = history;
 
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
+  /** The same selection, readable from callbacks that run outside render. */
+  const selectionRef = useRef<{ nodes: string[]; edges: string[] }>({ nodes: [], edges: [] });
+
+  /**
+   * What a bulk edit applies to, with the derived view elements taken out —
+   * a ghost belongs to another level and a boundary frame is not an element.
+   */
+  const selectedDocNodeIds = selectedNodeIds.filter(
+    (id) => !isZoneNodeId(id) && !isGhostNodeId(id) && !isBoundaryNodeId(id),
+  );
+  const selectedZoneIds = selectedNodeIds.filter(isZoneNodeId).map(fromZoneNodeId);
+  const multiSelected =
+    selectedDocNodeIds.length + selectedZoneIds.length + selectedEdgeIds.length > 1;
   /**
    * Which toolbar dropdown is open. One slot for all of them, so opening a
    * menu closes whichever other menu was open — no two-menus-at-once states.
@@ -449,7 +523,42 @@ function StudioInner({
   const [showTeams, setShowTeams] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchIndex, setSearchIndex] = useState(0);
+  /** The match the canvas is centred on. -1 = a query typed but not yet jumped to. */
+  const [searchIndex, setSearchIndex] = useState(-1);
+  /** Set by "Set version tag…" so the chip it just created opens for typing. */
+  const [editVersionTag, setEditVersionTag] = useState(false);
+  /**
+   * The right-click menu: where it is, and what it was opened on.
+   *
+   * Duplicate, lock, nest, align and delete lived only in toolbar menus, the
+   * bottom bar and the shortcut sheet — so the gesture every canvas editor
+   * answers with "here is what you can do to this" answered with the
+   * browser's own menu instead.
+   */
+  /** The alignment snap the guide is promising, applied when the drag ends. */
+  const pendingSnap = useRef<{ id: string; moving: ReadonlySet<string> } | null>(null);
+
+  /** The alignment guide showing while a node is being dragged. */
+  const [dragGuides, setDragGuides] = useState<
+    { axis: "x" | "y"; at: number; from: number; to: number } | null
+  >(null);
+  /** The container the dragged node would land in, highlighted while it moves. */
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+
+  /** Narrow picture exports to the selection. See `runDirectExport`. */
+  const [exportSelectionOnly, setExportSelectionOnly] = useState(false);
+  const [contextMenu, setContextMenu] = useState<
+    { x: number; y: number; kind: "node" | "edge" | "zone" | "pane" } | null
+  >(null);
+  /**
+   * The element whose name is open for editing on the canvas.
+   *
+   * F2 (and Enter on a single selection) opens it. Double-click is spoken for
+   * — it drills into a node's next level, including the empty one you start a
+   * decomposition from — so renaming needed a gesture that collides with
+   * nothing, and F2 is what every file manager and IDE already uses.
+   */
+  const [renamingId, setRenamingId] = useState<string | null>(null);
   /**
    * Which timeline stop is being shown, or null when the scrubber is off.
    * Pure view state: it never reaches the document, and the scrubbed canvas is
@@ -464,6 +573,20 @@ function StudioInner({
   const compareInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  /** The inspector's Link field, so ⌘⇧K can put the cursor in it. */
+  const linkInputRef = useRef<HTMLInputElement>(null);
+  /** The component's outermost element — how it tells its own keys from the host's. */
+  const rootRef = useRef<HTMLDivElement>(null);
+  /** Identity for the keyboard claim. See `activeStudio`. */
+  const studioId = useMemo(() => Symbol("studio"), []);
+  // The first editor on the page claims the keyboard, so a lone one works
+  // before it has been touched.
+  useEffect(() => {
+    if (activeStudio === null) activeStudio = studioId;
+    return () => {
+      if (activeStudio === studioId) activeStudio = null;
+    };
+  }, [studioId]);
   const abortRef = useRef<AbortController | null>(null);
   /** JSON of the last template this component emitted, so echoes don't re-sync. */
   // Seeded with the initial document so a controlled mount doesn't re-sync
@@ -497,14 +620,30 @@ function StudioInner({
   const focusStackRef = useRef<string[]>([]);
   const rfFocusRef = useRef<string | null>(null);
 
-  /** `color` tints the toast like its subject — e.g. the zone a node moved into. */
+  /**
+   * `color` tints the toast like its subject — e.g. the zone a node moved into.
+   *
+   * The timer is tracked by identity rather than by message text: an earlier
+   * version cleared "whatever is showing if it still reads the same", so a
+   * second "Moved into Payments" two seconds after the first was dismissed
+   * almost instantly by the FIRST one's timer. Repeating an action is exactly
+   * when the confirmation matters most.
+   */
+  const toastTimer = useRef<number | null>(null);
   const showToast = useCallback((message: string, color?: string) => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
     setToast({ message, color });
-    window.setTimeout(
-      () => setToast((current) => (current?.message === message ? null : current)),
-      2200,
-    );
+    toastTimer.current = window.setTimeout(() => {
+      toastTimer.current = null;
+      setToast(null);
+    }, 2200);
   }, []);
+  useEffect(
+    () => () => {
+      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    },
+    [],
+  );
 
   // ── Derived template ──────────────────────────────────────────────────────
 
@@ -580,12 +719,14 @@ function StudioInner({
   // ── Commit: snapshot for undo, then notify the host ───────────────────────
 
   const commit = useCallback(
-    (n: Node[], e: Edge[], derived?: DiagramTemplate) => {
+    (n: Node[], e: Edge[], derived?: DiagramTemplate, coalesce?: string) => {
       const next = derived ?? deriveTemplate(n, e);
       // The snapshot carries the full document so undo can re-materialize it
       // instead of re-deriving against whatever frame is current by then —
       // undoing across a provider toggle must not re-judge (and lose) nodes.
-      commitHistory({ nodes: n, edges: e, meta: meta.current, template: next });
+      // `coalesce` folds a run of keystrokes in one field into one entry; see
+      // CommitOptions in history.ts.
+      commitHistory({ nodes: n, edges: e, meta: meta.current, template: next }, { coalesce });
       if (!onChange) return;
       const json = JSON.stringify(next);
       if (json === lastEmitted.current) return;
@@ -595,11 +736,20 @@ function StudioInner({
     [commitHistory, onChange, deriveTemplate],
   );
 
-  /** Commit whatever is in state right now — for changes applied via setNodes. */
-  const commitLater = useCallback(() => {
-    // Read the freshest state from the store rather than the render closure.
-    queueMicrotask(() => commit(flow.getNodes(), flow.getEdges()));
-  }, [commit, flow]);
+  /**
+   * Commit whatever is in state right now — for changes applied via setNodes.
+   *
+   * `coalesce` names the field being edited, so a run of typing in one
+   * inspector input undoes as the one edit it was rather than a character at
+   * a time. Omit it for anything a person would call a single action.
+   */
+  const commitLater = useCallback(
+    (coalesce?: string) => {
+      // Read the freshest state from the store rather than the render closure.
+      queueMicrotask(() => commit(flow.getNodes(), flow.getEdges(), undefined, coalesce));
+    },
+    [commit, flow],
+  );
 
   // ── Materialization: the ONE way a document becomes a canvas ──────────────
 
@@ -631,9 +781,24 @@ function StudioInner({
         : doc;
       const rf = toReactFlow(viewDoc, registryKinds(registry, showHidden));
       const rfNodes = top ? decorateScopedNodes(rf.nodes as Node[]) : (rf.nodes as Node[]);
-      setNodes(rfNodes);
-      setEdges(rf.edges as Edge[]);
-      return { nodes: rfNodes, edges: rf.edges as Edge[] };
+
+      // Carry the selection across the rebuild for everything that still
+      // exists. `toReactFlow` produces a fresh, unselected canvas, so without
+      // this every undo closes the inspector — and "edit a label, press ⌘Z"
+      // becomes "edit a label, press ⌘Z, find the node again".
+      const keepNodes = new Set(selectionRef.current.nodes);
+      const keepEdges = new Set(selectionRef.current.edges);
+      const selected = keepNodes.size || keepEdges.size;
+      const outNodes = selected
+        ? rfNodes.map((n) => (keepNodes.has(n.id) ? { ...n, selected: true } : n))
+        : rfNodes;
+      const outEdges = selected
+        ? (rf.edges as Edge[]).map((e) => (keepEdges.has(e.id) ? { ...e, selected: true } : e))
+        : (rf.edges as Edge[]);
+
+      setNodes(outNodes);
+      setEdges(outEdges);
+      return { nodes: outNodes, edges: outEdges };
     },
     [registry, showHidden, setNodes, setEdges],
   );
@@ -671,6 +836,14 @@ function StudioInner({
    * the full template is what actually makes the toggle do anything.
    */
   useEffect(() => {
+    // Judged against the document this canvas was MATERIALIZED from, not the
+    // render closure. On a host that swaps `value` and `activeFileId` in one
+    // render without remounting, the closure still holds the previous file's
+    // document — and with an inline `onChange` or `registry` this effect's
+    // deps change every render, so it would run, rebuild from the OLD file
+    // and commit it into the new one.
+    const live = templateRef.current;
+    if (live !== template) return;
     const signature = viewSignatureOf(template, showHidden, focusId);
     if (signature === zoneSignatureRef.current) return;
     // The document part alone decides whether this rebuild is an EDIT
@@ -686,7 +859,10 @@ function StudioInner({
   // ── Replace the whole document ────────────────────────────────────────────
 
   const applyTemplate = useCallback(
-    (incoming: DiagramTemplate, { fit = true }: { fit?: boolean } = {}) => {
+    (
+      incoming: DiagramTemplate,
+      { fit = true, coalesce }: { fit?: boolean; coalesce?: string } = {},
+    ) => {
       // The declaration is truth on import: a generated document usually gets
       // membership right and coordinates approximately right, so move the node
       // to match its declared zone rather than dropping the membership.
@@ -694,12 +870,10 @@ function StudioInner({
         containerKinds: registry.containerKinds,
       });
       const next = materializeTemplate(validated);
-      commitHistory({
-        nodes: next.nodes,
-        edges: next.edges,
-        meta: meta.current,
-        template: validated,
-      });
+      commitHistory(
+        { nodes: next.nodes, edges: next.edges, meta: meta.current, template: validated },
+        { coalesce },
+      );
       if (onChange) {
         const json = JSON.stringify(validated);
         lastEmitted.current = json;
@@ -786,6 +960,8 @@ function StudioInner({
    * the original, and cascade so a run of ⌘V fans out instead of stacking.
    */
   const pasteStep = useRef(0);
+  /** What the cascade is counting pastes OF, so a new fragment restarts it. */
+  const lastPasted = useRef<string | null>(null);
 
   const copySelection = useCallback(async () => {
     const ids = selectedNodeIds.filter((id) => !isZoneNodeId(id));
@@ -814,18 +990,50 @@ function StudioInner({
       let source = fragment ?? null;
       if (!source) {
         // Prefer the system clipboard so a fragment copied in another tab
-        // pastes here; fall back to the in-memory copy.
+        // pastes here; fall back to the in-memory copy ONLY when the system
+        // clipboard could not be read at all.
+        //
+        // The distinction matters: clipboard text that simply isn't a fragment
+        // means the user copied something else since, and re-pasting the last
+        // in-app copy then looks like the editor inventing a node out of
+        // nowhere. "Nothing to paste" is the honest answer.
+        let reachable = false;
+        let text: string | undefined;
         try {
-          const text = await navigator.clipboard?.readText();
+          // A missing API is "unreachable", not "empty": jsdom and insecure
+          // contexts have no clipboard at all, and there the in-memory copy is
+          // the only clipboard the editor has.
+          if (!navigator.clipboard?.readText) throw new Error("no clipboard");
+          text = await navigator.clipboard.readText();
+          reachable = true;
+        } catch {
+          // Permission denied or unsupported — the in-memory copy is all we have.
+        }
+        if (text) {
           // With the registry, or an extension kind pasted from another tab
           // is coerced back to a plain "service".
-          if (text) source = parseFragment(text, registryOpts(registry));
-        } catch {
-          // Permission denied or unsupported.
+          source = parseFragment(text, registryOpts(registry));
+          if (!source) {
+            // Text on the clipboard, but not ours. A run of pastes from
+            // elsewhere must not keep cascading either.
+            pasteStep.current = 0;
+            showToast("Nothing on the clipboard to paste here");
+            return;
+          }
+        } else if (!reachable) {
+          source = localClipboard.current;
         }
-        source ??= localClipboard.current;
       }
       if (!source?.nodes.length && !source?.zones?.length) return;
+
+      // The cascade is about repeat pastes of the SAME thing. A different
+      // fragment — copied in another tab, or a second copy here — starts over,
+      // or a long session of pasting walks the offset off the canvas.
+      const signature = JSON.stringify(source);
+      if (signature !== lastPasted.current) {
+        pasteStep.current = 0;
+        lastPasted.current = signature;
+      }
 
       const { template: next, newNodeIds, newZoneIds } = pasteFragment(templateRef.current, source, {
         ...registryOpts(registry),
@@ -1178,13 +1386,29 @@ function StudioInner({
     // merely tie a selected node with whatever is nested on top of it.
     return {
       ...view,
-      nodes: view.nodes.map((n) =>
-        n.selected && n.type !== "group" && n.type !== "zone"
-          ? { ...n, zIndex: (n.zIndex ?? 0) + SELECT_ELEVATION }
-          : n,
+      nodes: view.nodes.map((n) => {
+        // The frame a dragged node is about to land in says so while the
+        // drag is happening, rather than in a toast after the drop.
+        const lifted =
+          n.selected && n.type !== "group" && n.type !== "zone"
+            ? { ...n, zIndex: (n.zIndex ?? 0) + SELECT_ELEVATION }
+            : n;
+        return n.id === dropTargetId
+          ? { ...lifted, className: `${lifted.className ?? ""} as-node--droptarget`.trim() }
+          : lifted;
+      }),
+      // A SELECTED edge is lifted above every node, and it has to be: its
+      // endpoint handles sit exactly where the node's own (invisible, but
+      // still clickable) connect handles are, and the node paints above the
+      // edge layer. Pressing the handle started a new connection instead of
+      // moving the endpoint — so the documented "drag an endpoint to pin
+      // where the line attaches" gesture was unreachable on every fresh edge.
+      // Unselected edges stay under the cards, which is the design.
+      edges: view.edges.map((e) =>
+        e.selected ? { ...e, zIndex: (e.zIndex ?? 0) + SELECTED_EDGE_ELEVATION } : e,
       ),
     };
-  }, [nodes, edges, timelineFutureIds, timelineFuture]);
+  }, [nodes, edges, timelineFutureIds, timelineFuture, dropTargetId]);
 
   useEffect(() => {
     timelineAtRef.current = timelineAt;
@@ -1313,29 +1537,39 @@ function StudioInner({
       if (readOnly) return;
       // source === target is a SELF-LOOP — a retry arrow, drawn out one face
       // and back into an adjacent one. Legal since validation learned it.
-      setEdges((current) =>
-        addEdge(
-          {
-            ...connection,
-            id: nextId("e"),
-            type: "labeled",
-            data: {
-              label: "",
-              labelT: 0.5,
-              style: "solid",
-              color: "slate",
-              ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
-              // New edges inherit the diagram default (no own `routing`).
-              routingResolved: resolveRouting(meta.current?.routing),
-            } satisfies DiagramEdgeData,
-            style: { stroke: EDGE_COLOR_HEX.slate, strokeWidth: 1.8 },
-          },
-          current,
-        ),
-      );
+      //
+      // Appended directly rather than through React Flow's `addEdge`, which
+      // refuses a connection whose (source, target, handles) tuple already
+      // exists. Every body-drop passes null handles, so a SECOND line between
+      // the same two boxes — "reads" and then "writes" — was silently dropped
+      // with no edge and no explanation. Two connections between two systems
+      // is an ordinary thing to draw, and the document has always allowed it.
+      const edge: Edge = {
+        ...connection,
+        id: nextId("e"),
+        type: "labeled",
+        data: {
+          label: "",
+          labelT: 0.5,
+          style: "solid",
+          color: "slate",
+          ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
+          // New edges inherit the diagram default (no own `routing`).
+          routingResolved: resolveRouting(meta.current?.routing),
+        } satisfies DiagramEdgeData,
+        style: { stroke: EDGE_COLOR_HEX.slate, strokeWidth: 1.8 },
+      };
+      setEdges((current) => [...current, edge]);
+      // A second line between the same pair lands exactly on the first, so it
+      // reads as nothing happening — say what was drawn, and offset it so it
+      // can be seen and grabbed.
+      const twin = flow
+        .getEdges()
+        .some((e) => e.source === connection.source && e.target === connection.target);
+      if (twin) showToast("Second connection added — drag it clear of the first");
       commitLater();
     },
-    [readOnly, setEdges, commitLater],
+    [readOnly, setEdges, commitLater, flow, showToast],
   );
 
   /**
@@ -1347,9 +1581,44 @@ function StudioInner({
    * edge attaches to it like any other, so the whole edge toolbox (bending,
    * labels, re-attachment, undo, exports) works on it unchanged.
    */
+  /** Set by Escape mid-drag, read (and cleared) by `onConnectEnd`. */
+  const connectCancelled = useRef(false);
+
+  /**
+   * Watch for Escape while a connection is being dragged.
+   *
+   * React Flow has no cancel API, so the drag runs to completion and the
+   * decision is made at the end — which is the same place every other outcome
+   * is decided, so nothing half-applies.
+   */
+  const onConnectStart = useCallback(() => {
+    connectCancelled.current = false;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      connectCancelled.current = true;
+    };
+    window.addEventListener("keydown", onKey, true);
+    const stop = () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  }, []);
+
   const onConnectEnd = useCallback<OnConnectEnd>(
     (event, connectionState) => {
+      const cancelled = connectCancelled.current;
+      connectCancelled.current = false;
       if (readOnly) return;
+      // Escape during the drag abandons it. Once the pointer has moved, EVERY
+      // release used to produce something — a self-loop, a dangling dot, or an
+      // edge — so a drag started by accident could only be taken back with
+      // undo, after the fact.
+      if (cancelled) return;
       // A drop that completed on a handle already went through onConnect.
       if (connectionState.isValid) return;
       const from = connectionState.fromNode;
@@ -1403,21 +1672,30 @@ function StudioInner({
 
     // Derived view elements are not deletable — a ghost is edited at its own
     // level, and its stand-in edges are just projections of real ones.
+    // Zones live in the same canvas array but in a different document
+    // collection, so they are separated here rather than left to a filter
+    // that would silently match nothing.
     const nodeIds = selectedNodeIds.filter(
-      (id) => !isGhostNodeId(id) && !isBoundaryNodeId(id),
+      (id) => !isGhostNodeId(id) && !isBoundaryNodeId(id) && !isZoneNodeId(id),
     );
+    const zoneIds = selectedNodeIds.filter(isZoneNodeId).map(fromZoneNodeId);
     const edgeIds = selectedEdgeIds.filter((id) => !isGhostEdgeId(id));
-    if (!nodeIds.length && !edgeIds.length) {
+    if (!nodeIds.length && !edgeIds.length && !zoneIds.length) {
       if (selectedNodeIds.length || selectedEdgeIds.length) {
         showToast("External elements are edited at their own level");
       }
       return;
     }
 
-    if (rfFocusRef.current) {
-      // Route through the DOCUMENT: the canvas cascade below cannot see the
-      // hidden grandchildren of a deleted child, and the carry-through would
-      // resurrect them as orphans.
+    {
+      // ALWAYS route through the DOCUMENT. The canvas holds only what this
+      // view draws, so a cascade over it cannot see a deleted box's hidden
+      // contents — the children of a COLLAPSED group at root, or the drill-in
+      // detail of a card one level down. Those survived the delete and came
+      // back on the next derive with their parent gone: root nodes at
+      // coordinates that only meant something inside the box that no longer
+      // exists, sitting on top of whatever was there. The document knows the
+      // whole tree, so it is the only place the cascade is correct.
       const doc = templateRef.current;
       const doomed = new Set(nodeIds);
       let grewDoc = true;
@@ -1438,10 +1716,19 @@ function StudioInner({
       const docRemovedEdge = (e: { id: string; source: string; target: string }) =>
         edgeIds.includes(e.id) || doomed.has(e.source) || doomed.has(e.target);
       const stranded = strandedPoints(docPointIds, doc.edges, docRemovedEdge);
+      // A deleted zone takes only its BACKDROP. Its members stay — they are
+      // referenced by `zoneId`, not contained — and validation would drop a
+      // dangling reference anyway; clearing it here says so plainly.
+      const goneZones = new Set(zoneIds);
       const next = validateTemplate(
         {
           ...doc,
-          nodes: doc.nodes.filter((n) => !doomed.has(n.id) && !stranded.has(n.id)),
+          ...(goneZones.size
+            ? { zones: (doc.zones ?? []).filter((z) => !goneZones.has(z.id)) }
+            : {}),
+          nodes: doc.nodes
+            .filter((n) => !doomed.has(n.id) && !stranded.has(n.id))
+            .map((n) => (n.zoneId && goneZones.has(n.zoneId) ? { ...n, zoneId: null } : n)),
           edges: doc.edges.filter(
             (e) => !edgeIds.includes(e.id) && !doomed.has(e.source) && !doomed.has(e.target),
           ),
@@ -1450,44 +1737,8 @@ function StudioInner({
       );
       const rf = materializeTemplate(next);
       commit(rf.nodes, rf.edges, next);
-      return;
     }
-
-    // Deleting a container deletes everything nested inside it.
-    const doomed = new Set(nodeIds);
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (const n of flow.getNodes()) {
-        if (n.parentId && doomed.has(n.parentId) && !doomed.has(n.id)) {
-          doomed.add(n.id);
-          grew = true;
-        }
-      }
-    }
-
-    // Same stranded-dot sweep as the document path above, judged on canvas
-    // state: a dangling arrow's dot goes with the last edge that held it.
-    const pointIds = new Set(
-      flow
-        .getNodes()
-        .filter((n) =>
-          registry.pointKinds.includes((n.data as DiagramNodeData | undefined)?.kind ?? ""),
-        )
-        .map((n) => n.id),
-    );
-    const removedEdge = (e: { id: string; source: string; target: string }) =>
-      edgeIds.includes(e.id) || doomed.has(e.source) || doomed.has(e.target);
-    const stranded = strandedPoints(pointIds, flow.getEdges(), removedEdge);
-
-    setNodes((current) => current.filter((n) => !doomed.has(n.id) && !stranded.has(n.id)));
-    setEdges((current) =>
-      current.filter(
-        (e) => !edgeIds.includes(e.id) && !doomed.has(e.source) && !doomed.has(e.target),
-      ),
-    );
-    commitLater();
-  }, [readOnly, selectedNodeIds, selectedEdgeIds, flow, setNodes, setEdges, commitLater, showToast, registry, materializeTemplate, commit]);
+  }, [readOnly, selectedNodeIds, selectedEdgeIds, showToast, registry, materializeTemplate, commit]);
 
   const patchNode = useCallback(
     (id: string, patch: Partial<DiagramNodeData>) => {
@@ -1575,7 +1826,7 @@ function StudioInner({
           };
         }),
       );
-      commitLater();
+      commitLater(typingRunKey("node", id, patch));
     },
     [readOnly, setNodes, registry, commitLater],
   );
@@ -1609,7 +1860,7 @@ function StudioInner({
           };
         }),
       );
-      commitLater();
+      commitLater(typingRunKey("edge", id, patch));
     },
     [readOnly, setEdges, commitLater],
   );
@@ -1631,6 +1882,8 @@ function StudioInner({
    * clone is left where the drag began.
    */
   const altDragOrigins = useRef<Map<string, { x: number; y: number }> | null>(null);
+  /** Ties an alt-drag's clone and its move into one undo entry. */
+  const altDragCommitKey = useRef<string | null>(null);
 
   const onNodeDragStart = useCallback(
     (event: MouseEvent | TouchEvent, _node: Node, dragged: Node[]) => {
@@ -1667,17 +1920,169 @@ function StudioInner({
         return origin ? { ...n, x: origin.x, y: origin.y } : n;
       }),
     };
-    applyTemplate(placed, { fit: false });
+    // The clone and the move that follows it are ONE gesture, so they share a
+    // coalescing key and undo together. Two entries meant the first ⌘Z left
+    // the original visually inside the group it was dragged into while its
+    // stored parent still said otherwise — a state the user never made.
+    const key = `altdrag:${Date.now()}`;
+    altDragCommitKey.current = key;
+    applyTemplate(placed, { fit: false, coalesce: key });
     showToast(`Left a copy of ${ids.length} node${ids.length === 1 ? "" : "s"} behind`);
     return true;
   }, [readOnly, registry, applyTemplate, showToast]);
 
+  /**
+   * Alignment guides and a drop-target highlight, while a node is moving.
+   *
+   * Two things were missing at once: nothing told you where a box would land
+   * relative to its neighbours until you let go, and nothing told you which
+   * container was about to swallow it — the answer to that arrived as a toast
+   * AFTER the drop, which is the wrong end of the gesture.
+   *
+   * Guides are for a SINGLE dragged node. A multi-selection has no one box to
+   * align, and snapping the group by one member's edge moves the others by an
+   * amount nobody asked for.
+   */
+  /**
+   * The nearest alignment between one node's edges/centres and any other's.
+   *
+   * Recomputed rather than remembered: `onNodeDrag` is throttled, so a delta
+   * captured on the last frame is a frame stale by the time the pointer is
+   * released — enough to land a box one pixel off the line the guide just
+   * promised it was on.
+   */
+  const bestAlignment = useCallback(
+    (nodeId: string, movingIds: ReadonlySet<string>) => {
+      const boxOf = (id: string) => {
+        const internal = flow.getInternalNode(id);
+        if (!internal) return null;
+        const { x, y } = internal.internals.positionAbsolute;
+        const w = (internal.measured?.width as number) ?? 0;
+        const h = (internal.measured?.height as number) ?? 0;
+        return { x, y, w, h };
+      };
+      const self = boxOf(nodeId);
+      if (!self) return null;
+
+      // Left / centre / right and top / middle / bottom, against the same
+      // three lines on every other box: the six alignments a person actually
+      // reaches for.
+      const selfX = [self.x, self.x + self.w / 2, self.x + self.w];
+      const selfY = [self.y, self.y + self.h / 2, self.y + self.h];
+      let best: { axis: "x" | "y"; at: number; delta: number; from: number; to: number } | null =
+        null;
+      for (const other of flow.getNodes()) {
+        if (movingIds.has(other.id) || isBoundaryNodeId(other.id) || isGhostNodeId(other.id)) continue;
+        const box = boxOf(other.id);
+        if (!box) continue;
+        const axes = [
+          { axis: "x" as const, mine: selfX, theirs: [box.x, box.x + box.w / 2, box.x + box.w] },
+          { axis: "y" as const, mine: selfY, theirs: [box.y, box.y + box.h / 2, box.y + box.h] },
+        ];
+        for (const { axis, mine, theirs } of axes) {
+          for (const m of mine) {
+            for (const t of theirs) {
+              const delta = t - m;
+              if (Math.abs(delta) > ALIGN_TOL) continue;
+              if (best && Math.abs(best.delta) <= Math.abs(delta)) continue;
+              best = {
+                axis,
+                at: t,
+                delta,
+                from: axis === "x" ? Math.min(self.y, box.y) : Math.min(self.x, box.x),
+                to:
+                  axis === "x"
+                    ? Math.max(self.y + self.h, box.y + box.h)
+                    : Math.max(self.x + self.w, box.x + box.w),
+              };
+            }
+          }
+        }
+      }
+      return best;
+    },
+    [flow],
+  );
+
+  const onNodeDrag = useCallback(
+    (_event: unknown, node: Node, dragged: Node[]) => {
+      if (readOnly) return;
+      const boxOf = (id: string) => {
+        const internal = flow.getInternalNode(id);
+        if (!internal) return null;
+        const { x, y } = internal.internals.positionAbsolute;
+        const w = (internal.measured?.width as number) ?? 0;
+        const h = (internal.measured?.height as number) ?? 0;
+        return { x, y, w, h };
+      };
+
+      const self = boxOf(node.id);
+      if (!self) return;
+
+      // Which open container the centre is over — the same deepest-wins rule
+      // the drop itself uses, so the highlight cannot promise a different
+      // answer from the one the drop gives.
+      const cx = self.x + self.w / 2;
+      const cy = self.y + self.h / 2;
+      const movingIds = new Set(dragged.map((n) => n.id));
+      let over: string | null = null;
+      let overDepth = -1;
+      for (const candidate of flow.getNodes()) {
+        if (movingIds.has(candidate.id) || isZoneNodeId(candidate.id)) continue;
+        if (isBoundaryNodeId(candidate.id) || isGhostNodeId(candidate.id)) continue;
+        const data = candidate.data as DiagramNodeData;
+        if (!kindDef(registry, data.kind).container || data.collapsed) continue;
+        const box = boxOf(candidate.id);
+        if (!box) continue;
+        if (cx <= box.x || cx >= box.x + box.w || cy <= box.y || cy >= box.y + box.h) continue;
+        let depth = 0;
+        for (let p = candidate.parentId; p; p = flow.getNode(p)?.parentId) depth += 1;
+        if (depth > overDepth) {
+          overDepth = depth;
+          over = candidate.id;
+        }
+      }
+      setDropTargetId(over);
+
+      // Guides are for a SINGLE dragged node — a multi-selection has no one
+      // box to align, and snapping the group by one member's edge moves the
+      // others by an amount nobody asked for.
+      if (dragged.length !== 1) {
+        setDragGuides(null);
+        pendingSnap.current = null;
+        return;
+      }
+
+      const best = bestAlignment(node.id, movingIds);
+      if (!best) {
+        setDragGuides(null);
+        pendingSnap.current = null;
+        return;
+      }
+      setDragGuides({ axis: best.axis, at: best.at, from: best.from - 24, to: best.to + 24 });
+      // Only WHETHER to snap and for which node — the amount is measured
+      // again on release, from where the box actually ended up. With
+      // snap-to-grid on there is no snap at all: two of them fighting over
+      // the same axis would land the box on neither. The guide still shows,
+      // because "you are level with that box" is worth knowing whichever
+      // thing decides the last few pixels.
+      pendingSnap.current = snapEnabled ? null : { id: node.id, moving: movingIds };
+    },
+    [readOnly, flow, registry, snapEnabled, bestAlignment],
+  );
+
   const onNodeDragStop = useCallback(
     (_event: unknown, _node: Node, dragged: Node[]) => {
+      setDragGuides(null);
+      setDropTargetId(null);
+      const snap = pendingSnap.current;
+      pendingSnap.current = null;
       if (readOnly) return;
       // An alt-drag drops its copy first, so the clone is in the document
       // before this move is committed on top of it.
+      altDragCommitKey.current = null;
       finishAltDrag();
+      const dragKey = altDragCommitKey.current ?? undefined;
 
       const all = flow.getNodes();
       const absOf = (id: string) => flow.getInternalNode(id)?.internals.positionAbsolute;
@@ -1723,6 +2128,8 @@ function StudioInner({
       >();
       /** Ghost drags land in `meta.views`, not in the node's own geometry. */
       const ghostMoves = new Map<string, { x: number; y: number; w: number; h: number }>();
+      /** Collapsed frames that received a drop and must open to show it. */
+      const expanded = new Set<string>();
 
       for (const node of dragged) {
         // Dragging a zone moves the backdrop; it has no parent and no zone.
@@ -1783,6 +2190,13 @@ function StudioInner({
         });
 
         if (parentChanged) {
+          // Dropping into a COLLAPSED frame opens it. The node genuinely
+          // joins the group, but the chip draws none of its contents — so it
+          // sat on top of the chip looking un-nested until some later rebuild
+          // swallowed it. Expanding shows the drop happening.
+          if (target && (target.data as DiagramNodeData).collapsed) {
+            expanded.add(target.id);
+          }
           showToast(
             target ? `Moved into ${(target.data as DiagramNodeData).label}` : "Moved to canvas",
           );
@@ -1793,6 +2207,36 @@ function StudioInner({
             nextZone ? `Now on ${nextZone.label}` : "Removed from zone",
             nextZone ? providerDef(registry, nextZone.provider).color : undefined,
           );
+        }
+      }
+
+      if (expanded.size) {
+        setNodes((current) =>
+          current.map((n) =>
+            expanded.has(n.id) ? { ...n, data: { ...n.data, collapsed: false } } : n,
+          ),
+        );
+      }
+
+      // The alignment guide's snap, applied here rather than mid-drag and
+      // measured from where the node actually ended up.
+      const snapTo = snap ? bestAlignment(snap.id, snap.moving) : null;
+      if (snapTo?.delta) {
+        const existing = updates.get(snap!.id);
+        const from =
+          existing?.position ?? flow.getNode(snap!.id)?.position ?? { x: 0, y: 0 };
+        const moved =
+          snapTo.axis === "x"
+            ? { x: Math.round(from.x + snapTo.delta), y: from.y }
+            : { x: from.x, y: Math.round(from.y + snapTo.delta) };
+        if (existing) updates.set(snap!.id, { ...existing, position: moved });
+        else {
+          const live = flow.getNode(snap!.id);
+          updates.set(snap!.id, {
+            ...(live?.parentId ? { parentId: live.parentId } : {}),
+            position: moved,
+            zoneId: (live?.data as DiagramNodeData | undefined)?.zoneId ?? null,
+          });
         }
       }
 
@@ -1834,13 +2278,13 @@ function StudioInner({
             registryOpts(registry),
           );
           const rf = materializeTemplate(next);
-          commit(rf.nodes, rf.edges, next);
+          commit(rf.nodes, rf.edges, next, dragKey);
         });
         return;
       }
-      commitLater();
+      commitLater(dragKey);
     },
-    [readOnly, flow, registry, setNodes, showToast, commitLater, deriveTemplate, materializeTemplate, commit],
+    [readOnly, flow, registry, setNodes, showToast, commitLater, deriveTemplate, materializeTemplate, commit, finishAltDrag],
   );
 
   // ── Undo / redo ───────────────────────────────────────────────────────────
@@ -1976,6 +2420,78 @@ function StudioInner({
   // (The keyboard handler lives further down — it binds every command in this
   //  component, so it has to be declared after all of them.)
 
+  /** Where `error` has a home. Anything else has to say so for itself. */
+  const aiPanelVisible = panelOpen && !!generate && !readOnly;
+
+  /**
+   * A finger or a stylus rather than a mouse.
+   *
+   * Read once — a device does not change category mid-session, and re-reading
+   * it per render would rebuild the canvas's gesture config for nothing.
+   */
+  const coarsePointer = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches,
+    [],
+  );
+
+  /** ⌘ or Ctrl, for the hints and tooltips that name a chord. */
+  const modKey = isMac() ? "⌘" : "Ctrl+";
+  const modKeyRef = useRef(modKey);
+  modKeyRef.current = modKey;
+
+  const handleVersionTagEditStarted = useCallback(() => setEditVersionTag(false), []);
+
+  /**
+   * Open the right-click menu on whatever is under the pointer.
+   *
+   * Right-clicking something that is not in the selection selects it first —
+   * acting on a hidden selection while the user is pointing at something else
+   * is how a context menu deletes the wrong thing.
+   */
+  const openContextMenu = useCallback(
+    (event: React.MouseEvent, nodeId?: string, edgeId?: string) => {
+      if (readOnly || activeDiffBase) return;
+      event.preventDefault();
+      setOpenMenu(null);
+      if (nodeId && !selectionRef.current.nodes.includes(nodeId)) {
+        setNodes((current) => current.map((n) => ({ ...n, selected: n.id === nodeId })));
+        setEdges((current) => current.map((e) => ({ ...e, selected: false })));
+      } else if (edgeId && !selectionRef.current.edges.includes(edgeId)) {
+        setEdges((current) => current.map((e) => ({ ...e, selected: e.id === edgeId })));
+        setNodes((current) => current.map((n) => ({ ...n, selected: false })));
+      }
+      const kind = edgeId ? "edge" : nodeId ? (isZoneNodeId(nodeId) ? "zone" : "node") : "pane";
+      setContextMenu({ x: event.clientX, y: event.clientY, kind });
+    },
+    [readOnly, activeDiffBase, setNodes, setEdges],
+  );
+
+  // Any click or Escape dismisses it, like every other menu here.
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        close();
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [contextMenu]);
+
+  /** Set when a dismiss-click has to be eaten whole. See the menu effect. */
+  const swallowClick = useRef(false);
+
+  const closeContext = useCallback(() => setContextMenu(null), []);
+
   const toggleMenu = useCallback(
     (id: "files" | "insert" | "arrange" | "view" | "checks" | "export") =>
       setOpenMenu((current) => (current === id ? null : id)),
@@ -1985,15 +2501,56 @@ function StudioInner({
   // Any open dropdown closes on a click outside its own wrapper. A single
   // document-level listener serves every menu, so no menu needs its own
   // outside-click plumbing and two can never be open in disagreement.
+  //
+  // The dismiss click is CONSUMED inside the editor: clicking a node to get
+  // rid of an open menu should get rid of the menu, not also select the node
+  // (or clear the selection, or start a drag). Outside the editor it is left
+  // alone — the host's own UI has to keep working while a menu happens to be
+  // open. Captured, so it lands before React Flow's own pointer handlers.
   useEffect(() => {
     if (!openMenu) return;
-    const onPointerDown = (event: Event) => {
+    const onDown = (event: Event) => {
       const target = event.target as HTMLElement | null;
-      if (!target?.closest(".as-menu-wrap")) setOpenMenu(null);
+      if (target?.closest(".as-menu-wrap")) return;
+      setOpenMenu(null);
+      // Only a click on the CANVAS is consumed. Clicking another control —
+      // the inspector's Delete, a toolbar button — is a deliberate second
+      // action, and eating it would make the editor feel like it had missed
+      // the press. Only the canvas has the "I clicked it to get rid of the
+      // menu" problem, because a click there also selects or deselects.
+      if (target?.closest(".react-flow")) {
+        event.preventDefault();
+        event.stopPropagation();
+        // pointerdown and click are separate events, and the SELECTION lands
+        // on the click — so the whole gesture has to be swallowed, or the
+        // dismiss still acts on whatever was underneath. The flag lives on a
+        // ref, and the listener that reads it OUTLIVES this effect: closing
+        // the menu is a state change, so the cleanup runs before the click
+        // ever arrives.
+        swallowClick.current = true;
+      }
     };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
+    // pointerdown AND mousedown: React Flow's drag/select plumbing comes from
+    // d3-drag, which listens for mousedown, so stopping only the pointer event
+    // leaves the selection happening anyway.
+    document.addEventListener("pointerdown", onDown, true);
+    document.addEventListener("mousedown", onDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      document.removeEventListener("mousedown", onDown, true);
+    };
   }, [openMenu]);
+
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (!swallowClick.current) return;
+      swallowClick.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, []);
 
   // ── Export / import ───────────────────────────────────────────────────────
 
@@ -2022,6 +2579,30 @@ function StudioInner({
         if (focusId && !exporter.fullDocument && subject.nodes.some((n) => n.id === focusId)) {
           subject = scopedView(subject, focusId, { containerKinds: registry.containerKinds });
         }
+        // A selection narrows a PICTURE export to what is selected — the
+        // usual reason to select a subgraph and then reach for Export is to
+        // put that part in a document. Descendants and internal wiring come
+        // along, the same rule Copy uses, so a group exports as a group.
+        // Document formats never narrow: "export → save to your database"
+        // must not quietly become "save only what I had highlighted".
+        if (exportSelectionOnly && !exporter.fullDocument && selectedDocNodeIds.length) {
+          const fragment = copyFragment(subject, selectedDocNodeIds, { zones: selectedZoneIds });
+          if (fragment.nodes.length) {
+            subject = validateTemplate(
+              {
+                ...subject,
+                // The zones the fragment actually references, so the backdrop
+                // a selected node sits on comes with it and the regions it
+                // has nothing to do with do not.
+                zones: fragment.zones ?? [],
+                nodes: fragment.nodes,
+                edges: fragment.edges,
+                meta: subject.meta,
+              },
+              registryOpts(registry),
+            );
+          }
+        }
         const result = await exporter.run({ template: subject, registry, filename, palette: exportPalette });
         if (result) {
           download(result.blob, result.filename);
@@ -2032,7 +2613,7 @@ function StudioInner({
         setPanelOpen(true);
       }
     },
-    [registry, template, filename, exportPalette, showToast, timelineActive, timelineAt, timelineFuture, focusId],
+    [registry, template, filename, exportPalette, showToast, timelineActive, timelineAt, timelineFuture, focusId, exportSelectionOnly, selectedDocNodeIds, selectedZoneIds],
   );
 
   const stateAxes = useMemo(() => templateStateAxes(template), [template]);
@@ -2153,7 +2734,26 @@ function StudioInner({
       setDropActive(false);
       if (readOnly) return;
       const file = event.dataTransfer?.files?.[0];
-      if (file) void loadFile(file);
+      if (!file) return;
+      // A template REPLACES the whole diagram. It is undoable, but a
+      // mis-aimed drag onto a canvas full of unsaved work is a shock worth
+      // one question — and a LAYOUT file only re-dresses what is here, so it
+      // never needs asking.
+      const replaces =
+        templateRef.current.nodes.length > 0 && !/\.layout\.json$/i.test(file.name);
+      if (
+        replaces &&
+        typeof window !== "undefined" &&
+        typeof window.confirm === "function" &&
+        !window.confirm(
+          `Replace this diagram with “${file.name}”?\n\n` +
+            `The ${templateRef.current.nodes.length} elements on the canvas are replaced. ` +
+            `${modKeyRef.current}Z undoes it.`,
+        )
+      ) {
+        return;
+      }
+      void loadFile(file);
     },
     [readOnly, loadFile],
   );
@@ -2172,20 +2772,42 @@ function StudioInner({
 
   // ── Save ──────────────────────────────────────────────────────────────────
 
+  /**
+   * Save, once at a time.
+   *
+   * The button disables itself while a save is in flight, but ⌘S did not —
+   * so a slow host got overlapping calls with different documents racing to
+   * be last. A ref rather than the `saving` state because two presses in the
+   * same tick both read the pre-render value.
+   */
+  const savingRef = useRef(false);
+  /**
+   * The document as it was when it was last saved, so the button can say
+   * whether there is anything to save. Without it Save looks identical
+   * before and after, and the only way to know whether your work is safe is
+   * to press it again.
+   */
+  const [savedJson, setSavedJson] = useState<string | null>(null);
   const handleSave = useCallback(async () => {
-    if (!onSave) return;
+    if (!onSave || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     setError("");
     try {
       await onSave(template);
+      setSavedJson(JSON.stringify(template));
       showToast("Saved");
     } catch (err) {
       setError(`Save failed: ${(err as Error).message}`);
       setPanelOpen(true);
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }, [onSave, template, showToast]);
+
+  /** Whether the document differs from what was last handed to `onSave`. */
+  const dirty = savedJson !== null && savedJson !== JSON.stringify(template);
 
   // ── AI generation ─────────────────────────────────────────────────────────
 
@@ -2251,14 +2873,27 @@ function StudioInner({
     if (!isBlankDoc(template) || readOnly || diffBase) setWelcomeOpen(false);
   }, [template, readOnly, diffBase]);
 
-  // Re-open when the workspace empties out under a host that doesn't remount.
+  // Re-open when the workspace empties out, or when the host switches to a
+  // NEW blank file, under a host that doesn't remount per file. The initial
+  // decision is made once at mount, so on such a host "+ New file" used to
+  // land on a bare canvas with none of the ways in the README promises.
   const prevFileCount = useRef(files?.length);
+  const prevActiveFileId = useRef(activeFileId);
   useEffect(() => {
-    if (files?.length === 0 && prevFileCount.current !== 0 && welcome && !readOnly && !diffBase) {
-      setWelcomeOpen(true);
+    if (!welcome || readOnly || diffBase) {
+      prevFileCount.current = files?.length;
+      prevActiveFileId.current = activeFileId;
+      return;
     }
+    const emptied = files?.length === 0 && prevFileCount.current !== 0;
+    const switchedToBlank =
+      activeFileId !== undefined &&
+      activeFileId !== prevActiveFileId.current &&
+      isBlankDoc(templateRef.current);
+    if (emptied || switchedToBlank) setWelcomeOpen(true);
     prevFileCount.current = files?.length;
-  }, [files?.length, welcome, readOnly, diffBase]);
+    prevActiveFileId.current = activeFileId;
+  }, [files?.length, activeFileId, welcome, readOnly, diffBase]);
 
   const activeFile = files?.find((file) => file.id === activeFileId) ?? files?.[0];
   const welcomeName = zeroFiles ? "Untitled 1" : (activeFile?.name ?? filename);
@@ -2359,24 +2994,32 @@ function StudioInner({
   const titleSyncRef = useRef<{ fileId: string; title: string; name: string } | null>(null);
   useEffect(() => {
     if (!activeFile) return;
+    // The LIVE document, not the render closure: when a host switches file
+    // without remounting, `template` still derives from the previous file's
+    // canvas for one render — long enough for this to rename the new file to
+    // the old file's title, and then write that title into it.
+    const liveTitle =
+      typeof templateRef.current.meta?.title === "string"
+        ? templateRef.current.meta.title.trim()
+        : "";
     const name = activeFile.name;
     const prev = titleSyncRef.current;
     const record = () => {
-      titleSyncRef.current = { fileId: activeFile.id, title: metaTitle, name };
+      titleSyncRef.current = { fileId: activeFile.id, title: liveTitle, name };
     };
 
     // Mount, or a different file became active: the document names itself.
     if (!prev || prev.fileId !== activeFile.id) {
-      if (metaTitle && metaTitle !== name) onFileRename?.(activeFile.id, metaTitle);
+      if (liveTitle && liveTitle !== name) onFileRename?.(activeFile.id, liveTitle);
       record();
       return;
     }
 
-    if (metaTitle !== prev.title) {
+    if (liveTitle !== prev.title) {
       // The document's title moved (edit, import, generation, undo) — push it
       // out. Ties (both moved) resolve this way too: the document is truth.
-      if (metaTitle && metaTitle !== name) onFileRename?.(activeFile.id, metaTitle);
-    } else if (name !== prev.name && name.trim() && name !== metaTitle) {
+      if (liveTitle && liveTitle !== name) onFileRename?.(activeFile.id, liveTitle);
+    } else if (name !== prev.name && name.trim() && name !== liveTitle) {
       // Only the NAME moved — an external rename. Adopt it as the title, the
       // same committed, undoable edit the ✎ affordance makes.
       applyTemplate(withMetaTitle(templateRef.current, name.trim()), { fit: false });
@@ -2389,13 +3032,21 @@ function StudioInner({
     (name: string) => {
       setWelcomeOpen(false);
       // With no files at all, "manually" still needs a file to land in. The
-      // latch keeps that brand-new blank file from greeting all over again.
+      // latch keeps that brand-new blank file from greeting all over again,
+      // and the node waits for the file to exist rather than landing in the
+      // document that is about to be replaced.
       if (zeroFiles && onFileCreate) {
         suppressNextWelcome();
         onFileCreate({ name, kind: "architecture" });
+        return;
       }
+      // The button says "Insert Node Manually", so insert one. It used to
+      // just close the modal, leaving an empty canvas and a promise unkept —
+      // and a first node is exactly what someone who picked "manually" is
+      // about to make anyway.
+      if (!readOnly) addNode("service");
     },
-    [zeroFiles, onFileCreate],
+    [zeroFiles, onFileCreate, readOnly, addNode],
   );
 
   const runGenerate = useCallback(
@@ -2516,9 +3167,20 @@ function StudioInner({
   // ── Selection ─────────────────────────────────────────────────────────────
 
   const onSelectionChange = useCallback((params: OnSelectionChangeParams) => {
-    setSelectedNodeIds(params.nodes.map((n) => n.id));
-    setSelectedEdgeIds(params.edges.map((e) => e.id));
-  }, []);
+    const nodeIds = params.nodes.map((n) => n.id);
+    const edgeIds = params.edges.map((e) => e.id);
+    // Selecting something else ends any run of typing: the next keystroke is
+    // a different edit and must undo on its own.
+    const before = selectionRef.current;
+    if (before.nodes.join() !== nodeIds.join() || before.edges.join() !== edgeIds.join()) {
+      endHistoryRun();
+    }
+    // Mirrored into a ref because `materializeTemplate` runs outside render
+    // and needs the CURRENT selection to carry it across a rebuild.
+    selectionRef.current = { nodes: nodeIds, edges: edgeIds };
+    setSelectedNodeIds(nodeIds);
+    setSelectedEdgeIds(edgeIds);
+  }, [endHistoryRun]);
 
   // Report the selection to the host in template terms: zone nodes drop their
   // canvas prefix, a collapse-rerouted edge resolves to the document edge it
@@ -2563,6 +3225,42 @@ function StudioInner({
   const selectedZoneNode = singleSelected && isZoneNodeId(singleSelected.id) ? singleSelected : undefined;
   const selectedNode = singleSelected && !isZoneNodeId(singleSelected.id) ? singleSelected : undefined;
   const selectedEdge = selectedEdgeIds.length === 1 ? edges.find((e) => e.id === selectedEdgeIds[0]) : undefined;
+  /** What a node is called, for the bar that says what a line joins. */
+  const nodeLabelOf = (id: string): string =>
+    ((nodes.find((n) => n.id === id)?.data as DiagramNodeData | undefined)?.label ?? id);
+
+  /**
+   * Turn a connection round.
+   *
+   * Everything that describes an END travels with it — the anchor, the field
+   * reference, the cardinality, the head glyph — because they describe the box
+   * that end touches, not the position in the tuple. A route drawn for the old
+   * direction is dropped: it bent toward where the line used to go.
+   */
+  const swapEdgeEnds = useCallback(
+    (id: string) => {
+      if (readOnly) return;
+      setEdges((current) =>
+        current.map((e) => {
+          if (e.id !== id) return e;
+          const d = (e.data ?? {}) as DiagramEdgeData;
+          const next: DiagramEdgeData = { ...d };
+          [next.start, next.end] = [d.end, d.start];
+          [next.startField, next.endField] = [d.endField, d.startField];
+          [next.startLabel, next.endLabel] = [d.endLabel, d.startLabel];
+          [next.startHead, next.endHead] = [d.endHead, d.startHead];
+          delete next.points;
+          for (const key of ["start", "end", "startField", "endField", "startLabel", "endLabel", "startHead", "endHead"] as const) {
+            if (next[key] === undefined) delete next[key];
+          }
+          return { ...e, source: e.target, target: e.source, data: next };
+        }),
+      );
+      commitLater();
+    },
+    [readOnly, setEdges, commitLater],
+  );
+
   // The rows the selected edge's ends could attach to. Read off the canvas,
   // so a field added a moment ago is already offered.
   const edgeEndFields = (endId: string | undefined): readonly NodeField[] =>
@@ -2626,7 +3324,7 @@ function StudioInner({
           };
         }),
       );
-      commitLater();
+      commitLater(typingRunKey("zone", zoneId, patch));
     },
     [readOnly, setNodes, commitLater, registry, materializeTemplate, commit],
   );
@@ -2634,8 +3332,41 @@ function StudioInner({
   // ── Selection commands (keyboard-first, all also reachable from the UI) ───
 
   const selectAll = useCallback(() => {
-    setNodes((current) => current.map((n) => ({ ...n, selected: true })));
-    setEdges((current) => current.map((e) => ({ ...e, selected: true })));
+    // Only what the user could have clicked. Derived view elements — the
+    // boundary frame you are inside, the ghost stand-ins for other levels —
+    // are marked unselectable precisely because they are not editable here,
+    // and selecting them makes the next arrow press move things that snap
+    // back on the following derive.
+    setNodes((current) =>
+      current.map((n) => ({ ...n, selected: n.selectable === false ? false : true })),
+    );
+    setEdges((current) =>
+      current.map((e) => ({ ...e, selected: e.selectable === false ? false : true })),
+    );
+  }, [setNodes, setEdges]);
+
+  /**
+   * After a rubber band, take the lines whose BOTH ends were caught.
+   *
+   * React Flow's marquee selects nodes only, so "select this subgraph and copy
+   * it" came back without any of its wiring — and a fragment carries only the
+   * edges wholly inside it, so the paste arrived unconnected. An edge between
+   * two selected boxes is unambiguously part of what was selected.
+   */
+  const selectEnclosedEdges = useCallback(() => {
+    const chosen = new Set(flow.getNodes().filter((n) => n.selected).map((n) => n.id));
+    if (chosen.size < 2) return;
+    setEdges((current) =>
+      current.map((e) =>
+        !e.selected && chosen.has(e.source) && chosen.has(e.target) ? { ...e, selected: true } : e,
+      ),
+    );
+  }, [flow, setEdges]);
+
+  /** Drop the selection without touching anything else. What Escape means. */
+  const clearSelection = useCallback(() => {
+    setNodes((current) => (current.some((n) => n.selected) ? current.map((n) => ({ ...n, selected: false })) : current));
+    setEdges((current) => (current.some((e) => e.selected) ? current.map((e) => ({ ...e, selected: false })) : current));
   }, [setNodes, setEdges]);
 
   const cutSelection = useCallback(async () => {
@@ -2659,7 +3390,7 @@ function StudioInner({
       if (!ids.size) return;
       setNodes((current) =>
         current.map((n) =>
-          ids.has(n.id) && !(n.data as DiagramNodeData)?.locked
+          ids.has(n.id) && !isNodeLocked(n)
             ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
             : n,
         ),
@@ -2675,7 +3406,7 @@ function StudioInner({
     // independently — a half-locked selection is not a state anyone wants.
     const anyUnlocked = selectedNodeIds.some((id) => {
       const node = flow.getNode(id);
-      return node && !(node.data as DiagramNodeData)?.locked;
+      return node && !isNodeLocked(node);
     });
     for (const id of selectedNodeIds) {
       if (isZoneNodeId(id)) patchZone(fromZoneNodeId(id), { locked: anyUnlocked || undefined });
@@ -2891,11 +3622,49 @@ function StudioInner({
   // Excalidraw wherever this editor has the same concept; the three places
   // they could not, and why, are commented at the point of divergence.
 
+  /** Any dialog is up, so the canvas is not what the keyboard is aimed at. */
+  const modalOpen = welcomeOpen || !!pendingExport || !!pendingNest;
+
+  /**
+   * Whether a keystroke on `window` was meant for THIS editor.
+   *
+   * The handler has to be on `window` — the canvas is not focusable and the
+   * user is usually pointing at it rather than tabbed into it — but "on
+   * window" is not the same as "for us". Embedded in a panel, the editor was
+   * answering Delete, N and the arrows while the user worked in the host's own
+   * UI, and two mounted studios both answered every key.
+   *
+   * Three signals, in order of how sure each one is:
+   *   focus inside us            → certainly ours
+   *   focus on something else    → certainly not ours
+   *   focus nowhere (the usual
+   *   state after a canvas click) → whichever editor was touched last
+   */
+  const ownsKeyboard = useCallback((): boolean => {
+    const root = rootRef.current;
+    if (!root) return false;
+    const active = typeof document !== "undefined" ? document.activeElement : null;
+    if (active && active !== document.body) return root.contains(active);
+    return activeStudio === studioId;
+  }, [studioId]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
-      // ⌘K works from anywhere, including other inputs — it's a navigation key.
+
+      // A dialog owns the keyboard while it is up. Without this, N inserts a
+      // node behind the welcome modal, Delete removes the very group a Nesting
+      // dialog is about to convert, and ⌘V pastes a fragment straight past the
+      // paste box's own name field and lint. Escape still reaches the modal —
+      // it registers its own capture listener — so this only silences the
+      // shortcuts that would act on a canvas nobody can see.
+      if (modalOpen) return;
+
+      // A few chords belong to the application rather than to whatever has
+      // focus, and are handled BEFORE the typing guard: "rename the node, hit
+      // ⌘S" is the most natural sequence here, and standing down would hand
+      // the key to the browser's Save-Page dialog.
       // (Excalidraw spends ⌘K on links; here search is both older and more
       //  valuable, so links take ⌘⇧K instead.)
       if (mod && key === "k" && !event.shiftKey) {
@@ -2904,7 +3673,24 @@ function StudioInner({
         searchInputRef.current?.select();
         return;
       }
+      if (mod && event.shiftKey && key === "k") {
+        event.preventDefault();
+        linkInputRef.current?.focus();
+        linkInputRef.current?.select();
+        return;
+      }
+      if (mod && key === "s" && onSave) {
+        event.preventDefault();
+        void handleSave();
+        return;
+      }
       if (isTypingTarget(event.target)) return;
+
+      // Everything below acts on the canvas, so it only applies while the
+      // pointer or focus is actually in this editor. Two studios on one page
+      // both answering Delete — or one answering it while the user is working
+      // in the host's own UI — is the same class of bug as the modal case.
+      if (!ownsKeyboard()) return;
 
       // Compare shows a diff rather than the document, so shortcuts that would
       // edit what the user cannot see are blocked. Timeline mode is NOT in
@@ -2934,9 +3720,13 @@ function StudioInner({
 
       // ── Clipboard ──
       if (mod && key === "c") {
-        // Without this the browser's native copy also fires and races the
-        // async clipboard write in copySelection, landing the DOM text
-        // selection on the clipboard instead of the fragment.
+        // With nothing selected there is no fragment to copy, so the browser's
+        // own copy must be left alone — otherwise text selected anywhere else
+        // on the host page cannot be copied while this editor is mounted.
+        if (!selectedNodeIds.length && !selectedEdgeIds.length) return;
+        // Otherwise suppress it: the native copy races the async clipboard
+        // write in copySelection and lands the DOM text selection on the
+        // clipboard instead of the fragment.
         event.preventDefault();
         void copySelection();
         return;
@@ -2959,11 +3749,6 @@ function StudioInner({
       if (mod && key === "a") {
         event.preventDefault();
         selectAll();
-        return;
-      }
-      if (mod && key === "s" && onSave) {
-        event.preventDefault();
-        void handleSave();
         return;
       }
 
@@ -3034,6 +3819,22 @@ function StudioInner({
         return;
       }
 
+      // ── Rename the selection in place ──
+      if (
+        editing &&
+        !mod &&
+        (event.key === "F2" || event.key === "Enter") &&
+        selectedNodeIds.length === 1 &&
+        !selectedEdgeIds.length
+      ) {
+        const id = selectedNodeIds[0]!;
+        if (!isGhostNodeId(id) && !isBoundaryNodeId(id)) {
+          event.preventDefault();
+          setRenamingId(id);
+          return;
+        }
+      }
+
       // ── Insert. Single letters, so they must not fire with a modifier. ──
       if (editing && !mod && !event.altKey) {
         const insert: Record<string, () => void> = {
@@ -3094,21 +3895,38 @@ function StudioInner({
         return;
       }
       if (event.key === "Escape") {
-        // Two-stage: the first press clears open chrome exactly as before;
-        // a "clean" press with nothing open steps one drill level out.
-        const hadChrome =
-          openMenu !== null || panelOpen || timelineCursor !== null || shortcutsOpen;
-        setOpenMenu(null);
-        setPanelOpen(false);
-        setTimelineCursor(null);
-        setShortcutsOpen(false);
-        if (!hadChrome && focusStackRef.current.length) drillOut();
+        // One thing per press, outermost first. Closing every panel at once
+        // meant dismissing the shortcuts sheet also threw away the timeline
+        // cursor you had scrubbed to; and jumping straight to drill-out meant
+        // Escape with a node selected left the level instead of doing the one
+        // thing Escape means everywhere else.
+        if (shortcutsOpen) {
+          setShortcutsOpen(false);
+          return;
+        }
+        if (openMenu !== null) {
+          setOpenMenu(null);
+          return;
+        }
+        if (panelOpen) {
+          setPanelOpen(false);
+          return;
+        }
+        if (selectedNodeIds.length || selectedEdgeIds.length) {
+          clearSelection();
+          return;
+        }
+        if (timelineCursor !== null) {
+          setTimelineCursor(null);
+          return;
+        }
+        if (focusStackRef.current.length) drillOut();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, timelineCursor, drillOut]);
+  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave]);
 
   // ── Zone resize gesture ───────────────────────────────────────────────────
   //
@@ -3222,14 +4040,24 @@ function StudioInner({
       drillInto,
       navigateToNode,
       childCounts,
+      renamingId,
+      setRenamingId,
+      showToast,
     }),
-    [registry, readOnly, tagFilter, showTeams, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts],
+    [registry, readOnly, tagFilter, showTeams, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast],
   );
   const rootStyle = { ...themeToStyle(theme), ...style };
 
   return (
     <StudioContext.Provider value={studioContext}>
-      <div className={`as-root${className ? ` ${className}` : ""}`} style={rootStyle}>
+      <div
+        ref={rootRef}
+        className={`as-root${className ? ` ${className}` : ""}`}
+        style={rootStyle}
+        onPointerDownCapture={() => {
+          activeStudio = studioId;
+        }}
+      >
         <div className="as-toolbar">
           {files?.length ? (
             <FileMenu
@@ -3543,9 +4371,11 @@ function StudioInner({
             </div>
           ) : null}
 
-          {(!readOnly && (hiddenCount > 0 || showHidden || !versionTag)) ||
-          allTags.length ||
-          anyTeams ? (
+          {/* Always present. It was gated on having something provider-,
+              tag- or team-shaped to say, which meant a diagram with a version
+              tag and no tags lost the menu — taking Keyboard shortcuts, the
+              only route to the `?` sheet from the UI, with it. */}
+          {true ? (
             <div className="as-toolbar__group">
               <ToolbarMenu
                 label={`View${tagFilter.length ? ` (${tagFilter.length})` : ""}`}
@@ -3596,8 +4426,13 @@ function StudioInner({
                     role="menuitem"
                     className="as-menu__item"
                     onClick={() => {
+                      // Create it and put the cursor in it, rather than
+                      // writing a placeholder and leaving the user to find the
+                      // corner chip that now says "v0.1". The ellipsis
+                      // promises somewhere to type; this is that place.
                       patchVersionTag({ versionTag: "v0.1" });
                       setOpenMenu(null);
+                      setEditVersionTag(true);
                     }}
                   >
                     <div className="as-menu__label">Set version tag…</div>
@@ -3674,7 +4509,7 @@ function StudioInner({
                 className="as-btn as-btn--icon"
                 onClick={doUndo}
                 disabled={!history.canUndo}
-                title="Undo (⌘Z)"
+                title={`Undo (${modKey}Z)`}
                 aria-label="Undo"
               >
                 ↺
@@ -3684,7 +4519,7 @@ function StudioInner({
                 className="as-btn as-btn--icon"
                 onClick={doRedo}
                 disabled={!history.canRedo}
-                title="Redo (⇧⌘Z)"
+                title={`Redo (⇧${modKey}Z)`}
                 aria-label="Redo"
               >
                 ↻
@@ -3735,16 +4570,28 @@ function StudioInner({
               ref={searchInputRef}
               className="as-input as-search"
               value={searchQuery}
-              placeholder="Search… (⌘K)"
+              placeholder={`Search… (${modKey}K)`}
               aria-label="Search nodes"
               onChange={(event) => {
                 setSearchQuery(event.target.value);
-                setSearchIndex(0);
+                setSearchIndex(-1);
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && searchMatches.length) {
-                  jumpToMatch(searchIndex);
-                  setSearchIndex((i) => i + 1);
+                  // `searchIndex` is the match the canvas is CENTRED on, and
+                  // -1 means "typed but not yet jumped" — so the first Enter
+                  // lands on match 1 and the readout agrees with it. Advancing
+                  // before jumping left the counter one ahead of the node the
+                  // user was looking at.
+                  const n = searchMatches.length;
+                  const next =
+                    searchIndex < 0
+                      ? event.shiftKey
+                        ? n - 1
+                        : 0
+                      : (searchIndex + (event.shiftKey ? -1 : 1) + n) % n;
+                  setSearchIndex(next);
+                  jumpToMatch(next);
                 }
                 if (event.key === "Escape") {
                   setSearchQuery("");
@@ -3754,13 +4601,28 @@ function StudioInner({
               }}
             />
             {searchQuery ? (
-              <span className="as-search__count" aria-live="polite">
+              <span
+                className="as-search__count"
+                aria-live="polite"
+                title="Enter for the next match, ⇧Enter for the previous"
+              >
                 {searchMatches.length
-                  ? `${(searchIndex % searchMatches.length) + 1}/${searchMatches.length}`
+                  ? `${(searchIndex < 0 ? 0 : searchIndex % searchMatches.length) + 1}/${searchMatches.length}`
                   : "0 matches"}
               </span>
             ) : null}
-            <span className="as-zoom">{Math.round(zoom * 100)}%</span>
+            {/* A readout you can act on: click resets to 100%, which is the
+                one thing a percentage makes you want to do. ⌘0 does the same
+                but is only discoverable from the shortcut sheet. */}
+            <button
+              type="button"
+              className="as-zoom"
+              onClick={() => flow.zoomTo(1, { duration: 120 })}
+              title={`Reset zoom to 100% (${modKey}0)`}
+              aria-label={`Zoom ${Math.round(zoom * 100)} percent — click to reset`}
+            >
+              {Math.round(zoom * 100)}%
+            </button>
             <button
               type="button"
               className="as-btn"
@@ -3770,6 +4632,16 @@ function StudioInner({
             </button>
 
             <ToolbarMenu label="Export" open={openMenu === "export"} onToggle={() => toggleMenu("export")}>
+              {selectedDocNodeIds.length ? (
+                <label className="as-menu__check" title="Picture formats only — a saved document is never narrowed">
+                  <input
+                    type="checkbox"
+                    checked={exportSelectionOnly}
+                    onChange={() => setExportSelectionOnly((on) => !on)}
+                  />
+                  Selection only ({selectedDocNodeIds.length})
+                </label>
+              ) : null}
               {registry.exporterOrder.map((key) => {
                 const exporter = registry.exporters[key];
                 return (
@@ -3849,12 +4721,18 @@ function StudioInner({
             {onSave && !readOnly ? (
               <button
                 type="button"
-                className="as-btn as-btn--primary"
+                className={`as-btn as-btn--primary${dirty ? " as-btn--dirty" : ""}`}
                 onClick={() => void handleSave()}
                 disabled={saving}
-                title="Save (⌘S)"
+                title={
+                  saving
+                    ? "Saving…"
+                    : dirty
+                      ? `Unsaved changes — Save (${modKey}S)`
+                      : `Everything is saved (${modKey}S)`
+                }
               >
-                {saving ? "Saving…" : "Save"}
+                {saving ? "Saving…" : dirty ? "Save •" : "Save"}
               </button>
             ) : null}
           </div>
@@ -3914,7 +4792,7 @@ function StudioInner({
           onDragOver={onDragOver}
           onDragLeave={() => setDropActive(false)}
         >
-          {panelOpen && generate && !readOnly ? (
+          {aiPanelVisible ? (
             <div className="as-panel">
               <div className="as-panel__head">
                 <h2 className="as-panel__title">Generate architecture</h2>
@@ -4007,12 +4885,29 @@ function StudioInner({
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            onConnectStart={onConnectStart}
             onConnectEnd={onConnectEnd}
             onNodeDragStart={onNodeDragStart}
+            onNodeDrag={onNodeDrag}
             onNodeDragStop={onNodeDragStop}
             onSelectionChange={onSelectionChange}
-            onMove={(_, viewport) => setZoom(viewport.zoom)}
-            onPaneClick={() => setOpenMenu(null)}
+            // Only when the READOUT would change. Storing the raw zoom put a
+            // state update — and a re-render of this whole component — on
+            // every frame of every pan, for a number that shows two digits.
+            onMove={(_, viewport) =>
+              setZoom((current) =>
+                Math.round(current * 100) === Math.round(viewport.zoom * 100)
+                  ? current
+                  : viewport.zoom,
+              )
+            }
+            onPaneClick={() => {
+              setOpenMenu(null);
+              setContextMenu(null);
+            }}
+            onNodeContextMenu={(event, node) => openContextMenu(event, node.id)}
+            onEdgeContextMenu={(event, edge) => openContextMenu(event, undefined, edge.id)}
+            onPaneContextMenu={(event) => openContextMenu(event as React.MouseEvent)}
             nodeTypes={NODE_TYPES}
             edgeTypes={EDGE_TYPES}
             // Manual mode makes React Flow honour each element's own zIndex.
@@ -4036,8 +4931,24 @@ function StudioInner({
             // swallows the event before node handlers see it on
             // non-draggable (readOnly) nodes.
             zoomOnDoubleClick={false}
-            selectionOnDrag
-            panOnDrag={[1, 2]}
+            // Shift as well as ⌘/Ctrl. React Flow's default is the platform
+            // modifier alone, but Shift+click is what Figma, Excalidraw and
+            // draw.io all extend a selection with — and it was doing nothing
+            // here, so the second click replaced the selection instead.
+            multiSelectionKeyCode={["Meta", "Control", "Shift"]}
+            // On a COARSE pointer a one-finger drag has to pan: there is no
+            // modifier to hold and no second button to pan with, so
+            // rubber-band-on-drag left a touch user unable to move the canvas
+            // at all. On a mouse, drag-to-select stays the default and pan
+            // lives on the middle button, space, and the scroll wheel.
+            selectionOnDrag={!coarsePointer}
+            panOnDrag={coarsePointer ? true : [1, 2]}
+            // Touch a box and it is in the selection. Requiring full
+            // enclosure means a rubber band round "these four services" has to
+            // clear every edge of every one of them, and misses whichever card
+            // sticks out — which is not what a rubber band means anywhere else.
+            selectionMode={SelectionMode.Partial}
+            onSelectionEnd={selectEnclosedEdges}
             panOnScroll
             snapToGrid={snapEnabled}
             snapGrid={[12, 12]}
@@ -4049,6 +4960,26 @@ function StudioInner({
             proOptions={{ hideAttribution: false }}
           >
             <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} color="var(--as-grid-dot)" />
+            {/* Drawn in flow coordinates so the guide stays on the line it
+                names at any zoom. */}
+            {dragGuides ? (
+              <ViewportPortal>
+                <div
+                  className={`as-align-guide as-align-guide--${dragGuides.axis}`}
+                  style={
+                    dragGuides.axis === "x"
+                      ? {
+                          transform: `translate(${dragGuides.at}px, ${dragGuides.from}px)`,
+                          height: dragGuides.to - dragGuides.from,
+                        }
+                      : {
+                          transform: `translate(${dragGuides.from}px, ${dragGuides.at}px)`,
+                          width: dragGuides.to - dragGuides.from,
+                        }
+                  }
+                />
+              </ViewportPortal>
+            ) : null}
             <Controls showInteractive={false} />
             {minimap ? (
               <MiniMap
@@ -4097,13 +5028,38 @@ function StudioInner({
                   position={versionTagPosition}
                   readOnly={readOnly}
                   onCommit={patchVersionTag}
+                  autoEdit={editVersionTag}
+                  onAutoEditHandled={handleVersionTagEditStarted}
                 />
               </Panel>
             ) : null}
           </ReactFlow>
           )}
 
-          {(selectedNode || selectedEdge || selectedZoneNode) && !readOnly && !activeDiffBase ? (
+          {/* More than one thing selected: the single-element inspector has
+              nothing to show, and hiding the bar altogether took Delete and
+              Duplicate with it — so selecting five nodes left the user with
+              fewer controls than selecting one. */}
+          {multiSelected && !readOnly && !activeDiffBase ? (
+            <div className="as-inspector">
+              <MultiInspector
+                nodeIds={selectedDocNodeIds}
+                edgeIds={selectedEdgeIds}
+                zoneIds={selectedZoneIds}
+                onPatchNode={patchNode}
+                onPatchEdge={patchEdge}
+                onPatchZone={patchZone}
+                onAlign={alignSelection}
+                onDistribute={distributeSelection}
+                onDuplicate={duplicateSelection}
+                onDelete={deleteSelection}
+                onGroup={groupSelection}
+              />
+              {renderSlot(inspectorExtras)}
+            </div>
+          ) : null}
+
+          {(selectedNode || selectedEdge || selectedZoneNode) && !multiSelected && !readOnly && !activeDiffBase ? (
             <div className="as-inspector">
               {selectedZoneNode ? (
                 <ZoneInspector
@@ -4111,6 +5067,7 @@ function StudioInner({
                   registry={registry}
                   zones={zones}
                   onPatch={patchZone}
+                  onRestack={restackZones}
                 />
               ) : null}
               {selectedNode && isGhostNodeId(selectedNode.id) ? (
@@ -4131,6 +5088,7 @@ function StudioInner({
               ) : selectedNode ? (
                 <NodeInspector
                   node={selectedNode}
+                  linkRef={linkInputRef}
                   registry={registry}
                   zones={zones}
                   // Authoritative membership comes from the derived template.
@@ -4153,7 +5111,12 @@ function StudioInner({
                   edge={selectedEdge}
                   sourceFields={edgeEndFields(selectedEdge.source)}
                   targetFields={edgeEndFields(selectedEdge.target)}
+                  sourceLabel={nodeLabelOf(selectedEdge.source)}
+                  targetLabel={nodeLabelOf(selectedEdge.target)}
+                  relevantProviders={[...referencedProviderSet]}
+                  registry={registry}
                   onPatch={patchEdge}
+                  onSwapEnds={swapEdgeEnds}
                 />
               ) : null}
               {renderSlot(inspectorExtras)}
@@ -4181,8 +5144,8 @@ function StudioInner({
                   aria-label="Duplicate with connections"
                   title={
                     selectedZoneNode
-                      ? "Duplicate this zone with its member nodes and their connections (⌘D)"
-                      : "Duplicate this node together with its direct connections (⌘D)"
+                      ? `Duplicate this zone with its member nodes and their connections (${modKey}D)`
+                      : `Duplicate this node together with its direct connections (${modKey}D)`
                   }
                 >
                   ⧉
@@ -4228,6 +5191,25 @@ function StudioInner({
             </div>
           ) : null}
 
+          {/* Failures have to be visible whether or not the AI panel exists.
+              The panel is the only other home for `error`, and it only renders
+              when the host passed `generate` — so without one, a rejected save
+              flipped the button back to "Save" and said nothing at all. */}
+          {error && !aiPanelVisible ? (
+            <div className="as-errorbar" role="alert">
+              <span className="as-errorbar__text">{error}</span>
+              <button
+                type="button"
+                className="as-btn as-btn--icon"
+                onClick={() => setError("")}
+                aria-label="Dismiss this error"
+                title="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          ) : null}
+
           <div className="as-status">
             {toast ? (
               <div
@@ -4237,10 +5219,12 @@ function StudioInner({
                 {toast.message}
               </div>
             ) : null}
-            <div className="as-hint">
-              drag from a node edge to connect · drop nodes into groups to nest · drag an edge label to
-              slide it · ⌘Z undo
-            </div>
+            {!readOnly ? (
+              <div className="as-hint">
+                drag from a node edge to connect · drop nodes into groups to nest · drag an edge label
+                to slide it · {modKey}Z undo
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -4288,6 +5272,83 @@ function StudioInner({
             onCancel={() => setPendingNest(null)}
             onConfirm={runNesting}
           />
+        ) : null}
+        {contextMenu ? (
+          <div
+            className="as-context"
+            role="menu"
+            aria-label="Actions"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            {contextMenu.kind === "pane" ? (
+              <>
+                <ContextItem label="Node" hint="N" onPick={() => addNode("service")} close={closeContext} />
+                <ContextItem label="Group" hint="G" onPick={() => addNode("group")} close={closeContext} />
+                <ContextItem label="Text note" hint="T" onPick={() => addNode("text")} close={closeContext} />
+                <ContextItem label="Zone" hint="Z" onPick={addZone} close={closeContext} />
+                <hr className="as-context__rule" />
+                <ContextItem
+                  label="Paste"
+                  hint={`${modKey}V`}
+                  onPick={() => void pasteClipboard()}
+                  close={closeContext}
+                />
+                <ContextItem label="Select all" hint={`${modKey}A`} onPick={selectAll} close={closeContext} />
+                <ContextItem label="Tidy" onPick={tidy} close={closeContext} />
+              </>
+            ) : (
+              <>
+                <ContextItem
+                  label="Copy"
+                  hint={`${modKey}C`}
+                  onPick={() => void copySelection()}
+                  close={closeContext}
+                />
+                <ContextItem
+                  label="Duplicate"
+                  hint={`${modKey}D`}
+                  onPick={() => void duplicateSelection()}
+                  close={closeContext}
+                />
+                {contextMenu.kind !== "edge" ? (
+                  <>
+                    <ContextItem
+                      label="Rename"
+                      hint="F2"
+                      disabled={selectedDocNodeIds.length !== 1}
+                      onPick={() => setRenamingId(selectedDocNodeIds[0] ?? null)}
+                      close={closeContext}
+                    />
+                    <ContextItem
+                      label="Group selection"
+                      hint={`${modKey}G`}
+                      disabled={selectedDocNodeIds.length < 1}
+                      onPick={groupSelection}
+                      close={closeContext}
+                    />
+                    <ContextItem
+                      label="Lock / unlock"
+                      hint={`⇧${modKey}L`}
+                      onPick={toggleLockSelection}
+                      close={closeContext}
+                    />
+                  </>
+                ) : (
+                  <ContextItem
+                    label="Clear route"
+                    disabled={!selectedEdge?.data?.points}
+                    onPick={() => {
+                      for (const id of selectedEdgeIds) patchEdge(id, { points: undefined });
+                    }}
+                    close={closeContext}
+                  />
+                )}
+                <hr className="as-context__rule" />
+                <ContextItem label="Delete" danger hint="Del" onPick={deleteSelection} close={closeContext} />
+              </>
+            )}
+          </div>
         ) : null}
         {shortcutsOpen ? <ShortcutsModal onClose={() => setShortcutsOpen(false)} /> : null}
       </div>
@@ -4417,17 +5478,312 @@ function ChipListEditor({
         value={draft}
         placeholder={addPlaceholder}
         aria-label={`${ariaLabel} — add`}
+        title="Type a name and press Enter to add it"
+
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
             event.preventDefault();
             submit();
           }
+          // Abandon the half-typed value rather than adding it. Committing on
+          // blur turned "type two letters, then click the canvas" into a tag
+          // nobody asked for — and on a zone, into a whole custom provider.
+          if (event.key === "Escape") {
+            event.preventDefault();
+            setDraft("");
+            (event.target as HTMLInputElement).blur();
+          }
           event.stopPropagation();
         }}
-        onBlur={submit}
+        onBlur={() => setDraft("")}
       />
     </span>
+  );
+}
+
+/** One row of the right-click menu. */
+function ContextItem({
+  label,
+  hint,
+  danger,
+  disabled,
+  onPick,
+  close,
+}: {
+  label: string;
+  hint?: string;
+  danger?: boolean;
+  disabled?: boolean;
+  onPick: () => void;
+  close: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className={`as-context__item${danger ? " as-context__item--danger" : ""}`}
+      disabled={disabled}
+      onClick={() => {
+        onPick();
+        close();
+      }}
+    >
+      <span>{label}</span>
+      {hint ? <span className="as-context__hint">{hint}</span> : null}
+    </button>
+  );
+}
+
+/**
+ * The inspector for a selection of several things.
+ *
+ * There was none: the bar rendered only for exactly one element, so selecting
+ * five nodes hid it — along with Delete and Duplicate, leaving a
+ * multi-selection with fewer controls than a single node. And the fields a
+ * team actually sets in bulk (owner, lifecycle stage, a tag, a lock) had to be
+ * set one box at a time.
+ *
+ * Only the fields that MEAN something across a mixed selection are offered.
+ * Each shows the shared value, or blank when they disagree — and setting one
+ * writes it to everything selected, which is the whole point.
+ */
+function MultiInspector({
+  nodeIds,
+  edgeIds,
+  zoneIds,
+  onPatchNode,
+  onPatchEdge,
+  onPatchZone,
+  onAlign,
+  onDistribute,
+  onDuplicate,
+  onDelete,
+  onGroup,
+}: {
+  nodeIds: string[];
+  edgeIds: string[];
+  zoneIds: string[];
+  onPatchNode: (id: string, patch: Partial<DiagramNodeData>) => void;
+  onPatchEdge: (id: string, patch: Partial<DiagramEdgeData>) => void;
+  onPatchZone: (id: string, patch: Partial<DiagramZone>) => void;
+  onAlign: (mode: "left" | "centerX" | "right" | "top" | "centerY" | "bottom") => void;
+  onDistribute: (axis: "x" | "y") => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  onGroup: () => void;
+}) {
+  const flow = useReactFlow();
+  const [team, setTeam] = useState("");
+  const [tag, setTag] = useState("");
+
+  const dataOf = (id: string) => flow.getNode(id)?.data as DiagramNodeData | undefined;
+  /** The one value they all share, or undefined when they disagree. */
+  const shared = <T,>(read: (d: DiagramNodeData) => T): T | undefined => {
+    const values = nodeIds.map((id) => dataOf(id)).filter(Boolean).map((d) => read(d!));
+    if (!values.length) return undefined;
+    const first = values[0];
+    return values.every((v) => v === first) ? first : undefined;
+  };
+
+  const counts = [
+    nodeIds.length ? `${nodeIds.length} node${nodeIds.length === 1 ? "" : "s"}` : "",
+    zoneIds.length ? `${zoneIds.length} zone${zoneIds.length === 1 ? "" : "s"}` : "",
+    edgeIds.length ? `${edgeIds.length} connection${edgeIds.length === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+
+  const sharedStatus = shared((d) => d.status ?? "active");
+  const sharedLocked = shared((d) => !!d.locked);
+
+  return (
+    <>
+      <InspectorSection caption="Selection">
+        <span className="as-inspector__count">{counts.join(" · ")}</span>
+      </InspectorSection>
+
+      {nodeIds.length ? (
+        <>
+          <InspectorSection caption="Status">
+            <select
+              className="as-select"
+              value={sharedStatus ?? ""}
+              aria-label="Lifecycle status for the whole selection"
+              onChange={(event) => {
+                const next = event.target.value as NodeStatus;
+                for (const id of nodeIds) {
+                  onPatchNode(id, { status: next === "active" ? undefined : next });
+                }
+              }}
+            >
+              {sharedStatus === undefined ? (
+                <option value="" disabled>
+                  Mixed
+                </option>
+              ) : null}
+              {NODE_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </InspectorSection>
+
+          <InspectorSection caption="Team">
+            <input
+              className="as-input"
+              value={team}
+              placeholder={shared((d) => d.team ?? "") ?? "Mixed"}
+              aria-label="Owning team for the whole selection"
+              title="Type a team and press Enter to set it on everything selected"
+              onChange={(event) => setTeam(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return event.stopPropagation();
+                const next = team.trim();
+                for (const id of nodeIds) onPatchNode(id, { team: next || undefined });
+                setTeam("");
+                event.stopPropagation();
+              }}
+            />
+          </InspectorSection>
+
+          <InspectorSection caption="Add tag">
+            <input
+              className="as-input"
+              value={tag}
+              placeholder="+ tag…"
+              aria-label="Add a tag to the whole selection"
+              title="Type a tag and press Enter to add it to everything selected"
+              onChange={(event) => setTag(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return event.stopPropagation();
+                const next = tag.trim();
+                if (next) {
+                  for (const id of nodeIds) {
+                    const current = dataOf(id)?.tags ?? [];
+                    if (!current.includes(next)) onPatchNode(id, { tags: [...current, next] });
+                  }
+                }
+                setTag("");
+                event.stopPropagation();
+              }}
+            />
+          </InspectorSection>
+        </>
+      ) : null}
+
+      {edgeIds.length ? (
+        <InspectorSection caption="Line">
+          <select
+            className="as-select"
+            defaultValue=""
+            aria-label="Line style for the selected connections"
+            onChange={(event) => {
+              const next = event.target.value as EdgeStyle;
+              if (!next) return;
+              for (const id of edgeIds) onPatchEdge(id, { style: next });
+            }}
+          >
+            <option value="" disabled>
+              Style…
+            </option>
+            {EDGE_STYLES.map((style) => (
+              <option key={style} value={style}>
+                {style}
+              </option>
+            ))}
+          </select>
+          <span className="as-swatches" role="group" aria-label="Colour for the selected connections">
+            {EDGE_COLORS.map((color) => (
+              <button
+                key={color}
+                type="button"
+                className="as-swatch"
+                style={{ background: EDGE_COLOR_HEX[color] }}
+                aria-label={`Edge colour ${color}`}
+                title={color}
+                onClick={() => {
+                  for (const id of edgeIds) onPatchEdge(id, { color });
+                }}
+              />
+            ))}
+          </span>
+        </InspectorSection>
+      ) : null}
+
+      <InspectorSection caption="Arrange">
+        {(
+          [
+            ["left", "⇤"],
+            ["centerX", "⇹"],
+            ["right", "⇥"],
+            ["top", "⤒"],
+            ["centerY", "⇳"],
+            ["bottom", "⤓"],
+          ] as const
+        ).map(([edge, glyph]) => (
+          <button
+            key={edge}
+            type="button"
+            className="as-btn as-btn--icon"
+            onClick={() => onAlign(edge)}
+            aria-label={`Align ${edge}`}
+            title={`Align ${edge}`}
+          >
+            {glyph}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="as-btn as-btn--icon"
+          onClick={() => onDistribute("x")}
+          aria-label="Distribute horizontally"
+          title="Distribute horizontally"
+        >
+          ↔
+        </button>
+        <button
+          type="button"
+          className="as-btn as-btn--icon"
+          onClick={() => onDistribute("y")}
+          aria-label="Distribute vertically"
+          title="Distribute vertically"
+        >
+          ↕
+        </button>
+      </InspectorSection>
+
+      {nodeIds.length > 1 ? (
+        <button type="button" className="as-btn" onClick={onGroup} title="Wrap the selection in a container">
+          Group
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className={`as-btn as-btn--icon${sharedLocked ? " as-btn--on" : ""}`}
+        onClick={() => {
+          const next = !sharedLocked;
+          for (const id of nodeIds) onPatchNode(id, { locked: next || undefined });
+          for (const id of zoneIds) onPatchZone(id, { locked: next || undefined });
+        }}
+        aria-pressed={!!sharedLocked}
+        aria-label={sharedLocked ? "Unlock the selection" : "Lock the selection in place"}
+        title={sharedLocked ? "Unlock the selection" : "Lock the selection in place"}
+      >
+        {sharedLocked ? "🔒" : "🔓"}
+      </button>
+      <button
+        type="button"
+        className="as-btn as-btn--icon"
+        onClick={onDuplicate}
+        aria-label="Duplicate the selection"
+        title="Duplicate the selection with its direct connections"
+      >
+        ⧉
+      </button>
+      <button type="button" className="as-btn as-btn--danger" onClick={onDelete}>
+        Delete
+      </button>
+    </>
   );
 }
 
@@ -4436,12 +5792,15 @@ function ZoneInspector({
   registry,
   zones,
   onPatch,
+  onRestack,
 }: {
   zone: DiagramZone;
   registry: ResolvedRegistry;
   /** Every zone in the document — the palette harvests their custom colours. */
   zones: DiagramZone[];
   onPatch: (zoneId: string, patch: Partial<DiagramZone>) => void;
+  /** Same swap semantics as ⌘] / ⌘[ — see `restackZones`. */
+  onRestack: (mode: "front" | "back" | "forward" | "backward") => void;
 }) {
   const ink = zoneInk(registry, zone);
 
@@ -4635,13 +5994,27 @@ function ZoneInspector({
       >
         {zone.locked ? "🔒" : "🔓"}
       </button>
+      {/* Swap with the neighbour rather than ±1 on `z`: equal z resolves by
+          array order, so incrementing past a zone two levels up looks like
+          the button doing nothing at all. Both directions, because a raise
+          you cannot undo by eye is a one-way door. */}
       <button
         type="button"
-        className="as-btn"
-        onClick={() => onPatch(zone.id, { z: (zone.z ?? 0) + 1 })}
-        title="Bring this zone above the others"
+        className="as-btn as-btn--icon"
+        onClick={() => onRestack("backward")}
+        aria-label="Send this zone behind the one below it"
+        title="Send backward — behind the zone below it"
       >
-        Raise
+        ⤓
+      </button>
+      <button
+        type="button"
+        className="as-btn as-btn--icon"
+        onClick={() => onRestack("forward")}
+        aria-label="Bring this zone in front of the one above it"
+        title="Bring forward — in front of the zone above it"
+      >
+        ⤒
       </button>
     </>
   );
@@ -4649,6 +6022,7 @@ function ZoneInspector({
 
 function NodeInspector({
   node,
+  linkRef,
   registry,
   zones,
   zoneId,
@@ -4656,6 +6030,8 @@ function NodeInspector({
   onPatch,
 }: {
   node: Node;
+  /** So ⌘⇧K can put the cursor straight in the Link field. */
+  linkRef: React.RefObject<HTMLInputElement>;
   registry: ResolvedRegistry;
   zones: DiagramZone[];
   zoneId: string | null;
@@ -4990,6 +6366,7 @@ function NodeInspector({
       {!def.annotation ? (
         <InspectorSection caption="Link">
           <input
+            ref={linkRef}
             className="as-input as-inspector__url"
             value={data.url ?? ""}
             placeholder="https://… or file:Name"
@@ -5097,6 +6474,10 @@ function FieldsEditor({
             >
               *
             </button>
+            {/* Both directions. Row order is meaning here — a foreign-key
+                line anchors to a column by its position — and with only ↑,
+                moving the first of ten columns to the bottom was nine clicks
+                on nine other rows. */}
             <button
               type="button"
               className="as-btn as-btn--icon"
@@ -5110,6 +6491,20 @@ function FieldsEditor({
               title="Move up"
             >
               ↑
+            </button>
+            <button
+              type="button"
+              className="as-btn as-btn--icon"
+              disabled={index === fields.length - 1}
+              onClick={() => {
+                const next = [...fields];
+                [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                replace(next);
+              }}
+              aria-label={`Move ${field.name || `field ${index + 1}`} down`}
+              title="Move down"
+            >
+              ↓
             </button>
             <button
               type="button"
@@ -5144,17 +6539,71 @@ function EdgeInspector({
   edge,
   sourceFields,
   targetFields,
+  sourceLabel,
+  targetLabel,
+  relevantProviders,
+  registry,
   onPatch,
+  onSwapEnds,
 }: {
   edge: Edge;
   /** Rows of the endpoint nodes — what an end may attach to. */
   sourceFields: readonly NodeField[];
   targetFields: readonly NodeField[];
+  /** What the ends are called, so the bar can say what this line joins. */
+  sourceLabel: string;
+  targetLabel: string;
+  relevantProviders: readonly string[];
+  registry: ResolvedRegistry;
   onPatch: (id: string, patch: Partial<DiagramEdgeData>) => void;
+  onSwapEnds: (id: string) => void;
 }) {
   const data = (edge.data ?? {}) as DiagramEdgeData;
   return (
     <>
+      {/* Which boxes this line joins, and a way to turn it round. The schema
+          has carried edge endpoints since the beginning and the inspector
+          never showed them — so "I drew that the wrong way" meant deleting
+          the line and drawing it again, losing its label and its route. */}
+      <InspectorSection caption="Between">
+        <span className="as-inspector__ends" title={`${sourceLabel} → ${targetLabel}`}>
+          {sourceLabel} → {targetLabel}
+        </span>
+        <button
+          type="button"
+          className="as-btn as-btn--icon"
+          onClick={() => onSwapEnds(edge.id)}
+          aria-label="Reverse this connection"
+          title="Reverse — swap which end it starts from"
+        >
+          ⇄
+        </button>
+      </InspectorSection>
+
+      {relevantProviders.length ? (
+        // An edge can be scoped to a topology exactly like a node — the
+        // README sells "a replication stream present on AWS but not Azure" —
+        // and there was no control for it anywhere, so the field could only
+        // be set by hand-editing the JSON.
+        <ChipListEditor
+          caption="On"
+          ariaLabel="Providers this connection exists on"
+          addPlaceholder="+ add…"
+          options={[...relevantProviders]}
+          active={data.providers ?? []}
+          labelOf={(p) => providerDef(registry, p).label}
+          colorOf={(p) => providerDef(registry, p).color}
+          onToggle={(p) => {
+            const current = data.providers ?? [];
+            const next = current.includes(p)
+              ? current.filter((x) => x !== p)
+              : [...current, p];
+            onPatch(edge.id, { providers: next.length ? next : undefined });
+          }}
+          onAdd={(p) => onPatch(edge.id, { providers: [...(data.providers ?? []), p] })}
+        />
+      ) : null}
+
       <InspectorSection caption="Edge">
         <input
           className="as-input as-inspector__name"

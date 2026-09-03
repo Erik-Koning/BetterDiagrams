@@ -155,9 +155,13 @@ function scopePartition(
     return out;
   };
 
+  // A self-loop on a direct child IS of this level: the retry arrow the schema
+  // prompt asks for belongs to the box it loops on, wherever that box is being
+  // shown. (A self-loop deeper down still collapses onto its card below — both
+  // ends map to the same representative and it is dropped as internal wiring.)
   const interiorEdges = new Set(
     t.edges
-      .filter((e) => childIds.has(e.source) && childIds.has(e.target) && e.source !== e.target)
+      .filter((e) => childIds.has(e.source) && childIds.has(e.target))
       .map((e) => e.id),
   );
 
@@ -272,7 +276,6 @@ export function scopedView(
     const srcIn = isInside(srcRep);
     const tgtIn = isInside(tgtRep);
     if (!srcIn && !tgtIn) continue; // other levels' wiring
-    if (srcRep === tgtRep) continue; // internal to one child
     if (interiorEdges.has(e.id)) {
       // Both endpoints are direct children — the edge is genuinely OF this
       // level. Group-focus interiors drop `points`: group children are inline
@@ -281,6 +284,7 @@ export function scopedView(
       order.push({ verbatim: emit });
       continue;
     }
+    if (srcRep === tgtRep) continue; // internal wiring of one child card
     const key = `${srcRep}→${tgtRep}`;
     let group = groups.get(key);
     if (!group) {
@@ -496,10 +500,45 @@ export function liftScopedReactFlow(
 
   // Everything the level does not show is view-hidden and carries from base;
   // everything it DOES show is genuinely editable, so absence is deletion.
+  //
+  // With one correction: a child deleted HERE takes its own contents with it.
+  // Those grandchildren are not on this canvas — they live one level deeper —
+  // so the plain rule would carry them through, and validation would then null
+  // their now-missing parent and strand them at root, at coordinates that only
+  // meant something inside the box that no longer exists.
+  const survivingChildren = new Set(
+    liftedNodes.filter((n) => part.childIds.has(n.id)).map((n) => n.id),
+  );
+  const orphaned = new Set<string>();
+  if (survivingChildren.size < part.childIds.size) {
+    for (const id of part.childIds) if (!survivingChildren.has(id)) orphaned.add(id);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const n of opts.base.nodes) {
+        if (n.parentId && orphaned.has(n.parentId) && !orphaned.has(n.id)) {
+          orphaned.add(n.id);
+          grew = true;
+        }
+      }
+    }
+  }
+
   const viewHidden = {
-    nodes: new Set(opts.base.nodes.filter((n) => !part.childIds.has(n.id)).map((n) => n.id)),
+    nodes: new Set(
+      opts.base.nodes
+        .filter((n) => !part.childIds.has(n.id) && !orphaned.has(n.id))
+        .map((n) => n.id),
+    ),
     edges: new Set(
-      opts.base.edges.filter((e) => !part.interiorEdges.has(e.id)).map((e) => e.id),
+      opts.base.edges
+        .filter(
+          (e) =>
+            !part.interiorEdges.has(e.id) &&
+            !orphaned.has(e.source) &&
+            !orphaned.has(e.target),
+        )
+        .map((e) => e.id),
     ),
   };
 

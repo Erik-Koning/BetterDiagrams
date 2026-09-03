@@ -24,8 +24,77 @@
  * arise; when it does, the fix is to drag the island or the node clear.
  */
 import { pointInZone } from "./zones";
-import { CONTAINER_KINDS, visibleElements } from "./schema";
+import { COLLAPSED_SIZE, CONTAINER_KINDS, visibleElements } from "./schema";
 import type { DiagramNode, DiagramTemplate } from "./schema";
+
+/**
+ * Provider ALTERNATES, mapped to the one that stands in for the set.
+ *
+ * "Azure SQL / Amazon RDS / Cloud SQL" is one box drawn three ways: the nodes
+ * are authored at the same spot with disjoint `providers`, so exactly one is
+ * ever visible and switching the scenario swaps it in place. A layout that
+ * ranked them as three members would deal them three slots — a permanent gap
+ * wherever the hidden two would sit, and a database that jumps across the
+ * diagram when the scenario changes.
+ *
+ * What marks a set as alternates, without asking the author to say so:
+ *   - same container (they are laid out together at all),
+ *   - the same neighbours (they stand in the same place in the graph), and
+ *   - provider lists that cannot both be showing at once.
+ *
+ * The last one is checked greedily against the set so far, so a node that
+ * overlaps an existing member starts its own group rather than dissolving the
+ * whole set — a cache on {azure, aws} is not an alternate of an Azure-only
+ * database, and gets a slot of its own.
+ */
+function variantGroups(template: DiagramTemplate): Map<string, string> {
+  const lead = new Map<string, string>();
+  const scoped = template.nodes.filter((n) => n.providers?.length);
+  if (scoped.length < 2) return lead;
+
+  const neighbours = new Map<string, Set<string>>();
+  for (const n of template.nodes) neighbours.set(n.id, new Set());
+  for (const e of template.edges) {
+    neighbours.get(e.source)?.add(e.target);
+    neighbours.get(e.target)?.add(e.source);
+  }
+
+  /** Same container AND same neighbours, ignoring the candidates themselves. */
+  const signature = (n: DiagramNode, family: ReadonlySet<string>): string => {
+    const others = [...(neighbours.get(n.id) ?? [])].filter((id) => !family.has(id)).sort();
+    return `${n.parentId ?? ""}|${n.zoneId ?? ""}|${others.join(",")}`;
+  };
+
+  const family = new Set(scoped.map((n) => n.id));
+  const bySignature = new Map<string, DiagramNode[]>();
+  for (const n of scoped) {
+    const key = signature(n, family);
+    const bucket = bySignature.get(key);
+    if (bucket) bucket.push(n);
+    else bySignature.set(key, [n]);
+  }
+
+  for (const candidates of bySignature.values()) {
+    if (candidates.length < 2) continue;
+    // Greedy: each group takes the members whose providers don't collide with
+    // anything already in it; the rest start groups of their own.
+    const remaining = [...candidates];
+    while (remaining.length) {
+      const first = remaining.shift()!;
+      const claimed = new Set(first.providers ?? []);
+      const members: DiagramNode[] = [];
+      for (let i = remaining.length - 1; i >= 0; i -= 1) {
+        const other = remaining[i]!;
+        if ((other.providers ?? []).some((p) => claimed.has(p))) continue;
+        for (const p of other.providers ?? []) claimed.add(p);
+        members.push(other);
+        remaining.splice(i, 1);
+      }
+      for (const m of members) lead.set(m.id, first.id);
+    }
+  }
+  return lead;
+}
 
 export interface LayoutOptions {
   /** Horizontal gap between ranks. */
@@ -241,6 +310,7 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
   const zones = template.zones ?? [];
   // A card's children live in their own drilled canvas, so a tidy arranges
   // one FRAME — by default the visible one, never a level you can't see.
+  const containerKindSet = new Set(options.containerKinds ?? CONTAINER_KINDS);
   const cardParents = cardParentIdsOf(template, options.containerKinds);
   const frameOf = frameResolver(template, cardParents);
   const frames = options.frames ?? "root";
@@ -278,9 +348,33 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
     buckets.get(key)!.push(node);
   }
 
+  // A lock says "the editor refuses to drag or resize it". A tidy is the
+  // editor moving things, so it has to honour that: a pinned node keeps its
+  // position and its size, and the rest of the diagram is arranged around
+  // whatever space is left. It is still an obstacle the ranking doesn't know
+  // about, which is the price of pinning something inside a flow.
+  const locked = new Set(template.nodes.filter((n) => n.locked).map((n) => n.id));
+
+  // Provider ALTERNATES — the same box in two topologies — are authored on
+  // top of each other so switching provider swaps them in place. Ranking them
+  // as separate members would deal them separate slots, leaving a permanent
+  // gap for whichever is hidden and making the database jump when the
+  // scenario changes. One of each set takes part in the layout; the others
+  // follow it. See `variantGroups` for what counts as an alternate.
+  const variantOf = variantGroups(template);
+
   const positions = new Map<string, { x: number; y: number }>();
   const sizes = new Map<string, { w: number; h: number }>();
-  for (const n of template.nodes) sizes.set(n.id, { w: n.w, h: n.h });
+  for (const n of template.nodes) {
+    // A collapsed container draws a chip. Spacing its rank-mates against the
+    // expanded frame it is NOT drawing leaves a hole the size of the group.
+    const chip = n.collapsed && containerKindSet.has(n.kind as string);
+    sizes.set(n.id, chip ? { ...COLLAPSED_SIZE } : { w: n.w, h: n.h });
+  }
+
+  /** The members one layout pass should actually rank, in document order. */
+  const rankable = (members: DiagramNode[]): DiagramNode[] =>
+    members.filter((n) => !locked.has(n.id) && (variantOf.get(n.id) ?? n.id) === n.id);
 
   // Groups innermost-first, so a nested group has its final size before the
   // group containing it is laid out.
@@ -304,7 +398,7 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
     .sort((a, b) => groupDepth(b.slice(6)) - groupDepth(a.slice(6)));
 
   for (const key of groupKeys) {
-    const members = buckets.get(key)!;
+    const members = rankable(buckets.get(key)!);
     const result = layoutGroup(
       members.map((n) => ({ id: n.id, ...sizes.get(n.id)! })),
       template.edges,
@@ -330,7 +424,7 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
   // Zones and the root flow belong to the visible canvas, so a drill-scoped
   // tidy leaves both exactly as they were.
   const grownZones = zones.map((zone) => {
-    const members = rootInScope ? (buckets.get(`zone:${zone.id}`) ?? []) : [];
+    const members = rootInScope ? rankable(buckets.get(`zone:${zone.id}`) ?? []) : [];
     if (!members.length) return zone;
     const result = layoutGroup(
       members.map((n) => ({ id: n.id, ...sizes.get(n.id)! })),
@@ -356,7 +450,7 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
   });
 
   // Root: everything not in a group or zone, placed clear of the zones.
-  const rootMembers = rootInScope ? (buckets.get("root") ?? []) : [];
+  const rootMembers = rootInScope ? rankable(buckets.get("root") ?? []) : [];
   if (rootMembers.length) {
     const result = layoutGroup(
       rootMembers.map((n) => ({ id: n.id, ...sizes.get(n.id)! })),
@@ -374,13 +468,17 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
   }
 
   const nodes = template.nodes.map((node) => {
-    const position = positions.get(node.id);
+    // An alternate lands wherever its representative landed, which is what
+    // keeps the three managed databases one box that changes name.
+    const lead = variantOf.get(node.id) ?? node.id;
+    const position = locked.has(node.id) ? undefined : positions.get(lead);
     const size = sizes.get(node.id)!;
     return {
       ...node,
       ...(position ? { x: position.x, y: position.y } : {}),
-      // Only containers were resized; leaves keep their authored size.
-      ...(containerIds.has(node.id) ? { w: size.w, h: size.h } : {}),
+      // Only containers were resized; leaves keep their authored size. A
+      // locked container is not resized either — the lock covers both.
+      ...(containerIds.has(node.id) && !locked.has(node.id) ? { w: size.w, h: size.h } : {}),
     };
   });
 

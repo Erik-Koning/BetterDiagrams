@@ -21,6 +21,13 @@ export interface SequenceContextValue {
    * gestures (press-drag creation, move, resize) all end here.
    */
   commitSpanGeometry: (nodeId: string) => void;
+  /**
+   * End a message-label drag at flow y `y`. Goes through the document's own
+   * `moveMessage` rather than re-deriving order from the canvas, so a message
+   * dragged out of a loop leaves the loop over the rows it still frames
+   * instead of stretching the frame to follow it.
+   */
+  commitMessageOrder: (messageId: string, y: number) => void;
 }
 
 export const SequenceContext = createContext<SequenceContextValue>({
@@ -28,6 +35,7 @@ export const SequenceContext = createContext<SequenceContextValue>({
   autonumber: false,
   requestCommit: () => {},
   commitSpanGeometry: () => {},
+  commitMessageOrder: () => {},
 });
 
 export const useSequence = (): SequenceContextValue => useContext(SequenceContext);

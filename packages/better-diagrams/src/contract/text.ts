@@ -28,6 +28,12 @@ export function approxTextWidth(text: string, size: number, font: TextFont): num
  *
  * A word longer than `maxWidth` is not broken — it overhangs. Breaking mid-word
  * would be worse for the identifiers these labels are usually made of.
+ *
+ * An explicit newline is a HARD break, not whitespace to collapse: the canvas
+ * renders annotations with `white-space: pre-wrap`, so a note typed as three
+ * lines is three lines on screen, and flattening it here would reflow it into
+ * one paragraph in every image export — the one place the export is supposed
+ * to be indistinguishable from the screen.
  */
 export function wrapText(
   text: string,
@@ -36,20 +42,47 @@ export function wrapText(
   maxWidth: number,
   maxLines: number,
 ): string[] {
-  const words = String(text).split(/\s+/).filter(Boolean);
-  if (!words.length) return [];
+  const paragraphs = String(text).split(/\r\n|\r|\n/);
   const lines: string[] = [];
   let line = "";
-  for (const word of words) {
-    const candidate = line ? `${line} ${word}` : word;
-    if (approxTextWidth(candidate, size, font) > maxWidth && line) {
-      lines.push(line);
-      line = word;
-      if (lines.length === maxLines) break;
-    } else {
-      line = candidate;
+  let full = false;
+
+  for (const [p, paragraph] of paragraphs.entries()) {
+    if (full) break;
+    // A newline ends the current line even mid-paragraph-fill.
+    if (p > 0) {
+      if (line) {
+        lines.push(line);
+        line = "";
+        if (lines.length === maxLines) {
+          full = true;
+          break;
+        }
+      } else if (paragraph.trim() === "") {
+        // A deliberate blank line between paragraphs.
+        lines.push("");
+        if (lines.length === maxLines) {
+          full = true;
+          break;
+        }
+        continue;
+      }
+    }
+    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (approxTextWidth(candidate, size, font) > maxWidth && line) {
+        lines.push(line);
+        line = word;
+        if (lines.length === maxLines) {
+          full = true;
+          break;
+        }
+      } else {
+        line = candidate;
+      }
     }
   }
+  if (!lines.length && !line) return [];
   if (lines.length < maxLines && line) lines.push(line);
   if (lines.length === maxLines && line && lines[maxLines - 1] !== line) {
     // Out of room — ellipsise what we kept.

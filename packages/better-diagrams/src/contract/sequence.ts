@@ -22,7 +22,7 @@
 import { NODE_STATUSES, VERSION_TAG_POSITIONS, hiddenInline, visibleAnchor } from "./schema";
 import type { DiagramTemplate, Migration, NodeStatus, VersionTagPosition } from "./schema";
 import { normalizeDate, type DiagramDate } from "./timeline";
-import { parseLlmJson } from "./json-repair";
+import { parseLlmJsonReport } from "./json-repair";
 import {
   BAR_OVERHANG,
   BAR_W,
@@ -422,12 +422,190 @@ export function validateSequence(raw: unknown): SequenceTemplate {
   return out;
 }
 
+// ─── Structural edits that keep spans meaning what they meant ────────────────
+//
+// Activations, fragments and their branch dividers anchor to MESSAGE IDS, and
+// two ids are all a span has. That is what makes inserting a step inside a
+// loop grow the loop for free — and it is also why removing or moving a
+// BOUNDARY message needs help: the anchor it names is about to stop being the
+// edge of anything.
+//
+// Both edits below work the same way. Before the message list changes, each
+// span is resolved to the ROWS IT COVERS; afterwards, its ends are re-hung on
+// the first and last of those rows that are still there. A loop over two
+// messages whose first message is deleted becomes a loop over the second, not
+// a deleted loop; a bar whose closing message is dragged to the top closes on
+// the last row it still covers, rather than falling open to the diagram floor.
+
+/** The message ids a span covers, in document order, ends included. */
+function coveredIds(order: readonly string[], from: string, to: string): string[] {
+  const a = order.indexOf(from);
+  const b = order.indexOf(to);
+  if (a < 0 || b < 0) return [];
+  return order.slice(Math.min(a, b), Math.max(a, b) + 1);
+}
+
+/**
+ * Re-hang every span after the message list has changed.
+ *
+ * `detached` names messages that must no longer anchor anything — the ones
+ * being deleted, or the one being moved out from between its neighbours.
+ * `nextOrder` is the message order afterwards.
+ */
+function reanchorSpans(
+  t: SequenceTemplate,
+  nextMessages: SeqMessage[],
+  detached: ReadonlySet<string>,
+): SequenceTemplate {
+  const before = t.messages.map((m) => m.id);
+  const after = nextMessages.map((m) => m.id);
+  const alive = new Set(after);
+  const rank = new Map(after.map((id, i) => [id, i]));
+
+  /** The surviving rows of a span, in the NEW order. Empty = nothing left. */
+  const survivors = (from: string, to: string): string[] =>
+    coveredIds(before, from, to)
+      .filter((id) => alive.has(id) && !detached.has(id))
+      .sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0));
+
+  const fragments = (t.fragments ?? []).flatMap((f) => {
+    const kept = survivors(f.from, f.to);
+    // Nothing but the detached message was inside: the frame belongs to it and
+    // travels with it. Deleted, it has nothing left to frame and goes.
+    const from = kept[0] ?? (alive.has(f.from) ? f.from : null);
+    const to = kept[kept.length - 1] ?? (alive.has(f.to) ? f.to : null);
+    if (!from || !to) return [];
+    // A divider marks the first row of its branch — re-hang it on the first
+    // surviving row at or after the one it named, inside the new span.
+    const elses = (f.elses ?? []).flatMap((e) => {
+      const at = coveredIds(before, e.at, f.to).find((id) => alive.has(id) && !detached.has(id));
+      return at ? [{ ...e, at }] : [];
+    });
+    return [{ ...f, from, to, ...(elses.length ? { elses } : {}) }];
+  });
+
+  const activations = (t.activations ?? []).flatMap((a) => {
+    const kept = survivors(a.from, a.to ?? a.from);
+    const from = kept[0] ?? (alive.has(a.from) ? a.from : null);
+    if (!from) return [];
+    // An open-ended bar stays open-ended; a bounded one stays bounded, on the
+    // last row it still covers.
+    if (a.to === undefined) return [{ ...a, from }];
+    const to = kept[kept.length - 1] ?? from;
+    return [{ ...a, from, to }];
+  });
+
+  const notes = (t.notes ?? []).map((n) => {
+    if (n.at === undefined || alive.has(n.at)) return n;
+    const at = coveredIds(before, n.at, before[before.length - 1] ?? n.at).find((id) =>
+      alive.has(id),
+    );
+    const { at: _gone, ...rest } = n;
+    return at ? { ...rest, at } : rest;
+  });
+
+  return validateSequence({
+    ...t,
+    messages: nextMessages,
+    activations,
+    fragments,
+    notes,
+  });
+}
+
+/**
+ * Delete messages, keeping every span that still has a row to hold on to.
+ *
+ * The alternative — letting validation drop a fragment whose boundary id no
+ * longer resolves — deletes a loop the user can still see the inside of, with
+ * no toast and one undo step covering both.
+ */
+export function removeMessages(t: SequenceTemplate, ids: Iterable<string>): SequenceTemplate {
+  const gone = new Set(ids);
+  if (!gone.size) return t;
+  return reanchorSpans(
+    t,
+    t.messages.filter((m) => !gone.has(m.id)),
+    gone,
+  );
+}
+
+/**
+ * Move one message to a new row, keeping every span over the rows it framed.
+ *
+ * Dragging a loop's first message to the bottom of the diagram takes it OUT
+ * of the loop — it does not drag the loop's top edge down past its own bottom
+ * edge, which is what anchoring alone would do (validation then swaps the
+ * ends and the frame silently swallows every row in between).
+ */
+export function moveMessage(t: SequenceTemplate, id: string, toIndex: number): SequenceTemplate {
+  const from = t.messages.findIndex((m) => m.id === id);
+  if (from < 0) return t;
+  const next = [...t.messages];
+  const [moved] = next.splice(from, 1);
+  next.splice(Math.max(0, Math.min(next.length, toIndex)), 0, moved!);
+  if (next.every((m, i) => m.id === t.messages[i]?.id)) return t;
+  return reanchorSpans(t, next, new Set([id]));
+}
+
+/** Move one participant to a new column, keeping the rest in their order. */
+export function moveParticipant(
+  t: SequenceTemplate,
+  id: string,
+  toIndex: number,
+): SequenceTemplate {
+  const from = t.participants.findIndex((p) => p.id === id);
+  if (from < 0) return t;
+  const next = [...t.participants];
+  const [moved] = next.splice(from, 1);
+  next.splice(Math.max(0, Math.min(next.length, toIndex)), 0, moved!);
+  if (next.every((p, i) => p.id === t.participants[i]?.id)) return t;
+  return validateSequence({ ...t, participants: next });
+}
+
 // ─── Derived geometry helpers ────────────────────────────────────────────────
 
 /** Column order per participant id. */
 export function participantOrder(t: SequenceTemplate): Map<string, number> {
   return new Map(t.participants.map((p, i) => [p.id, i]));
 }
+
+/**
+ * How many other fragments this one encloses — its nesting level from the
+ * inside out, so an innermost frame is 0.
+ *
+ * Frames are separated by GROWING the outer ones rather than shrinking the
+ * inner ones: a frame's natural box already hugs the columns its messages
+ * touch, and pulling it inward would cross the lifelines it frames. Without
+ * any separation a fragment wrapped around an existing one draws the
+ * identical rectangle, with both operator tabs on the same corner.
+ */
+export function fragmentNestLevel(t: SequenceTemplate, frag: SeqFragment): number {
+  const fragments = t.fragments ?? [];
+  const order = t.messages.map((m) => m.id);
+  const span = (f: SeqFragment): [number, number] => {
+    const a = order.indexOf(f.from);
+    const b = order.indexOf(f.to);
+    return [Math.min(a, b), Math.max(a, b)];
+  };
+  const [lo, hi] = span(frag);
+  if (lo < 0) return 0;
+  const mine = fragments.findIndex((f) => f.id === frag.id);
+  let level = 0;
+  for (const [i, other] of fragments.entries()) {
+    if (other.id === frag.id) continue;
+    const [olo, ohi] = span(other);
+    if (olo < 0) continue;
+    if (lo > olo || hi < ohi) continue; // not inside this one
+    // Identical spans can't nest — order them by declaration so two frames
+    // over the same rows still separate instead of coinciding exactly.
+    if (olo === lo && ohi === hi ? i > mine : true) level += 1;
+  }
+  return level;
+}
+
+/** How far each nesting level grows a fragment's frame sideways, in px. */
+const FRAG_NEST_INSET = 10;
 
 /**
  * A fragment's frame box. The x-span is DERIVED from the participants its
@@ -460,8 +638,12 @@ export function fragmentBox(
     min = 0;
     max = Math.max(0, t.participants.length - 1);
   }
-  const x = slotX(min) - FRAG_PAD_X;
-  const w = slotX(max) + HEADER_W + FRAG_PAD_X - x;
+  // Inset per nesting level, so a frame wrapped around an existing one reads
+  // as outside it instead of drawing the identical rectangle with its tab on
+  // the same corner.
+  const inset = fragmentNestLevel(t, frag) * FRAG_NEST_INSET;
+  const x = slotX(min) - FRAG_PAD_X - inset;
+  const w = slotX(max) + HEADER_W + FRAG_PAD_X + inset - x;
   const y = rowY(fromIdx) - FRAG_HEAD_H;
   const h = rowY(toIdx) - y + ROW_HEIGHT / 2;
   return { x, y, w, h };
@@ -550,7 +732,13 @@ export function toSequenceFlow(t: SequenceTemplate): { nodes: SeqRFNode[]; edges
       width: box.w,
       height: box.h,
       style: { width: box.w, height: box.h },
-      zIndex: -1000,
+      // Above the activation bars, below the notes and messages. At the very
+      // back its operator tab and guard text went behind any bar that happened
+      // to run through the frame's top-left corner — the shipped example read
+      // "[card val d]" — and a guard nobody can read is the one thing an `alt`
+      // frame exists to say. Its own border and wash still travel under every
+      // message, which is what keeps the frame scenery.
+      zIndex: 650,
       dragHandle: ".as-seq-frag__tab",
       data: { fragment: frag, elseOffsets },
     });
@@ -797,7 +985,23 @@ Rules:
  * rejected; what can't be healed throws a user-facing message.
  */
 export function parseLlmSequence(llmText: string): SequenceTemplate {
-  return validateSequence(parseLlmJson(llmText));
+  return parseLlmSequenceReport(llmText).sequence;
+}
+
+/**
+ * `parseLlmSequence`, plus what the healer had to do to get there. Same
+ * contract as `parseLlmTemplateReport`: `truncated` means the reply stopped
+ * early, so the messages that never arrived look exactly like deletions.
+ */
+export function parseLlmSequenceReport(
+  llmText: string,
+): { sequence: SequenceTemplate; repairs: string[]; truncated: boolean } {
+  const parsed = parseLlmJsonReport(llmText);
+  return {
+    sequence: validateSequence(parsed.value),
+    repairs: parsed.repairs,
+    truncated: parsed.truncated,
+  };
 }
 
 /** Build the user-turn message for a sequence refine request. */
@@ -849,6 +1053,9 @@ export const EXAMPLE_SEQUENCE: SequenceTemplate = {
     { id: "f2", kind: "alt", label: "card valid", from: "m6", to: "m7", elses: [{ label: "card declined", at: "m7" }] },
   ],
   notes: [
-    { id: "n1", text: "Idempotent by order id", side: "right", participant: "api", at: "m4" },
+    // Beside the DB rather than the API: a right-side note on the API at this
+    // row is drawn into the very gap the "INSERT order" arrow crosses, so the
+    // shipped example opened with its note printed over two messages.
+    { id: "n1", text: "Idempotent by order id", side: "right", participant: "db", at: "m4" },
   ],
 };

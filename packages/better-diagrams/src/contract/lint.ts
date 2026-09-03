@@ -54,8 +54,40 @@ const SEVERITY_RANK: Record<LintSeverity, number> = { error: 0, warning: 1, info
 /** Kinds that are not architecture elements for linting purposes. */
 const isAnnotation = (n: DiagramNode) => n.kind === "text";
 const isContainer = (n: DiagramNode) => n.kind === "group";
-const isLeaf = (n: DiagramNode) => !isAnnotation(n) && !isContainer(n);
+/** The bare dot at the end of a dangling arrow — notation, not a component. */
+const isPoint = (n: DiagramNode) => n.kind === "point";
+/**
+ * Flow-chart notation: a decision diamond, a start/end stadium, an I/O
+ * parallelogram. They are steps in a procedure, not systems anyone owns or
+ * deploys, so ownership and dependency rules have nothing to say about them.
+ */
+const FLOWCHART_KINDS = new Set(["decision", "terminator", "io"]);
+const isFlowchart = (n: DiagramNode) => FLOWCHART_KINDS.has(n.kind as string);
+
+const isLeaf = (n: DiagramNode) => !isAnnotation(n) && !isContainer(n) && !isPoint(n);
+/** A real architecture element: something a team could own and operate. */
+const isComponent = (n: DiagramNode) => isLeaf(n) && !isFlowchart(n);
 const isSunset = (n: DiagramNode) => n.status === "deprecated" || n.status === "retired";
+
+/**
+ * Tag that opts one element out of linting: `lint-ignore` silences every rule
+ * on it, `lint-ignore:no-orphans` silences one.
+ *
+ * A tag rather than a schema field because that is where "this is deliberate,
+ * stop telling me" already lives in this document, it survives every
+ * round-trip, and it shows in the tag filter — so a reader can see at a glance
+ * what has been excused and why the Checks count is what it is.
+ */
+export const LINT_IGNORE_TAG = "lint-ignore";
+
+export function lintIgnored(n: DiagramNode, rule: string): boolean {
+  const tags = n.tags;
+  if (!tags?.length) return false;
+  return tags.some((t) => {
+    const tag = t.trim().toLowerCase();
+    return tag === LINT_IGNORE_TAG || tag === `${LINT_IGNORE_TAG}:${rule.toLowerCase()}`;
+  });
+}
 
 function nodeMap(template: DiagramTemplate): Map<string, DiagramNode> {
   return new Map(template.nodes.map((n) => [n.id, n]));
@@ -70,7 +102,13 @@ export const BUILTIN_LINT_RULES: Record<string, LintRuleDef> = {
       const connected = new Set(t.edges.flatMap((e) => [e.source, e.target]));
       const parents = new Set(t.nodes.map((n) => n.parentId).filter(Boolean));
       return t.nodes
-        .filter((n) => isLeaf(n) && !connected.has(n.id) && !parents.has(n.id))
+        .filter(
+          (n) =>
+            isLeaf(n) &&
+            !connected.has(n.id) &&
+            !parents.has(n.id) &&
+            !lintIgnored(n, "no-orphans"),
+        )
         .map((n) => ({ message: `"${n.label}" has no connections`, nodeIds: [n.id] }));
     },
   },
@@ -85,6 +123,15 @@ export const BUILTIN_LINT_RULES: Record<string, LintRuleDef> = {
       const adjacency = new Map<string, string[]>();
       for (const e of t.edges) {
         if ((e.style ?? "solid") !== "solid") continue;
+        // A self-loop is a retry, not a distributed cycle — the schema prompt
+        // asks for exactly this shape on a flow chart, so reporting it would
+        // flag the editor's own advice.
+        if (e.source === e.target) continue;
+        // Only a one-way call is a hop that waits on the next one. "none" is a
+        // plain association (no call at all) and "both" is a mutual link the
+        // author drew deliberately as ONE edge, not a cycle we discovered.
+        if ((e.direction ?? "forward") !== "forward") continue;
+        if (byId.get(e.source) && lintIgnored(byId.get(e.source)!, "no-cycles")) continue;
         if (!adjacency.has(e.source)) adjacency.set(e.source, []);
         adjacency.get(e.source)!.push(e.target);
       }
@@ -135,7 +182,7 @@ export const BUILTIN_LINT_RULES: Record<string, LintRuleDef> = {
             : target.kind === "external" && (s.kind === "database" || s.kind === "queue")
               ? [target, s]
               : null;
-        if (pair) {
+        if (pair && !pair.some((n) => lintIgnored(n, "external-data-access"))) {
           issues.push({
             message: `External "${pair[0].label}" reaches "${pair[1].label}" directly`,
             nodeIds: [pair[0].id, pair[1].id],
@@ -154,7 +201,9 @@ export const BUILTIN_LINT_RULES: Record<string, LintRuleDef> = {
     severity: "warning",
     check(t) {
       if (!t.nodes.some((n) => n.team)) return [];
-      const unowned = t.nodes.filter((n) => isLeaf(n) && !n.team);
+      const unowned = t.nodes.filter(
+        (n) => isComponent(n) && !n.team && !lintIgnored(n, "missing-owner"),
+      );
       if (!unowned.length) return [];
       const names = unowned.map((n) => `"${n.label}"`).join(", ");
       return [
@@ -177,7 +226,13 @@ export const BUILTIN_LINT_RULES: Record<string, LintRuleDef> = {
         if (e.label) continue;
         const s = byId.get(e.source);
         const target = byId.get(e.target);
-        if (s?.team && target?.team && s.team !== target.team) {
+        if (
+          s?.team &&
+          target?.team &&
+          s.team !== target.team &&
+          !lintIgnored(s, "unlabeled-cross-team") &&
+          !lintIgnored(target, "unlabeled-cross-team")
+        ) {
           issues.push({
             message: `Unlabeled edge between ${s.team}'s "${s.label}" and ${target.team}'s "${target.label}"`,
             nodeIds: [s.id, target.id],
@@ -199,7 +254,13 @@ export const BUILTIN_LINT_RULES: Record<string, LintRuleDef> = {
       for (const e of t.edges) {
         const s = byId.get(e.source);
         const target = byId.get(e.target);
-        if (s && target && !isSunset(s) && isSunset(target)) {
+        if (
+          s &&
+          target &&
+          !isSunset(s) &&
+          isSunset(target) &&
+          !lintIgnored(s, "deprecated-dependency")
+        ) {
           issues.push({
             message: `"${s.label}" depends on ${target.status} "${target.label}"`,
             nodeIds: [s.id, target.id],

@@ -125,7 +125,10 @@ describe("SequenceStudio", () => {
       />,
     );
     const strip = container.querySelector(".as-seq-lifeline__hit") as HTMLElement;
+    // A real DRAG — a motionless press is a click on the column now, not a
+    // one-row bar and an undo entry nobody asked for.
     fireEvent.pointerDown(strip, { pointerId: 1, clientX: 140, clientY: 220 });
+    fireEvent.pointerMove(strip, { pointerId: 1, clientX: 140, clientY: 320 });
     fireEvent.pointerUp(strip, { pointerId: 1 });
 
     expect(await screen.findByText(/Add a message first/)).toBeInTheDocument();
@@ -197,6 +200,8 @@ describe("SequenceStudio", () => {
 
     fireEvent.click(screen.getByText("Orders DB"));
     await user.click(await screen.findByRole("button", { name: "Delete" }));
+    // A column that carries messages asks before it takes them with it.
+    await user.click(await screen.findByRole("button", { name: "Delete participant" }));
 
     const latest = onChange.mock.calls.at(-1)![0] as SequenceTemplate;
     expect(latest.participants.find((p) => p.id === "db")).toBeUndefined();

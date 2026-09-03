@@ -27,6 +27,14 @@ export interface JsonRepairResult {
   repairs: string[];
   /** Lossy guesses, one per damage site — only ever non-empty in approximate mode. */
   approximations: JsonApproximation[];
+  /**
+   * The text ran out mid-document: a bracket or a string was still open at
+   * the end. Structural rather than a string to match against, because this
+   * is the one repair a caller MUST surface — a reply cut off by max_tokens
+   * parses cleanly once the brackets are closed, and the elements that never
+   * arrived are indistinguishable from elements the model chose to delete.
+   */
+  truncated: boolean;
 }
 
 /**
@@ -66,6 +74,8 @@ interface Frame {
 }
 
 const CUT_OFF = "closed unclosed brackets (the text looks cut off)";
+const UNCLOSED_BRACKET = "closed an unclosed bracket";
+const UNTERMINATED = "closed an unterminated string (the text looks cut off)";
 
 function scan(src: string, approximate: boolean): JsonRepairResult {
   const out: string[] = [];
@@ -185,7 +195,7 @@ function scan(src: string, approximate: boolean): JsonRepairResult {
     }
     while (stack.length - 1 > idx) {
       finishFrame();
-      repairs.add("closed an unclosed bracket");
+      repairs.add(UNCLOSED_BRACKET);
     }
     finishFrame();
   };
@@ -248,7 +258,7 @@ function scan(src: string, approximate: boolean): JsonRepairResult {
       s += ch === '"' ? '\\"' : ch; // bare " is reachable only via other quote styles
       i++;
     }
-    repairs.add("closed an unterminated string (the text looks cut off)");
+    repairs.add(UNTERMINATED);
     return s;
   };
 
@@ -444,7 +454,10 @@ function scan(src: string, approximate: boolean): JsonRepairResult {
   }
   if (!topDone) fail("no JSON value found", 0);
 
-  return { text: out.join(""), repairs: [...repairs], approximations };
+  // The two repairs that mean "the text stopped early" rather than "the text
+  // was malformed": an open bracket or an open string at the end of input.
+  const truncated = repairs.has(CUT_OFF) || repairs.has(UNTERMINATED) || repairs.has(UNCLOSED_BRACKET);
+  return { text: out.join(""), repairs: [...repairs], approximations, truncated };
 }
 
 /**
@@ -457,7 +470,7 @@ function scan(src: string, approximate: boolean): JsonRepairResult {
 export function repairJsonText(raw: string, opts: JsonRepairOptions = {}): JsonRepairResult {
   try {
     JSON.parse(raw);
-    return { text: raw, repairs: [], approximations: [] };
+    return { text: raw, repairs: [], approximations: [], truncated: false };
   } catch {
     // Fall through to the scanner.
   }
@@ -517,6 +530,20 @@ export function approximateJsonFix(
  * for model replies and pasted documents.
  */
 export function parseLlmJson(llmText: string): unknown {
+  return parseLlmJsonReport(llmText).value;
+}
+
+/**
+ * `parseLlmJson`, plus what the healer had to do to get there.
+ *
+ * The notes matter most when they say the text was CUT OFF: that document
+ * parses cleanly once its brackets are closed, and the elements that never
+ * arrived look exactly like elements the author meant to delete. A caller
+ * that merges the result into a live document has to be able to say so.
+ */
+export function parseLlmJsonReport(
+  llmText: string,
+): { value: unknown; repairs: string[]; truncated: boolean } {
   const cleaned = llmText.replace(/```json/gi, "").replace(/```/g, "").trim();
   const start = cleaned.indexOf("{");
   if (start === -1) {
@@ -525,6 +552,14 @@ export function parseLlmJson(llmText: string): unknown {
   const end = cleaned.lastIndexOf("}");
   // No closing brace at all means the text was cut off — hand the healer
   // everything and let it close the document.
-  const slice = end > start ? cleaned.slice(start, end + 1) : cleaned.slice(start);
-  return JSON.parse(repairJsonText(slice).text);
+  const closed = end > start;
+  const slice = closed ? cleaned.slice(start, end + 1) : cleaned.slice(start);
+  const repaired = repairJsonText(slice);
+  return {
+    value: JSON.parse(repaired.text),
+    repairs: repaired.repairs,
+    // A reply with no closing brace at all was cut off however cleanly the
+    // healer then closed it.
+    truncated: repaired.truncated || !closed,
+  };
 }

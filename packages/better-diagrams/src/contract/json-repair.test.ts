@@ -9,7 +9,12 @@ const heal = (raw: string) => {
 describe("repairJsonText", () => {
   it("returns valid JSON byte-identical, with no repairs", () => {
     const raw = '{\n  "a": [1, 2],\n  "b": "x — y"\n}';
-    expect(repairJsonText(raw)).toEqual({ text: raw, repairs: [], approximations: [] });
+    expect(repairJsonText(raw)).toEqual({
+      text: raw,
+      repairs: [],
+      approximations: [],
+      truncated: false,
+    });
   });
 
   it("straightens smart double quotes", () => {

@@ -5,8 +5,13 @@
  * two participants' lifeline x positions at `data.y` (the LabeledEdge
  * approach). Vertical dragging reorders time: a transparent strip rendered
  * through EdgeLabelRenderer (ABOVE the node layer, so nothing steals the
- * gesture) patches `data.y` live; releasing commits, and the commit path
- * sorts messages by y and renormalizes the rows.
+ * gesture) patches `data.y` live; releasing hands the final row to
+ * `commitMessageOrder`, which moves the message through the document rather
+ * than re-deriving order from the canvas.
+ *
+ * The label is also the only obvious thing to click, so a press that never
+ * becomes a drag selects the message — it is a portal child, outside the
+ * edge's own `<g>`, so React Flow's own selection can never reach it.
  */
 import { memo, useCallback } from "react";
 import {
@@ -31,6 +36,9 @@ export type MessageEdgeType = Edge<
 /** How far a lost/found stub extends from its one known lifeline. */
 const STUB = 90;
 
+/** Movement that separates a drag from a click. Matches the other gestures. */
+const DRAG_THRESHOLD = 4;
+
 export const MessageEdge = memo(function MessageEdge({
   id,
   source,
@@ -38,22 +46,36 @@ export const MessageEdge = memo(function MessageEdge({
   selected,
   data,
 }: EdgeProps<MessageEdgeType>) {
-  const { readOnly, autonumber, requestCommit } = useSequence();
-  const { setEdges, screenToFlowPosition } = useReactFlow();
+  const { readOnly, autonumber, commitMessageOrder } = useSequence();
+  const { setEdges, setNodes, screenToFlowPosition } = useReactFlow();
   const s = useInternalNode(source);
   const t = useInternalNode(target);
+  const rowY = data?.y ?? 0;
 
   const startDrag = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (readOnly) return;
+      if (readOnly || event.button !== 0) return;
       event.stopPropagation();
       const strip = event.currentTarget;
+      const origin = { x: event.clientX, y: event.clientY };
+      const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+      // The label floats above its arrow, so following the raw pointer y made
+      // the row jump under the cursor on the very first pixel. Hold the grab
+      // offset and the arrow stays exactly where it was picked up.
+      const grabOffset = screenToFlowPosition({ x: event.clientX, y: event.clientY }).y - rowY;
+      let dragging = false;
+      let lastY = rowY;
+
       strip.setPointerCapture(event.pointerId);
       const move = (e: PointerEvent) => {
-        const y = screenToFlowPosition({ x: e.clientX, y: e.clientY }).y;
+        if (!dragging && Math.hypot(e.clientX - origin.x, e.clientY - origin.y) < DRAG_THRESHOLD) {
+          return;
+        }
+        dragging = true;
+        lastY = screenToFlowPosition({ x: e.clientX, y: e.clientY }).y - grabOffset;
         setEdges((edges) =>
           edges.map((edge) =>
-            edge.id === id ? { ...edge, data: { ...edge.data, y } } : edge,
+            edge.id === id ? { ...edge, data: { ...edge.data, y: lastY } } : edge,
           ),
         );
       };
@@ -61,12 +83,34 @@ export const MessageEdge = memo(function MessageEdge({
         strip.releasePointerCapture(event.pointerId);
         strip.removeEventListener("pointermove", move as EventListener);
         strip.removeEventListener("pointerup", up);
-        requestCommit();
+        strip.removeEventListener("pointercancel", up);
+        if (dragging) {
+          commitMessageOrder(id, lastY);
+          return;
+        }
+        // A click on the obvious target: select the message so the inspector
+        // opens on it (and shift-click piles messages up for "Fragment
+        // around selection").
+        setEdges((edges) =>
+          edges.map((edge) =>
+            edge.id === id
+              ? { ...edge, selected: true }
+              : additive
+                ? edge
+                : edge.selected
+                  ? { ...edge, selected: false }
+                  : edge,
+          ),
+        );
+        if (!additive) {
+          setNodes((nodes) => nodes.map((n) => (n.selected ? { ...n, selected: false } : n)));
+        }
       };
       strip.addEventListener("pointermove", move as EventListener);
       strip.addEventListener("pointerup", up);
+      strip.addEventListener("pointercancel", up);
     },
-    [readOnly, id, setEdges, screenToFlowPosition, requestCommit],
+    [readOnly, id, rowY, setEdges, setNodes, screenToFlowPosition, commitMessageOrder],
   );
 
   if (!s || !t || !data) return null;
@@ -133,7 +177,7 @@ export const MessageEdge = memo(function MessageEdge({
             width: isSelf ? undefined : Math.max(60, stripW - 40),
           }}
           onPointerDown={startDrag}
-          title={readOnly ? undefined : "Drag up or down to reorder this message in time"}
+          title={readOnly ? undefined : "Click to select · drag up or down to reorder in time"}
         >
           <span className="as-seq-msg__text">{labelText || "​"}</span>
           {m.tech ? <span className="as-seq-msg__tech">[{m.tech}]</span> : null}

@@ -586,7 +586,14 @@ export default function App() {
   // checkbox and the panel's own collapse button still work.
   useEffect(() => {
     const onKeyDown = (event) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "l") {
+      // Not ⌘⇧L — that is the editor's lock shortcut, and swallowing it here
+      // meant locking a zone toggled this panel instead.
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === "l"
+      ) {
         event.preventDefault();
         setShowJson((on) => !on);
       }

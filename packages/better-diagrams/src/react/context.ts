@@ -63,6 +63,25 @@ export interface StudioContextValue {
    * still counts.
    */
   childCounts: ReadonlyMap<string, number>;
+  /**
+   * The element whose NAME is open for editing on the canvas, or null.
+   *
+   * Renaming needed a gesture of its own: double-click is the drill gesture
+   * and worth keeping (it is how an empty level is started), so F2 — and
+   * Enter on a single selection — opens the name in place instead. Held here
+   * rather than in each renderer because the trigger is a keystroke the
+   * studio owns and the field belongs to the node.
+   */
+  renamingId: string | null;
+  setRenamingId: (id: string | null) => void;
+  /**
+   * Say something in the editor's status strip.
+   *
+   * Renderers need it for the gestures they own: a refused bend, a drop that
+   * did nothing. A gesture that silently declines reads as the editor being
+   * broken, which is worse than the limit it is enforcing.
+   */
+  showToast: (message: string) => void;
 }
 
 const FALLBACK: StudioContextValue = {
@@ -77,6 +96,9 @@ const FALLBACK: StudioContextValue = {
   drillInto: () => {},
   navigateToNode: () => {},
   childCounts: new Map(),
+  renamingId: null,
+  setRenamingId: () => {},
+  showToast: () => {},
 };
 
 export const StudioContext = createContext<StudioContextValue>(FALLBACK);

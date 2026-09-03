@@ -28,7 +28,9 @@ describe("renderSequenceToMermaid", () => {
 
   it("maps styles to arrows and carries tech in the label", () => {
     expect(out).toContain("user->>web: Place order");
-    expect(out).toContain("api-)pay: Charge [gRPC]");
+    // Async is dashed on the canvas, so it is `--)` here — `-)` is the
+    // SOLID open arrow, which disagreed with every other rendering.
+    expect(out).toContain("api--)pay: Charge [gRPC]");
     expect(out).toContain("db-->>api: order id");
     // Self-message.
     expect(out).toContain("api->>api: Validate cart");
@@ -47,7 +49,7 @@ describe("renderSequenceToMermaid", () => {
   });
 
   it("emits notes beside their anchor", () => {
-    expect(out).toContain("Note right of api: Idempotent by order id");
+    expect(out).toContain("Note right of db: Idempotent by order id");
   });
 
   it("comments out lost/found messages Mermaid cannot express", () => {
@@ -93,7 +95,7 @@ describe("renderSequenceToPlantUml", () => {
     expect(out).toContain("else card declined");
     expect(out).toContain("activate pay");
     expect(out).toContain("deactivate pay");
-    expect(out).toContain("note right of api : Idempotent by order id");
+    expect(out).toContain("note right of db : Idempotent by order id");
   });
 });
 
@@ -213,7 +215,7 @@ describe("sequence colour theming", () => {
     });
     expect(renderSequenceToSvg(doc)).toContain("#38bdf8");
     const light = renderSequenceToSvg(doc, LIGHT_EXPORT_PALETTE);
-    expect(light).toContain("#0284c7");
+    expect(light).toContain("#0369a1");
     expect(light).not.toContain("#38bdf8");
   });
 

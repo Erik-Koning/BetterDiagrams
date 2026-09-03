@@ -9,6 +9,12 @@ dist/
 packages/*/README.md
 packages/*/LICENSE
 
+# Playwright output
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
 # Editor / tooling state
 .claude/
 .DS_Store

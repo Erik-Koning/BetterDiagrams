@@ -99,13 +99,39 @@ export function seqBadgeOffset(label: string | undefined): number {
 }
 
 /**
+ * HSL → `#rrggbb`, the CSS conversion done by hand.
+ *
+ * Colours that reach the exporters have to be canonical hex: the Canvas2D
+ * backend applies an alpha by taking the colour apart, and a colour it cannot
+ * parse paints at full strength. `hsl()` is legal everywhere else and would
+ * look right on screen and in SVG, so the failure would only ever show up in
+ * a PNG or a PDF — the two formats nobody re-checks.
+ */
+function hslToHex(h: number, s: number, l: number): string {
+  const a = s * Math.min(l, 1 - l);
+  const channel = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const v = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(v * 255)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${channel(0)}${channel(8)}${channel(4)}`;
+}
+
+/**
  * Stable colour for a team name — hash the name to a hue, so "Payments" is
  * the same colour on every node, in every session, on screen and in exports,
  * with no registry to maintain. Saturation/lightness are pinned mid-range so
  * every hue stays readable on both the dark and light themes.
+ *
+ * Returned as hex rather than the `hsl()` it is computed from: the team pill
+ * is drawn as a 14% tint with its label in the same hue, so a colour the
+ * canvas backend cannot fade turns the pill into a solid blob with invisible
+ * text in every raster export.
  */
 export function teamColor(team: string): string {
   let h = 0;
   for (let i = 0; i < team.length; i++) h = (h * 31 + team.charCodeAt(i)) >>> 0;
-  return `hsl(${h % 360} 60% 55%)`;
+  return hslToHex(h % 360, 0.6, 0.55);
 }

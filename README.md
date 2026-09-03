@@ -24,8 +24,8 @@ The package is two halves. `contract/` has **no dependencies at all** — no Rea
 import { validateTemplate, buildSystemPrompt, autoLayout } from "@mosphere/better-diagrams/contract";
 ```
 
-That's 12 kB gzipped versus 92 kB for the full editor, and it's enforced by a test that walks
-the import graph rather than trusted to a comment.
+That's about 47 kB gzipped versus about 165 kB for the full editor, and the separation is
+enforced by a test that walks the import graph rather than trusted to a comment.
 
 ## Quick start
 
@@ -33,8 +33,13 @@ the import graph rather than trusted to a comment.
 npm install
 npm run dev        # example app on http://localhost:5173
 npm test           # 332 tests
+npm run test:e2e   # Playwright, end to end through the example app (see e2e/)
 npm run build      # builds the library to packages/better-diagrams/dist
 ```
+
+The end-to-end suite starts its own dev server on :5174 and drives the example in
+Chromium — first run `npx playwright install chromium`. It never writes to
+`/templates`: the auto-save route is blocked for the duration of a test.
 
 The example runs fully offline. AI generation is optional and needs a second terminal:
 
@@ -57,7 +62,12 @@ import "@mosphere/better-diagrams/styles.css";
 ```
 
 The component **fills its parent box**. Give it a sized container — it never assumes the viewport,
-so it embeds in a panel, a modal, or a split view without fighting your layout.
+so it embeds in a panel, a modal, or a split view without fighting your layout. In a narrow box
+the toolbar wraps to more rows rather than clipping its last buttons, and its type scale is in
+`rem`, so a reader who has raised their browser font size gets a bigger editor rather than a
+bigger page around the same 8px labels. Keyboard focus is visible on every control, and a
+`forced-colors` block restates the states that are otherwise carried only by a background or a
+shadow.
 
 ### Props
 
@@ -65,8 +75,8 @@ so it embeds in a panel, a modal, or a split view without fighting your layout.
 |---|---|---|
 | `value` | `DiagramTemplate` | Controlled document. Pair with `onChange`. |
 | `defaultValue` | `DiagramTemplate` | Initial document when uncontrolled. |
-| `onChange` | `(t) => void` | Every committed edit, already validated. |
-| `onSave` | `(t) => void \| Promise` | Shows a Save button; `⌘S` also triggers it. |
+| `onChange` | `(t) => void` | Every committed edit, already validated. Typing in an inspector field fires per keystroke, so a host that persists on every call should debounce; the UNDO stack does not — a run of typing in one field is one entry. |
+| `onSave` | `(t) => void \| Promise` | Shows a Save button; `⌘S` also triggers it, from inside a text field too, and never twice at once. The button reads `Save •` while the document differs from what was last saved. A rejected promise is surfaced to the user rather than swallowed. |
 | `readOnly` | `boolean` | Hides editing affordances; pan/zoom/export still work. |
 | `registry` | `RegistryExtensions` | Add node kinds, icons, exporters. See below. |
 | `theme` | `Theme` | Overrides `--as-*` design tokens. `LIGHT_THEME` / `DARK_THEME` are complete presets — `theme={LIGHT_THEME}` flips the whole editor **and** its image exports (the export palette derives from the theme). |
@@ -179,6 +189,23 @@ duplicate id gets suffixed, an edge to a missing node is dropped, and **parent c
 so every consumer can assume the parent graph is a forest. It throws only when there is no
 `nodes` array at all.
 
+"Repair rather than reject" is meant literally, and the awkward cases are the ones that matter:
+a numeric `"id": 1` is coerced, not dropped (dropping the node would take its edges and its
+children's parent links with it); a duplicate id is suffixed without ever *stealing* an id a
+later element already claimed; `"providers": "aws"` is repaired into a one-element list rather
+than discarded, because discarding it INVERTS the meaning and makes an AWS-only node visible
+everywhere. Two things are refused outright, because keeping them would be worse than losing
+them: a `url` whose scheme executes when clicked (`javascript:`, `data:` — only `http(s):`,
+`mailto:`, `tel:`, `ftp:`, relative links and the internal `file:` form survive), and a date
+that isn't one. Rows are never truncated: a load/save round-trip that quietly deleted a real
+table's columns would be data loss with no error and no undo.
+
+`parseLlmTemplateReport` (and `parseLlmSequenceReport`) return the healer's notes alongside the
+document. The one a caller must not swallow is `truncated`: a reply cut off by `max_tokens`
+parses cleanly once its brackets are closed, so the elements that never arrived are
+indistinguishable from elements the model chose to delete — and a refine merges that as a
+deletion. The editor says so rather than applying it silently.
+
 The export surface is curated. Everything importable from the root entry or
 `@mosphere/better-diagrams/contract` — the components, schema types, validators, migrations,
 prompts, adapters, layout, lint, diff, clipboard, and timeline — is a deliberate API we intend
@@ -231,6 +258,11 @@ zone has:
   "color": "#8b5cf6",   // frame ink; the tint derives from it
   "opacity": 0.28 }     // tint strength
 ```
+
+`color` is **not** container-only: on any other kind it overrides that kind's registry accent,
+which is what `"color": "#ff0000"` on a service can only mean. `fill`, `outline` and `opacity`
+stay frame concepts — a leaf draws its own silhouette — and the JSON editor's lint says so
+rather than letting them vanish on save.
 
 `fill: false` + `outline: "none"` is a **fully invisible grouping frame** — nothing renders on
 screen or in exports except its name chip, but it still nests, still accepts drops, still
@@ -535,12 +567,25 @@ recoloured zone is still hosted where it is hosted.
 
 Beyond the base tokens, the `theme` prop reaches the warning and comparison colours
 (`diffAdded/diffRemoved/diffChanged`, `warn`/`warnStrong` for deprecated's salmon→red,
-`overdue`, `hazardInk`/`hazardTape`) and two record tokens — `edgeColors` and `seqAccents` —
-that fan out to per-entry CSS variables (`--as-edge-sky`, `--as-seq-database`).
-**`LIGHT_THEME` now retunes all of them**: the fixed edge and sequence palettes were picked for
-the dark canvas (sky `#38bdf8` sits at ~2.2:1 on a light page) and darken to legible
-counterparts in light mode, on canvas and in every export — the interactive HTML's scrubber
-accent follows the page's luminance too.
+`overdue`, `hazardInk`/`hazardTape`), the shadow ink, `colorScheme` (which native date pickers,
+select popups and scrollbars follow), and three record tokens — `edgeColors`, `seqAccents` and
+`nodeAccents` — that fan out to per-entry CSS variables (`--as-edge-sky`, `--as-seq-database`,
+`--as-node-service`).
+
+**`LIGHT_THEME` retunes all of them**, and clears WCAG AA throughout: the fixed palettes were
+picked for the dark canvas (sky `#38bdf8` sits at ~2.2:1 on a light page, and the node-kind
+accents that colour every eyebrow, icon and PK/FK badge sat between 1.6 and 2.5:1) and darken to
+legible counterparts in light mode, on canvas and in every export. A node's own `color` still
+wins over both, and the registry's accent remains the fallback for a kind the theme doesn't
+name — including one a host registers.
+
+Two things the theme is deliberately not responsible for. **Dimmed states fade the box, not the
+words**: `deprecated`, `retired`, ghosted and tag-filtered nodes recede by dulling their frame,
+icon and description while the title and the status word stay legible (the word "deprecated"
+reads at 4.95:1 in light mode, where it used to be 1.88:1) — because hover-to-restore does
+nothing for a keyboard, a touch screen, or a PNG. And **provider segments derive their ink from
+the provider's own colour** rather than the theme's, so a host that registers a pale brand still
+gets readable text on it.
 
 ## Extending it
 
@@ -578,7 +623,12 @@ derived from the active `theme`, so a light-mode app exports light images automa
 
 Image exports draw zones behind everything, honour the active provider selection (hidden nodes
 and their edges are omitted, and the crop tightens to what's visible), and stamp the legend into
-the corner so the file explains its own colours. Mermaid can't express overlapping regions, so it
+the corner so the file explains its own colours — in a gutter of its own, so it never lands on
+the diagram. Dates in an export always carry the year: a picture outlives the calendar. With
+something selected, Export ▾ offers **Selection only**, which narrows the PICTURE formats to the
+selected subgraph (descendants and internal wiring included, the same rule Copy uses). Document
+formats never narrow — "export → save to your database" must not quietly become "save only what
+I had highlighted". Mermaid can't express overlapping regions, so it
 records the active selection as `%% zone:` comments and reserves subgraphs for groups.
 
 A custom exporter returns a blob to download, or nothing if it delivered the result itself:
@@ -645,15 +695,24 @@ save, theming, version tag) but sequence-style:
 
 | Element | Schema | On canvas |
 |---|---|---|
-| Participants | `participants[]` — `kind` (actor/service/database/queue/external), `team`, `status` | Header row; drag horizontally to reorder columns |
-| Messages | `messages[]` — `style` (sync/async/reply), `tech`, self-messages (`from === to`), lost/found (`null` endpoint) | Horizontal arrows; **drag a label up/down to reorder time**; drag between headers to connect |
-| Activation bars | `activations[]` — anchored to message ids | **Press-drag on a lifeline to add one**, resize its ends, Delete to remove |
-| Fragments | `fragments[]` — loop/alt/opt/par/break with else branches | Frames with operator tabs; wrap the selected messages via Insert ▾ |
-| Notes | `notes[]` — side, anchor message | Dog-eared cards; drag to re-side/re-anchor |
+| Participants | `participants[]` — `kind` (actor/service/database/queue/external), `team`, `status` | Header row; drag a header past the halfway point to reorder columns |
+| Messages | `messages[]` — `style` (sync/async/reply), `tech`, self-messages (`from === to`), lost/found (`null` endpoint, pick "(the environment)" as an end) | Horizontal arrows; click the label to select, **drag it up/down to reorder time**; drag between headers to connect |
+| Activation bars | `activations[]` — anchored to message ids | **Press-drag on a lifeline to add one** (a click selects the column instead), resize its ends, Delete to remove |
+| Fragments | `fragments[]` — loop/alt/opt/par/break with else branches | Frames with operator tabs; wrap the selected messages via Insert ▾. Branch guards are editable and removable one at a time, and `+ branch` is offered only on the kinds that can hold one |
+| Notes | `notes[]` — side, anchor message | Dog-eared cards; drag onto another lifeline to re-anchor, above the first row to float free |
 
 The document stores **no coordinates**: participant column = array order, message time = array
 order, and spans anchor to message *ids* — so inserting a message inside a `loop` grows the
-loop, diffs stay structural, and the whole document maps 1:1 onto Mermaid/PlantUML. Exports:
+loop, diffs stay structural, and the whole document maps 1:1 onto Mermaid/PlantUML.
+
+Two ids are all a span has, which is what makes inserting a step inside a loop free — and what
+makes removing or moving a BOUNDARY message need help. `removeMessages` and `moveMessage` resolve
+each span to the ROWS IT COVERS before the list changes and re-hang its ends on the survivors, so
+deleting a loop's first message leaves the loop over what is left rather than deleting the loop,
+and dragging that message to the bottom takes it OUT of the loop rather than stretching the frame
+to follow it. Deleting a participant that carries messages asks first, and says what went with it.
+A fragment that would CROSS an existing one is refused: properly nested or disjoint frames are the
+only shapes Mermaid and PlantUML can express. Exports:
 PNG/PDF/SVG through the same draw-command backends (light/dark palettes included), Mermaid
 `sequenceDiagram`, PlantUML (full fidelity incl. lost/found), and the JSON itself. The example
 app's **Architecture | Sequence** tabs switch editors.
@@ -722,8 +781,19 @@ registry={{ lintRules: {
 } }}
 ```
 
+One element can opt out with a **tag**: `lint-ignore` silences every rule on it,
+`lint-ignore:no-orphans` silences one. A tag rather than a schema field because that is where
+"this is deliberate, stop telling me" already lives in the document — it survives every
+round-trip and shows in the tag filter, so a reader can see what has been excused and why the
+Checks count is what it is. The built-in rules also know what is *not* a component: a retry
+self-loop is not a cycle, a `direction: "none"` association is not a call, and nobody owns a
+decision diamond or the dot at the end of a dangling arrow.
+
 **Compare** diffs the live document against a baseline — `diffTemplates(base, current)` matches
-by id and ignores pure moves/resizes, so the diff is about structure, not tidying. On screen,
+by id and ignores pure moves/resizes *and* pure view state (a folded group is not an
+architecture change), so the diff is about structure, not tidying. It reports `meta` too, so a
+retitled diagram or a changed version tag is visible. `diffSequences` is the same function for a
+sequence document, where there are no coordinates to ignore at all. On screen,
 added elements outline green-dashed, removed ones render **ghosted in place** in red, changed
 ones amber, with a `+a −r ~c` banner. Pass `diffBase` (e.g. the last approved revision from
 your DB) or use the toolbar's Compare button with a `.json` file. The view is strictly
@@ -823,8 +893,19 @@ zones would drag nodes out of the region deciding whether they're visible, silen
 document's meaning. It also runs automatically on generated diagrams, but only when
 `hasOverlaps` says the output is actually a mess.
 
+Two things Tidy leaves alone, because moving them would contradict what they mean. A **locked**
+node keeps its position and its size — a lock says the editor refuses to drag or resize it, and
+a Tidy is the editor doing exactly that. And **provider alternates** stay stacked: "Azure SQL /
+Amazon RDS / Cloud SQL" is one box drawn three ways, authored at the same spot with disjoint
+`providers` so that switching scenario swaps it in place. Ranking them as three members would
+deal them three slots — a permanent gap wherever the hidden two sit, and a database that jumps
+across the diagram when the scenario changes. A set counts as alternates when its members share
+a container and the same neighbours, and their provider lists cannot both be showing at once.
+
 **Copy / paste** (`⌘C` / `⌘V`) travel as template JSON through the system clipboard, so a
-fragment pastes into another diagram or another tab. Descendants come along with a copied
+fragment pastes into another diagram or another tab. Text on the clipboard that is not a
+fragment pastes nothing and says so — re-applying the last in-app copy instead would look like
+the editor inventing a node out of nowhere. Descendants come along with a copied
 container, ids are remapped, and an existing zone is reused rather than cloned. A fragment
 keeps only the lines wholly **inside** the selection — copy two connected nodes and the line
 between them pastes too; copy one node and no lines come along (the other endpoint may not
@@ -856,8 +937,15 @@ shows the active scenario.
 The toolbar groups its actions into four dropdowns — **Insert** (node/group/text/zone),
 **Arrange** (tidy, align, distribute, routing, snap), **View** (ghosts, tag filter), and
 **Export** — all sharing one open-menu slot, so opening one closes the rest and a click
-anywhere else closes them all. The inspector reads as captioned sections (Node · Style · On ·
-Tags · Link) instead of an unbroken run of inputs.
+anywhere else closes them all — and the click that dismisses a menu is spent on dismissing it,
+rather than also selecting whatever was under the pointer. The inspector reads as captioned
+sections (Node · Style · On · Tags · Link) instead of an unbroken run of inputs.
+
+Selecting **more than one** element swaps the inspector for a bulk one: how many are selected,
+then the fields that mean something across a mixed selection — lifecycle status, owning team, a
+tag to add, line style and colour for the connections — plus align, distribute, group, lock,
+duplicate and delete. Each field shows the shared value, or blank when they disagree, and
+setting it writes to everything selected.
 
 ## Keyboard
 
@@ -866,17 +954,32 @@ wherever this editor has the same concept, so muscle memory carries over.
 
 | | |
 |---|---|
-| **Essentials** | `⌘Z` undo · `⇧⌘Z` redo · `⌘S` save · `⌘A` select all · `Delete` remove selection (cascades into groups) · `Esc` close panels, then leave a drilled level |
+| **Essentials** | `⌘Z` undo · `⇧⌘Z` / `⌘Y` redo · `⌘S` save · `⌘A` select all · `F2` (or `Enter`) rename in place · `Delete` remove selection (cascades into groups) · `Esc` one thing at a time — see below |
 | **Clipboard** | `⌘C` · `⌘V` · `⌘X` cut · `⌘D` duplicate with connections · `⌥`-drag to drag a copy and leave the original |
 | **Insert** | `N` node · `G` group · `T` text note · `Z` zone — all land at the canvas centre, exactly as the Insert menu does |
 | **Arrange** | `←↑→↓` nudge 1px · `⇧`+arrows nudge 10px · `⌘⇧`+arrows align · `⌘G` wrap the selection in a container · `⌘⇧G` ungroup · `⌘⇧L` lock |
-| **View** | `⌘=`/`⌘-`/`⌘0` zoom · `⇧1` fit · `⇧2` fit selection · `⌘'` snap to grid · `⌘K` search · `⌘⇧E` export PNG · `Space`-drag pan |
+| **View** | `⌘=`/`⌘-`/`⌘0` zoom · `⇧1` fit · `⇧2` fit selection · `⌘'` snap to grid · `⌘K` search (`⇧Enter` for the previous match) · `⌘⇧K` the selected node's link · `⌘⇧E` export PNG · `Space`-drag pan |
 | **Timeline** | `←`/`→` step between stops, while scrubbing with nothing selected |
 
-Three places the conventions could not be copied verbatim, and why:
+`⌘S`, `⌘K` and `⌘⇧K` are **global**: they work from inside a text field, because "rename the
+node, hit `⌘S`" is the most natural sequence here and yielding to the field would hand the key
+to the browser. Every other binding stands down while you are typing, and all of them stand
+down while a dialog is open — a shortcut that edits a canvas nobody can see is not a shortcut.
+
+**`Esc` does ONE thing per press**, outermost first: close the shortcut sheet, then a menu, then
+a panel, then drop the selection, then leave the timeline, then step out one drilled level. It
+used to clear everything at once, so dismissing the `?` sheet also threw away the timeline
+cursor you had scrubbed to. `Esc` also abandons a drag in progress — a connection being pulled,
+a line being bent — rather than leaving undo as the only way back.
+
+Four places the conventions could not be copied verbatim, and why:
 
 - **`⌘K` is search, not link.** It predates this, is advertised in the search field, and works
   from inside any input. Links take `⌘⇧K`.
+- **Renaming is `F2`, not double-click.** Double-click is the DRILL gesture and worth keeping:
+  it opens a component's next C4 level, including the empty one you start a decomposition from.
+  `F2` (or `Enter` on a single selection) opens the name in place instead; a text note and an
+  edge label still edit on double-click, since neither has a level to drill into.
 - **Arrow keys move the selection, not the focused node.** React Flow's built-in nudge only
   moves the one node with DOM focus and can't move a multi-selection, so `disableKeyboardA11y`
   turns it off and the editor owns all four arrows. With nothing selected they fall through to
@@ -903,11 +1006,21 @@ and copy-/paste-styles is near-empty here because colour is registry-level by ki
 stored per node — so none of those are bound.
 
 Sequence mode binds the subset that means something there (`N` participant, `A` actor,
-`M` message, `T` note, plus the essentials and zoom); its `?` sheet lists only those.
+`M` message, `T` note, `⌘D` duplicate, plus the essentials and zoom); its `?` sheet lists only
+those, and its View ▾ menu points at the sheet. `Insert ▸ Message` uses the participants you have
+selected and lands after the selected message rather than always appending Customer → Web App at
+the bottom of the flow.
 
 Mouse: drag from a node edge to connect. Drop a node onto a group to nest it, drag it out to
-un-nest. Drag an edge label along its curve to slide it, or away from the curve to bend the line
-itself. Drop a `.json` template file on the canvas to load it.
+un-nest — the frame you are about to land in lights up while you drag, and dropping onto a
+COLLAPSED frame opens it so you can see the node arrive. Dragging a node also shows **alignment
+guides** against its neighbours' edges and centres, and snaps softly to them (off while
+snap-to-grid is on, and only for a single dragged node). Drag an edge label along its curve to
+slide it, or away from the curve to bend the line itself. Shift- or ⌘-click extends a selection;
+a rubber band takes everything it touches, plus the lines whose ends are both inside it. A group
+is dragged by its label bar, so the space between its children is free for a rubber band.
+**Right-click** anything for the actions that apply to it. Drop a `.json` template file on the
+canvas to load it — a file that would replace a diagram with content in it asks first.
 
 ## Versioning
 

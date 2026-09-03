@@ -204,7 +204,14 @@ export const ZoneNode = memo(function ZoneNode({ id, data, selected }: NodeProps
                     style={active ? { background: pd.color } : undefined}
                     aria-pressed={active}
                     disabled={readOnly}
-                    onClick={() => setProvider(p)}
+                    // The click belongs to the toggle, not to the zone under
+                    // it: picking a provider also selected the region and
+                    // opened its inspector over the canvas, every time.
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setProvider(p);
+                    }}
                     title={`Show the ${pd.label} deployment`}
                   >
                     {pd.label}
@@ -265,6 +272,8 @@ function PolygonEditor({
   onDragEnd: (points: ZonePoint[]) => void;
 }) {
   const points = zoneOutline(zone) ?? [];
+  const width = zone.w;
+  const height = zone.h;
 
   /**
    * Shared drag plumbing. `place(nx, ny)` builds the full point list for the
@@ -273,7 +282,7 @@ function PolygonEditor({
    */
   const dragFrom = useCallback(
     (
-      target: SVGCircleElement,
+      target: SVGGraphicsElement,
       pointerId: number,
       place: (nx: number, ny: number) => ZonePoint[],
       initial: ZonePoint[],
@@ -302,7 +311,7 @@ function PolygonEditor({
   );
 
   const startDrag = useCallback(
-    (index: number) => (event: ReactPointerEvent<SVGCircleElement>) => {
+    (index: number) => (event: ReactPointerEvent<SVGGraphicsElement>) => {
       event.stopPropagation();
       const place = (nx: number, ny: number) =>
         points.map((p, i): ZonePoint => (i === index ? [nx, ny] : p));
@@ -313,7 +322,7 @@ function PolygonEditor({
 
   /** The new point exists from the pointerdown; keep holding to place it. */
   const addAndDrag = useCallback(
-    (afterIndex: number) => (event: ReactPointerEvent<SVGCircleElement>) => {
+    (afterIndex: number) => (event: ReactPointerEvent<SVGGraphicsElement>) => {
       event.stopPropagation();
       const a = points[afterIndex];
       const b = points[(afterIndex + 1) % points.length];
@@ -330,7 +339,7 @@ function PolygonEditor({
   );
 
   const removePoint = useCallback(
-    (index: number) => (event: ReactPointerEvent<SVGCircleElement>) => {
+    (index: number) => (event: { stopPropagation: () => void }) => {
       event.stopPropagation();
       // A polygon needs three points to still be a polygon.
       if (points.length <= 3) return;
@@ -339,6 +348,14 @@ function PolygonEditor({
     },
     [points, onDragEnd],
   );
+
+  // Handles are drawn in the ZONE's own 0..100 box, which `preserveAspectRatio:
+  // none` then stretches to the region's real size — so one radius produced a
+  // 6x5px dot on a small zone and a 30x17px blob on a large one. Convert a
+  // fixed pixel radius into that box's units per axis, so every handle is the
+  // same size on screen and round whatever shape the zone is.
+  const rx = (px: number) => (width > 0 ? (px / width) * 100 : px);
+  const ry = (px: number) => (height > 0 ? (px / height) * 100 : px);
 
   return (
     <svg
@@ -353,31 +370,38 @@ function PolygonEditor({
         const next = points[(i + 1) % points.length];
         const mid: ZonePoint = [(p[0] + next[0]) / 2, (p[1] + next[1]) / 2];
         return (
-          <circle
+          <ellipse
             key={`add-${i}`}
             className="as-zone__vertex as-zone__vertex--add nodrag"
             cx={mid[0] * 100}
             cy={mid[1] * 100}
-            r={1.1}
+            rx={rx(VERTEX_ADD_R)}
+            ry={ry(VERTEX_ADD_R)}
             onPointerDown={addAndDrag(i)}
           >
             <title>Press to add a point — keep holding to place it</title>
-          </circle>
+          </ellipse>
         );
       })}
       {points.map((p, i) => (
-        <circle
+        <ellipse
           key={`v-${i}`}
           className="as-zone__vertex nodrag"
           cx={p[0] * 100}
           cy={p[1] * 100}
-          r={1.6}
+          rx={rx(VERTEX_R)}
+          ry={ry(VERTEX_R)}
           onPointerDown={startDrag(i)}
           onDoubleClick={removePoint(i)}
         >
           <title>Drag to move · double-click to remove</title>
-        </circle>
+        </ellipse>
       ))}
     </svg>
   );
 }
+
+/** Vertex handle radius, in SCREEN px — a comfortable pointer target. */
+const VERTEX_R = 7;
+/** The "add a point" dot between two vertices, deliberately smaller. */
+const VERTEX_ADD_R = 5;

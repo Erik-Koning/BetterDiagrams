@@ -97,12 +97,49 @@ export function ToolbarMenu({
   menuClassName?: string;
   children: ReactNode;
 }) {
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * The arrow-key model a `role="menu"` promises.
+   *
+   * Announcing a menu and then answering only Tab is the worst of both: a
+   * screen-reader user is told to expect Arrow/Home/End, and a sighted
+   * keyboard user has to Tab through every row of every menu to reach the
+   * toolbar button after it.
+   */
+  const onMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const items = [...(menuRef.current?.querySelectorAll<HTMLElement>(MENU_ITEM) ?? [])].filter(
+      (el) => !el.hasAttribute("disabled"),
+    );
+    if (!items.length) return;
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    const go = (i: number) => {
+      event.preventDefault();
+      items[(i + items.length) % items.length]?.focus();
+    };
+    if (event.key === "ArrowDown") go(at + 1);
+    else if (event.key === "ArrowUp") go(at <= 0 ? items.length - 1 : at - 1);
+    else if (event.key === "Home") go(0);
+    else if (event.key === "End") go(items.length - 1);
+  };
+
+  // Opening moves focus to the first row, so the arrows have somewhere to go.
+  useEffect(() => {
+    if (!open) return;
+    menuRef.current?.querySelector<HTMLElement>(MENU_ITEM)?.focus({ preventScroll: true });
+  }, [open]);
+
   return (
     <div className="as-menu-wrap">
       <button
         type="button"
         className={`as-btn${active || open ? " as-btn--on" : ""}`}
         onClick={onToggle}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowDown" || open) return;
+          event.preventDefault();
+          onToggle();
+        }}
         aria-expanded={open}
         aria-haspopup="menu"
         title={title}
@@ -110,13 +147,21 @@ export function ToolbarMenu({
         {label} ▾
       </button>
       {open ? (
-        <div className={`as-menu${menuClassName ? ` ${menuClassName}` : ""}`} role="menu">
+        <div
+          ref={menuRef}
+          className={`as-menu${menuClassName ? ` ${menuClassName}` : ""}`}
+          role="menu"
+          onKeyDown={onMenuKeyDown}
+        >
           {children}
         </div>
       ) : null}
     </div>
   );
 }
+
+/** The rows arrow keys walk: real menu items and the checkboxes among them. */
+const MENU_ITEM = '[role="menuitem"], .as-menu__item, .as-menu__check input';
 
 /**
  * The revision notice pinned in a canvas corner. Document data, not view
@@ -128,15 +173,29 @@ export function VersionTagChip({
   position,
   readOnly,
   onCommit,
+  autoEdit,
+  onAutoEditHandled,
 }: {
   tag: string;
   position: VersionTagPosition;
   readOnly: boolean;
   onCommit: (patch: { versionTag?: string; versionTagPosition?: VersionTagPosition }) => void;
+  /**
+   * Open straight into the editor. "Set version tag…" creates the tag and
+   * hands it here rather than leaving a placeholder in a corner for the user
+   * to find — the ellipsis promises somewhere to type.
+   */
+  autoEdit?: boolean;
+  onAutoEditHandled?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(tag);
   useEffect(() => setDraft(tag), [tag]);
+  useEffect(() => {
+    if (!autoEdit || readOnly) return;
+    setEditing(true);
+    onAutoEditHandled?.();
+  }, [autoEdit, readOnly, onAutoEditHandled]);
 
   if (!editing || readOnly) {
     return (
@@ -509,24 +568,71 @@ export function Modal({
   /** Skip the visible heading; `title` still labels the dialog for AT. */
   hideTitle?: boolean;
 }) {
+  const cardRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        // stopImmediatePropagation, not stopPropagation: two dialogs each
+        // register one of these, and one Escape used to close both — so
+        // dismissing the shortcuts sheet also threw away the welcome modal's
+        // pasted JSON, and created a file on the way out.
+        event.stopImmediatePropagation();
         event.stopPropagation();
         onClose();
+        return;
+      }
+      // Keep Tab inside the dialog. `aria-modal` hides the page behind it
+      // from assistive technology but does nothing to the tab ring, so
+      // tabbing walked out into the toolbar under the dimmed backdrop —
+      // where every control still worked.
+      if (event.key !== "Tab") return;
+      const card = cardRef.current;
+      if (!card) return;
+      const focusable = [...card.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+        (el) => !el.hasAttribute("disabled") && el.tabIndex !== -1 && el.offsetParent !== null,
+      );
+      if (!focusable.length) return;
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      const active = document.activeElement as HTMLElement | null;
+      if (event.shiftKey && (active === first || !card.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !card.contains(active))) {
+        event.preventDefault();
+        first.focus();
       }
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [onClose]);
 
+  // Focus lands in the dialog on open and goes back where it came from on
+  // close. Without it a keyboard user had to Tab in from wherever they were,
+  // and a screen reader announced nothing at all.
+  useEffect(() => {
+    const returnTo = document.activeElement as HTMLElement | null;
+    const card = cardRef.current;
+    const target =
+      card?.querySelector<HTMLElement>("[autofocus]") ??
+      card?.querySelector<HTMLElement>(FOCUSABLE) ??
+      card;
+    target?.focus({ preventScroll: true });
+    return () => {
+      if (returnTo && document.contains(returnTo)) returnTo.focus({ preventScroll: true });
+    };
+  }, []);
+
   return (
     <div className="as-modal" onPointerDown={onClose}>
       <div
+        ref={cardRef}
         className={`as-modal__card${cardClassName ? ` ${cardClassName}` : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
         onPointerDown={(event) => event.stopPropagation()}
       >
         {hideTitle ? null : <h2 className="as-modal__title">{title}</h2>}
@@ -535,6 +641,10 @@ export function Modal({
     </div>
   );
 }
+
+/** What counts as a tab stop inside a dialog. */
+const FOCUSABLE =
+  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
 
 /**
  * The `?` sheet: every binding the editor answers to, in one place.
@@ -555,11 +665,12 @@ export const SHORTCUT_GROUPS: Record<"architecture" | "sequence", ReadonlyArray<
       title: "Essentials",
       items: [
         ["mod+Z", "Undo"],
-        ["mod+⇧+Z", "Redo"],
+        ["mod+⇧+Z / mod+Y", "Redo"],
         ["mod+S", "Save"],
         ["mod+A", "Select all"],
+        ["F2 / Enter", "Rename the selection"],
         ["Delete", "Delete selection (cascades into groups)"],
-        ["Esc", "Close panels · leave a drilled level"],
+        ["Esc", "Close a panel · drop the selection · leave a level"],
         ["?", "This sheet"],
       ],
     },
@@ -603,7 +714,8 @@ export const SHORTCUT_GROUPS: Record<"architecture" | "sequence", ReadonlyArray<
         ["⇧+1", "Zoom to fit"],
         ["⇧+2", "Zoom to selection"],
         ["mod+'", "Snap to grid"],
-        ["mod+K", "Search"],
+        ["mod+K", "Search (⇧Enter for the previous match)"],
+        ["mod+⇧+K", "Edit the selected node's link"],
         ["mod+⇧+E", "Export PNG"],
         ["Space+drag", "Pan"],
       ],

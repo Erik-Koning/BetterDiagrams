@@ -31,11 +31,16 @@ export interface DropProbeFlow {
  * (ghosts, drill-in boundaries) are not attachable: an edge to one could
  * never persist.
  */
-export function topDropTarget(flow: DropProbeFlow, point: { x: number; y: number }): string | null {
+export function topDropTarget(
+  flow: DropProbeFlow,
+  point: { x: number; y: number },
+  opts: { exclude?: ReadonlySet<string> } = {},
+): string | null {
   let hit: string | null = null;
   let hitZ = -Infinity;
   for (const node of flow.getNodes()) {
     if (node.type === "zone" || isGhostNodeId(node.id) || isBoundaryNodeId(node.id)) continue;
+    if (opts.exclude?.has(node.id)) continue;
     const internal = flow.getInternalNode(node.id);
     if (!internal) continue;
     const { x, y } = internal.internals.positionAbsolute;

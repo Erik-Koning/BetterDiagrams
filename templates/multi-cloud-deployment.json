@@ -1,0 +1,279 @@
+{
+  "version": 1,
+  "nodes": [
+    {
+      "id": "cdn",
+      "label": "CDN",
+      "kind": "gateway",
+      "icon": "globe",
+      "description": "Edge cache",
+      "parentId": null,
+      "zoneId": "region",
+      "x": 90,
+      "y": 130,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "api",
+      "label": "REST API",
+      "kind": "service",
+      "icon": "box",
+      "description": "Node / TypeScript",
+      "parentId": null,
+      "zoneId": "region",
+      "tags": [
+        "core"
+      ],
+      "url": "https://github.com/example/api",
+      "team": "Platform",
+      "x": 330,
+      "y": 130,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "wrk",
+      "label": "Worker",
+      "kind": "service",
+      "icon": "gear",
+      "description": "Background jobs",
+      "parentId": null,
+      "zoneId": "region",
+      "date": "2026-06-15",
+      "x": 330,
+      "y": 300,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "q",
+      "label": "Queue",
+      "kind": "queue",
+      "icon": "layers",
+      "description": "",
+      "parentId": null,
+      "zoneId": "region",
+      "date": "2026-06-15",
+      "x": 330,
+      "y": 440,
+      "w": 170,
+      "h": 64,
+      "fontSize": 13
+    },
+    {
+      "id": "sql-az",
+      "label": "Azure SQL",
+      "kind": "database",
+      "icon": "database",
+      "description": "Managed, geo-replicated",
+      "parentId": null,
+      "zoneId": "region",
+      "providers": [
+        "azure"
+      ],
+      "date": "2026-03-02",
+      "x": 590,
+      "y": 120,
+      "w": 180,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "cache",
+      "label": "Redis",
+      "kind": "database",
+      "icon": "bolt",
+      "description": "Sessions",
+      "parentId": null,
+      "zoneId": "region",
+      "providers": [
+        "azure",
+        "aws"
+      ],
+      "status": "deprecated",
+      "x": 590,
+      "y": 240,
+      "w": 180,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "pay",
+      "label": "Payments",
+      "kind": "external",
+      "icon": "lock",
+      "description": "PCI scope",
+      "parentId": null,
+      "zoneId": "vendor",
+      "tags": [
+        "pci"
+      ],
+      "url": "file:Order flow",
+      "team": "Fintech",
+      "date": "2026-09-30",
+      "x": 725,
+      "y": 405,
+      "w": 160,
+      "h": 72,
+      "fontSize": 13
+    },
+    {
+      "id": "sql-aws",
+      "label": "Amazon RDS",
+      "kind": "database",
+      "icon": "database",
+      "description": "Multi-AZ Postgres",
+      "parentId": null,
+      "zoneId": "region",
+      "providers": [
+        "aws"
+      ],
+      "date": "2026-03-02",
+      "x": 590,
+      "y": 120,
+      "w": 180,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "sql-gcp",
+      "label": "Cloud SQL",
+      "kind": "database",
+      "icon": "database",
+      "description": "Regional Postgres",
+      "parentId": null,
+      "zoneId": "region",
+      "providers": [
+        "gcp"
+      ],
+      "date": "2026-03-02",
+      "x": 590,
+      "y": 120,
+      "w": 180,
+      "h": 76,
+      "fontSize": 13
+    }
+  ],
+  "edges": [
+    {
+      "id": "z1",
+      "source": "cdn",
+      "target": "api",
+      "label": "HTTPS",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "sky"
+    },
+    {
+      "id": "z2",
+      "source": "api",
+      "target": "sql-az",
+      "label": "read/write",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "amber",
+      "tech": "SQL"
+    },
+    {
+      "id": "z5",
+      "source": "api",
+      "target": "cache",
+      "label": "",
+      "labelT": 0.5,
+      "style": "dotted",
+      "color": "rose"
+    },
+    {
+      "id": "z6",
+      "source": "api",
+      "target": "q",
+      "label": "enqueue",
+      "labelT": 0.5,
+      "style": "dashed",
+      "color": "violet",
+      "tech": "AMQP",
+      "seq": 1
+    },
+    {
+      "id": "z7",
+      "source": "q",
+      "target": "wrk",
+      "label": "consume",
+      "labelT": 0.5,
+      "style": "dashed",
+      "color": "violet",
+      "tech": "AMQP",
+      "seq": 2
+    },
+    {
+      "id": "z8",
+      "source": "api",
+      "target": "pay",
+      "label": "charge",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "emerald"
+    },
+    {
+      "id": "z3",
+      "source": "api",
+      "target": "sql-aws",
+      "label": "read/write",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "amber"
+    },
+    {
+      "id": "z4",
+      "source": "api",
+      "target": "sql-gcp",
+      "label": "read/write",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "amber"
+    }
+  ],
+  "zones": [
+    {
+      "id": "region",
+      "label": "Cloud Region",
+      "shape": "rounded",
+      "x": 40,
+      "y": 40,
+      "w": 940,
+      "h": 520,
+      "providers": [
+        "azure",
+        "aws",
+        "gcp"
+      ],
+      "provider": "azure",
+      "opacity": 0.14,
+      "z": 0
+    },
+    {
+      "id": "vendor",
+      "label": "Stripe",
+      "shape": "hexagon",
+      "date": "2026-09-30",
+      "x": 660,
+      "y": 340,
+      "w": 280,
+      "h": 190,
+      "providers": [
+        "saas"
+      ],
+      "provider": "saas",
+      "opacity": 0.14,
+      "z": 1
+    }
+  ],
+  "meta": {
+    "title": "Multi-cloud deployment",
+    "versionTag": "v2.1"
+  }
+}

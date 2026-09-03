@@ -111,7 +111,10 @@ function rootLevelProjection(template: DiagramTemplate): DiagramTemplate {
     edges: template.edges.flatMap((e) => {
       const source = visibleAnchor(e.source, byId, hidden);
       const target = visibleAnchor(e.target, byId, hidden);
-      if (source === target) return []; // internal wiring of one card
+      // Both ends re-anchored onto one card: internal wiring, not shown. A
+      // loop the document states is a retry arrow and survives the projection
+      // — the same test toReactFlow and the image emitter apply.
+      if (source === target && (source !== e.source || target !== e.target)) return [];
       if (source === e.source && target === e.target) return [e];
       const key = `${source}→${target}`;
       if (seen.has(key)) return [];
@@ -123,10 +126,49 @@ function rootLevelProjection(template: DiagramTemplate): DiagramTemplate {
   };
 }
 
+/**
+ * Grammar-safe, collision-free aliases for a list of document ids, in order.
+ *
+ * Both text formats need identifiers made of `[A-Za-z0-9_]`, and the obvious
+ * `id.replace(/[^A-Za-z0-9_]/g, "_")` corrupts rather than degrades: `api-v1`
+ * and `api_v1` sanitise to one alias and MERGE into a single node, and a node
+ * whose id is `end` or `subgraph` — a natural id for a terminator — is a
+ * Mermaid keyword that breaks the parse outright. Only the ids that would
+ * actually collide or read as keywords are renamed, so the aliases every
+ * existing document has always exported with are unchanged.
+ */
+function uniqueAliases(ids: readonly string[], reserved?: ReadonlySet<string>): string[] {
+  const taken = new Set<string>();
+  return ids.map((id) => {
+    const sanitised = id.replace(/[^A-Za-z0-9_]/g, "_");
+    // An identifier may not open with a digit, and an empty id is not one.
+    const base =
+      /^[A-Za-z_]/.test(sanitised) && !reserved?.has(sanitised.toLowerCase())
+        ? sanitised
+        : `n_${sanitised}`;
+    let alias = base;
+    for (let n = 2; taken.has(alias); n++) alias = `${base}_${n}`;
+    taken.add(alias);
+    return alias;
+  });
+}
+
+/** Fold a label onto one line — both formats emit line-oriented statements. */
+const oneLine = (text: string) => String(text).replace(/\s+/g, " ").trim();
+
 export function renderTemplateToC4Puml(rawTemplate: DiagramTemplate): string {
   const template = rootLevelProjection(rawTemplate);
-  const safe = (id: string) => id.replace(/[^A-Za-z0-9_]/g, "_");
-  const q = (text: string) => text.replace(/"/g, "'");
+  // Zones and nodes become PlantUML aliases in ONE namespace, so they are
+  // named together: a zone `db` and a node `db` would otherwise declare the
+  // same alias twice and the second declaration would be rejected.
+  const zoneIds = (template.zones ?? []).map((z) => z.id);
+  const nodeIds = template.nodes.map((n) => n.id);
+  const aliases = uniqueAliases([...nodeIds, ...zoneIds]);
+  const nodeAlias = new Map(nodeIds.map((id, i) => [id, aliases[i]]));
+  const zoneAlias = new Map(zoneIds.map((id, i) => [id, aliases[nodeIds.length + i]]));
+  const safe = (id: string) => nodeAlias.get(id) ?? id.replace(/[^A-Za-z0-9_]/g, "_");
+  const safeZone = (id: string) => zoneAlias.get(id) ?? id.replace(/[^A-Za-z0-9_]/g, "_");
+  const q = (text: string) => oneLine(text).replace(/"/g, "'");
   const visible = visibleElements(template);
   // C4 is a strict semantic model with no dangling-arrow concept: a point
   // node (and any arrow that ends on one) is sketch scaffolding, not
@@ -140,7 +182,14 @@ export function renderTemplateToC4Puml(rawTemplate: DiagramTemplate): string {
   const zoneById = new Map((template.zones ?? []).map((z) => [z.id, z]));
 
   const lines: string[] = ["@startuml"];
-  lines.push("!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml");
+  // `Deployment_Node` is defined in C4_Deployment.puml, not C4_Container.puml
+  // — a zoned document rendered with only the container library and PlantUML
+  // reported an undefined macro. The deployment library includes the container
+  // one itself, so exactly one !include is right in both cases.
+  const stdlib = zoneIds.length ? "C4_Deployment" : "C4_Container";
+  lines.push(
+    `!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/${stdlib}.puml`,
+  );
   lines.push("");
   if (template.meta?.title) lines.push(`title ${q(String(template.meta.title))}`);
   lines.push("");
@@ -190,7 +239,7 @@ export function renderTemplateToC4Puml(rawTemplate: DiagramTemplate): string {
   for (const [zoneId, members] of byZone) {
     if (zoneId === null) continue;
     const zone = zoneById.get(zoneId)!;
-    lines.push(`Deployment_Node(${safe(zone.id)}, "${q(zone.label)}", "${q(zone.provider)}") {`);
+    lines.push(`Deployment_Node(${safeZone(zone.id)}, "${q(zone.label)}", "${q(zone.provider)}") {`);
     for (const n of members) {
       if (n.kind === "group") {
         lines.push(`  Container_Boundary(${safe(n.id)}, "${q(n.label)}") {`);
@@ -229,6 +278,25 @@ export function renderTemplateToC4Puml(rawTemplate: DiagramTemplate): string {
 // ─── Mermaid ─────────────────────────────────────────────────────────────────
 
 const ARROW: Record<string, string> = { solid: "-->", dashed: "-.->", dotted: "-.->" };
+
+/**
+ * Mermaid keywords that cannot stand as a node id. `end` is the one that
+ * actually bites — a terminator node called "end" is the obvious thing to
+ * write, and it closes whatever subgraph is open instead of declaring a node.
+ */
+const MERMAID_KEYWORDS: ReadonlySet<string> = new Set([
+  "end",
+  "graph",
+  "flowchart",
+  "subgraph",
+  "class",
+  "classdef",
+  "click",
+  "style",
+  "linkstyle",
+  "direction",
+  "default",
+]);
 
 /**
  * Mermaid's glyph for each cardinality, per end — read through the SAME parser
@@ -285,7 +353,7 @@ function renderTemplateToMermaidEr(template: DiagramTemplate, safe: (id: string)
     // columns are the truest thing to say when the edge carries no words.
     const label =
       e.label || (e.startField && e.endField ? `${e.startField} → ${e.endField}` : "relates");
-    lines.push(`  ${safe(e.source)} ${rel} ${safe(e.target)} : "${label.replace(/"/g, "'")}"`);
+    lines.push(`  ${safe(e.source)} ${rel} ${safe(e.target)} : "${oneLine(label).replace(/"/g, "'")}"`);
   }
   return lines.join("\n");
 }
@@ -293,7 +361,10 @@ function renderTemplateToMermaidEr(template: DiagramTemplate, safe: (id: string)
 /** Text export — pastes straight into a Markdown ```mermaid fence. */
 export function renderTemplateToMermaid(rawTemplate: DiagramTemplate): string {
   const template = rootLevelProjection(rawTemplate);
-  const safe = (id: string) => id.replace(/[^A-Za-z0-9_]/g, "_");
+  const ids = template.nodes.map((n) => n.id);
+  const aliases = uniqueAliases(ids, MERMAID_KEYWORDS);
+  const alias = new Map(ids.map((id, i) => [id, aliases[i]]));
+  const safe = (id: string) => alias.get(id) ?? id.replace(/[^A-Za-z0-9_]/g, "_");
   const visible = visibleElements(template);
 
   // A document whose every visible box is a record exports as what it is.
@@ -316,7 +387,9 @@ export function renderTemplateToMermaid(rawTemplate: DiagramTemplate): string {
   // overlap. Record the active infra selection as a comment header instead,
   // and reserve subgraphs for the (strictly nested) groups.
   for (const zone of template.zones ?? []) {
-    lines.push(`%% zone: ${zone.label} on ${zone.provider}`);
+    // A comment ends at the newline, so a multi-line zone label would leave
+    // its tail standing as a statement Mermaid cannot parse.
+    lines.push(`%% zone: ${oneLine(zone.label)} on ${oneLine(zone.provider)}`);
   }
   lines.push("flowchart LR");
 
@@ -342,7 +415,7 @@ export function renderTemplateToMermaid(rawTemplate: DiagramTemplate): string {
       .filter(Boolean)
       .join(" · ");
     const label = sub ? `${n.label}<br/><small>${sub}</small>` : n.label;
-    const text = `"${label.replace(/"/g, "'")}"`;
+    const text = `"${oneLine(label).replace(/"/g, "'")}"`;
     // Cloud pack kinds export by their silhouette (aws-dynamodb → cylinder).
     const cloudShape = CLOUD_NODE_KINDS[n.kind as string]?.shape;
     if (n.kind === "database" || cloudShape === "cylinder") lines.push(`${indent}${safe(n.id)}[(${text})]`);
@@ -358,7 +431,7 @@ export function renderTemplateToMermaid(rawTemplate: DiagramTemplate): string {
     for (const n of children.get(parentId) ?? []) {
       if (n.kind === "text") continue;
       if (n.kind === "group") {
-        lines.push(`${indent}subgraph ${safe(n.id)}["${n.label.replace(/"/g, "'")}"]`);
+        lines.push(`${indent}subgraph ${safe(n.id)}["${oneLine(n.label).replace(/"/g, "'")}"]`);
         emitLevel(n.id, `${indent}  `);
         lines.push(`${indent}end`);
       } else {
@@ -371,7 +444,16 @@ export function renderTemplateToMermaid(rawTemplate: DiagramTemplate): string {
   for (const e of template.edges) {
     if (!visible.edges.has(e.id)) continue;
     const arrow = ARROW[e.style] ?? "-->";
-    lines.push(`  ${safe(e.source)} ${arrow}${e.label ? `|${e.label.replace(/\|/g, "/")}|` : ""} ${safe(e.target)}`);
+    // QUOTED, on one line. Bare edge text only survives if it happens to
+    // contain nothing Mermaid punctuates with, so a label as ordinary as
+    // `read (cached)` used to break the whole file.
+    // A pipe closes the `|…|` delimiter even inside the quotes, so it has to
+    // go whatever else is escaped — the quoting is what saves brackets and
+    // parentheses, not this.
+    const label = e.label
+      ? `|"${oneLine(e.label).replace(/"/g, "'").replace(/\|/g, "/")}"|`
+      : "";
+    lines.push(`  ${safe(e.source)} ${arrow}${label} ${safe(e.target)}`);
   }
   return lines.join("\n");
 }
@@ -472,11 +554,15 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
     label: "PDF document",
     hint: "Single page, sized to fit",
     async run({ template, registry, filename, palette }: ExportContext) {
-      const { canvas } = renderTemplateToCanvas(template, registry, 2, palette);
+      // The PAGE is sized in CSS pixels, not backing-store pixels: the canvas
+      // is rendered at 2x for sharpness, and handing those dimensions to the
+      // PDF writer prints the diagram at twice its physical size (a 1036px
+      // document came out as a 21-inch page).
+      const { canvas, width, height } = renderTemplateToCanvas(template, registry, 2, palette);
       const jpegBlob = await canvasToBlob(canvas, "image/jpeg", 0.92);
       const jpeg = await blobToUint8(jpegBlob);
       return {
-        blob: buildSinglePageJpegPdf(jpeg, canvas.width, canvas.height),
+        blob: buildSinglePageJpegPdf(jpeg, width, height),
         filename: `${filename}.pdf`,
       };
     },
@@ -552,9 +638,17 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
     // slice would propagate the same silent loss one hop downstream.
     fullDocument: true,
     run({ template, registry, filename }: ExportContext) {
+      // Everything, in its expanded form. The defaults drop every node the
+      // active provider hides, fold each collapsed group's contents away, and
+      // replace edges into them with synthetic `collapsed:` stand-ins —
+      // exactly the silent loss the flag above exists to prevent, one hop
+      // downstream. A consumer rebuilding state from this file has to receive
+      // the whole document, collapse flags and all, and unfold it itself.
       const rf = toReactFlow(template, {
         containerKinds: registry.containerKinds,
         annotationKinds: registry.annotationKinds,
+        applyVisibility: false,
+        applyCollapse: false,
       });
       return { blob: json(rf), filename: `${filename}.reactflow.json` };
     },

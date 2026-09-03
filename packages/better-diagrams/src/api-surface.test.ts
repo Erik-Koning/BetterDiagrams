@@ -51,6 +51,9 @@ const CONTRACT_EXPORTS = [
   "buildSystemPrompt",
   "DIAGRAM_SYSTEM_PROMPT",
   "parseLlmTemplate",
+  "parseLlmTemplateReport",
+  "safeUrl",
+  "FILE_LINK_PREFIX",
   "toReactFlow",
   "fromReactFlow",
   // data-model rows
@@ -116,8 +119,13 @@ const CONTRACT_EXPORTS = [
   // lint
   "BUILTIN_LINT_RULES",
   "lintTemplate",
+  "LINT_IGNORE_TAG",
+  "lintIgnored",
   // diff
   "POSITIONAL_FIELDS",
+  "VIEW_FIELDS",
+  "DEFAULT_DIFF_IGNORE",
+  "diffSequences",
   "PRE_ACTIVE_STATUSES",
   "diffTemplates",
   // sequence
@@ -131,9 +139,13 @@ const CONTRACT_EXPORTS = [
   "EMPTY_SEQUENCE",
   "EXAMPLE_SEQUENCE",
   "validateSequence",
+  "removeMessages",
+  "moveMessage",
+  "moveParticipant",
   "sequenceFromTemplate",
   "buildSequencePrompt",
   "parseLlmSequence",
+  "parseLlmSequenceReport",
   "buildSequenceRefineMessage",
   "toSequenceFlow",
   "fromSequenceFlow",

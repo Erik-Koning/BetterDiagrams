@@ -39,6 +39,26 @@
   --as-edge-amber: #f59e0b;
   --as-edge-rose: #fb7185;
   --as-edge-violet: #a78bfa;
+  /* How much of a node kind's accent survives when the accent is used as TEXT
+     (the kind eyebrow, a key badge, the icon). The kind accents are chosen for
+     the dark canvas and land at 2.2–2.5:1 on a light card, so anything a
+     person READS is pulled halfway to the body ink — which darkens it on a
+     light theme and lightens it on a dark one, from one number. A theme that
+     supplies its own per-kind accents (Theme.nodeAccents) can raise this
+     toward 100% to get the raw hue back. */
+  --as-node-ink-mix: 50%;
+  /* Drop shadows are a colour, not just a geometry: 45% black is right over
+     the dark canvas and reads as soot on a white one. Themes override the
+     ink; each rule keeps its own offsets and blur. */
+  --as-shadow-ink: rgb(0 0 0 / 45%);
+  /* Bottom-left is React Flow's: the zoom controls are a 26px column at a
+     15px margin. Our own bottom-left furniture starts clear of them instead
+     of painting over them. */
+  --as-canvas-gutter: 56px;
+  /* Native UI (the date picker's glyph, select popups, scrollbars) follows
+     this, not the tokens above — without it the browser paints its LIGHT
+     widgets over the dark editor. LIGHT_THEME sets it to `light`. */
+  color-scheme: var(--as-color-scheme, dark);
   --as-radius: 8px;
   /* One height for every toolbar/inspector control. Glyph metrics differ
      between fonts (↺ and ⌐ fall back to different faces than Latin text), so
@@ -59,10 +79,44 @@
   background: var(--as-bg);
   color: var(--as-text);
   font-family: var(--as-font);
-  font-size: 14px;
+  /* rem, not px: every type size in this file is now relative to the
+     browser's root font size, so a reader who sets 20px text gets a bigger
+     editor instead of a pixel-identical one — with px, "larger text" did
+     nothing at all here. 0.875rem is the 14px this shipped with, and the
+     scale bottoms out at 0.625rem: the eyebrows, key badges and lint marks
+     that were set at 8px and 9px are now 10px-equivalent, which is the
+     smallest size worth calling text. */
+  font-size: 0.875rem;
   line-height: 1.4;
   box-sizing: border-box;
 }
+
+/*
+ * ── Stacking order ──────────────────────────────────────────────────────────
+ *
+ * One ledger for the whole editor. Everything below shares the page's root
+ * stacking context — `.as-root` and `.as-canvas` are positioned but have no
+ * z-index, so nothing here is trapped inside a parent's band:
+ *
+ *    20  status strip, the empty-focus card
+ *    25  the dismissible error strip (above the strip it sits on)
+ *    40  the AI panel
+ *    41  the timeline bar and the drill breadcrumb bar
+ *    45  the inspector
+ *    50  the drop-a-file overlay
+ *    60  toolbar dropdowns (.as-menu, .as-kindmenu)
+ *    90  the right-click menu
+ *   100  modals
+ *
+ * `.as-toolbar` deliberately has NO z-index. It is a flex item, and a
+ * z-index on a flex item creates a stacking context even without `position`:
+ * it used to sit at 5, which painted every dropdown inside it at 5 too — under
+ * the timeline (41), the inspector (45) and React Flow's own panels, so the
+ * Insert menu opened *beneath* the scrubber and clicks landed on the bar. The
+ * toolbar has nothing to paint above: it is a row above the canvas, not over
+ * it. Only what escapes it (the menus, the modals) needs a layer, and those
+ * carry their own.
+ */
 
 .as-root *,
 .as-root *::before,
@@ -72,6 +126,7 @@
 
 /* ── Toolbar ─────────────────────────────────────────────────────────────── */
 
+/* No z-index here on purpose — see the stacking ledger above. */
 .as-toolbar {
   display: flex;
   align-items: center;
@@ -80,14 +135,33 @@
   padding: 8px 12px;
   border-bottom: 1px solid var(--as-border);
   background: var(--as-surface);
-  z-index: 5;
+  flex: 0 0 auto;
+}
+
+/* Narrow editors: the bar wraps to more rows rather than squeezing its
+   contents. A flex line is only allowed to shrink its items when a single
+   item is wider than the bar — which is exactly what a `.as-toolbar__group`
+   was, so at 420px the Compare button rendered as a clipped "Co". Groups now
+   wrap internally and nothing on the bar shrinks, so a label is always whole
+   or on the next line; nothing is ever silently cut. */
+.as-toolbar > * {
   flex: 0 0 auto;
 }
 
 .as-toolbar__group {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
+  /* A flex item sized `auto` is as wide as its content wants, so the group's
+     own `flex-wrap` never engaged — it simply grew past the bar and the last
+     few buttons were cut off by the editor's `overflow: hidden`. Capping it at
+     the bar's width is what lets it wrap instead of overflow. */
+  max-width: 100%;
+}
+
+.as-toolbar__group > * {
+  flex: 0 0 auto;
 }
 
 .as-toolbar__spacer {
@@ -100,7 +174,7 @@
   gap: 8px;
   margin-right: 4px;
   font-family: var(--as-mono);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--as-text);
@@ -130,7 +204,7 @@
   background: var(--as-surface-2);
   color: var(--as-text-dim);
   font: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
@@ -138,22 +212,20 @@
   transition: background 120ms, color 120ms, border-color 120ms;
 }
 
+/* Hover moves the surface toward the TEXT colour, never toward white: mixing
+   with #fff lightened a light theme's already-light button by a hair
+   (#f1f5f9 → #f5f8fb, 1.01:1 — invisible), and the two percentages summing to
+   78% also scaled the result's alpha to 0.78, letting the canvas show
+   through. Toward `--as-text` the step darkens on a light theme and lightens
+   on a dark one, from one declaration. */
 .as-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--as-surface-2) 70%, #fff 8%);
+  background: color-mix(in srgb, var(--as-surface-2) 86%, var(--as-text));
   color: var(--as-text);
 }
 
 .as-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-.as-btn:focus-visible,
-.as-input:focus-visible,
-.as-select:focus-visible,
-.as-textarea:focus-visible {
-  outline: 2px solid var(--as-accent);
-  outline-offset: 1px;
 }
 
 .as-btn--on {
@@ -169,9 +241,19 @@
   font-weight: 600;
 }
 
+/* Toward the text colour again, not #fff: lightening the accent under the
+   cursor pushed a light theme's white button label from 5.9:1 to under 4.5,
+   so the hover state was the least readable state. */
 .as-btn--primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--as-accent) 85%, #fff);
+  background: color-mix(in srgb, var(--as-accent) 85%, var(--as-text));
   color: var(--as-accent-ink);
+}
+
+/* Unsaved changes. The label already says "Save •", so this is emphasis, not
+   alarm: a ring in the accent's own colour, the way a focused field is
+   marked, rather than a second colour competing with the button's fill. */
+.as-btn--dirty {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--as-accent) 28%, transparent);
 }
 
 .as-btn--danger {
@@ -189,7 +271,7 @@
   min-width: 44px;
   text-align: center;
   font-family: var(--as-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--as-text-dim);
 }
 
@@ -205,12 +287,21 @@
   top: calc(100% + 6px);
   z-index: 60;
   width: 240px;
-  max-height: 60vh;
+  /* A bare `60vh` measured the WINDOW, so the panel-sized embed the README
+     promises — 300px tall inside a 1200px page — got a 720px menu that its
+     own box then clipped, and the last rows were unreachable. The px cap is
+     what makes it fit an embed; the vh term keeps it sane in a short window.
+     A host that embeds shorter than ~330px sets `--as-menu-max-h` to its own
+     height: CSS inside the toolbar cannot measure the editor box on its own
+     (a container query would need `container-type` on `.as-root`, which would
+     also make it the containing block for the `position: fixed` right-click
+     menu and modals, and those are placed in viewport coordinates). */
+  max-height: min(60vh, var(--as-menu-max-h, 280px));
   overflow-y: auto;
   border: 1px solid var(--as-border);
   border-radius: var(--as-radius);
   background: var(--as-surface);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 45%);
+  box-shadow: 0 12px 32px var(--as-shadow-ink);
 }
 
 .as-menu__item {
@@ -240,13 +331,13 @@
 }
 
 .as-menu__label {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
 }
 
 .as-menu__hint {
   margin-top: 1px;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--as-text-dim);
 }
 
@@ -257,7 +348,7 @@
   gap: 8px;
   padding: 7px 12px;
   border-bottom: 1px solid var(--as-border);
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--as-text);
   cursor: pointer;
   user-select: none;
@@ -285,7 +376,7 @@
   padding: 7px 12px 3px;
   border-top: 1px solid var(--as-border);
   font-family: var(--as-mono);
-  font-size: 9px;
+  font-size: 0.625rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--as-text-dim);
@@ -295,17 +386,101 @@
   border-top: 0;
 }
 
+/* ── Right-click menu ────────────────────────────────────────────────────── */
+
+/*
+ * The same surface as a toolbar dropdown, but placed in VIEWPORT coordinates
+ * (ArchitectureStudio passes the event's clientX/clientY as inline left/top),
+ * so it is `fixed` and carries its own layer — above every dropdown, below
+ * the modals. See the stacking ledger at the top of the file.
+ *
+ * Keeping it inside the window is the positioning code's job, not this
+ * file's: CSS cannot read the inline offsets back, so it cannot flip the
+ * menu about them. What it can do is stay small — a capped width and a
+ * scrolling height mean a menu opened near an edge overhangs by a row rather
+ * than by half a screen.
+ */
+.as-context {
+  position: fixed;
+  z-index: 90;
+  min-width: 190px;
+  max-width: 260px;
+  max-height: min(60vh, 320px);
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius);
+  background: var(--as-surface);
+  box-shadow: 0 12px 32px var(--as-shadow-ink);
+}
+
+.as-context__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  /* 24px of target even for the shortest label (WCAG 2.2 2.5.8). */
+  min-height: 24px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--as-text);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.as-context__item:hover:not(:disabled) {
+  background: var(--as-surface-2);
+}
+
+.as-context__item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* The shortcut, not the action: dim, monospaced so ⌘C and ⇧⌘L line up. */
+.as-context__hint {
+  flex: none;
+  font-family: var(--as-mono);
+  font-size: 0.625rem;
+  color: var(--as-text-dim);
+}
+
+.as-context__item--danger {
+  color: var(--as-danger);
+}
+
+.as-context__item--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--as-danger) 15%, transparent);
+}
+
+/* A hairline, not a rule: `<hr>` arrives with a UA border and margins that
+   would collapse the menu's padding into a gap. */
+.as-context__rule {
+  height: 1px;
+  margin: 4px 0;
+  border: 0;
+  background: var(--as-border);
+}
+
 /* Toolbar search. */
-.as-search {
+/* Doubled class on purpose: the shared `.as-input { width: 100% }` below is
+   later in the file and would otherwise win, stretching the field across the
+   whole toolbar and pushing everything after it onto another row. */
+.as-input.as-search {
   width: 150px;
   padding-inline: 9px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .as-search__count {
   min-width: 34px;
   font-family: var(--as-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--as-text-dim);
 }
 
@@ -334,7 +509,7 @@
 
 .as-panel__title {
   margin: 0;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 
@@ -348,7 +523,7 @@
 
 .as-panel__label {
   margin: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -358,7 +533,7 @@
 .as-panel__foot {
   margin-top: auto;
   padding-top: 12px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--as-text-dim);
 }
 
@@ -374,7 +549,7 @@
   background: var(--as-surface-2);
   color: var(--as-text);
   font: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 /* Single-line controls share the button height exactly; the textarea is
@@ -390,22 +565,63 @@
   color: color-mix(in srgb, var(--as-text-dim) 70%, transparent);
 }
 
+/* `:not(:focus-visible)` is load-bearing. A focus-visible element ALSO
+   matches `:focus`, so a bare `.as-input:focus { outline: none }` later in the
+   file cancelled the keyboard ring below it at equal specificity — the search
+   box, every inspector field, the AI textarea and the file rename box all
+   computed to `outline: none` while focused from the keyboard. The border
+   tint is the pointer-focus affordance; the ring is the keyboard one. */
+.as-input:focus:not(:focus-visible),
+.as-select:focus:not(:focus-visible),
+.as-textarea:focus:not(:focus-visible) {
+  border-color: var(--as-accent);
+  outline: none;
+}
+
 .as-input:focus,
 .as-select:focus,
 .as-textarea:focus {
   border-color: var(--as-accent);
-  outline: none;
 }
 
 .as-textarea {
   min-height: 120px;
   resize: vertical;
   font-family: var(--as-mono);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .as-select {
   cursor: pointer;
+}
+
+/* ── Keyboard focus ──────────────────────────────────────────────────────── */
+
+/*
+ * One ring for everything focusable in the editor, not just the four control
+ * classes that used to name it: a swatch, a chip, a menu row, a zone segment
+ * and a breadcrumb are all reachable by Tab and none of them showed anything.
+ * `:focus-visible` means it never fires on a mouse click.
+ *
+ * The ring is drawn in the accent, which every theme is obliged to keep
+ * legible against its own surfaces, and offset OUTSIDE the element so it
+ * still reads on a control that is itself accent-coloured (a primary button).
+ */
+.as-root :focus-visible {
+  outline: 2px solid var(--as-accent);
+  outline-offset: 1px;
+}
+
+/* Inside a box that clips (the provider toggle, a collapsed group chip, a
+   modal's file list) an offset ring is sliced off, so those draw it inward
+   instead. `.as-zone__toggle` no longer clips — see its own rule — but a
+   segment's ring still belongs inside the toggle's outline. */
+.as-root .as-zone__toggle :focus-visible,
+.as-root .as-group-chip :focus-visible,
+.as-root .as-modal__list :focus-visible,
+.as-root .as-fields__list :focus-visible,
+.as-root .as-scope__rows :focus-visible {
+  outline-offset: -2px;
 }
 
 .as-error {
@@ -414,7 +630,7 @@
   border-radius: 6px;
   background: color-mix(in srgb, var(--as-danger) 12%, transparent);
   color: var(--as-danger);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 /* ── Canvas ──────────────────────────────────────────────────────────────── */
@@ -437,7 +653,7 @@
   background: color-mix(in srgb, var(--as-accent) 10%, transparent);
   color: var(--as-accent);
   font-family: var(--as-mono);
-  font-size: 13px;
+  font-size: 0.8125rem;
   pointer-events: none;
 }
 
@@ -447,6 +663,18 @@
    The kind colour survives as a whisper — the outline blend, the icon chip,
    and the eyebrow — never as a bar or a slab of fill. */
 .as-node {
+  /* The kind accent, pulled toward the body ink until it is safe to READ.
+     Declared here (and on the group frame below) because this is where
+     `--as-node-accent` actually exists — a derived custom property resolves
+     against the element it is declared on, so the same line on `.as-root`
+     would resolve against nothing. Everything that draws the accent as text
+     or as a glyph uses this; outlines, fills and washes keep the raw hue. */
+  --as-node-ink: color-mix(
+    in srgb,
+    var(--as-node-accent, var(--as-text-dim)) var(--as-node-ink-mix),
+    var(--as-text)
+  );
+
   display: flex;
   align-items: center;
   gap: 10px;
@@ -523,14 +751,21 @@
 }
 
 /* Doc link + lock affordances. */
+/* 24px of TARGET around a 12px glyph (WCAG 2.2 2.5.8): the arrow keeps its
+   size, the pressable box grows around it. Absolutely positioned, so nothing
+   in the card moves to make room. */
 .as-node__link {
   position: absolute;
-  top: 4px;
-  right: 6px;
-  padding: 1px 4px;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
   border-radius: 4px;
   color: var(--as-text-dim);
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1.2;
   text-decoration: none;
 }
@@ -540,25 +775,26 @@
   color: var(--as-accent);
 }
 
+/* `pointer-events: none` sat on the element carrying `title="Locked"`, so the
+   one explanation for why a node will not move could never be shown. The
+   badge is not a control — it takes the pointer only so the browser can read
+   its title, and the arrow cursor says nothing here is clickable. Dragging is
+   unaffected: the pointerdown still reaches the node underneath. */
 .as-node__lock {
   position: absolute;
   bottom: 3px;
   right: 6px;
-  font-size: 9px;
+  font-size: 0.625rem;
   opacity: 0.75;
-  pointer-events: none;
+  cursor: default;
 }
 
-/* Tag filter: non-matching nodes dim but stay present and selectable. */
+/* Tag filter: non-matching nodes dim but stay present and selectable. The
+   level is a variable the shared "Dimmed elements" section below reads — see
+   it for why this is no longer `opacity` on the card. */
 .as-node--dimmed {
-  opacity: 0.28;
-  filter: saturate(0.4);
+  --as-dim: 0.3;
   transition: opacity 150ms;
-}
-
-.as-node--dimmed:hover,
-.as-node--dimmed.as-node--selected {
-  opacity: 0.8;
 }
 
 /* Small rounded chip behind the icon — the main carrier of the kind colour. */
@@ -572,6 +808,13 @@
   background: color-mix(in srgb, var(--as-node-accent) 13%, transparent);
 }
 
+/* SvgIcon paints with a `stroke` presentation attribute, which any author
+   rule outranks — so the glyph follows the same readable ink as the eyebrow
+   instead of the raw accent, which reached 2.2:1 on a light card. */
+.as-node__iconbox svg {
+  stroke: var(--as-node-ink);
+}
+
 .as-node__body {
   flex: 1 1 auto;
   min-width: 0;
@@ -579,19 +822,43 @@
 
 .as-node__kind {
   font-family: var(--as-mono);
-  font-size: 9px;
+  font-size: 0.625rem;
   font-weight: 500;
   line-height: 1.2;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: color-mix(in srgb, var(--as-node-accent) 75%, var(--as-text-dim));
+  color: var(--as-node-ink);
+}
+
+/*
+ * F2 / double-click rename. The input is rendered WITH the class of the text
+ * it replaces (`.as-node__title`, `.as-group__name`), so it has to look like
+ * that text, not like a form field: no border, no padding, no UA font, and a
+ * full-width block box so the card's layout does not shift by a pixel when it
+ * appears. `font: inherit` is what strips the UA's Arial 13.33px — and this
+ * rule sits ABOVE `.as-node__title` deliberately, so the title's own size and
+ * weight still win for the node case, while a group name (which sets none)
+ * inherits its label's monospace.
+ */
+.as-inline-name {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--as-accent) 8%, transparent);
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
 }
 
 .as-node__title {
   overflow: hidden;
   /* --as-node-font is set only when the node overrides fontSize, so the
      default stays the literal 13px the exporter also hard-codes. */
-  font-size: var(--as-node-font, 13px);
+  font-size: var(--as-node-font, 0.8125rem);
   font-weight: 600;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -602,7 +869,7 @@
 .as-node__desc {
   display: -webkit-box;
   overflow: hidden;
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1.25;
   color: var(--as-text-dim);
   -webkit-box-orient: vertical;
@@ -681,7 +948,7 @@
   align-items: center;
   height: 19px;
   overflow: hidden;
-  font-size: 10.5px;
+  font-size: 0.6562rem;
   line-height: 19px;
   white-space: nowrap;
 }
@@ -690,12 +957,12 @@
   flex: 0 0 auto;
   min-width: 20px;
   font-family: var(--as-mono);
-  font-size: 8px;
+  font-size: 0.625rem;
   font-weight: 700;
   text-align: center;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--as-node-accent);
+  color: var(--as-node-ink);
   border: 1px solid color-mix(in srgb, var(--as-node-accent) 45%, transparent);
   border-radius: 3px;
   padding: 0 3px;
@@ -704,9 +971,12 @@
 
 /* A primary key is the row that identifies the record — it carries the tint;
    a foreign key only points elsewhere, so it stays an outline. */
+/* 14%, not 18%: the tint is the badge's own background, so every point of it
+   is contrast the PK/FK label pays for. At 18% the darkest kinds' badges came
+   in under AA on a light card. */
 .as-node__fieldkey--pk,
 .as-node__fieldkey--pfk {
-  background: color-mix(in srgb, var(--as-node-accent) 18%, transparent);
+  background: color-mix(in srgb, var(--as-node-accent) 14%, transparent);
 }
 
 .as-node__fieldname {
@@ -719,7 +989,7 @@
 }
 
 .as-node__fieldreq {
-  color: var(--as-node-accent);
+  color: var(--as-node-ink);
 }
 
 .as-node__fieldtype {
@@ -728,7 +998,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: var(--as-mono);
-  font-size: 9.5px;
+  font-size: 0.625rem;
   color: var(--as-text-faint, var(--as-text-dim));
 }
 
@@ -752,12 +1022,18 @@
   background: color-mix(in srgb, var(--as-surface) 70%, transparent);
   color: var(--as-text-dim);
   font-family: var(--as-mono);
-  font-size: 9px;
+  font-size: 0.625rem;
   font-weight: 500;
   line-height: 15px;
   letter-spacing: 0.04em;
   white-space: nowrap;
-  pointer-events: none;
+  /* The chip abbreviates ("Sep 30 '26") and its `title` carries the full
+     date — which `pointer-events: none` made unreachable, so the one place
+     the whole value existed could never be shown. It takes the pointer only
+     for that: it has no click handler, and `cursor` inherits, so over a
+     draggable node the chip still reads (and behaves) as part of the card —
+     the pointerdown bubbles straight through to it. */
+  pointer-events: auto;
 }
 
 /* A past date on an element that never became active: the plan says landed,
@@ -788,7 +1064,7 @@
    eyebrow would push the participant's name out of it. */
 .as-seq-head__kind .as-date {
   padding: 0 4px;
-  font-size: 8px;
+  font-size: 0.625rem;
   line-height: 11px;
 }
 
@@ -923,7 +1199,7 @@
   min-width: 0;
   overflow: hidden;
   font-family: var(--as-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -932,27 +1208,34 @@
 
 .as-zone__single {
   font-family: var(--as-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--as-text-dim);
 }
 
-/* Segmented multi-step provider toggle. */
+/* Segmented multi-step provider toggle. The corners are rounded on the end
+   segments rather than clipped by the toggle: `overflow: hidden` here also
+   sliced off a segment's keyboard focus ring. */
 .as-zone__toggle {
   display: inline-flex;
-  overflow: hidden;
   border: 1px solid var(--as-border);
   border-radius: 5px;
   background: var(--as-bg);
 }
 
 .as-zone__seg {
+  display: inline-flex;
+  align-items: center;
+  /* 24px of pressable height around a 10px label (WCAG 2.2 2.5.8) — the
+     zone's header chip grows by a few px, which is cheaper than a target a
+     fingertip misses. */
+  min-height: 24px;
   padding: 3px 8px;
   border: 0;
   border-right: 1px solid var(--as-border);
   background: none;
   color: var(--as-text-dim);
   font: inherit;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 600;
   line-height: 1.3;
   white-space: nowrap;
@@ -960,8 +1243,13 @@
   transition: background 120ms, color 120ms;
 }
 
+.as-zone__seg:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
 .as-zone__seg:last-child {
   border-right: 0;
+  border-radius: 0 4px 4px 0;
 }
 
 .as-zone__seg:hover:not(:disabled):not(.as-zone__seg--on) {
@@ -969,8 +1257,26 @@
   color: var(--as-text);
 }
 
+/*
+ * The active segment used to paint `--as-accent-ink` on the provider's raw
+ * brand colour, which ZoneNode sets INLINE: white on AWS orange is 2.14:1,
+ * on-prem grey 2.56, SaaS violet 2.72, and on the dark theme's dark ink Azure
+ * is 4.17 — at 10px/600, so none of it is "large text". CSS cannot read an
+ * inline background back out to derive an ink from it.
+ *
+ * So the brand colour stops being a slab behind the label and becomes a wash
+ * plus an underline. `--as-zone-color` is the same value (the zone's ink IS
+ * its active provider's colour, unless the zone overrides it, in which case
+ * matching the zone is right anyway) and it IS readable from CSS, so the
+ * label can sit on a 22% tint of it in the theme's own text colour — which is
+ * legible for every hue a host can register, brand colours included, instead
+ * of for the four that happened to be dark enough. `!important` is the only
+ * lever an author rule has over an inline style.
+ */
 .as-zone__seg--on {
-  color: var(--as-accent-ink);
+  background: color-mix(in srgb, var(--as-zone-color, var(--as-accent)) 22%, var(--as-surface)) !important;
+  box-shadow: inset 0 -2px 0 var(--as-zone-color, var(--as-accent));
+  color: var(--as-text);
 }
 
 .as-zone__seg:disabled {
@@ -984,7 +1290,7 @@
   background: var(--as-bg);
   color: var(--as-text);
   font: inherit;
-  font-size: 10px;
+  font-size: 0.625rem;
   cursor: pointer;
 }
 
@@ -1030,7 +1336,7 @@
 .as-legend__title {
   margin: 0 0 6px;
   font-family: var(--as-mono);
-  font-size: 9px;
+  font-size: 0.625rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -1042,7 +1348,7 @@
   align-items: center;
   gap: 7px;
   padding: 2px 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--as-text);
 }
 
@@ -1058,7 +1364,7 @@
 .as-legend__count {
   margin-left: auto;
   font-family: var(--as-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--as-text-dim);
 }
 
@@ -1066,22 +1372,15 @@
   margin-top: 6px;
   padding-top: 6px;
   border-top: 1px solid var(--as-border);
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--as-text-dim);
 }
 
 /* ── Ghosts: nodes the active provider hides, shown so they stay editable ── */
 
 .as-ghost {
-  opacity: 0.42;
+  --as-dim: 0.4;
   border-style: dashed;
-  filter: saturate(0.5);
-}
-
-.as-ghost:hover,
-.as-node--selected.as-ghost {
-  opacity: 0.85;
-  filter: none;
 }
 
 .as-ghost__badge {
@@ -1097,7 +1396,7 @@
   background: var(--as-surface);
   color: var(--as-text-dim);
   font-family: var(--as-mono);
-  font-size: 9px;
+  font-size: 0.625rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1179,13 +1478,15 @@
 }
 
 .as-node--status-deprecated {
-  opacity: 0.55;
+  --as-dim: 0.5;
 }
 
 .as-node--status-retired {
-  opacity: 0.4;
+  --as-dim: 0.38;
 }
 
+/* The strike-through is what tells retired from deprecated now that neither
+   is a puddle of transparency. */
 .as-node--status-retired .as-node__title {
   text-decoration: line-through;
 }
@@ -1216,9 +1517,6 @@
     var(--as-hazard-ink) border-box;
 }
 
-/* Every dulled stage must still READ: under the cursor it comes back to full
-   strength, so a faded label is one hover from legible. The outline styling
-   stays — hover clarifies, it doesn't disguise the stage. */
 .as-node--status-stubbed,
 .as-node--status-dark,
 .as-node--status-deprecated,
@@ -1229,11 +1527,76 @@
   transition: opacity 120ms, border-color 120ms, box-shadow 120ms;
 }
 
-.as-node--status-stubbed:hover,
-.as-node--status-dark:hover,
-.as-node--status-deprecated:hover,
-.as-node--status-retired:hover {
-  opacity: 1;
+/* ── Dimmed elements: fade the CARD, keep the WORDS ──────────────────────── */
+/*
+ * Five states dull an element: filtered out by a tag, hidden by the active
+ * provider, deprecated, retired, and dated after the timeline cursor. Each
+ * used to set `opacity` on the whole card — 0.22 for a future one — which
+ * faded the title and the lifecycle word with it. "deprecated" computed at
+ * 2.96:1 on the dark canvas and 1.88:1 on a light one: the stage the code
+ * comment says people most need to notice was the least readable thing on the
+ * card. Hovering restored it, which does nothing for a keyboard, a touch
+ * screen, or an exported PNG.
+ *
+ * A child cannot be more opaque than its parent, so the fade moves off the
+ * card and onto the parts that can afford it — the icon chip, the
+ * description, the field rows, the silhouette wash, the meta chips — while
+ * the frame recedes by mixing toward the border's own colour. The title steps
+ * down one tier of ink instead of fading, and the status word keeps its
+ * warning colour at full strength. Hover and selection still restore
+ * everything: `--as-dim` is one variable, and setting it to 1 undoes the lot.
+ */
+.as-node--dimmed,
+.as-ghost,
+.as-node--status-deprecated,
+.as-node--status-retired {
+  border-color: color-mix(in srgb, var(--as-border) 65%, transparent);
+}
+
+:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired, .as-future)
+  :is(
+    .as-node__iconbox,
+    .as-node__desc,
+    .as-node__fields,
+    .as-node__silhouette,
+    .as-node__team,
+    .as-node__drill,
+    .as-ghost__badge,
+    .as-date
+  ) {
+  opacity: var(--as-dim, 0.4);
+  transition: opacity 120ms;
+}
+
+/* One tier down, not one third as visible. `--as-text-dim` is the theme's own
+   secondary ink, so it clears AA in both themes by construction. */
+:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired, .as-future)
+  :is(.as-node__title, .as-group__name, .as-group-chip__label, .as-seq-head__label) {
+  color: var(--as-text-dim);
+}
+
+/* Under the cursor, or once selected, a dimmed element is fully back — the
+   same promise the old element-level opacity made, kept from one variable.
+   The frame comes back too, and to the RIGHT colour: the hover blend under
+   the cursor, the selection accent once it is picked. (Both are restated
+   here because the recede above is a single-class rule and would otherwise
+   outrank `.as-node--selected`, which is declared earlier in the file.) */
+:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired):hover {
+  --as-dim: 1;
+  border-color: color-mix(in srgb, var(--as-node-accent) 45%, var(--as-border));
+}
+
+:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired).as-node--selected,
+:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired).as-group--selected {
+  --as-dim: 1;
+  border-color: var(--as-accent);
+}
+
+:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired, .as-future):hover
+  :is(.as-node__title, .as-group__name, .as-group-chip__label, .as-seq-head__label),
+:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired).as-node--selected
+  :is(.as-node__title, .as-group__name, .as-group-chip__label, .as-seq-head__label) {
+  color: var(--as-text);
 }
 
 .as-node__status {
@@ -1271,11 +1634,13 @@
   background: color-mix(in srgb, var(--as-team-color) 14%, var(--as-surface));
   color: color-mix(in srgb, var(--as-team-color) 78%, var(--as-text));
   font-family: var(--as-mono);
-  font-size: 9px;
+  font-size: 0.625rem;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
-  pointer-events: none;
+  /* See .as-date — the pill is truncated to 70% of the card and its `title`
+     ("Owned by Payments") was the only full copy of the name. */
+  pointer-events: auto;
 }
 
 /* Inside a group label or collapsed chip the tag flows inline instead. */
@@ -1283,7 +1648,6 @@
   position: static;
   flex-shrink: 0;
   margin-left: 6px;
-  pointer-events: none;
 }
 
 /* ── Group / container nodes ─────────────────────────────────────────────── */
@@ -1293,6 +1657,13 @@
    `outline: "none"`) for a purely abstract grouping box. The fallbacks are the
    values this rule hard-coded before, so an untouched group is unchanged. */
 .as-group {
+  /* Same readable form of the kind accent the cards use — see `.as-node`. */
+  --as-node-ink: color-mix(
+    in srgb,
+    var(--as-node-accent, var(--as-text-dim)) var(--as-node-ink-mix),
+    var(--as-text)
+  );
+
   width: 100%;
   height: 100%;
   border: var(--as-group-border-width, 1px) var(--as-group-outline, dashed)
@@ -1308,6 +1679,30 @@
   border-width: 1px;
   border-style: solid;
   border-color: var(--as-accent);
+}
+
+/*
+ * The frame a dragged node is about to land in, said during the drag rather
+ * than in a toast after the drop. It brightens the group's OWN ink and adds a
+ * wash — not the accent and not a box-shadow, which is what selection looks
+ * like, and not an animation, which would be one more thing moving while
+ * something is already moving. The wash is a background IMAGE so it layers
+ * over whatever fill the group stores instead of replacing it.
+ */
+.as-node--droptarget .as-group,
+.as-node--droptarget .as-group-chip {
+  border-width: 2px;
+  border-style: solid;
+  border-color: var(--as-group-ink, var(--as-node-accent));
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--as-group-ink, var(--as-node-accent)) 14%, transparent),
+    color-mix(in srgb, var(--as-group-ink, var(--as-node-accent)) 14%, transparent)
+  );
+}
+
+.as-node--droptarget .as-group__label {
+  border-color: var(--as-group-ink, var(--as-node-accent));
+  color: var(--as-text);
 }
 
 /* A flex row rather than a line of text, so the truncation applies to the
@@ -1327,7 +1722,7 @@
   background: var(--as-surface-2);
   color: var(--as-text-dim);
   font-family: var(--as-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   white-space: nowrap;
 }
 
@@ -1340,14 +1735,24 @@
 }
 
 /* Collapse toggle in the group label, and the collapsed chip. */
+/* A 24px target around a 10px caret (WCAG 2.2 2.5.8). The negative block
+   margin hands the extra height back to the label chip, so the frame's corner
+   tab is exactly as tall as it was — the button is simply bigger than what it
+   draws. */
 .as-group__collapse {
-  padding: 0 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  margin-block: -4px;
   margin-right: 2px;
+  padding: 0;
   border: 0;
   background: none;
   color: var(--as-text-dim);
   font: inherit;
-  font-size: 10px;
+  font-size: 0.625rem;
   cursor: pointer;
 }
 
@@ -1379,7 +1784,7 @@
   min-width: 0;
   overflow: hidden;
   font-family: var(--as-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1439,7 +1844,10 @@
   resize: none;
 }
 
-.as-annotation__input:focus {
+/* Pointer focus only: typing in a note is its own affordance. A keyboard
+   focus still gets the editor's ring (see "Keyboard focus"), which is the
+   only sign a Tab landed here. */
+.as-annotation__input:focus:not(:focus-visible) {
   outline: none;
 }
 
@@ -1474,14 +1882,20 @@
    test can assert it. Nothing themable belongs here. */
 
 /* The label is a handle on its line: along it slides the text, away from it
-   bends the line. `move` says both directions are live. */
+   bends the line. `move` says both directions are live — and so does the
+   text itself, which comes up to full ink under the cursor. A drag gesture
+   nobody can see is a drag gesture nobody uses. */
 .as-edge__labelgroup {
   cursor: move;
 }
 
+.as-edge__labelgroup:hover .as-edge__label {
+  fill: var(--as-text);
+}
+
 .as-edge__label {
   font-family: var(--as-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   fill: var(--as-text-dim);
   paint-order: stroke;
   stroke: var(--as-bg);
@@ -1500,10 +1914,36 @@
   cursor: pointer;
 }
 
+/*
+ * The hit band is 16px wide and the line inside it is 1.8px, and nothing said
+ * so: people aimed at the visible stroke, missed it, and concluded the line
+ * was not clickable. Hovering anywhere in the band now thickens the line it
+ * belongs to — the hit path is the first child of the edge group, so a
+ * sibling combinator reaches the stroke and the crow's feet without either of
+ * them needing to be hoverable themselves (they are `pointer-events: none`,
+ * which is what keeps a 2px target from being the only way in).
+ *
+ * Thickness, not colour: the stroke's colour comes from an edge palette that
+ * a theme can replace with anything, so there is no brightening that is
+ * guaranteed to go the right way on both canvases. Nothing moves — a stroke
+ * grows about its own centre line.
+ */
+.as-edge__stroke {
+  transition: stroke-width 120ms;
+}
+
+.as-edge__hit:hover ~ .as-edge__stroke {
+  stroke-width: 3.2;
+}
+
+.as-edge__hit:hover ~ .as-edge__crow {
+  stroke-width: 2.4;
+}
+
 /* C4-style technology sub-label: smaller, dimmer, bracketed. */
 .as-edge__tech {
   font-family: var(--as-mono);
-  font-size: 9px;
+  font-size: 0.625rem;
   fill: color-mix(in srgb, var(--as-text-dim) 80%, transparent);
   paint-order: stroke;
   stroke: var(--as-bg);
@@ -1515,7 +1955,7 @@
    sub-label, so it stays readable where it crosses the line it belongs to. */
 .as-edge__date {
   font-family: var(--as-mono);
-  font-size: 9px;
+  font-size: 0.625rem;
   letter-spacing: 0.04em;
   fill: color-mix(in srgb, var(--as-text-dim) 70%, transparent);
   paint-order: stroke;
@@ -1529,7 +1969,7 @@
    part of a data model people check first. */
 .as-edge__endlabel {
   font-family: var(--as-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 600;
   fill: var(--as-text);
   paint-order: stroke;
@@ -1667,11 +2107,53 @@
   pointer-events: none;
 }
 
+/*
+ * The same idea for a dragged NODE: the edge that a snapped node lines up
+ * with, drawn as a dashed accent line. Rendered through React Flow's viewport
+ * portal, so it lives in flow coordinates — the inline `transform` places it
+ * and an inline width/height gives it its length.
+ *
+ * A 1px HTML box cannot show a dashed border along its long axis, so the
+ * dashes are a repeating gradient. They are deliberately coarser than
+ * `.as-edge__guide`'s 4/3: everything in the portal is scaled by the zoom, and
+ * a 4px dash at the 0.15 minimum is a third of a pixel. At 6/5 and 1.5px
+ * thick the line still reads as a dashed rule zoomed out, and does not turn
+ * into a ladder zoomed in.
+ */
+.as-align-guide {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.as-align-guide--x {
+  width: 1.5px;
+  /* Centred on the coordinate it names rather than starting at it. */
+  margin-left: -0.75px;
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--as-accent) 0 6px,
+    transparent 6px 11px
+  );
+}
+
+.as-align-guide--y {
+  height: 1.5px;
+  margin-top: -0.75px;
+  background: repeating-linear-gradient(
+    to right,
+    var(--as-accent) 0 6px,
+    transparent 6px 11px
+  );
+}
+
 /* The inline edge-label editor (double-click the line). Styled like the
    label it replaces, plus a caret-worthy field. */
 .as-edge__labeledit {
   font-family: var(--as-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--as-text);
   background: var(--as-surface);
   border: 1px solid var(--as-accent);
@@ -1679,6 +2161,8 @@
   padding: 2px 6px;
   width: 140px;
   text-align: center;
+  /* Not a focus rule — the field is only ever mounted focused, and the
+     accent border is its frame. The keyboard ring still lands on top of it. */
   outline: none;
 }
 
@@ -1690,7 +2174,7 @@
 
 .as-edge__seqnum {
   font-family: var(--as-mono);
-  font-size: 9px;
+  font-size: 0.625rem;
   font-weight: 700;
   fill: var(--as-accent-ink);
   user-select: none;
@@ -1719,8 +2203,32 @@
   border: 1px solid var(--as-border);
   border-radius: 12px;
   background: color-mix(in srgb, var(--as-surface) 97%, transparent);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 45%);
+  box-shadow: 0 12px 32px var(--as-shadow-ink);
   backdrop-filter: blur(8px);
+}
+
+/*
+ * The bar centres in the space that is actually free, not in the whole
+ * canvas. At 94% of anything under ~1000px it ran straight over React Flow's
+ * zoom controls on the left and its minimap on the right — the two things you
+ * reach for to get an inspector out of the way.
+ *
+ * The offsets exist only when those panels do, and they fade out as the
+ * canvas narrows (`100% - 560px` reaches zero at 560px wide) rather than
+ * squeezing the bar into a column: below that there is no arrangement where
+ * both fit, and the inspector is the one carrying the controls. The minimap
+ * also lifts clear of a one-row bar, which covers the widths in between.
+ */
+.as-canvas:has(.react-flow__controls) .as-inspector {
+  left: max(0px, min(var(--as-canvas-gutter), 100% - 420px));
+}
+
+.as-canvas:has(.react-flow__minimap) .as-inspector {
+  right: max(0px, min(224px, 100% - 560px));
+}
+
+.as-canvas:has(.as-inspector) .react-flow__minimap {
+  margin-bottom: 72px;
 }
 
 .as-inspector .as-input,
@@ -1815,7 +2323,7 @@
   display: inline-flex;
   gap: 5px;
   align-items: center;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--as-text-dim);
   cursor: pointer;
   user-select: none;
@@ -1824,7 +2332,28 @@
 .as-swatches {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
+}
+
+/* "3 nodes · 1 connection" — a readout, not a control, so it takes the
+   secondary ink and the inspector's caption size. */
+.as-inspector__count {
+  font-size: 0.6875rem;
+  color: var(--as-text-dim);
+  white-space: nowrap;
+}
+
+/* "Source → Target". One line: the pair is an orientation check, and a
+   wrapped one would push the reverse button onto its own row. The full text
+   is on the element's `title`. */
+.as-inspector__ends {
+  max-width: 240px;
+  overflow: hidden;
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--as-text);
 }
 
 /* A captioned cluster of controls, separated by a hairline from its
@@ -1866,20 +2395,25 @@
 .as-inspector__caption {
   margin-right: 2px;
   font-family: var(--as-mono);
-  font-size: 9px;
+  font-size: 0.625rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--as-text-dim);
 }
 
 .as-chip {
+  /* 24px tall (WCAG 2.2 2.5.8). It also lines the chip group up with the
+     30px control height once the group's own padding is counted. */
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   padding: 3px 7px;
   border: 1px solid var(--as-border);
   border-radius: 5px;
   background: none;
   color: var(--as-text-dim);
   font: inherit;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
@@ -1909,14 +2443,17 @@
   background: none;
   color: var(--as-text);
   font: inherit;
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 
 .as-chip__add:focus {
   border-color: var(--as-accent);
   border-style: solid;
-  outline: none;
   width: 90px;
+}
+
+.as-chip__add:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .as-chip__add::placeholder {
@@ -1931,7 +2468,7 @@
 
 .as-scenario__label {
   font-family: var(--as-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--as-text-dim);
@@ -1940,12 +2477,15 @@
 .as-scenario__select {
   width: auto;
   padding-inline: 8px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
+/* 24px, not 20: the custom-colour swatch is an <input type="color">, and a
+   replaced element has no pseudo-elements to hang an invisible hit area on,
+   so the only honest way to reach the 24px minimum is to be 24px. */
 .as-swatch {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 2px solid var(--as-border);
   border-radius: 50%;
@@ -2011,10 +2551,14 @@
 
 .as-focusbar__sep {
   color: var(--as-text-dim);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .as-focusbar__crumb {
+  display: inline-flex;
+  align-items: center;
+  /* 24px of target (WCAG 2.2 2.5.8); the bar grows by 3px to hold it. */
+  min-height: 24px;
   max-width: 200px;
   overflow: hidden;
   padding: 2px 6px;
@@ -2023,7 +2567,7 @@
   background: none;
   color: var(--as-text-dim);
   font: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
@@ -2047,7 +2591,7 @@
   border-radius: 999px;
   color: var(--as-accent);
   font-family: var(--as-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -2069,6 +2613,11 @@
    spoken for (↗ link, 🔒 lock, team pill), and a count reads as metadata
    anyway, like the "· planned" status beside it. */
 .as-node__drill {
+  /* The badge rides a text line inside a small card, so it cannot grow to
+     24px without moving the line. The pressable area does instead: a
+     transparent pseudo-element centred on the chip, which changes no layout
+     and no pixel. */
+  position: relative;
   flex: 0 0 auto;
   margin-left: 5px;
   padding: 0 5px;
@@ -2082,8 +2631,18 @@
   cursor: pointer;
 }
 
+.as-node__drill::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 24px);
+  height: max(100%, 24px);
+  transform: translate(-50%, -50%);
+}
+
 .as-node__drill:hover {
-  border-color: var(--as-node-accent, var(--as-accent));
+  border-color: var(--as-node-ink, var(--as-accent));
   color: var(--as-text);
 }
 
@@ -2107,7 +2666,7 @@
   border: 1px solid var(--as-border);
   border-radius: 10px;
   background: color-mix(in srgb, var(--as-surface) 97%, transparent);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 45%);
+  box-shadow: 0 12px 32px var(--as-shadow-ink);
   backdrop-filter: blur(8px);
   text-align: center;
   pointer-events: auto;
@@ -2115,14 +2674,14 @@
 
 .as-focus-empty__title {
   margin: 0 0 4px;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
 }
 
 .as-focus-empty__hint {
   margin: 0 0 12px;
   color: var(--as-text-dim);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .as-focus-empty__actions {
@@ -2134,7 +2693,7 @@
 .as-inspector__ghostnote {
   max-width: 200px;
   color: var(--as-text-dim);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.4;
 }
 
@@ -2146,7 +2705,7 @@
   border-radius: 999px;
   color: var(--as-accent);
   font-family: var(--as-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 
 .as-panel__scopednote {
@@ -2155,7 +2714,7 @@
   border: 1px dashed var(--as-border);
   border-radius: 8px;
   color: var(--as-text-dim);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .as-panel__exitlink {
@@ -2184,7 +2743,7 @@
   border: 1px solid currentcolor;
   border-radius: 999px;
   font-family: var(--as-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
 }
 
@@ -2202,7 +2761,7 @@
 
 .as-diffbar__note {
   flex: 1;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--as-text-dim);
 }
 
@@ -2314,14 +2873,34 @@
    renders through a portal, outside its own edge group, and would otherwise
    stay bright while its arrow faded. */
 .as-future {
-  opacity: 0.22;
-  filter: grayscale(1);
+  /* Was 0.22 + full grayscale, which put a future connection's own label at
+     1.4:1 — invisible rather than "not yet". Greyness carries the state; the
+     fade only has to say "not the foreground". */
+  --as-dim: 0.34;
+  opacity: 0.45;
+  filter: grayscale(0.85);
   transition: opacity 120ms, filter 120ms;
+}
+
+/* A node fades part by part instead (see "Dimmed elements"), so the card's
+   own box keeps its opacity and its title stays readable. */
+.react-flow__node.as-future {
+  opacity: 1;
+}
+
+/* Labels are the thing being read. They still grey out with everything else,
+   but they do not also drop to a third of their contrast — an edge label and
+   a sequence message name are the two pieces of a scrubbed diagram someone is
+   most likely reading ahead to. */
+.as-edge__labellayer.as-future,
+.as-seq-msg__label.as-future {
+  opacity: 0.85;
 }
 
 /* Dulled-but-hoverable, like the lifecycle stages and provider ghosts: a
    future element under the cursor reads at full strength. */
 .as-future:hover {
+  --as-dim: 1;
   opacity: 1;
   filter: none;
 }
@@ -2350,7 +2929,7 @@
 
 .as-timeline__caption {
   font-family: var(--as-mono);
-  font-size: 9px;
+  font-size: 0.625rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -2389,6 +2968,12 @@
   background: var(--as-accent);
 }
 
+/* The one `title` in this file that stays unreachable, and deliberately: the
+   range input is laid over the whole track (it owns dragging, the keyboard
+   and the accessibility tree), so it is always the element under the pointer
+   and a tick can never be hovered. Giving the tick pointer events would take
+   the scrubber's own hit area away for the sake of a tooltip. Showing a
+   stop's date needs the readout, not CSS. */
 .as-timeline__tick {
   position: absolute;
   top: 5px;
@@ -2499,7 +3084,7 @@
   background: none;
   color: var(--as-text);
   font-family: var(--as-mono);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   text-align: right;
   white-space: nowrap;
@@ -2522,7 +3107,7 @@
 
 .as-timeline__ahead {
   font-family: var(--as-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   white-space: nowrap;
   color: var(--as-text-dim);
 }
@@ -2541,7 +3126,7 @@
   background: var(--as-surface);
   color: var(--as-text-dim);
   font-family: var(--as-mono);
-  font-size: 9px;
+  font-size: 0.625rem;
   letter-spacing: 0.04em;
   white-space: nowrap;
   transform: translateX(-50%);
@@ -2578,19 +3163,19 @@
   border: 1px solid var(--as-border, #334155);
   border-radius: 12px;
   background: var(--as-surface, #0b1220);
-  box-shadow: 0 18px 48px rgb(0 0 0 / 45%);
+  box-shadow: 0 18px 48px var(--as-shadow-ink);
 }
 
 .as-modal__title {
   margin: 0 0 10px;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 650;
   color: var(--as-text, #e2e8f0);
 }
 
 .as-modal__body {
   margin: 0 0 16px;
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.5;
   color: var(--as-text-dim, #94a3b8);
 }
@@ -2610,7 +3195,7 @@
   align-items: center;
   padding: 8px 10px;
   border-bottom: 1px solid var(--as-border);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .as-modal__row:last-child {
@@ -2635,7 +3220,7 @@
   align-items: center;
   gap: 8px;
   margin: 0 0 16px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--as-text-dim);
 }
 
@@ -2661,21 +3246,23 @@
 /* Three columns where there is room, fewer where there isn't. `align-content:
    start` keeps a short final row tight to the one above rather than stretching
    the gap. */
+/* No scroller of its own: `.as-modal__card` is already one, and on a ~700px
+   window the pair gave the shortcuts sheet two nested scrollbars — a list
+   that scrolled inside a card that also scrolled, neither reaching the end by
+   itself. The card's is the one to keep, since it carries the title. */
 .as-shortcuts {
   display: grid;
   align-content: start;
   gap: 18px 28px;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   margin-top: 12px;
-  max-height: min(70vh, 640px);
-  overflow-y: auto;
 }
 
 .as-shortcuts__caption {
   margin: 0 0 6px;
   color: var(--as-text-dim);
   font-family: var(--as-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -2706,7 +3293,7 @@
 .as-shortcuts__desc {
   margin: 0;
   color: var(--as-text-dim);
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1.5;
 }
 
@@ -2718,7 +3305,7 @@
   background: var(--as-surface-2);
   color: var(--as-text);
   font-family: var(--as-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   white-space: nowrap;
 }
 
@@ -2756,7 +3343,7 @@
 .as-export-states__axis-title {
   padding: 0;
   margin-bottom: 4px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -2771,7 +3358,7 @@
 
 .as-export-states__count {
   margin: 0 0 12px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--as-text-dim);
 }
 
@@ -2800,7 +3387,7 @@
 
 .as-welcome__wordmark {
   font-family: var(--as-mono);
-  font-size: 20px;
+  font-size: 1.25rem;
   font-weight: 650;
   letter-spacing: -0.01em;
 }
@@ -2808,7 +3395,7 @@
 .as-welcome__name {
   width: 100%;
   height: 34px;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .as-welcome__ctas {
@@ -2820,7 +3407,7 @@
   flex: 1;
   justify-content: space-between;
   height: 40px;
-  font-size: 12.5px;
+  font-size: 0.7812rem;
 }
 
 .as-welcome__arrow {
@@ -2867,7 +3454,7 @@
 }
 
 .as-welcome__error {
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.5;
   color: var(--as-danger);
 }
@@ -2876,7 +3463,7 @@
 .as-welcome__approx {
   display: block;
   margin-top: 8px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .as-welcome__insert-row {
@@ -2924,7 +3511,7 @@
   background: none;
   color: var(--as-text);
   font: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   text-align: left;
   cursor: pointer;
 }
@@ -2946,13 +3533,13 @@
   border: 1px solid var(--as-border);
   border-radius: 999px;
   font-family: var(--as-mono);
-  font-size: 9px;
+  font-size: 0.625rem;
   color: var(--as-text-dim);
 }
 
 .as-filemenu__rename-btn {
   color: var(--as-text-dim);
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 
 .as-filemenu__rename-btn:hover {
@@ -2974,13 +3561,13 @@
 
 .as-filemenu__rename {
   width: 100%;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 /* ── Lint findings (Checks menu) ─────────────────────────────────────────── */
 
 .as-lint {
-  font-size: 8px;
+  font-size: 0.625rem;
   vertical-align: 1px;
 }
 
@@ -2988,8 +3575,9 @@
   color: var(--as-danger);
 }
 
+/* The theme's amber, not a literal one: #f59e0b is 2.1:1 on a white page. */
 .as-lint--warning {
-  color: #f59e0b;
+  color: var(--as-overdue);
 }
 
 .as-lint--info {
@@ -2999,6 +3587,11 @@
 /* ── Version tag notice ──────────────────────────────────────────────────── */
 
 .as-version-tag {
+  display: inline-flex;
+  align-items: center;
+  /* 24px of target (WCAG 2.2 2.5.8) — the chip already sits in its own
+     React Flow panel, so nothing has to move to hold it. */
+  min-height: 24px;
   padding: 3px 10px;
   border: 1px solid var(--as-border);
   border-radius: 999px;
@@ -3006,7 +3599,7 @@
   color: var(--as-text-dim);
   font: inherit;
   font-family: var(--as-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   cursor: pointer;
@@ -3042,11 +3635,11 @@
 .as-version-tag__input {
   width: 90px;
   padding-inline: 6px;
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 
 .as-version-tag__corner {
-  font-size: 10px;
+  font-size: 0.625rem;
 }
 
 /* ── Sequence mode ───────────────────────────────────────────────────────── */
@@ -3079,15 +3672,18 @@
      name out of the box. */
   white-space: nowrap;
   font-family: var(--as-mono);
-  font-size: 8px;
+  font-size: 0.625rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: color-mix(in srgb, var(--as-seq-accent) 80%, var(--as-text-dim));
+  /* Same readable form of a kind accent the cards use (see `--as-node-ink`).
+     At 80% accent over the DIM ink, the neutral participant kinds — actor and
+     external, both greys — landed at 4.17:1 on the header they sit on. */
+  color: color-mix(in srgb, var(--as-seq-accent) var(--as-node-ink-mix), var(--as-text));
 }
 
 .as-seq-head__label {
   overflow: hidden;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3141,6 +3737,13 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--as-accent) 20%, transparent);
 }
 
+/*
+ * The frame is transparent to clicks so the messages inside it stay
+ * clickable — but that also made the frame itself unselectable except by its
+ * tiny operator tab. The border gets its own hit area back: a pseudo-element
+ * clipped to a ring, which `clip-path` applies to HIT TESTING as well as to
+ * painting, so the interior stays a hole and only the edge band responds.
+ */
 .as-seq-frag {
   position: relative;
   width: 100%;
@@ -3149,6 +3752,32 @@
   border-radius: 6px;
   background: color-mix(in srgb, var(--as-surface-2) 25%, transparent);
   pointer-events: none;
+}
+
+.as-seq-frag::before {
+  content: "";
+  position: absolute;
+  /* Outside the border as well as inside it: a 1.2px line is not a target. */
+  inset: -4px;
+  pointer-events: auto;
+  cursor: grab;
+  clip-path: polygon(
+    evenodd,
+    0 0,
+    100% 0,
+    100% 100%,
+    0 100%,
+    0 0,
+    10px 10px,
+    10px calc(100% - 10px),
+    calc(100% - 10px) calc(100% - 10px),
+    calc(100% - 10px) 10px,
+    10px 10px
+  );
+}
+
+.as-seq-frag:active::before {
+  cursor: grabbing;
 }
 
 .as-seq-frag--selected {
@@ -3169,17 +3798,22 @@
   border-radius: 5px 0 9px 0;
   background: var(--as-surface-2);
   font-family: var(--as-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 700;
   color: var(--as-text);
   pointer-events: all;
   cursor: grab;
 }
 
+/* The guard ("[balance > 0]") is text a person reads and reaches for, so it
+   takes the pointer back from the frame and selects the fragment like the
+   operator tab does. */
 .as-seq-frag__guard {
   font-family: var(--as-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--as-text-dim);
+  pointer-events: auto;
+  cursor: grab;
 }
 
 .as-seq-frag__else {
@@ -3205,7 +3839,7 @@
   border-radius: 2px 12px 2px 2px;
   background: color-mix(in srgb, var(--as-surface-2) 90%, transparent);
   color: var(--as-text-dim);
-  font-size: 10px;
+  font-size: 0.625rem;
   line-height: 1.4;
 }
 
@@ -3224,7 +3858,8 @@
   resize: none;
 }
 
-.as-seq-note__input:focus {
+/* See .as-annotation__input — the keyboard ring survives. */
+.as-seq-note__input:focus:not(:focus-visible) {
   outline: none;
 }
 
@@ -3260,7 +3895,7 @@
   padding: 1px 6px;
   border-radius: 4px;
   font-family: var(--as-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--as-text-dim);
   pointer-events: all;
   user-select: none;
@@ -3273,31 +3908,98 @@
 }
 
 .as-seq-msg__tech {
-  font-size: 9px;
+  font-size: 0.625rem;
   opacity: 0.8;
 }
 
 /* ── Status strip ────────────────────────────────────────────────────────── */
 
+/*
+ * Bottom-left, beside React Flow's zoom controls rather than on top of them:
+ * the strip started at 12px, which is inside the controls' 26px column, and
+ * the permanent hint line then ran ~600px across the bottom of the canvas
+ * over whatever was there. `--as-canvas-gutter` is that column's width plus
+ * air. The strip itself stays transparent to the pointer — everything in it
+ * is a message, and the canvas underneath must stay draggable.
+ */
 .as-status {
   position: absolute;
   bottom: 12px;
-  left: 12px;
+  left: var(--as-canvas-gutter);
+  right: 12px;
   z-index: 20;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 6px;
   pointer-events: none;
 }
 
+/* The AI panel is an opaque 380px column on the same edge, so an import error
+   announced while it was open was posted underneath it. The toast steps
+   sideways to the panel's far edge instead of being stacked over its
+   contents. */
+.as-canvas:has(.as-panel) .as-status {
+  left: calc(min(380px, 100%) + 12px);
+}
+
 .as-toast {
+  max-width: 100%;
   padding: 6px 10px;
   border: 1px solid color-mix(in srgb, var(--as-accent) 45%, transparent);
   border-radius: 6px;
   background: color-mix(in srgb, var(--as-surface) 92%, transparent);
   color: var(--as-accent);
   font-family: var(--as-mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
+}
+
+/*
+ * A failure that the user has to be able to dismiss, so unlike the strip
+ * above it this one takes pointer events — it holds a close button. It sits
+ * one line above the status strip on the same edge, wraps rather than running
+ * off the canvas, and is tinted like `.as-error` so the two failures in the
+ * editor look like one thing.
+ */
+.as-errorbar {
+  position: absolute;
+  /* Clear of the status strip below it, toast and hint line included. */
+  bottom: 56px;
+  left: var(--as-canvas-gutter);
+  z-index: 25;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(560px, calc(100% - var(--as-canvas-gutter) - 12px));
+  padding: 8px 8px 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--as-danger) 55%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--as-danger) 14%, var(--as-surface));
+  box-shadow: 0 8px 24px var(--as-shadow-ink);
+  color: var(--as-danger);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.as-errorbar__text {
+  min-width: 0;
+  /* A schema error is a paragraph, not a word: it wraps, and a long
+     unbroken identifier inside it breaks rather than widening the box. */
+  overflow-wrap: anywhere;
+}
+
+.as-errorbar .as-btn {
+  flex: none;
+  height: 24px;
+  min-width: 24px;
+  border-color: color-mix(in srgb, var(--as-danger) 40%, transparent);
+  background: none;
+  color: var(--as-danger);
+}
+
+.as-errorbar .as-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--as-danger) 18%, transparent);
+  color: var(--as-danger);
 }
 
 /* Tinted like its subject — the same 1.5px outline + low-opacity fill recipe
@@ -3309,9 +4011,15 @@
 }
 
 .as-hint {
+  /* Capped so the line wraps inside the canvas's left half instead of running
+     ~600px along the bottom edge and under the minimap. */
+  max-width: min(52ch, 100%);
   font-family: var(--as-mono);
-  font-size: 10px;
-  color: color-mix(in srgb, var(--as-text-dim) 70%, transparent);
+  font-size: 0.625rem;
+  /* 70% of the dim ink was 3.5:1 on the light canvas. This line is permanent
+     and it is instructions, so it reads as instructions: 85% clears AA on
+     both canvases and is still quieter than anything else in the strip. */
+  color: color-mix(in srgb, var(--as-text-dim) 85%, transparent);
 }
 
 .as-sr-only {
@@ -3337,18 +4045,50 @@
   color: inherit;
 }
 
+/*
+ * The four connect dots. Invisible at rest — and now inert with it: React
+ * Flow arms them with `pointer-events: all` the moment a node is connectable,
+ * and each dot is centred ON the card's edge, so half of every one of them
+ * hangs outside the box. A press within ~4px of a side midpoint, including
+ * presses aimed at the canvas beside the card or at a selected edge's
+ * endpoint circle sitting in the same place, started a connection instead.
+ *
+ * Revealing and arming are the same event, so what you can press is exactly
+ * what you can see. Hover is the mouse route; selection is the touch one,
+ * where there is no hover at all — tapping the card lights its handles.
+ * A connection already in flight keeps them live regardless (below): the drag
+ * leaves the node, and with it the hover.
+ */
 .as-root .react-flow__handle {
   width: 8px;
   height: 8px;
   border: 1px solid var(--as-bg);
   background: var(--as-accent);
   opacity: 0;
-  transition: opacity 120ms;
+  pointer-events: none;
+  transition: opacity 120ms, width 90ms, height 90ms;
 }
 
-.as-root .react-flow__node:hover .react-flow__handle,
-.as-root .react-flow__node.selected .react-flow__handle {
+/* Point nodes are excluded by name. Their own rules (see "The free end of a
+   dangling arrow") keep the four dots dormant on a 12px node the handles
+   would otherwise bury — but those rules sit earlier in the file at the same
+   specificity, so a bare `.react-flow__node:hover` here quietly outranked
+   them and lit the dots anyway. `:not()` states the exception where the rule
+   is, and stops arming them now that revealing also arms. */
+.as-root .react-flow__node:not(.react-flow__node-point):hover .react-flow__handle,
+.as-root .react-flow__node:not(.react-flow__node-point).selected .react-flow__handle {
   opacity: 1;
+  pointer-events: all;
+}
+
+/* Its own hover grows the dot to a fingertip-friendlier 12px. It stays at the
+   card's edge midpoint (React Flow centres each handle with a translate), so
+   it never reaches the title. */
+.as-root .react-flow__node:not(.react-flow__node-point):hover .react-flow__handle:hover,
+.as-root .react-flow__node:not(.react-flow__node-point).selected .react-flow__handle:hover {
+  width: 12px;
+  height: 12px;
+  cursor: crosshair;
 }
 
 /* Read-only and scrubbed diagrams keep their handles MOUNTED so React Flow can
@@ -3361,9 +4101,14 @@
   pointer-events: none;
 }
 
+/* `pointer-events` too, not just opacity: the rule above turns the base state
+   off, and it would otherwise beat React Flow's own `.connectingfrom` rule
+   (same specificity, later in the cascade) and take the live end's events
+   away halfway through the drag that is using it. */
 .as-root .react-flow__handle.connectingfrom,
 .as-root .react-flow__handle.connectingto {
   opacity: 1;
+  pointer-events: all;
 }
 
 .as-root .react-flow__controls-button {
@@ -3384,7 +4129,7 @@
 
 .as-root .react-flow__attribution {
   background: transparent;
-  font-size: 9px;
+  font-size: 0.625rem;
 }
 
 .as-root .react-flow__attribution a {
@@ -3425,7 +4170,7 @@
   background: var(--as-surface-2);
   color: var(--as-text-dim);
   font: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 550;
   cursor: pointer;
   transition: background 120ms, color 120ms, border-color 120ms;
@@ -3461,7 +4206,7 @@
 }
 
 .as-scope__label {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--as-text-dim);
   margin-right: 2px;
 }
@@ -3480,7 +4225,7 @@
   gap: 8px;
   width: 100%;
   padding: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--as-text-dim);
 }
 
@@ -3505,7 +4250,7 @@
   background: none;
   color: var(--as-accent);
   font: inherit;
-  font-size: 11px;
+  font-size: 0.6875rem;
   cursor: pointer;
 }
 
@@ -3529,7 +4274,7 @@
   align-items: baseline;
   gap: 6px;
   padding: 3px 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--as-text);
   cursor: pointer;
   min-width: 0;
@@ -3548,7 +4293,7 @@
    service, the hint only reminds you what it is. */
 .as-scope__row-hint {
   color: var(--as-text-dim);
-  font-size: 11px;
+  font-size: 0.6875rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3566,7 +4311,7 @@
 .as-schema-copy__subtitle,
 .as-schema-copy__note {
   margin: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--as-text-dim);
   line-height: 1.5;
 }
@@ -3585,12 +4330,12 @@
 }
 
 .as-schema-copy__form-hint {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--as-text-dim);
 }
 
 .as-schema-copy__error {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--as-danger);
 }
 
@@ -3602,7 +4347,7 @@
 }
 
 .as-schema-copy__summary {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--as-text-dim);
   font-variant-numeric: tabular-nums;
 }
@@ -3624,7 +4369,7 @@
   background: var(--as-surface-2);
   color: var(--as-text-dim);
   font: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 550;
   cursor: pointer;
   transition: background 120ms, color 120ms, border-color 120ms;
@@ -3674,7 +4419,7 @@
   align-items: center;
   gap: 6px;
   padding: 7px 10px 3px;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -3700,7 +4445,7 @@
   background: none;
   color: var(--as-text);
   font: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   text-align: left;
   cursor: pointer;
 }
@@ -3714,12 +4459,14 @@
   font-weight: 600;
 }
 
-/* The demoted section: clouds this document doesn't reference. Grayed and
-   set on a darker wash — reachable, but visually second-class. */
+/* The demoted section: clouds this document doesn't reference. Reachable, but
+   visually second-class — a wash toward the theme's OWN second surface, not
+   toward black, which on a light theme painted a #b8b8b8 slab and left the
+   dim rows on it at 2.40:1. */
 .as-kindmenu__dim {
   margin-top: 4px;
   border-top: 1px solid var(--as-border);
-  background: color-mix(in srgb, var(--as-surface) 72%, #000);
+  background: color-mix(in srgb, var(--as-surface) 90%, var(--as-text));
 }
 
 .as-kindmenu__dim .as-kindmenu__option {
@@ -3728,6 +4475,59 @@
 
 .as-kindmenu__dim .as-kindmenu__dot {
   opacity: 0.45;
+}
+
+/* ── Forced colours (Windows high contrast) ──────────────────────────────── */
+
+/*
+ * Forced-colors mode replaces every colour with the user's own palette and
+ * drops background images and box-shadows. Two whole families of state in
+ * this editor are carried by exactly those: a toggle says "on" with a tinted
+ * BACKGROUND, and a selected node says "selected" with a box-shadow ring.
+ * Both vanish, leaving a toolbar where nothing looks pressed and a canvas
+ * where nothing looks picked. Outlines and borders survive, so the state is
+ * restated with those.
+ */
+@media (forced-colors: active) {
+  .as-btn--on,
+  .as-chip--on,
+  .as-kind-chip[aria-pressed="true"],
+  .as-cloud-chip[aria-pressed="true"],
+  .as-zone__seg--on {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .as-node--selected,
+  .as-group--selected,
+  .as-group-chip--selected,
+  .as-annotation--selected,
+  .as-seq-head--selected,
+  .as-seq-bar--selected,
+  .as-seq-frag--selected,
+  .as-seq-note--selected,
+  .as-point--selected {
+    outline: 3px solid Highlight;
+    outline-offset: 1px;
+  }
+
+  /* A swatch IS its colour — forcing it to the system palette would leave a
+     row of identical squares with nothing to choose between. */
+  .as-swatch,
+  .as-cloud-chip__dot,
+  .as-kindmenu__dot,
+  .as-legend__swatch,
+  .as-zone__swatch {
+    forced-color-adjust: none;
+  }
+
+  /* Opacity survives forced colours and is the one dimming lever left, so the
+     dimmed states keep a visible difference without relying on hue. */
+  .as-node--dimmed,
+  .as-ghost,
+  .as-future {
+    opacity: 0.6;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -38,7 +38,7 @@ import {
   type DiagramTemplate,
 } from "../contract/schema";
 import { zoneChipRadius, zoneCornerRadius, zoneOutline, type DiagramZone } from "../contract/zones";
-import { dateToDay, effectiveNodeDates, formatDiagramDate, isOverdue, laterDate } from "../contract/timeline";
+import { dateToDay, effectiveNodeDates, formatDiagramDate, isOverdue, laterDate, type DiagramDate } from "../contract/timeline";
 import {
   cardinalityMarker,
   crowsFootPath,
@@ -61,6 +61,35 @@ const ICON_INSET = 20;
 const GROUP_RADIUS = 10;
 
 export const GRID = 24;
+
+/**
+ * The legend box's size, and the height of the title block above the content.
+ * They are constants because the page's reserved margins are computed from
+ * them BEFORE anything is drawn — the chrome has to get real space, not paint
+ * over the diagram in the padding.
+ */
+const LEGEND_W = 150;
+const LEGEND_ROW_H = 18;
+const TITLE_BLOCK_H = 46;
+
+/**
+ * A note's line pitch, as a factor of its own font size: 1.4 is what
+ * `.as-annotation` inherits from the editor root, 1.3 what its description
+ * line sets. The export used a flat `size + 5`, which agreed with the canvas
+ * at the default 13px and drifted badly at the large sizes notes are often set
+ * in — a 26px note lost four points of leading per line.
+ */
+const ANNOTATION_LINE_HEIGHT = 1.4;
+const ANNOTATION_DESC_LINE_HEIGHT = 1.3;
+
+/**
+ * A card's description, `.as-node__desc` in the stylesheet: 11px on a 1.25
+ * line-height, clamped to two lines. The export drew it at 10.5px over four
+ * lines when the node wrapped, so the same document read differently on screen
+ * and in its own PNG.
+ */
+const DESC_FONT_SIZE = 11;
+const DESC_LINE_H = Math.round(DESC_FONT_SIZE * 1.25);
 
 // ─── Palette ─────────────────────────────────────────────────────────────────
 
@@ -95,6 +124,13 @@ export interface ExportPalette {
   edgeColors?: Record<string, string> | string;
   /** Per-participant-kind accents for the sequence emitter. Same encoding. */
   seqAccents?: Record<string, string> | string;
+  /**
+   * Per-node-kind accents. Same encoding, and the same reason the other two
+   * exist: the registry's hues were picked for the dark canvas and sit around
+   * 2:1 on a white card, so a light export drew its kind eyebrows and icons in
+   * colours the screen had already replaced.
+   */
+  nodeAccents?: Record<string, string> | string;
 }
 
 /** Normalize the record-or-JSON palette fields. */
@@ -125,6 +161,26 @@ export const DARK_EXPORT_PALETTE: ExportPalette = {
   overdue: "#f59e0b",
 };
 
+/** The light node-kind accents, mirroring LIGHT_THEME.nodeAccents. */
+const LIGHT_NODE_ACCENTS: Record<string, string> = {
+  service: "#0369a1",
+  database: "#b45309",
+  queue: "#6d28d9",
+  gateway: "#047857",
+  client: "#0e7490",
+  external: "#334155",
+  table: "#0f766e",
+  group: "#475569",
+  text: "#475569",
+  point: "#475569",
+  decision: "#a16207",
+  terminator: "#15803d",
+  io: "#0369a1",
+  "lm-small": "#a21caf",
+  "lm-medium": "#9333ea",
+  llm: "#7e22ce",
+};
+
 export const LIGHT_EXPORT_PALETTE: ExportPalette = {
   bg: "#f8fafc",
   surface: "#ffffff",
@@ -135,10 +191,16 @@ export const LIGHT_EXPORT_PALETTE: ExportPalette = {
   border: "#e2e8f0",
   gridDot: "#e2e8f0",
   accentInk: "#ffffff",
-  warn: "#e0674f",
-  overdue: "#d97706",
-  edgeColors: { slate: "#475569", sky: "#0284c7", emerald: "#059669", amber: "#d97706", rose: "#e11d48", violet: "#7c3aed" },
-  seqAccents: { actor: "#64748b", service: "#0284c7", database: "#d97706", queue: "#7c3aed", external: "#475569" },
+  // Kept in step with LIGHT_THEME by hand, because they are the same decision
+  // made twice: a host passing `theme={LIGHT_THEME}` gets those values through
+  // `paletteFromTheme`, and a host that exports without a theme gets these.
+  // Drifting apart means two light exports of the same diagram with different
+  // colours. Every hue below clears 4.5:1 on this background.
+  warn: "#c2410c",
+  overdue: "#b45309",
+  edgeColors: { slate: "#475569", sky: "#0369a1", emerald: "#047857", amber: "#b45309", rose: "#be123c", violet: "#6d28d9" },
+  seqAccents: { actor: "#475569", service: "#0369a1", database: "#b45309", queue: "#6d28d9", external: "#334155" },
+  nodeAccents: LIGHT_NODE_ACCENTS,
 };
 
 // ─── Command set ─────────────────────────────────────────────────────────────
@@ -288,6 +350,31 @@ function ellipsePath(cx: number, cy: number, rx: number, ry: number): string {
   return `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`;
 }
 
+// ─── Lifecycle stage vocabulary ──────────────────────────────────────────────
+
+/**
+ * Outline dashes and body dimming per lifecycle stage — the export half of the
+ * `.as-node--status-*` rules. Shared by leaf cards and container frames
+ * because the stages mean the same thing on both: a group marked `planned`
+ * reads as future work on screen, and used to come back as an ordinary frame
+ * in the PNG.
+ */
+const STATUS_DASH: Record<string, number[]> = {
+  proposed: [2, 3],
+  planned: [6, 5],
+  stubbed: [10, 4],
+};
+
+const STATUS_DIM: Record<string, number> = {
+  deprecated: 0.55,
+  retired: 0.4,
+  dark: 0.65,
+  stubbed: 0.85,
+};
+
+const statusDashOf = (status: string | undefined) => (status ? STATUS_DASH[status] : undefined);
+const statusDimOf = (status: string | undefined) => (status ? STATUS_DIM[status] ?? 1 : 1);
+
 // ─── Layout pass (visibility + collapse, shared with nothing else) ───────────
 
 interface Placed {
@@ -335,8 +422,13 @@ function layout(template: DiagramTemplate, containerKinds?: readonly string[]): 
   const edges = shown.flatMap((e) => {
       const source = visibleAnchor(e.source, nodeById, collapseHidden);
       const target = visibleAnchor(e.target, nodeById, collapseHidden);
-      if (!placedIds.has(source) || !placedIds.has(target) || source === target) return [];
+      if (!placedIds.has(source) || !placedIds.has(target)) return [];
       const rerouted = source !== e.source || target !== e.target;
+      // Both ends RE-ROUTED onto one box is the internal wiring of a collapsed
+      // group and is not drawn. A loop the document actually states is a retry
+      // arrow — the same distinction toReactFlow draws, so the screen and the
+      // export agree about which loops exist.
+      if (source === target && rerouted) return [];
       if (rerouted) {
         const key = `${source}→${target}`;
         if (rerouteSeen.has(key)) return [];
@@ -388,6 +480,19 @@ export interface Emitted {
   originY: number;
 }
 
+/**
+ * Every date an image or HTML export prints carries its year.
+ *
+ * The editor's chips drop it for the current year — the reader is looking at
+ * the calendar it was written in. An exported artefact outlives that year: a
+ * PNG in next year's slide deck saying "Mar 2" is ambiguous, and the file has
+ * no way to say which March it meant. (Mermaid already did this.)
+ */
+/** Drawn height of a date chip — the pill, not its text. */
+const DATE_CHIP_H = 15;
+
+const exportDate = (date: DiagramDate | undefined) => formatDiagramDate(date, { year: "always" });
+
 export function emitTemplate(
   template: DiagramTemplate,
   registry: ResolvedRegistry,
@@ -399,8 +504,30 @@ export function emitTemplate(
   const edgeHex = { ...EDGE_COLOR_HEX, ...paletteRecord(palette.edgeColors) };
   const { placed, byId, zones, edges, legend } = layout(template, registry.containerKinds);
   const b = templateBounds(template, { onlyVisible: true, containerKinds: registry.containerKinds });
-  const width = Math.max(1, b.maxX - b.minX + PAD * 2);
-  const height = Math.max(1, b.maxY - b.minY + PAD * 2);
+
+  // The page's chrome — legend, title block, version tag — is drawn in
+  // RESERVED margin rather than over the drawing. A 150px legend box inside a
+  // 48px pad lands on whatever occupies the top-right corner, and a version
+  // tag stacked under a title block lands inside the content: both were
+  // verified sitting on the example's region border and its "Cloud Region"
+  // header. Growing the page is the only way an export carries all of it.
+  const tag = template.meta?.versionTag ? String(template.meta.versionTag) : "";
+  const tagPos = template.meta?.versionTagPosition ?? "top-left";
+  const tagW = tag ? approxTextWidth(tag, 10, "mono") + 20 : 0;
+  const legendH = legend.length ? 14 + legend.length * LEGEND_ROW_H + 8 : 0;
+  // A top-right tag shares the corner with the legend, so it queues below it.
+  const tagOffsetY =
+    tagPos === "top-left" ? (template.meta?.title ? TITLE_BLOCK_H : 0) : legendH ? legendH + 8 : 0;
+  const padTop = Math.max(
+    PAD,
+    template.meta?.title ? TITLE_BLOCK_H : 0,
+    tag && tagPos.startsWith("top") ? 10 + tagOffsetY + 20 + 8 : 0,
+  );
+  const padRight =
+    Math.max(PAD, tag && tagPos.endsWith("right") ? tagW + 20 : 0) +
+    (legend.length ? LEGEND_W + 16 : 0);
+  const width = Math.max(1, b.maxX - b.minX + PAD + padRight);
+  const height = Math.max(1, b.maxY - b.minY + padTop + PAD);
   const cmds: DrawCmd[] = [];
 
   // Effective landing days, for tagging: nodes after the containment cascade,
@@ -428,6 +555,16 @@ export function emitTemplate(
    * too), so splicing that tail into a bucket costs one line per element and
    * keeps every tag with the command it belongs to.
    */
+  /**
+   * A node's accent: its own colour, else the palette's value for its kind,
+   * else the registry's. Same precedence the canvas uses, so a light export
+   * draws the eyebrows and icons the screen was showing rather than the
+   * dark-canvas hues the registry keeps as its fallback.
+   */
+  const paletteAccents = paletteRecord(palette.nodeAccents);
+  const accentOf = (node: { kind: string; color?: string }, fallback: string) =>
+    node.color || paletteAccents?.[node.kind] || fallback;
+
   const levels = stackLevels(
     placed
       .filter(({ node }) => {
@@ -456,13 +593,13 @@ export function emitTemplate(
   // Background + dot grid.
   cmds.push({
     op: "path",
-    d: `M ${b.minX - PAD} ${b.minY - PAD} h ${width} v ${height} h ${-width} Z`,
+    d: `M ${b.minX - PAD} ${b.minY - padTop} h ${width} v ${height} h ${-width} Z`,
     fill: palette.bg,
   });
   cmds.push({
     op: "grid",
     x: Math.floor((b.minX - PAD) / GRID) * GRID,
-    y: Math.floor((b.minY - PAD) / GRID) * GRID,
+    y: Math.floor((b.minY - padTop) / GRID) * GRID,
     w: width + GRID,
     h: height + GRID,
     step: GRID,
@@ -512,7 +649,7 @@ export function emitTemplate(
     // label keeps the PROVIDER's name — a recoloured zone is still hosted
     // where it is hosted.
     const label = `${zone.label}  ·  ${def.label}${
-      zone.date ? `  ·  ${formatDiagramDate(zone.date)}` : ""
+      zone.date ? `  ·  ${exportDate(zone.date)}` : ""
     }`;
     const chipW = approxTextWidth(label, 11, "mono") + 26;
     cmds.push({
@@ -534,9 +671,9 @@ export function emitTemplate(
   // Date chip — the same outlined grey chip the editor renders (.as-date), so
   // "this lands in June" survives into the shared artefact rather than being
   // an editor-only affordance.
-  const dateChipW = (date: string) => approxTextWidth(formatDiagramDate(date), 9, "mono") + 12;
+  const dateChipW = (date: string) => approxTextWidth(exportDate(date), 9, "mono") + 12;
   const pushDateChip = (date: string, x: number, y: number, overdue = false) => {
-    const text = formatDiagramDate(date);
+    const text = exportDate(date);
     // Overdue — past date, element still pre-active — is the chip's one loud
     // moment: amber border and text, same as the editor.
     const ink = overdue ? (palette.overdue ?? "#f59e0b") : palette.textDim;
@@ -568,35 +705,75 @@ export function emitTemplate(
     // from it, and `fill: false` / `outline: "none"` each drop their layer. A
     // frame with neither is invisible in the export too, which is the point:
     // an abstract grouping box must not reappear in the PNG.
-    const frameInk = node.color || def.accent;
+    const frameInk = accentOf(node, def.accent);
     const frameTinted = !!node.color || node.opacity !== undefined;
     const frameOutline = node.outline ?? "dashed";
+    // A lifecycle stage restyles the frame exactly as it restyles a card (see
+    // .as-group.as-node--status-*): its dashes win over the frame's own, and
+    // the whole boundary dims. `outline: "none"` still wins over both — the
+    // canvas zeroes the border width there, so a deliberately invisible
+    // grouping box stays invisible whatever stage it is at.
+    const frameDim = statusDimOf(node.status);
     const frameDash =
-      frameOutline === "dashed" ? [6, 5] : frameOutline === "dotted" ? [2, 4] : undefined;
+      statusDashOf(node.status) ??
+      (frameOutline === "dashed" ? [6, 5] : frameOutline === "dotted" ? [2, 4] : undefined);
+    const frameD = roundedRectPath(box.x, box.y, box.width, box.height, GROUP_RADIUS);
     cmds.push({
       op: "path",
-      d: roundedRectPath(box.x, box.y, box.width, box.height, GROUP_RADIUS),
+      d: frameD,
       // The default tint is the neutral surface wash groups have always used;
       // an ink-derived tint appears only once the node stores a colour.
       ...(node.fill === false
         ? {}
         : {
             fill: frameTinted ? frameInk : palette.surface2,
-            fillAlpha: node.opacity ?? DEFAULT_CONTAINER_OPACITY,
+            fillAlpha: (node.opacity ?? DEFAULT_CONTAINER_OPACITY) * frameDim,
           }),
       ...(frameOutline === "none"
         ? {}
-        : { stroke: frameInk, strokeWidth: 1.2, ...(frameDash ? { dash: frameDash } : {}) }),
+        : {
+            stroke: frameInk,
+            strokeWidth: 1.2,
+            ...(frameDim < 1 ? { strokeAlpha: frameDim } : {}),
+            ...(frameDash ? { dash: frameDash } : {}),
+          }),
     });
-    const chipW = Math.max(60, approxTextWidth(node.label, 11, "mono") + 18);
+    if (node.status === "dark" && frameOutline !== "none") {
+      // Hazard tape, the group's own two-layer form: a black ring outside the
+      // frame and white dashes on it (box-shadow + dashed border in the CSS).
+      // Undimmed on purpose — "shipped but not switched on" IS the message.
+      cmds.push({ op: "path", d: frameD, stroke: "#020617", strokeWidth: 3.5 });
+      cmds.push({ op: "path", d: frameD, stroke: "#f8fafc", strokeWidth: 2, dash: [6, 6] });
+    }
+    // The stage's eyebrow, in the name chip rather than above the frame: a
+    // boundary has no card body to hang one under, and the chip is where a
+    // reader already looks for the group's name.
+    const frameStatusText = node.status ? ` · ${node.status.toUpperCase()}` : "";
+    const labelW = approxTextWidth(node.label, 11, "mono");
+    const chipW = Math.max(60, labelW + approxTextWidth(frameStatusText, 11, "mono") + 18);
     cmds.push({
       op: "path",
       // border-radius: 10px 0 6px 0 — the top-left is the FRAME's radius, so
       // the two curves lie on top of each other instead of crossing.
       d: roundedRectCorners(box.x, box.y, chipW, 22, { tl: GROUP_RADIUS, br: 6 }),
       fill: palette.surface2,
+      ...(frameDim < 1 ? { fillAlpha: frameDim } : {}),
     });
-    cmds.push({ op: "text", x: box.x + 9, y: box.y + 15, text: node.label, size: 11, font: "mono", color: palette.textDim });
+    cmds.push({ op: "text", x: box.x + 9, y: box.y + 15, text: node.label, size: 11, font: "mono", color: palette.textDim, ...(frameDim < 1 ? { alpha: frameDim } : {}) });
+    if (frameStatusText) {
+      cmds.push({
+        op: "text",
+        x: box.x + 9 + labelW,
+        y: box.y + 15,
+        text: frameStatusText,
+        size: 11,
+        font: "mono",
+        // Same two-colour rule the leaf eyebrow uses: salmon for the stage
+        // that means "on its way out", the element's own ink otherwise.
+        color: node.status === "deprecated" ? palette.warn ?? "#fa8072" : frameInk,
+        alpha: 0.9 * frameDim,
+      });
+    }
     // Beside the boundary's name chip, in the same order the editor's group
     // label renders them: date first, then the owning team.
     let cursor = box.x + chipW + 6;
@@ -726,7 +903,7 @@ export function emitTemplate(
         op: "text",
         x: geo.label.x,
         y: geo.label.y + (edge.label ? 8 : -4) + (edge.tech ? 11 : 0),
-        text: formatDiagramDate(edge.date),
+        text: exportDate(edge.date),
         size: 9,
         font: "mono",
         color: palette.textDim,
@@ -754,6 +931,7 @@ export function emitTemplate(
     const def = kindDef(registry, node.kind);
     if (def.container && !node.collapsed) continue;
     const leafStart = cmds.length;
+    const accent = accentOf(node, def.accent);
 
     // A dangling-arrow endpoint: just the dot the canvas shows (.as-point__dot
     // — 7px, dim, on a bg ring), never a card. Its box still routed the edge.
@@ -774,7 +952,7 @@ export function emitTemplate(
     if (def.container) {
       const d = roundedRectPath(box.x, box.y, box.width, box.height, 9);
       cmds.push({ op: "path", d, fill: palette.surface });
-      cmds.push({ op: "path", d, fill: def.accent, fillAlpha: 0.1, stroke: def.accent, strokeAlpha: 0.45, strokeWidth: 1 });
+      cmds.push({ op: "path", d, fill: accent, fillAlpha: 0.1, stroke: accent, strokeAlpha: 0.45, strokeWidth: 1 });
       cmds.push({
         op: "text",
         x: box.x + 10,
@@ -809,23 +987,32 @@ export function emitTemplate(
           strokeWidth: 1,
         });
       }
-      const lines = wrapText(node.label, size, "sans", box.width - pad * 2, Math.max(1, Math.floor(box.height / (size + 5))));
+      // `.as-annotation` inherits the editor root's 1.4 line-height and does
+      // not clip (`overflow: visible`), so a note typed as four lines shows
+      // four lines on screen however tall its box is. The export says the
+      // same: no line cap, or `wrapText`'s hard newline breaks — the very
+      // thing that makes a note read as the user typed it — would be silently
+      // reflowed away by a height the canvas never enforced.
+      const lineH = Math.round(size * ANNOTATION_LINE_HEIGHT);
+      const lines = wrapText(node.label, size, "sans", box.width - pad * 2, Number.MAX_SAFE_INTEGER);
       const top = box.y + (boxed ? 6 : 0);
       lines.forEach((line, i) =>
-        cmds.push({ op: "text", x: box.x + pad, y: top + size + i * (size + 5), text: line, size, font: "sans", color: palette.text }),
+        cmds.push({ op: "text", x: box.x + pad, y: top + size + i * lineH, text: line, size, font: "sans", color: palette.text }),
       );
       // The note's description, as a dim sub-line under its sentence —
-      // .as-annotation__desc on the canvas, 0.85em of the note's own size.
+      // .as-annotation__desc on the canvas, 0.85em of the note's own size at
+      // its own tighter 1.3 line-height.
       const descSize = Math.max(9, Math.round(size * 0.85));
+      const descLineH = Math.round(descSize * ANNOTATION_DESC_LINE_HEIGHT);
       const descLines = node.description
         ? wrapText(node.description, descSize, "sans", box.width - pad * 2, 3)
         : [];
-      const descTop = top + lines.length * (size + 5) + 3;
+      const descTop = top + lines.length * lineH + 3;
       descLines.forEach((line, i) =>
         cmds.push({
           op: "text",
           x: box.x + pad,
-          y: descTop + descSize + i * (descSize + 4),
+          y: descTop + descSize + i * descLineH,
           text: line,
           size: descSize,
           font: "sans",
@@ -833,11 +1020,15 @@ export function emitTemplate(
         }),
       );
       if (node.date) {
-        // Under the last line of the note, clamped inside the box so a long
-        // annotation can't push the chip past its own outline.
-        const below =
-          (descLines.length ? descTop + descLines.length * (descSize + 4) : top + lines.length * (size + 5)) + 2;
-        pushDateChip(node.date, box.x + pad, Math.min(below, box.y + box.height - 17));
+        // Under the last line of the note, and NOT clamped to the outline:
+        // `.as-annotation` lets its content overflow (the chip lands past the
+        // bottom edge on screen too), and clamping while the sentence runs on
+        // would drop the chip into the middle of the words.
+        pushDateChip(
+          node.date,
+          box.x + pad,
+          (descLines.length ? descTop + descLines.length * descLineH : top + lines.length * lineH) + 2,
+        );
       }
       endLeaf(leafStart, node);
       continue;
@@ -847,38 +1038,22 @@ export function emitTemplate(
     // way-out — the same conventions the editor's CSS applies. `stubbed` gets
     // the heavy construction dash; `dark` gets a hazard-tape ring on top.
     const status = node.status;
-    const statusDash =
-      status === "proposed"
-        ? [2, 3]
-        : status === "planned"
-          ? [6, 5]
-          : status === "stubbed"
-            ? [10, 4]
-            : undefined;
-    const dim =
-      status === "deprecated"
-        ? 0.55
-        : status === "retired"
-          ? 0.4
-          : status === "dark"
-            ? 0.65
-            : status === "stubbed"
-              ? 0.85
-              : 1;
+    const statusDash = statusDashOf(status);
+    const dim = statusDimOf(status);
 
     const sil = silhouettePath(def.shape ?? "card", box.x + 0.75, box.y + 0.75, box.width - 1.5, box.height - 1.5);
     cmds.push({ op: "path", d: sil.body, fill: palette.surface });
     cmds.push({
       op: "path",
       d: sil.body,
-      fill: def.accent,
+      fill: accent,
       fillAlpha: 0.06 * dim,
-      stroke: def.accent,
+      stroke: accent,
       strokeAlpha: 0.4 * dim,
       strokeWidth: 1.2,
       ...(statusDash ? { dash: statusDash } : {}),
     });
-    if (sil.detail) cmds.push({ op: "path", d: sil.detail, stroke: def.accent, strokeAlpha: 0.35 * dim, strokeWidth: 1.2 });
+    if (sil.detail) cmds.push({ op: "path", d: sil.detail, stroke: accent, strokeAlpha: 0.35 * dim, strokeWidth: 1.2 });
     if (status === "dark") {
       // Black/white hazard tape: a black underlay with white dashes over it,
       // matching the editor's two-layer border. Undimmed on purpose — the
@@ -904,14 +1079,14 @@ export function emitTemplate(
       cmds.push({
         op: "path",
         d: roundedRectPath(box.x + sil.contentInlinePad + 12, iconMidY - 14, 28, 28, 7),
-        fill: def.accent,
+        fill: accent,
         fillAlpha: 0.13,
       });
       for (const d of icon) {
         cmds.push({
           op: "path",
           d,
-          stroke: def.accent,
+          stroke: accent,
           strokeWidth: 1.8,
           round: true,
           transform: { tx: box.x + sil.contentInlinePad + 17.5, ty: iconMidY - 8.5, scale: 17 / 24 },
@@ -947,8 +1122,18 @@ export function emitTemplate(
     // A node with rows holds its description to ONE line: the rows below are
     // placed by a shared formula, and a second line would shift every one of
     // them out from under its edge anchor.
+    //
+    // `wrap` lifts the two-line clamp on the canvas (.as-node--wrap
+    // .as-node__desc), but validateTemplate only grows a node's height for its
+    // TITLE — so the box, not the text, is what bounds it. Cap the wrapped
+    // description at the lines that fit above the bottom edge; unbounded, a
+    // long one prints straight through the silhouette.
+    const descRoom = Math.max(
+      1,
+      Math.floor((box.height - cTop - 49 - titleOverflow) / DESC_LINE_H) + 1,
+    );
     const descLines = node.description
-      ? wrapText(node.description, 10.5, "sans", textW, rows.length ? 1 : node.wrap ? 4 : 2)
+      ? wrapText(node.description, DESC_FONT_SIZE, "sans", textW, rows.length ? 1 : node.wrap ? descRoom : 2)
       : [];
 
     // Vertical placement moves the whole text block inside the box.
@@ -964,7 +1149,7 @@ export function emitTemplate(
     // edge also computes, so shifting them would leave every foreign-key line
     // pointing between columns. (The canvas agrees — .as-node--record pins to
     // the top.)
-    const blockH = 45 + titleOverflow + descLines.length * 13;
+    const blockH = 45 + titleOverflow + descLines.length * DESC_LINE_H;
     const slack = Math.max(0, box.height - cTop - blockH);
     const vShift = rows.length
       ? 0
@@ -981,7 +1166,7 @@ export function emitTemplate(
       // the canvas. Centred/right-aligned nodes draw the eyebrow as one run so
       // the two halves can't drift apart under a non-start anchor.
       const eyebrowX = align === "left" ? textX : anchorX;
-      cmds.push({ op: "text", x: eyebrowX, y: ty(16), text: kindText, size: 9, font: "mono", color: def.accent, alpha: 0.8 * dim, ...aligned });
+      cmds.push({ op: "text", x: eyebrowX, y: ty(16), text: kindText, size: 9, font: "mono", color: accent, alpha: 0.8 * dim, ...aligned });
       if (align === "left") {
         cmds.push({
           op: "text",
@@ -995,7 +1180,7 @@ export function emitTemplate(
         });
       }
     } else {
-      cmds.push({ op: "text", x: anchorX, y: ty(16), text: kindText + statusText, size: 9, font: "mono", color: def.accent, alpha: 0.8 * dim, ...aligned });
+      cmds.push({ op: "text", x: anchorX, y: ty(16), text: kindText + statusText, size: 9, font: "mono", color: accent, alpha: 0.8 * dim, ...aligned });
     }
     titleLines.forEach((line, i) =>
       cmds.push({ op: "text", x: anchorX, y: ty(31 + i * lineH), text: line, size: fontSize, font: "sans", weight: 600, color: palette.text, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
@@ -1006,7 +1191,7 @@ export function emitTemplate(
       cmds.push({ op: "path", d: `M ${strikeX} ${ty(26.5)} L ${strikeX + strikeW} ${ty(26.5)}`, stroke: palette.text, strokeAlpha: dim, strokeWidth: 1 });
     }
     descLines.forEach((line, i) =>
-      cmds.push({ op: "text", x: anchorX, y: ty(45 + titleOverflow + i * 13), text: line, size: 10.5, font: "sans", color: palette.textDim, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
+      cmds.push({ op: "text", x: anchorX, y: ty(45 + titleOverflow + i * DESC_LINE_H), text: line, size: DESC_FONT_SIZE, font: "sans", color: palette.textDim, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
     );
 
     // Field rows — the same list the canvas draws, from the same metrics.
@@ -1031,9 +1216,9 @@ export function emitTemplate(
           // foreign key only points elsewhere, so it stays an outline —
           // matching .as-node__fieldkey--pk in the stylesheet.
           if (field.key !== "fk") {
-            cmds.push({ op: "path", d, fill: def.accent, fillAlpha: 0.18 * dim });
+            cmds.push({ op: "path", d, fill: accent, fillAlpha: 0.18 * dim });
           }
-          cmds.push({ op: "path", d, stroke: def.accent, strokeAlpha: 0.45 * dim, strokeWidth: 1 });
+          cmds.push({ op: "path", d, stroke: accent, strokeAlpha: 0.45 * dim, strokeWidth: 1 });
           cmds.push({
             op: "text",
             x: textX + (badgeW - approxTextWidth(badge, 8, "mono")) / 2,
@@ -1042,7 +1227,7 @@ export function emitTemplate(
             size: 8,
             font: "mono",
             weight: 700,
-            color: def.accent,
+            color: accent,
             ...(dim < 1 ? { alpha: dim } : {}),
           });
           nameX = textX + badgeW + 6;
@@ -1077,17 +1262,32 @@ export function emitTemplate(
       });
     }
 
+    let dateBottom = -Infinity;
     if (node.date) {
-      // Stacked under whatever text the node ended up with, then clamped
-      // inside the box — a two-line description on a default-height node
-      // leaves no room, and the chip must not escape the silhouette.
+      // Stacked under whatever text the node ended up with — exactly where
+      // the canvas puts it. Clamping it back inside a default-height box was
+      // worse than letting it sit low: on a node whose description wrapped to
+      // two lines the chip was pushed UP onto the second line and printed
+      // over the words, while the canvas (which lets its content overflow the
+      // card) showed both. An export that disagrees with the screen is the one
+      // thing this emitter exists to prevent.
       const below = rows.length
         ? listTop + rows.length * FIELD_ROW_H + 2
-        : ty(36 + descLines.length * 13);
-      pushDateChip(node.date, textX, Math.min(below, box.y + box.height - 19), isOverdue(node.date, node.status));
+        : ty(36 + descLines.length * DESC_LINE_H);
+      pushDateChip(node.date, textX, below, isOverdue(node.date, node.status));
+      dateBottom = below + DATE_CHIP_H;
     }
-    // Bottom-right, riding the edge — mirrors the editor's placement.
-    if (node.team) pushTeamPill(node.team, box.x + box.width - teamPillW(node.team) - 6, box.y + box.height - 8);
+    // Bottom-right, riding the edge — mirrors the editor's placement, unless
+    // the text ran long enough that the date chip is already there. Two pieces
+    // of chrome printed on top of each other is worse than one sitting a few
+    // pixels lower than the edge it usually rides.
+    if (node.team) {
+      pushTeamPill(
+        node.team,
+        box.x + box.width - teamPillW(node.team) - 6,
+        Math.max(box.y + box.height - 8, dateBottom + 2),
+      );
+    }
     endLeaf(leafStart, node);
   }
 
@@ -1100,13 +1300,14 @@ export function emitTemplate(
   // (legend, title, version tag) paints after this.
   cmds.push(...labelCmds);
 
-  // Legend.
+  // Legend — in the right-hand gutter reserved for it above, clear of the
+  // drawing rather than on top of it.
   if (legend.length) {
-    const rowH = 18;
-    const boxW = 150;
-    const boxH = 14 + legend.length * rowH + 8;
-    const lx = b.maxX + PAD - boxW - 8;
-    const ly = b.minY - PAD + 8;
+    const rowH = LEGEND_ROW_H;
+    const boxW = LEGEND_W;
+    const boxH = legendH;
+    const lx = b.maxX + padRight - boxW - 8;
+    const ly = b.minY - padTop + 8;
     cmds.push({ op: "path", d: roundedRectPath(lx, ly, boxW, boxH, 8), fill: palette.surface, fillAlpha: 0.92, stroke: palette.border, strokeWidth: 1 });
     cmds.push({ op: "text", x: lx + 10, y: ly + 16, text: "INFRASTRUCTURE", size: 9, font: "mono", weight: 600, color: palette.textDim });
     legend.forEach(({ provider, count }, i) => {
@@ -1120,13 +1321,13 @@ export function emitTemplate(
     });
   }
 
-  // Title block.
+  // Title block — top-left, in the headroom reserved above the content.
   if (template.meta?.title) {
-    cmds.push({ op: "text", x: b.minX - PAD + 10, y: b.minY - PAD + 24, text: String(template.meta.title), size: 15, font: "sans", weight: 700, color: palette.text });
+    cmds.push({ op: "text", x: b.minX - PAD + 10, y: b.minY - padTop + 24, text: String(template.meta.title), size: 15, font: "sans", weight: 700, color: palette.text });
     cmds.push({
       op: "text",
       x: b.minX - PAD + 10,
-      y: b.minY - PAD + 40,
+      y: b.minY - padTop + 40,
       text: `${placed.length} elements · ${edges.length} connections`,
       size: 10,
       font: "mono",
@@ -1134,20 +1335,17 @@ export function emitTemplate(
     });
   }
 
-  // Version tag notice — pinned in its corner, same as the editor's chip.
-  if (template.meta?.versionTag) {
-    const tag = String(template.meta.versionTag);
-    const pos = template.meta.versionTagPosition ?? "top-left";
-    const pillW = approxTextWidth(tag, 10, "mono") + 20;
-    const px = pos.endsWith("left") ? b.minX - PAD + 10 : b.maxX + PAD - pillW - 10;
-    // Top-left is also the title block's corner; sit below it when both show.
-    const titleOffset = pos === "top-left" && template.meta?.title ? 40 : 0;
-    const py = pos.startsWith("top") ? b.minY - PAD + 10 + titleOffset : b.maxY + PAD - 30;
-    cmds.push({ op: "path", d: roundedRectPath(px, py, pillW, 20, 10), fill: palette.surface, fillAlpha: 0.92, stroke: palette.border, strokeWidth: 1 });
+  // Version tag notice — pinned in its corner, same as the editor's chip, and
+  // in margin the bounds above already made room for: it queues under the
+  // title block on the left and under the legend on the right.
+  if (tag) {
+    const px = tagPos.endsWith("left") ? b.minX - PAD + 10 : b.maxX + padRight - tagW - 10;
+    const py = tagPos.startsWith("top") ? b.minY - padTop + 10 + tagOffsetY : b.maxY + PAD - 30;
+    cmds.push({ op: "path", d: roundedRectPath(px, py, tagW, 20, 10), fill: palette.surface, fillAlpha: 0.92, stroke: palette.border, strokeWidth: 1 });
     cmds.push({ op: "text", x: px + 10, y: py + 14, text: tag, size: 10, font: "mono", weight: 600, color: palette.textDim });
   }
 
-  return { cmds, width, height, originX: -b.minX + PAD, originY: -b.minY + PAD };
+  return { cmds, width, height, originX: -b.minX + PAD, originY: -b.minY + padTop };
 }
 
 // ─── Backends ────────────────────────────────────────────────────────────────
@@ -1156,11 +1354,28 @@ const MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
 const SANS = "ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif";
 const fontOf = (font: "mono" | "sans") => (font === "mono" ? MONO : SANS);
 
-/** `#rrggbb` + alpha → `rgba()`, for canvas. */
-function rgba(hex: string, alpha: number | undefined): string {
-  if (alpha === undefined || alpha >= 1) return hex;
-  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex.trim());
-  if (!m) return hex;
+/**
+ * Set `ctx` up to paint `color` at `alpha`, and return the style to assign.
+ *
+ * `#rrggbb` folds into an `rgba()` string. Anything else — an `hsl()` from a
+ * host's palette, a named colour — keeps its own form and gets the alpha
+ * through `globalAlpha` instead. The alternative, returning the colour
+ * untouched, is how a 14%-tinted team pill came to paint at full strength
+ * with its own label invisible inside it: SVG honoured `fill-opacity` and the
+ * canvas silently did not, so one document exported as two different pictures.
+ *
+ * Always writes `globalAlpha`, including the opaque case, because a path fills
+ * and then strokes inside one save/restore and the second must not inherit the
+ * first's transparency.
+ */
+function withAlpha(ctx: CanvasRenderingContext2D, color: string, alpha: number | undefined): string {
+  ctx.globalAlpha = 1;
+  if (alpha === undefined || alpha >= 1) return color;
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(color.trim());
+  if (!m) {
+    ctx.globalAlpha = alpha;
+    return color;
+  }
   const [r, g, b] = [m[1], m[2], m[3]].map((h) => Number.parseInt(h, 16));
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
@@ -1185,11 +1400,11 @@ export function drawToCanvas(ctx: CanvasRenderingContext2D, cmds: DrawCmd[]): vo
         }
         const path = new Path2D(cmd.d);
         if (cmd.fill) {
-          ctx.fillStyle = rgba(cmd.fill, cmd.fillAlpha);
+          ctx.fillStyle = withAlpha(ctx, cmd.fill, cmd.fillAlpha);
           ctx.fill(path);
         }
         if (cmd.stroke) {
-          ctx.strokeStyle = rgba(cmd.stroke, cmd.strokeAlpha);
+          ctx.strokeStyle = withAlpha(ctx, cmd.stroke, cmd.strokeAlpha);
           ctx.lineWidth = cmd.strokeWidth ?? 1;
           if (cmd.round) {
             ctx.lineCap = "round";
@@ -1250,7 +1465,7 @@ export function drawToCanvas(ctx: CanvasRenderingContext2D, cmds: DrawCmd[]): vo
           ctx.miterLimit = 2;
           ctx.strokeText(cmd.text, cmd.x, cmd.y);
         }
-        ctx.fillStyle = rgba(cmd.color, cmd.alpha);
+        ctx.fillStyle = withAlpha(ctx, cmd.color, cmd.alpha);
         ctx.fillText(cmd.text, cmd.x, cmd.y);
         ctx.restore();
         break;

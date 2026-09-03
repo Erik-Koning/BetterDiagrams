@@ -99,6 +99,13 @@ const LABEL_BEND_TOL = 18;
 const LABEL_MOVE_TOL = 6;
 
 /**
+ * How far the pointer must travel before a press on the label counts as a
+ * drag at all. Small enough that a deliberate nudge still registers, large
+ * enough that trackpad jitter during a click does not move anything.
+ */
+const LABEL_DRAG_TOL = 3;
+
+/**
  * The label layer's geometry. Inline rather than in the stylesheet because it
  * is load-bearing, not decorative: an outermost svg sized 0×0 paints NOTHING
  * in Chrome — `overflow: visible` or not — which is exactly how every edge
@@ -139,7 +146,7 @@ export const LabeledEdge = memo(function LabeledEdge({
   data,
   selected,
 }: EdgeProps<LabeledEdgeType>) {
-  const { readOnly, requestCommit, registry } = useStudio();
+  const { readOnly, requestCommit, registry, showToast } = useStudio();
   const { screenToFlowPosition, setEdges, setNodes, getEdges, getNodes, getInternalNode } =
     useReactFlow();
   const sourceNode = useInternalNode(source);
@@ -281,9 +288,23 @@ export const LabeledEdge = memo(function LabeledEdge({
       const refsY = [Math.round(grabGeo.at(0).y), Math.round(grabGeo.tip.y), ...basePoints.map((pt) => pt[1])];
       let bendIndex = -1;
 
+      /**
+       * A click is not a drag.
+       *
+       * Without a threshold, the pointer jitter of an ordinary click on a
+       * trackpad rewrote `labelT` and pushed an undo entry — so selecting a
+       * label nudged it, and ⌘Z afterwards moved it back. The line-drag path
+       * has had this guard all along; the label needed the same one.
+       */
+      let travelled = false;
+
       const move = (e: PointerEvent) => {
         if (!draggingRef.current) return;
         const point = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+        if (!travelled) {
+          if (Math.hypot(point.x - from.x, point.y - from.y) < LABEL_DRAG_TOL) return;
+          travelled = true;
+        }
         const nextT = nearestTOnCurve(grabGeo, point);
         const foot = grabGeo.at(nextT);
         // How far the pointer has moved OFF the line since the grab.
@@ -324,21 +345,52 @@ export const LabeledEdge = memo(function LabeledEdge({
           ),
         );
       };
-      const up = () => {
+      const finish = (cancelled: boolean) => {
         draggingRef.current = false;
         element.releasePointerCapture(event.pointerId);
         element.removeEventListener("pointermove", move as EventListener);
         element.removeEventListener("pointerup", up);
-        element.removeEventListener("pointercancel", up);
+        element.removeEventListener("pointercancel", cancel);
+        window.removeEventListener("keydown", onKey, true);
         setGuides(null);
+        if (cancelled) {
+          // Put the line back exactly as it was. Escape abandons a gesture
+          // everywhere else; a route you can only undo AFTER releasing is a
+          // gesture you cannot change your mind about.
+          setEdges((edges) =>
+            edges.map((edge) =>
+              edge.id === id
+                ? {
+                    ...edge,
+                    data: {
+                      ...edge.data,
+                      labelT: data?.labelT,
+                      ...(basePoints.length ? { points: basePoints } : {}),
+                    },
+                  }
+                : edge,
+            ),
+          );
+          return;
+        }
+        if (!travelled) return; // a click, not a drag — nothing to record
         // Without this the new labelT lives only in React Flow state — undo
         // and a controlled host would never see it until an unrelated edit
         // happened to commit.
         requestCommit();
       };
+      const up = () => finish(false);
+      const cancel = () => finish(true);
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key !== "Escape") return;
+        e.preventDefault();
+        e.stopPropagation();
+        finish(true);
+      };
       element.addEventListener("pointermove", move as EventListener);
       element.addEventListener("pointerup", up);
-      element.addEventListener("pointercancel", up);
+      element.addEventListener("pointercancel", cancel);
+      window.addEventListener("keydown", onKey, true);
     },
     [readOnly, synthetic, s, t, data, screenToFlowPosition, setEdges, id, requestCommit],
   );
@@ -416,8 +468,8 @@ export const LabeledEdge = memo(function LabeledEdge({
   // The drop-target judgement is shared with the studio's onConnectEnd, so
   // dragging an endpoint and dragging a NEW connection agree about what a
   // given release means.
-  const nodeAt = (point: { x: number; y: number }) =>
-    topDropTarget({ getNodes, getInternalNode }, point);
+  const nodeAt = (point: { x: number; y: number }, exclude?: ReadonlySet<string>) =>
+    topDropTarget({ getNodes, getInternalNode }, point, exclude ? { exclude } : {});
 
   // Rubber band: a dragged endpoint follows the pointer as a free point — a
   // zero-size box, which every router attaches to at the point itself. The
@@ -493,8 +545,12 @@ export const LabeledEdge = memo(function LabeledEdge({
   const onPathPointerDown = (event: React.PointerEvent<SVGPathElement>) => {
     if (readOnly || synthetic || event.button !== 0) return;
     // Same cap as the double-click: a bend past MAX_EDGE_POINTS would be
-    // dropped by validation, so the gesture must not start.
-    if ((data?.points?.length ?? 0) >= MAX_EDGE_POINTS) return;
+    // dropped by validation, so the gesture must not start — and it says so,
+    // because a line that stops responding to a drag reads as broken.
+    if ((data?.points?.length ?? 0) >= MAX_EDGE_POINTS) {
+      showToast(`A line holds at most ${MAX_EDGE_POINTS} bends — remove one first`);
+      return;
+    }
     event.stopPropagation();
     const element = event.currentTarget;
     element.setPointerCapture(event.pointerId);
@@ -561,13 +617,23 @@ export const LabeledEdge = memo(function LabeledEdge({
       const ownIsPoint = registry.pointKinds.includes(
         (ownNode?.data as DiagramNodeData | undefined)?.kind ?? "",
       );
+      // Everything this endpoint is already INSIDE. Pinning to a side means
+      // pulling the endpoint just outside its own box, and just outside a
+      // nested box is its parent's frame — so a parent under the pointer is
+      // the gesture working, not a re-target.
+      const ancestors = new Set<string>();
+      for (let cursor = ownNode?.parentId; cursor; ) {
+        ancestors.add(cursor);
+        cursor = getNodes().find((n) => n.id === cursor)?.parentId;
+      }
+
       let last: { x: number; y: number } | null = null;
       let drop: string | null = null;
 
       const move = (e: PointerEvent) => {
         const point = screenToFlowPosition({ x: e.clientX, y: e.clientY });
         last = point;
-        const over = nodeAt(point);
+        const over = nodeAt(point, ancestors);
         // Dropping on the far node makes a SELF-LOOP — dragging an edge's end
         // onto its own source is how an ordinary arrow becomes a retry loop.
         // Only this end's own node stays a pin, never a re-attachment.

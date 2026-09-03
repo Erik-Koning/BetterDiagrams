@@ -82,6 +82,9 @@ function mountEdge(
     drillInto: () => {},
     navigateToNode: () => {},
     childCounts: new Map(),
+    renamingId: null,
+    setRenamingId: () => {},
+    showToast: () => {},
   };
   const utils = render(
     <StudioContext.Provider value={ctx}>
@@ -563,6 +566,9 @@ describe("compare overlay", () => {
       drillInto: () => {},
       navigateToNode: () => {},
       childCounts: new Map(),
+      renamingId: null,
+      setRenamingId: () => {},
+      showToast: () => {},
     };
     const { container } = render(
       <StudioContext.Provider value={ctx}>

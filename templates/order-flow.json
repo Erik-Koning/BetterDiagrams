@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "participants": [
+    {
+      "id": "user",
+      "label": "Customer",
+      "kind": "actor"
+    },
+    {
+      "id": "web",
+      "label": "Web App",
+      "kind": "service",
+      "team": "Frontend"
+    },
+    {
+      "id": "api",
+      "label": "Order API",
+      "kind": "service",
+      "team": "Platform"
+    },
+    {
+      "id": "db",
+      "label": "Orders DB",
+      "kind": "database"
+    },
+    {
+      "id": "pay",
+      "label": "Payment Gateway",
+      "kind": "external"
+    }
+  ],
+  "messages": [
+    {
+      "id": "m1",
+      "from": "user",
+      "to": "web",
+      "label": "Place order",
+      "style": "sync"
+    },
+    {
+      "id": "m2",
+      "from": "web",
+      "to": "api",
+      "label": "POST /orders",
+      "style": "sync",
+      "tech": "JSON/HTTPS"
+    },
+    {
+      "id": "m3",
+      "from": "api",
+      "to": "api",
+      "label": "Validate cart",
+      "style": "sync"
+    },
+    {
+      "id": "m4",
+      "from": "api",
+      "to": "db",
+      "label": "INSERT order",
+      "style": "sync",
+      "tech": "SQL"
+    },
+    {
+      "id": "m5",
+      "from": "db",
+      "to": "api",
+      "label": "order id",
+      "style": "reply"
+    },
+    {
+      "id": "m6",
+      "from": "api",
+      "to": "pay",
+      "label": "Charge",
+      "style": "async",
+      "tech": "gRPC"
+    },
+    {
+      "id": "m7",
+      "from": "pay",
+      "to": "api",
+      "label": "receipt",
+      "style": "reply"
+    },
+    {
+      "id": "m8",
+      "from": "api",
+      "to": "web",
+      "label": "201 Created",
+      "style": "reply"
+    },
+    {
+      "id": "m9",
+      "from": "web",
+      "to": "user",
+      "label": "Confirmation",
+      "style": "reply"
+    }
+  ],
+  "meta": {
+    "title": "Order flow",
+    "autonumber": true
+  },
+  "activations": [
+    {
+      "id": "a1",
+      "participant": "api",
+      "from": "m2",
+      "to": "m8"
+    },
+    {
+      "id": "a2",
+      "participant": "db",
+      "from": "m4",
+      "to": "m5"
+    },
+    {
+      "id": "a3",
+      "participant": "pay",
+      "from": "m6",
+      "to": "m7"
+    }
+  ],
+  "fragments": [
+    {
+      "id": "f1",
+      "kind": "loop",
+      "label": "retry ×3",
+      "from": "m4",
+      "to": "m5"
+    },
+    {
+      "id": "f2",
+      "kind": "alt",
+      "label": "card valid",
+      "from": "m6",
+      "to": "m7",
+      "elses": [
+        {
+          "label": "card declined",
+          "at": "m7"
+        }
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "id": "n1",
+      "text": "Idempotent by order id",
+      "side": "right",
+      "participant": "api",
+      "at": "m4"
+    }
+  ]
+}

@@ -87,15 +87,22 @@ export function renderSequenceToMermaid(t: SequenceTemplate): string {
 
   const { opens, closes, branches } = fragmentEvents(t);
   const openKeyword = (f: SeqFragment) => (f.kind === "alt" ? "alt" : f.kind);
-  const branchKeyword = (f: SeqFragment) => (f.kind === "par" ? "and" : "else");
-  const arrow = (style: string) => (style === "async" ? "-)" : style === "reply" ? "-->>" : "->>");
+  // Mermaid only understands a divider inside alt (`else`) and par (`and`).
+  // Emitting one inside loop/opt/break produced a diagram that would not
+  // parse at all, so those branches are dropped rather than written out.
+  const branchKeyword = (f: SeqFragment) =>
+    f.kind === "par" ? "and" : f.kind === "alt" ? "else" : undefined;
+  // Async is DASHED on the canvas and in the image exports; `-)` is Mermaid's
+  // solid open arrow, `--)` the dashed one. They have to agree.
+  const arrow = (style: string) => (style === "async" ? "--)" : style === "reply" ? "-->>" : "->>");
 
   t.messages.forEach((m, i) => {
     for (const f of opens.get(i) ?? []) {
       lines.push(`  ${openKeyword(f)} ${q(f.label)}`);
     }
     for (const b of branches.get(i) ?? []) {
-      lines.push(`  ${branchKeyword(b.fragment)} ${q(b.label)}`);
+      const kw = branchKeyword(b.fragment);
+      if (kw) lines.push(`  ${kw} ${q(b.label)}`);
     }
     const label =
       q(m.label) +
@@ -166,15 +173,20 @@ export function renderSequenceToPlantUml(t: SequenceTemplate): string {
   lines.push("");
 
   const { opens, closes, branches } = fragmentEvents(t);
-  const branchKeyword = (f: SeqFragment) => (f.kind === "par" ? "else" : "else");
-  const arrow = (style: string) => (style === "async" ? "->>" : style === "reply" ? "-->" : "->");
+  // PlantUML spells the divider `else` in both alt and par; nothing else
+  // takes one, so a stray branch on a loop/opt/break is dropped.
+  const branchKeyword = (f: SeqFragment) =>
+    f.kind === "alt" || f.kind === "par" ? "else" : undefined;
+  // Dashed for async, matching the canvas — `->>` is the SOLID thin arrow.
+  const arrow = (style: string) => (style === "async" ? "-->>" : style === "reply" ? "-->" : "->");
 
   t.messages.forEach((m, i) => {
     for (const f of opens.get(i) ?? []) {
       lines.push(`${f.kind} ${q(f.label)}`.trimEnd());
     }
     for (const b of branches.get(i) ?? []) {
-      lines.push(`${branchKeyword(b.fragment)} ${q(b.label)}`.trimEnd());
+      const kw = branchKeyword(b.fragment);
+      if (kw) lines.push(`${kw} ${q(b.label)}`.trimEnd());
     }
     const label =
       q(m.label) +

@@ -30,7 +30,7 @@ import {
 } from "./zones";
 import { ALL_CLOUD_KIND_IDS } from "./cloud";
 import { normalizeDate, type DiagramDate } from "./timeline";
-import { parseLlmJson } from "./json-repair";
+import { parseLlmJsonReport } from "./json-repair";
 import { wrappedLineCount } from "./text";
 
 // ─── Vocabulary ──────────────────────────────────────────────────────────────
@@ -750,7 +750,7 @@ export function buildSystemPrompt(opts: PromptOptions = {}): string {
       : `Use it to show provider-specific services: one node per provider's equivalent service, each carrying only its own provider id.`;
 
   return `You convert software requirements, source code, or natural-language descriptions into an architecture diagram template. Respond with ONLY compact valid JSON (no markdown fences, no commentary) matching:
-{"version":1,"meta":{"title":"Name","routing":"${routings}","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${zoneProvider}"],"provider":"${zoneProvider}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":"","date":"YYYY-MM-DD"}]}
+{"version":1,"meta":{"title":"Name","routing":"${routings}","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${zoneProvider}"],"provider":"${zoneProvider}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","providers":[],"direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":""${geo ? `,"routing":"${routings}"` : ""},"date":"YYYY-MM-DD"}]}
 Rules:
 - "group" = boundary (VPC, cluster, tier, bounded context). Children set parentId${geo ? "; child x/y are RELATIVE to the group's top-left. Size groups to contain all children (+24px sides, +48px top). Children of a NON-group parent use small local coordinates starting near 0,0 (their own drilled canvas); never size the parent to contain them." : "."}
 - "text" = free annotation; put the sentence in label, fontSize 12-16${geo ? ", w~300 h~60" : ""}, no edges.
@@ -773,12 +773,13 @@ Rules:
 - A zone's "providers" lists every provider it could run on; "provider" is the one shown. Use a higher "z" for a small zone that sits on top of a bigger one (e.g. a third-party SaaS island inside a cloud region).
 - Nodes reference a zone with "zoneId" — this is INDEPENDENT of parentId, so a node can be in a zone and a group at once.${geo ? " Position them so they fall inside the zone's box." : ""}
 - A node's "providers" lists which providers it exists on; it is hidden when the zone shows anything else. Omit it (or use []) for nodes present in every deployment. ${multiProviderRule}
+- An edge has "providers" too, with the same meaning, judged against its source node's zone: use it for a CONNECTION that exists in one topology only (a cross-region replication stream on one cloud but not another) while both boxes it joins exist in all of them. Omit it whenever the link exists wherever its endpoints do.${geo ? ` Edge "routing" ("${routings}") overrides meta.routing for one line; omit unless the user asks for a specific connector shape on a specific edge.` : ""}
 - Use "shape":"polygon" with normalised "points":[[0,0],[1,0],[1,1]] (0..1 within the zone box) only for genuinely irregular regions; prefer "rounded".
 - ${
     geo
       ? "Lay out left-to-right by request flow, spread vertically, no overlapping nodes. 6-14 nodes per level (a component's children form their own level with their own budget)."
-      : "NEVER emit x/y/w/h on nodes or labelT on edges — placement is managed outside this document and is preserved across your edits. KEEP EVERY EXISTING ID EXACTLY as given (ids are how elements keep their places); give new elements new ids. Array order = rough left-to-right flow. 6-14 nodes per level (a component's children form their own level with their own budget)."
-  } fontSize only on text nodes. Keep JSON compact.${
+      : 'NEVER emit x/y/w/h on nodes, or labelT/routing/start/end/points on edges — placement and line routing are managed outside this document and are preserved across your edits. KEEP EVERY EXISTING ID EXACTLY as given (ids are how elements keep their places); give new elements new ids. Array order = rough left-to-right flow. 6-14 nodes per level (a component\'s children form their own level with their own budget).'
+  } Keep JSON compact.${
     opts.extraRules ? `\n${opts.extraRules}` : ""
   }`;
 }
@@ -840,15 +841,28 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
   const zones = validateZones(r.zones, providerSet);
   const zoneIds = new Set(zones.map((z) => z.id));
 
+  // An id may arrive as a number (`"id": 1`) — coerce it, exactly as edge
+  // endpoints already do below. Dropping the node instead would take its
+  // edges and its children's parent links with it, which is the loudest
+  // possible failure for the quietest possible input slip.
+  const rawNodes = (r.nodes as DiagramNode[]).filter(
+    (n): n is DiagramNode => !!n && typeof n === "object" && idOf(n.id) !== null,
+  );
+  // Every id the document CLAIMS, collected before any renaming. A suffix can
+  // then never steal an id a later node was going to use: with `api`, `api`,
+  // `api_2`, the duplicate becomes `api_3` and the real `api_2` keeps its own
+  // id — along with the edges and children that point at it.
+  const claimed = new Set<string>(rawNodes.map((n) => idOf(n.id) as string));
+
   const seen = new Set<string>();
-  const nodes: DiagramNode[] = r.nodes
-    .filter((n): n is DiagramNode => !!n && typeof (n as DiagramNode).id === "string")
+  const nodes: DiagramNode[] = rawNodes
     .map((n) => {
-      let id = String(n.id);
+      const rawId = idOf(n.id) as string;
+      let id = rawId;
       // Suffix duplicates rather than dropping them — an LLM repeating an id
       // usually means two real nodes, not one.
       let bump = 2;
-      while (seen.has(id)) id = `${String(n.id)}_${bump++}`;
+      while (seen.has(id) || (id !== rawId && claimed.has(id))) id = `${rawId}_${bump++}`;
       seen.add(id);
 
       const kind: NodeKind = kindSet.has(n.kind as string) ? n.kind : "service";
@@ -856,13 +870,9 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
 
       // A node lists the providers it exists on. An empty list would hide it
       // everywhere, which is never what anyone means — treat it as "always".
-      const providers = Array.isArray(n.providers)
-        ? [...new Set(n.providers.filter((p): p is string => typeof p === "string" && !!p))]
-        : undefined;
-      const tags = Array.isArray(n.tags)
-        ? [...new Set(n.tags.map((t) => String(t).trim()).filter(Boolean))]
-        : undefined;
-      const url = typeof n.url === "string" ? n.url.trim() : "";
+      const providers = stringList(n.providers);
+      const tags = stringList(n.tags);
+      const url = safeUrl(n.url);
       const team = typeof n.team === "string" ? n.team.trim() : "";
       // Unparseable dates are dropped rather than kept verbatim: the whole
       // timeline orders by string comparison, and one malformed value would
@@ -884,8 +894,14 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
 
       // Container frame styling, mirroring the zone rules exactly: an explicit
       // `opacity` beats an alpha carried on the colour, which beats the default.
+      //
+      // `color` alone is NOT container-only: on a leaf it overrides the kind's
+      // registry accent, which is what someone writing `"color": "#ff0000"` on
+      // a service means. `fill`/`outline`/`opacity` stay frame concepts — a
+      // leaf draws its own silhouette — and the JSON editor's lint says so
+      // rather than letting them vanish on save.
       const isContainer = containerSet.has(kind);
-      const color = isContainer ? normalizeHexColor(n.color) : null;
+      const color = normalizeHexColor(n.color);
       const outline = NODE_OUTLINES.includes(n.outline as NodeOutline)
         ? (n.outline as NodeOutline)
         : "dashed";
@@ -897,8 +913,8 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         icon: iconSet.has(n.icon as string) ? n.icon : "none",
         description,
         ...(fields ? { fields } : {}),
-        parentId: n.parentId ? String(n.parentId) : null,
-        zoneId: n.zoneId && zoneIds.has(String(n.zoneId)) ? String(n.zoneId) : null,
+        parentId: idOf(n.parentId),
+        zoneId: idOf(n.zoneId) && zoneIds.has(idOf(n.zoneId) as string) ? idOf(n.zoneId) : null,
         ...(providers && providers.length ? { providers } : {}),
         ...(tags && tags.length ? { tags } : {}),
         ...(url ? { url } : {}),
@@ -1147,18 +1163,28 @@ function validateZones(raw: unknown, providerSet: Set<string>): DiagramZone[] {
 /** At least 3 points, each clamped into the normalised 0..1 box. */
 function validatePolygon(raw: unknown): ZonePoint[] | undefined {
   if (!Array.isArray(raw)) return [...DEFAULT_POLYGON_POINTS];
+  // A vertex missing a coordinate is dropped, not pinned to the corner: an
+  // unreadable point silently becomes (0, 0), which folds the shape rather
+  // than leaving it alone.
   const points = raw
     .filter((p): p is [unknown, unknown] => Array.isArray(p) && p.length >= 2)
-    .map(([x, y]): ZonePoint => [clamp(num(x, 0), 0, 1), clamp(num(y, 0), 0, 1)]);
+    .map(([x, y]) => [coord(x), coord(y)] as const)
+    .filter((p): p is readonly [number, number] => p[0] !== null && p[1] !== null)
+    .map(([x, y]): ZonePoint => [clamp(x, 0, 1), clamp(y, 0, 1)]);
   return points.length >= 3 ? points : [...DEFAULT_POLYGON_POINTS];
 }
 
 /**
- * How many rows one node may carry. A model asked for "the schema" can emit a
- * hundred columns for one table; past this the node is a wall of text rather
- * than a diagram, and the excess is dropped instead of rendered off-box.
+ * How many rows one node may carry.
+ *
+ * A sanity bound against pathological input, NOT a display budget: rows are
+ * content, and a load/save round-trip that quietly deleted a real table's
+ * 41st column would be data loss with no error and no undo. The node grows to
+ * hold whatever it carries (see `fieldsBoxHeight`), so a wide table reads as a
+ * tall box rather than a truncated one — which is the user's problem to solve
+ * by drilling in or splitting the entity, not ours to solve by forgetting.
  */
-export const MAX_NODE_FIELDS = 40;
+export const MAX_NODE_FIELDS = 500;
 
 /**
  * Coerce a node's rows. Repairs in the house style: an entry with no usable
@@ -1290,15 +1316,34 @@ function validateAnchor(raw: unknown): EdgeAnchor | undefined {
  * whole pixels, capped so a runaway document can't smuggle in thousands.
  */
 export const MAX_EDGE_POINTS = 16;
+
+/**
+ * A coordinate, or null.
+ *
+ * `Number(null)`, `Number("")`, `Number(false)` and `Number([])` are all 0 —
+ * finite, and silently a real position at the canvas origin. A waypoint that
+ * lost one coordinate has to be dropped, not moved to (0, y).
+ */
+function coord(v: unknown): number | null {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 function validateEdgePoints(raw: unknown): Array<[number, number]> | undefined {
   if (!Array.isArray(raw)) return undefined;
-  const points = raw
-    .filter(
-      (p): p is [unknown, unknown] =>
-        Array.isArray(p) && p.length >= 2 && Number.isFinite(Number(p[0])) && Number.isFinite(Number(p[1])),
-    )
-    .slice(0, MAX_EDGE_POINTS)
-    .map(([x, y]): [number, number] => [Math.round(Number(x)), Math.round(Number(y))]);
+  const points: Array<[number, number]> = [];
+  for (const p of raw) {
+    if (!Array.isArray(p) || p.length < 2) continue;
+    const x = coord(p[0]);
+    const y = coord(p[1]);
+    if (x === null || y === null) continue;
+    points.push([Math.round(x), Math.round(y)]);
+    if (points.length === MAX_EDGE_POINTS) break;
+  }
   return points.length ? points : undefined;
 }
 
@@ -1892,6 +1937,76 @@ function breakParentCycles(nodes: DiagramNode[], byId: Map<string, DiagramNode>)
 }
 
 /**
+ * A usable element id from whatever the document carried, or null.
+ *
+ * Numbers are coerced: `"id": 1` means a node called "1", and every reference
+ * to it (`source`, `parentId`, `zoneId`) is stringified the same way, so the
+ * graph still joins up. Objects, arrays, booleans, null and the empty string
+ * have no honest reading and are refused — which drops the element, the only
+ * case where that is the right answer.
+ */
+function idOf(raw: unknown): string | null {
+  if (typeof raw === "string") return raw.trim() || null;
+  if (typeof raw === "number") return Number.isFinite(raw) ? String(raw) : null;
+  if (typeof raw === "bigint") return String(raw);
+  return null;
+}
+
+/**
+ * A list of non-empty strings from whatever was written.
+ *
+ * A bare string is the common single-value slip (`"providers": "aws"`), and
+ * DROPPING it inverts the meaning — an AWS-only node would become visible on
+ * every provider — so it is repaired into a one-element list. An empty result
+ * comes back as undefined, so "no list" and "list of nothing" stay the same
+ * thing to every caller.
+ */
+function stringList(raw: unknown): string[] | undefined {
+  const items = Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : null;
+  if (!items) return undefined;
+  const out = [
+    ...new Set(
+      items
+        .map((t) => (typeof t === "string" || typeof t === "number" ? String(t).trim() : ""))
+        .filter(Boolean),
+    ),
+  ];
+  return out.length ? out : undefined;
+}
+
+/**
+ * Schemes a node's ↗ link may use.
+ *
+ * The link is rendered as a real anchor, and documents arrive from an LLM
+ * proxy, a paste, a dropped file and the system clipboard — so a scheme that
+ * EXECUTES when clicked is dropped rather than trusted. Relative and
+ * scheme-relative links pass through: they inherit the page's own scheme and
+ * can only ever be a navigation.
+ */
+const SAFE_URL_SCHEMES: readonly string[] = ["http:", "https:", "mailto:", "tel:", "ftp:"];
+
+/** Prefix marking a cross-DOCUMENT link, resolved by the host, never fetched. */
+export const FILE_LINK_PREFIX = "file:";
+
+export function safeUrl(raw: unknown): string {
+  const url = typeof raw === "string" ? raw.trim() : "";
+  if (!url) return "";
+  // The internal cross-file reference (`file:Order flow`). It never becomes an
+  // href — the ↗ hands it to `onNavigateFile` — so it is not a scheme at all.
+  if (url.slice(0, FILE_LINK_PREFIX.length).toLowerCase() === FILE_LINK_PREFIX) return url;
+
+  // Browsers strip control characters and whitespace from INSIDE a scheme
+  // before acting on it, so "java\nscript:x" is a javascript: URL however it
+  // reads here. Judge the flattened form, which is what the browser will see.
+  const flat = url.replace(/[\u0000-\u0020\u007f-\u00a0]/g, "");
+  const colon = flat.indexOf(":");
+  const pathStart = flat.search(/[/?#]/);
+  // No colon, or the path starts before it ("/a:b") — a relative link.
+  if (colon < 0 || (pathStart >= 0 && pathStart < colon)) return url;
+  return SAFE_URL_SCHEMES.includes(flat.slice(0, colon + 1).toLowerCase()) ? url : "";
+}
+
+/**
  * Coerce to a finite number.
  *
  * Note `Number(null)` and `Number("")` are both 0, not NaN — so absent values
@@ -1950,7 +2065,27 @@ function normalizeHexColor(raw: unknown): { hex: string; alpha?: number } | null
  * what can't be healed throws a user-facing message pointing at the damage.
  */
 export function parseLlmTemplate(llmText: string, opts?: ValidateOptions): DiagramTemplate {
-  return validateTemplate(parseLlmJson(llmText), opts);
+  return parseLlmTemplateReport(llmText, opts).template;
+}
+
+/**
+ * `parseLlmTemplate`, plus what the healer had to do to get there.
+ *
+ * `truncated` is the one a caller must not swallow: a reply cut off by
+ * max_tokens closes cleanly and validates cleanly, so the nodes and edges
+ * that never arrived are indistinguishable from ones the model chose to
+ * delete — and a refine merges that as a deletion.
+ */
+export function parseLlmTemplateReport(
+  llmText: string,
+  opts?: ValidateOptions,
+): { template: DiagramTemplate; repairs: string[]; truncated: boolean } {
+  const parsed = parseLlmJsonReport(llmText);
+  return {
+    template: validateTemplate(parsed.value, opts),
+    repairs: parsed.repairs,
+    truncated: parsed.truncated,
+  };
 }
 
 // ─── Geometry helpers ────────────────────────────────────────────────────────
@@ -2007,12 +2142,34 @@ export function templateBounds(
   // summing their local coords into root space would inflate the box with
   // phantom area no renderer draws.
   const drillHidden = hiddenInline(t, opts.containerKinds);
+  const byId = new Map(t.nodes.map((n) => [n.id, n]));
+  const containerSet = new Set(opts.containerKinds ?? CONTAINER_KINDS);
+
+  // A collapsed container draws a chip, not its stored (expanded) frame, and
+  // its contents draw nothing at all. Measuring either would leave a large
+  // blank region in the crop where the frame used to be.
+  const collapsed = new Set(
+    t.nodes.filter((n) => n.collapsed && containerSet.has(n.kind as string)).map((n) => n.id),
+  );
+  const insideCollapsed = (n: DiagramNode): boolean => {
+    let cur = n.parentId ? byId.get(n.parentId) : undefined;
+    const guard = new Set<string>([n.id]);
+    while (cur && !guard.has(cur.id)) {
+      if (collapsed.has(cur.id)) return true;
+      guard.add(cur.id);
+      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+    }
+    return false;
+  };
+
   const nodes = t.nodes.filter(
-    (n) => !drillHidden.has(n.id) && (!visible || visible.has(n.id)),
+    (n) =>
+      !drillHidden.has(n.id) &&
+      (!visible || visible.has(n.id)) &&
+      (!collapsed.size || !insideCollapsed(n)),
   );
   if (!nodes.length && !zones.length) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
 
-  const byId = new Map(t.nodes.map((n) => [n.id, n]));
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -2026,9 +2183,24 @@ export function templateBounds(
   };
 
   for (const zone of zones) extend(zone.x, zone.y, zone.w, zone.h);
+  const drawn = new Set<string>();
   for (const n of nodes) {
     const { x, y } = absolutePosition(n, byId);
-    extend(x, y, n.w, n.h);
+    const chip = collapsed.has(n.id);
+    extend(x, y, chip ? COLLAPSED_SIZE.w : n.w, chip ? COLLAPSED_SIZE.h : n.h);
+    drawn.add(n.id);
+  }
+
+  // Edge routes are drawn too. A waypoint dragged above the topmost node sits
+  // outside every box, so a bounds taken from boxes alone crops the arc: the
+  // line leaves the image and comes back. Only routes whose ends are both
+  // drawn count — a waypoint on an edge into a hidden node draws nothing.
+  const visibleEdges = opts.onlyVisible ? visibleElements(t).edges : null;
+  for (const e of t.edges) {
+    if (!e.points?.length) continue;
+    if (visibleEdges && !visibleEdges.has(e.id)) continue;
+    if (!drawn.has(e.source) || !drawn.has(e.target)) continue;
+    for (const [px, py] of e.points) extend(px, py, 0, 0);
   }
   return { minX, minY, maxX, maxY };
 }
@@ -2273,15 +2445,62 @@ export function stackLevels(
   boxes: ReadonlyArray<{ id: string; box: StackBox }>,
 ): Map<string, number> {
   const levels = new Map<string, number>();
+  if (!boxes.length) return levels;
+
+  // This runs on every canvas rebuild and every export, so the pair count is
+  // the thing to keep down. Below the threshold the flat scan is faster than
+  // the index that avoids it; above it, bucketing by cell turns "every card
+  // against every card" into "every card against its neighbours", which is
+  // what the answer actually depends on — two boxes that share no cell cannot
+  // overlap at all.
+  if (boxes.length < STACK_INDEX_MIN) {
+    for (const entry of boxes) {
+      let under = 0;
+      for (const other of boxes) {
+        if (other.id !== entry.id && sitsOn(other.box, entry.box)) under += 1;
+      }
+      levels.set(entry.id, Math.min(under, MAX_STACK_LEVEL));
+    }
+    return levels;
+  }
+
+  const cellsOf = (b: StackBox): string[] => {
+    const keys: string[] = [];
+    const x1 = Math.floor((b.x + b.width) / STACK_GRID);
+    const y1 = Math.floor((b.y + b.height) / STACK_GRID);
+    for (let cx = Math.floor(b.x / STACK_GRID); cx <= x1; cx += 1) {
+      for (let cy = Math.floor(b.y / STACK_GRID); cy <= y1; cy += 1) keys.push(`${cx}:${cy}`);
+    }
+    return keys;
+  };
+
+  const cells = new Map<string, Array<{ id: string; box: StackBox }>>();
   for (const entry of boxes) {
+    for (const key of cellsOf(entry.box)) {
+      const bucket = cells.get(key);
+      if (bucket) bucket.push(entry);
+      else cells.set(key, [entry]);
+    }
+  }
+
+  for (const entry of boxes) {
+    const near = new Set<{ id: string; box: StackBox }>();
+    for (const key of cellsOf(entry.box)) {
+      for (const other of cells.get(key) ?? []) near.add(other);
+    }
     let under = 0;
-    for (const other of boxes) {
+    for (const other of near) {
       if (other.id !== entry.id && sitsOn(other.box, entry.box)) under += 1;
     }
     levels.set(entry.id, Math.min(under, MAX_STACK_LEVEL));
   }
   return levels;
 }
+
+/** Grid cell size for the overlap index, in canvas px — about two cards wide. */
+const STACK_GRID = 256;
+/** Below this many boxes the flat scan beats building the index. */
+const STACK_INDEX_MIN = 64;
 
 /**
  * Map a validated template to React Flow nodes/edges.
@@ -2298,6 +2517,14 @@ export function toReactFlow(
     pointKinds?: readonly string[];
     /** Drop nodes hidden by the active provider selection. Default true. */
     applyVisibility?: boolean;
+    /**
+     * Fold collapsed containers and drill-in detail away. Default true — that
+     * is what a CANVAS shows. An exporter writing "the whole document" turns
+     * it off, or the file it produces silently lacks every folded group's
+     * contents and every card's internal level, with edges into them replaced
+     * by synthetic stand-ins.
+     */
+    applyCollapse?: boolean;
     /**
      * Keep hidden nodes on the canvas, flagged `data.ghost`, instead of
      * omitting them. Without this a provider-hidden node cannot be selected,
@@ -2339,7 +2566,10 @@ export function toReactFlow(
   const showHidden = opts.showHidden === true;
   // Collapse hides regardless of ghost mode — ghosts reveal provider-hidden
   // nodes for editing, but a collapsed group is intentional viewing state.
-  const collapseHidden = hiddenByCollapse(t, { containerKinds: opts.containerKinds });
+  const collapseHidden =
+    opts.applyCollapse === false
+      ? new Set<string>()
+      : hiddenByCollapse(t, { containerKinds: opts.containerKinds });
 
   const rendered = [...t.nodes]
     .filter((n) => !collapseHidden.has(n.id) && (!visible || showHidden || visible.nodes.has(n.id)))
@@ -2419,6 +2649,13 @@ export function toReactFlow(
             ? depth
             : LEAF_Z_INDEX + (levels.get(n.id) ?? 0) * STACK_BAND + depth,
         ...(n.locked ? { draggable: false } : {}),
+        // An OPEN container is dragged by its label bar, exactly as a zone is.
+        // With the whole frame as the drag surface there was no empty canvas
+        // inside a group to start a rubber band from, so its children could
+        // never be marquee-selected — and every press aimed at the space
+        // between them moved the group instead. A collapsed chip IS its label,
+        // so it keeps the whole surface.
+        ...(isContainer && !n.collapsed ? { dragHandle: ".as-group__label" } : {}),
         // Deliberately NOT `extent: "parent"`. That clamps a child inside its
         // container, which makes it impossible to drag a node back out of a
         // group. The editor re-parents on drop instead, so nesting stays
@@ -2806,8 +3043,12 @@ export const EXAMPLE_ZONED_TEMPLATE: DiagramTemplate = {
   nodes: [
     { id: "cdn", label: "CDN", kind: "gateway", icon: "globe", description: "Edge cache", parentId: null, zoneId: "region", x: 90, y: 130, w: 170, h: 76 },
     { id: "api", label: "REST API", kind: "service", icon: "box", description: "Node / TypeScript", parentId: null, zoneId: "region", tags: ["core"], url: "https://github.com/example/api", team: "Platform", x: 330, y: 130, w: 170, h: 76 },
-    { id: "wrk", label: "Worker", kind: "service", icon: "gear", description: "Background jobs", parentId: null, zoneId: "region", date: "2026-06-15", x: 330, y: 300, w: 170, h: 76 },
-    { id: "q", label: "Queue", kind: "queue", icon: "layers", description: "", parentId: null, zoneId: "region", date: "2026-06-15", x: 330, y: 440, w: 170, h: 64 },
+    // Ordered down the column the way the numbered flow runs — api ① queue
+    // ② worker. With the worker in the middle, the "enqueue" arrow ran
+    // straight THROUGH it and printed its label over the worker's own name,
+    // which was the first thing anyone opening the editor saw.
+    { id: "q", label: "Queue", kind: "queue", icon: "layers", description: "", parentId: null, zoneId: "region", date: "2026-06-15", x: 330, y: 300, w: 170, h: 64 },
+    { id: "wrk", label: "Worker", kind: "service", icon: "gear", description: "Background jobs", parentId: null, zoneId: "region", date: "2026-06-15", x: 330, y: 430, w: 170, h: 76 },
 
     // Exactly one of these three renders at a time.
     { id: "sql-az", label: "Azure SQL", kind: "database", icon: "database", description: "Managed, geo-replicated", parentId: null, zoneId: "region", providers: ["azure"], date: "2026-03-02", x: 590, y: 120, w: 180, h: 76 },
@@ -2828,6 +3069,8 @@ export const EXAMPLE_ZONED_TEMPLATE: DiagramTemplate = {
     { id: "z5", source: "api", target: "cache", label: "", style: "dotted", color: "rose" },
     { id: "z6", source: "api", target: "q", label: "enqueue", tech: "AMQP", seq: 1, style: "dashed", color: "violet" },
     { id: "z7", source: "q", target: "wrk", label: "consume", tech: "AMQP", seq: 2, style: "dashed", color: "violet" },
-    { id: "z8", source: "api", target: "pay", label: "charge", style: "solid", color: "emerald" },
+    // Pushed along the curve so the label clears the Redis cylinder it used
+    // to be printed on top of.
+    { id: "z8", source: "api", target: "pay", label: "charge", labelT: 0.78, style: "solid", color: "emerald" },
   ],
 };

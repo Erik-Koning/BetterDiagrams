@@ -21,7 +21,18 @@ export interface NodeKindDef {
   label: string;
   /** Node body background. Ignored for container/annotation kinds. */
   fill: string;
-  /** Left accent bar, icon tint, selection colour. */
+  /**
+   * Left accent bar, icon tint, selection colour.
+   *
+   * These are dark-canvas values and they are the FALLBACK, not the last
+   * word: a theme names its own per-kind accents (`Theme.nodeAccents`), which
+   * fan out to `--as-node-<kind>` custom properties, and any kind a theme does
+   * not name — a cloud pack's, a host's own — keeps the one declared here.
+   * Anything the stylesheet then draws as TEXT (the kind eyebrow, a key badge,
+   * the icon) is additionally pulled toward the body ink by
+   * `--as-node-ink-mix`, so even an unthemed kind's label clears AA on a
+   * light card, where the raw hue lands near 2.4:1.
+   */
   accent: string;
   /** Title text colour. */
   text: string;
