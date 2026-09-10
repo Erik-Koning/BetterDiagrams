@@ -129,6 +129,15 @@ export function emitSequence(
   const stamp = (start: number, id: string, day?: number) => {
     for (let i = start; i < cmds.length; i++) cmds[i].tag ??= { id, ...(day !== undefined ? { day } : {}) };
   };
+  /**
+   * Message text, held back for the final pass — nothing may cover a label.
+   * The same rule `emitTemplate` applies to a connection's name, and the same
+   * rule the canvas applies by rendering every message label through
+   * `EdgeLabelRenderer` (see MessageEdge). Emitted in one pass and MOVED
+   * afterwards: each message's text is the contiguous tail of its commands,
+   * so lifting it out costs one splice and keeps every tag with its command.
+   */
+  const labelCmds: DrawCmd[] = [];
 
   // Background + dot grid.
   cmds.push({ op: "path", d: `M ${minX} ${-PAD} h ${width} v ${height} h ${-width} Z`, fill: palette.bg });
@@ -325,17 +334,10 @@ export function emitSequence(
     stamp(headStart, `participant:${p.id}`, dayOf(p.date));
   });
 
-  // Messages.
-  const autonumber = t.meta?.autonumber === true;
-  t.messages.forEach((m, i) => {
-    const msgStart = cmds.length;
-    const y = rowY(i);
-    const dash = m.style === "sync" ? undefined : m.style === "async" ? [7, 5] : [4, 4];
-    pushMessage(cmds, palette, skin, order, m, i, y, dash, autonumber);
-    stamp(msgStart, `message:${m.id}`, dayOf(mDate.get(m.id)));
-  });
-
-  // Notes.
+  // Notes — BEFORE the messages, because that is the order the canvas paints
+  // them in (a note node sits at zIndex 700, a message edge at 800). A note
+  // drawn last covered the arrow running through it, which is the one thing
+  // an export may not disagree with the screen about.
   for (const { note, nx, ny, w, lines, h } of noteBoxes) {
     const noteStart = cmds.length;
     // Dog-eared note card.
@@ -353,6 +355,24 @@ export function emitSequence(
     );
     stamp(noteStart, `note:${note.id}`, dayOf(pDate.get(note.participant)));
   }
+
+  // Messages.
+  const autonumber = t.meta?.autonumber === true;
+  t.messages.forEach((m, i) => {
+    const msgStart = cmds.length;
+    const y = rowY(i);
+    const dash = m.style === "sync" ? undefined : m.style === "async" ? [7, 5] : [4, 4];
+    const textStart = pushMessage(cmds, palette, skin, order, m, i, y, dash, autonumber);
+    // Stamp BEFORE the splice, so the text carries this message's tag into the
+    // final pass — the HTML player scrubs both runs as one element.
+    stamp(msgStart, `message:${m.id}`, dayOf(mDate.get(m.id)));
+    labelCmds.push(...cmds.splice(textStart));
+  });
+
+  // Then every message label, over all of it. A row drawn later must never
+  // bury the row above it, and a note must never bury the arrow it annotates.
+  // Only the diagram's own chrome (title, version tag) paints after this.
+  cmds.push(...labelCmds);
 
   // Title + version tag, matching emitTemplate's corners.
   if (t.meta?.title) {
@@ -381,7 +401,14 @@ export function emitSequence(
   return { cmds, width, height, originX: -minX, originY: PAD };
 }
 
-/** One message row: line, arrowhead(s), label, tech, optional number badge. */
+/**
+ * One message row: line, arrowhead(s), label, tech, optional number badge.
+ *
+ * Returns the index at which this message's TEXT begins. Everything from
+ * there down is words, and words paint in the final pass (see `labelCmds`),
+ * so the run is kept contiguous at the tail on every branch — a caller lifts
+ * it out with a single splice.
+ */
 function pushMessage(
   cmds: DrawCmd[],
   palette: ExportPalette,
@@ -392,7 +419,7 @@ function pushMessage(
   y: number,
   dash: number[] | undefined,
   autonumber: boolean,
-): void {
+): number {
   const color = palette.textDim;
   const number = autonumber ? `${index + 1}. ` : "";
   const labelText = `${number}${m.label}`;
@@ -417,13 +444,14 @@ function pushMessage(
       dash,
     });
     arrowAt(x + 1, -1, open);
+    const selfTextStart = cmds.length;
     cmds.push({ op: "text", x: x + 12, y: y - 16, text: labelText, size: skin.labelSize, font: skin.labelFont, ...(skin.marketing ? { weight: 500 } : {}), color: skin.labelColor, knockout: { color: palette.bg, padX: 4, height: 15 } });
     const selfTech = m.tech && skin.edgeTech;
     if (selfTech) cmds.push({ op: "text", x: x + 12, y: y + 26, text: `[${m.tech}]`, size: 9, font: "mono", color: palette.textDim, alpha: 0.8 });
     if (m.date) {
       cmds.push({ op: "text", x: x + 12, y: y + (selfTech ? 37 : 26), text: exportDate(m.date), size: 9, font: skin.chipFont, color: palette.textDim, alpha: 0.7 });
     }
-    return;
+    return selfTextStart;
   }
 
   // Lost/found: a stub from/to a filled dot in the environment.
@@ -439,6 +467,7 @@ function pushMessage(
   if (m.to === null) cmds.push({ op: "circle", cx: x2, cy: y, r: 4, fill: color });
 
   const midX = (x1 + x2) / 2;
+  const textStart = cmds.length;
   if (labelText.trim()) {
     cmds.push({ op: "text", x: midX, y: y - 6, text: labelText, size: skin.labelSize, font: skin.labelFont, ...(skin.marketing ? { weight: 500 } : {}), color: skin.labelColor, anchor: "middle", knockout: { color: palette.bg, padX: 4, height: 15 } });
   }
@@ -448,4 +477,5 @@ function pushMessage(
   if (m.date) {
     cmds.push({ op: "text", x: midX, y: y + (m.tech ? 24 : 13), text: exportDate(m.date), size: 9, font: "mono", color: palette.textDim, alpha: 0.7, anchor: "middle", knockout: { color: palette.bg, padX: 3, height: 11 } });
   }
+  return textStart;
 }

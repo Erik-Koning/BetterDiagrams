@@ -6,7 +6,7 @@ test.describe("paths", () => {
 
     // Offered because the example names two flows. The label counts the lit ones.
     const menuButton = studio.root.getByRole("button", { name: /^Paths/ });
-    await expect(menuButton).toHaveText("Paths ▾");
+    await expect(menuButton).toHaveText("Paths");
     await menuButton.click();
     const menu = studio.root.getByRole("menu");
     await menu.getByRole("checkbox", { name: "Background job" }).check();
@@ -22,7 +22,7 @@ test.describe("paths", () => {
     await expect(flow).toHaveClass(/as-edge--c-violet/);
     await expect(page.locator('.react-flow__edge[data-id="z1"] .as-edge__flow')).toHaveCount(0);
     await expect(studio.root.locator(".as-legend")).toContainText("Background job");
-    await expect(menuButton).toHaveText("Paths (1) ▾");
+    await expect(menuButton).toHaveText("Paths (1)");
 
     // Everything at once.
     await menu.getByRole("menuitem", { name: "Select all" }).click();
@@ -44,7 +44,7 @@ test.describe("paths", () => {
     await expect(studio.node("q")).not.toHaveClass(/as-path-node/);
     await expect(page.locator(".as-edge__flow")).toHaveCount(0);
     await expect(studio.root.locator(".as-legend")).not.toContainText("Background job");
-    await expect(menuButton).toHaveText("Paths ▾");
+    await expect(menuButton).toHaveText("Paths");
   });
 });
 

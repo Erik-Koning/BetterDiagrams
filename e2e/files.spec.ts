@@ -9,12 +9,12 @@ test.describe("the workspace of files", () => {
     await expect(studio.participant("Payment Gateway")).toBeVisible();
     await expect(studio.message("POST /orders")).toBeVisible();
     // The host's header follows the active file's kind.
-    await expect(page.getByRole("button", { name: "⇄ Architecture" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "→ Sequence" })).toBeHidden();
+    await expect(page.getByRole("button", { name: "Architecture" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Derive sequence" })).toBeHidden();
 
     await studio.openFile(ARCH_FILE);
     await expect(studio.nodeTitled("REST API")).toBeVisible();
-    await expect(page.getByRole("button", { name: "→ Sequence" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sequence", exact: true })).toBeVisible();
   });
 
   test("the active file is remembered across a reload", async ({ page, studio }) => {
@@ -98,10 +98,10 @@ test.describe("the workspace of files", () => {
     await expect(studio.participant("Customer")).toBeVisible();
   });
 
-  test("→ Sequence derives a new sequence file from the numbered flow", async ({ page, studio }) => {
+  test("Derive sequence derives a new sequence file from the numbered flow", async ({ page, studio }) => {
     await studio.goto();
 
-    await page.getByRole("button", { name: "→ Sequence" }).click();
+    await page.getByRole("button", { name: "Derive sequence" }).click();
     for (const label of ["REST API", "Queue", "Worker"]) {
       await expect(studio.participant(label)).toBeVisible();
     }

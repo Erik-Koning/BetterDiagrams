@@ -61,7 +61,7 @@ describe("SequenceStudio", () => {
     const onChange = vi.fn();
     mount(<SequenceStudio defaultValue={example} onChange={onChange} />);
 
-    await user.click(screen.getByRole("button", { name: "Insert ▾" }));
+    await user.click(screen.getByRole("button", { name: "Insert" }));
     await user.click(screen.getByRole("menuitem", { name: /^Participant / }));
 
     const latest = onChange.mock.calls.at(-1)![0] as SequenceTemplate;
@@ -294,7 +294,7 @@ describe("SequenceStudio", () => {
     // Mounting alone commits nothing.
     expect(seen).toHaveLength(0);
 
-    await user.click(screen.getByRole("button", { name: "Insert ▾" }));
+    await user.click(screen.getByRole("button", { name: "Insert" }));
     await user.click(screen.getByRole("menuitem", { name: /^Actor / }));
 
     expect(seen.length).toBeGreaterThanOrEqual(1);
@@ -389,7 +389,7 @@ describe("SequenceStudio", () => {
     );
 
     expect(screen.queryByText("seq·studio")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Order flow ▾" }));
+    await user.click(screen.getByRole("button", { name: "Order flow" }));
     await user.click(screen.getByRole("menuitem", { name: /Refunds/ }));
     expect(onFileSelect).toHaveBeenCalledWith("s2");
   });
@@ -407,7 +407,7 @@ describe("SequenceStudio", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Order flow ▾" }));
+    await user.click(screen.getByRole("button", { name: "Order flow" }));
     await user.click(screen.getByRole("button", { name: "Rename Order flow" }));
     const input = screen.getByLabelText("File name");
     await user.clear(input);
@@ -434,7 +434,7 @@ describe("SequenceStudio", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Order flow ▾" }));
+    await user.click(screen.getByRole("button", { name: "Order flow" }));
     await user.click(screen.getByRole("button", { name: "Delete Refunds" }));
     await user.click(screen.getByRole("button", { name: "Delete file" }));
     expect(onFileDelete).toHaveBeenCalledWith("s2");
@@ -442,10 +442,10 @@ describe("SequenceStudio", () => {
 
   it("hides editing affordances in readOnly mode", () => {
     const { container } = mount(<SequenceStudio defaultValue={example} readOnly />);
-    expect(screen.queryByRole("button", { name: "Insert ▾" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Insert" })).not.toBeInTheDocument();
     expect(container.querySelector(".as-seq-lifeline__hit")).toBeNull();
     // Export stays available.
-    expect(screen.getByRole("button", { name: "Export ▾" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export" })).toBeInTheDocument();
   });
 
   it("still draws the messages when editing is disabled", async () => {
@@ -535,7 +535,7 @@ describe("SequenceStudio", () => {
 
     // Editing stays live while scrubbing — and the commit it causes must not
     // destroy the hidden June participant or its messages.
-    await user.click(screen.getByRole("button", { name: "Insert ▾" }));
+    await user.click(screen.getByRole("button", { name: "Insert" }));
     await user.click(screen.getByRole("menuitem", { name: /Participant/ }));
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     const last = onChange.mock.calls.at(-1)![0] as SequenceTemplate;
@@ -600,7 +600,7 @@ describe("multi-state export modal", () => {
     const user = userEvent.setup();
     mount(<SequenceStudio defaultValue={dated} />);
 
-    await user.click(screen.getByRole("button", { name: "Export ▾" }));
+    await user.click(screen.getByRole("button", { name: "Export" }));
     await user.click(screen.getByRole("menuitem", { name: /SVG vector/ }));
     const dialog = screen.getByRole("dialog", { name: "Export SVG" });
     // No zone axes in a sequence — the one fieldset is the dates.
@@ -617,7 +617,7 @@ describe("multi-state export modal", () => {
     const user = userEvent.setup();
     mount(<SequenceStudio defaultValue={example} />);
 
-    await user.click(screen.getByRole("button", { name: "Export ▾" }));
+    await user.click(screen.getByRole("button", { name: "Export" }));
     await user.click(screen.getByRole("menuitem", { name: /SVG vector/ }));
     expect(screen.queryByRole("dialog", { name: "Export SVG" })).not.toBeInTheDocument();
     await screen.findByText("Exported sequence.svg");
@@ -671,7 +671,7 @@ describe("welcome modal type picker (cross-kind insert)", () => {
       "true",
     );
 
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
     expect(onFileCreate).toHaveBeenCalledTimes(1);
     const init = onFileCreate.mock.calls[0][0];
     expect(init.kind).toBe("architecture");

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createRegistry as resolveRegistry } from "./create-registry";
-import { kindDef, iconPaths, zoneFill, zoneInk } from "./registry-types";
+import { kindDef, iconPaths, providerDef, zoneFill, zoneInk } from "./registry-types";
 import { silhouettePath } from "./shapes";
 import { LIGHT_THEME, themeToStyle } from "./theme";
 import {
@@ -62,6 +62,47 @@ describe("the icon set", () => {
 
   it("offers every name in the picker's list", () => {
     expect(resolveRegistry().iconNames.sort()).toEqual([...ICON_NAMES].sort());
+  });
+});
+
+describe("cloud component icons", () => {
+  const iconOf = (id: string) => kindDef(resolveRegistry(), id).icon;
+
+  it("tells the three shapes of GCP compute apart", () => {
+    // The whole point of the per-service layer: a VM, a function, a
+    // serverless container and a cluster used to be one bolt and one gear.
+    const compute = ["gcp-compute", "gcp-functions", "gcp-cloud-run", "gcp-gke"].map(iconOf);
+    expect(new Set(compute).size).toBe(compute.length);
+    expect(iconOf("gcp-compute")).toBe("server");
+    expect(iconOf("gcp-functions")).toBe("bolt");
+    expect(iconOf("gcp-cloud-run")).toBe("box");
+    expect(iconOf("gcp-gke")).toBe("grid");
+  });
+
+  it("gives the same thing the same glyph across clouds", () => {
+    for (const group of [
+      ["aws-ec2", "azure-vm", "gcp-compute"],
+      ["aws-eks", "azure-aks", "gcp-gke"],
+      ["aws-lambda", "azure-functions", "gcp-functions"],
+      ["aws-s3", "azure-blob", "gcp-storage"],
+      // Cloud Run and Container Apps are the same product idea filed under
+      // different roles; the icon is what makes them read alike.
+      ["gcp-cloud-run", "azure-container-apps"],
+    ]) {
+      expect(new Set(group.map(iconOf)).size, group.join(" / ")).toBe(1);
+    }
+  });
+
+  it("does not confuse a load balancer with an API front door", () => {
+    expect(iconOf("gcp-load-balancing")).not.toBe(iconOf("gcp-api-gateway"));
+  });
+
+  it("still resolves every cloud kind to a glyph that exists", () => {
+    const r = resolveRegistry();
+    for (const id of r.kindOrder) {
+      const icon = kindDef(r, id).icon;
+      expect(r.iconNames, `${id} uses an unregistered icon "${icon}"`).toContain(icon);
+    }
   });
 });
 
@@ -729,10 +770,26 @@ describe("zone styling", () => {
       edges: [],
     });
 
-  it("zoneInk: the override wins, else the provider, else the fallback grey", () => {
+  it("zoneInk: the override wins, else the provider, else a colour of the id's own", () => {
     expect(zoneInk(registry, { provider: "azure" })).toBe("#0078d4");
     expect(zoneInk(registry, { provider: "azure", color: "#22c55e" })).toBe("#22c55e");
-    expect(zoneInk(registry, { provider: "no-such-provider" })).toBe("#64748b");
+    // An unregistered provider — what every one typed into the zone
+    // inspector starts as — gets a stable colour derived from its id rather
+    // than the one shared grey that made all of them look alike.
+    const render = zoneInk(registry, { provider: "render" });
+    expect(render).toMatch(/^#[0-9a-f]{6}$/);
+    expect(render).not.toBe("#64748b");
+    expect(zoneInk(registry, { provider: "render" })).toBe(render);
+    expect(zoneInk(registry, { provider: "vercel" })).not.toBe(render);
+    // No provider at all still falls all the way back.
+    expect(zoneInk(registry, { provider: "" })).toBe("#64748b");
+  });
+
+  it("names an unregistered provider instead of printing its id", () => {
+    expect(providerDef(registry, "render").label).toBe("Render");
+    expect(providerDef(registry, "my-cloud").label).toBe("My Cloud");
+    // A registered one is untouched.
+    expect(providerDef(registry, "azure").label).toBe("Azure");
   });
 
   it("zoneFill derives the dull tint from the ink", () => {

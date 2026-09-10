@@ -103,7 +103,7 @@ export function NestingModal({
       ) : null}
 
       <div className="as-modal__actions">
-        <button type="button" className="as-btn" onClick={onCancel}>
+        <button type="button" className="as-btn as-btn--outline" onClick={onCancel}>
           Cancel
         </button>
         <button type="button" className="as-btn as-btn--primary" onClick={() => onConfirm(kind)}>

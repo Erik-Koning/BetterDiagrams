@@ -6,7 +6,7 @@ test.describe("workspace shell", () => {
 
     await expect(page).toHaveTitle(/Architecture Studio/);
     await expect(page.getByRole("heading", { level: 1, name: "BetterDiagrams" })).toBeVisible();
-    await expect(studio.fileButton).toHaveText(exact(`${ARCH_FILE} ▾`));
+    await expect(studio.fileButton).toHaveText(exact(`${ARCH_FILE}`));
 
     for (const label of ["CDN", "REST API", "Queue", "Worker", "Payments"]) {
       await expect(studio.nodeTitled(label)).toBeVisible();

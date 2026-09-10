@@ -175,8 +175,29 @@ export const ZoneNode = memo(function ZoneNode({ id, data, selected }: NodeProps
         />
       )}
 
-      {/* The only interactive part, and the drag handle. */}
-      <div className="as-zone__header">
+      {/* The grab pad: the region's interior, as a drag surface.
+
+          A zone used to be movable only by the small chip at its top-left
+          corner, because its body was left click-through so a press inside it
+          would reach the node on top or the canvas beneath. That made a region
+          the one thing on the canvas you could not simply pick up — and when a
+          new zone landed with its chip under the toolbar, it could not be moved
+          at all.
+
+          So the interior is a drag surface from the first press, the way a node
+          is: mouse down and go, with no click to select first. Nodes still sit
+          above it and keep their own presses, and the Select tool's rubber band
+          takes the pointer on CAPTURE (see marquee.ts), so banding out from
+          inside a region still works. What it costs is the press on empty space
+          inside a zone that used to clear the selection; that is the Escape key
+          and the canvas outside the region.
+
+          Locked zones opt out — React Flow already refuses to drag them, and a
+          pad would swallow presses to no purpose. */}
+      {!readOnly && !zone.locked ? (
+        <div className="as-zone__pad as-zone__grab" aria-hidden="true" />
+      ) : null}
+      <div className="as-zone__header as-zone__grab">
         <span className="as-zone__swatch" aria-hidden="true" />
         <span className="as-zone__label" title={zone.label}>
           {zone.label}

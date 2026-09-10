@@ -88,7 +88,7 @@ shadow.
 | `defaultShowHidden` | `boolean` | Start with provider-hidden nodes ghosted rather than omitted. Default `false`. |
 | `diffBase` | `DiagramTemplate` | Baseline to compare against: the canvas becomes a read-only diff view (added/removed/changed) while set. The toolbar's Compare button offers the same via a file picker. |
 | `filename` | `string` | Base name for exports. Default `"architecture"`. |
-| `files` / `activeFileId` / `onFileSelect` / `onFileCreate` / `onFileRename` / `onFileDelete` | `StudioFile[]`, callbacks | When `files` is provided the brand becomes a **file selector** (switch, ＋ new, ✎ rename, × delete). The host owns all storage — the editor only calls back. Both editors take these. **The file name and the document's `meta.title` are one title with two homes**: renaming the active file writes `meta.title` (committed, emitted, undoable), and a document title arriving any other way — AI generation, import, a controlled `value` — is pushed back out through `onFileRename`, so the dropdown always shows what exports will print. The sync is a reconciler, not two blind pushes: on a mismatch, *which side moved since they last agreed* decides — a title edit (including undo) renames the file, while a **host-side rename** (another tab, the host's own UI, a changed `files` prop) is adopted as the document's new title rather than being reverted; when both moved at once, the document wins. The editor can only do this for the document it holds; a host that stores the other documents should mirror renames into them too (the example app does). Set `StudioFile.empty` and a blank file deletes straight away; anything else asks for confirmation first. `onFileCreate` receives an optional `StudioFileInit` (`{ name?, kind?, doc? }`): the menu's ＋ New file passes nothing, the welcome modal passes a name and — when JSON was inserted — a validated document to seed the file with. |
+| `files` / `activeFileId` / `onFileSelect` / `onFileCreate` / `onFileRename` / `onFileDelete` | `StudioFile[]`, callbacks | When `files` is provided the brand becomes a **file selector** (switch, new, rename, delete). The host owns all storage — the editor only calls back. Both editors take these. **The file name and the document's `meta.title` are one title with two homes**: renaming the active file writes `meta.title` (committed, emitted, undoable), and a document title arriving any other way — AI generation, import, a controlled `value` — is pushed back out through `onFileRename`, so the dropdown always shows what exports will print. The sync is a reconciler, not two blind pushes: on a mismatch, *which side moved since they last agreed* decides — a title edit (including undo) renames the file, while a **host-side rename** (another tab, the host's own UI, a changed `files` prop) is adopted as the document's new title rather than being reverted; when both moved at once, the document wins. The editor can only do this for the document it holds; a host that stores the other documents should mirror renames into them too (the example app does). Set `StudioFile.empty` and a blank file deletes straight away; anything else asks for confirmation first. `onFileCreate` receives an optional `StudioFileInit` (`{ name?, kind?, doc? }`): the menu's New file row passes nothing, the welcome modal passes a name and — when JSON was inserted — a validated document to seed the file with. |
 | `removedFiles` / `onFileRestore` | `StudioFile[]`, `(id) => void` | Deleted documents the host still holds. The menu grows a **Recently removed…** entry opening a recovery modal. |
 | `onNavigateFile` | `(ref) => void` | Fired when a node url with the `file:` prefix (e.g. `file:Order flow`) has its ↗ clicked — resolve by id, then name, and switch documents. |
 | `onSelectionChange` | `(sel) => void` | The canvas selection in **document terms** — ids bucketed by template section (`{ nodes, edges, zones }` here; `{ participants, messages, activations, fragments, notes }` on the sequence editor), so a host can mirror it, e.g. highlight the matching entries of a live JSON view (the example app does exactly this). Fires on mount too, so a host that remounts per file never keeps a stale selection. |
@@ -174,8 +174,11 @@ keeps a single copy of `@codemirror/state`.
 A curated set of components per big cloud ships as first-class node kinds — AWS (`aws-lambda`,
 `aws-s3`, `aws-dynamodb`, `aws-bedrock`, …), Azure (`azure-functions`, `azure-app-service`, `azure-cosmos`,
 `azure-openai`, …), GCP (`gcp-cloud-run`, `gcp-pubsub`, `gcp-bigquery`, `gcp-vertex-ai`, …) —
-each styled in its provider's brand palette with a role-appropriate icon and silhouette
-(databases are cylinders, queues are pipes).
+each styled in its provider's brand palette with a silhouette by role (databases are cylinders,
+queues are pipes) and an icon chosen per service where the role is too coarse: a virtual machine
+is a `server`, a serverless container is a `box`, a function is a `bolt`, and a managed
+Kubernetes cluster is a `grid`, so Compute Engine, Cloud Run, Cloud Functions and GKE read
+apart at a glance, and EC2, Azure VM and Compute Engine read alike across clouds.
 
 - **Always valid data**: cloud kinds are registered built-ins, so pasting, validation, and the
   schema lint accept them in any document. Relevance only shapes the UI.
@@ -267,7 +270,7 @@ double-clicking the note.
 ### Paths: named flows the reader can light up
 
 A document may name **paths** — ordered walks through the diagram, each with a title — and the
-toolbar's **Paths ▾** menu lists them. Tick one and every node and arrow on it glows in that
+toolbar's **Paths** menu lists them. Tick one and every node and arrow on it glows in that
 path's colour; tick several and each keeps its own colour, with a key in the corner legend. The
 glow pulses, and the bright spot travels the walk from its first step to its last while each
 arrow's dashes run the way the walk takes it — against the arrowhead when the flow goes back up
@@ -468,7 +471,7 @@ only a line with no waypoints at all gets a new one, at a deliberately blunt thr
 the same line by its label repeatedly moves one dot instead of leaving a trail of them.
 **Double-click the line or its label to edit the label inline.**
 Drag a waypoint to move it, double-click the dot to remove it, or *Clear route* in the
-inspector (or right-click). *Arrange ▾ → Clear routes* does the whole canvas at once — or just
+inspector (or right-click). *Arrange → Clear routes* does the whole canvas at once — or just
 the selected lines, the same scope rule Tidy uses — and says how many it changed. However many
 lines any of them touches, it is **one undo**: `⌘Z` puts every route back in a single step. On a selected edge, **drag an endpoint handle** to pin exactly where
 the line attaches — anywhere along any side of its box — or drop it on another node to
@@ -603,12 +606,20 @@ provider does. `EXAMPLE_ZONED_TEMPLATE` is exactly this diagram; the example app
 | Legend | Corner panel listing providers on show, with a count and how many nodes are hidden. |
 | Shapes | `rect`, `rounded`, `ellipse`, `hexagon`, `polygon` — the last with draggable vertices (press an edge midpoint to add a point and keep holding to place it; double-click a vertex to remove; drag a vertex past the box edge and the zone grows to hold it). |
 | Membership | Assigned on drop using **shape-aware** containment, so an L-shaped zone's notch isn't "inside" it. Overlaps resolve by highest `z`, then smallest area. |
+| Moving one | Press anywhere on it and go, the way a node moves — the header chip and the whole interior are both drag surfaces from the first mouse-down, with no click to select first. Nodes sit above it and keep their own presses, and the Select tool (`M`) takes the pointer first, so a rubber band still starts inside a region. **Its members travel with it**, the way resizing one already scaled them — a node nested in a container moves with the container rather than twice, and a member living on a drilled-in level is left where it is. Anything the region is dragged *over* is enrolled on drop, as before. A **locked** zone has no drag surface at all. |
+| Where a new one lands | *Insert ▾ → Zone* puts it in the first corner of the visible canvas that is clear of every node and zone, sized to fit the viewport. If no corner is free it goes below the diagram and the canvas pans to it. It arrives selected, so it can be dragged immediately. |
 
 Providers are registry-extensible like everything else:
 
 ```jsx
 registry={{ providers: { fly: { label: "Fly.io", color: "#8b5cf6" }, aws: { color: "#ff9d2e" } } }}
 ```
+
+A provider that is **not** registered still works — the zone inspector's *Supports* row takes any
+name as free text, which is how you add one without touching the registry. It is named from its id
+(`render` reads as "Render", `my-cloud` as "My Cloud") and given a colour derived from that id, so
+two hand-added providers never look alike. Register it when you want the real brand colour, a
+label the id can't spell, or an icon.
 
 Programmatic control, if you'd rather drive it from your own UI:
 
@@ -727,7 +738,7 @@ Image exports draw zones behind everything, honour the active provider selection
 and their edges are omitted, and the crop tightens to what's visible), and stamp the legend into
 the corner so the file explains its own colours — in a gutter of its own, so it never lands on
 the diagram. Dates in an export always carry the year: a picture outlives the calendar. With
-something selected, Export ▾ offers **Selection only**, which narrows the PICTURE formats to the
+something selected, Export offers **Selection only**, which narrows the PICTURE formats to the
 selected subgraph (descendants and internal wiring included, the same rule Copy uses). Document
 formats never narrow — "export → save to your database" must not quietly become "save only what
 I had highlighted". Mermaid can't express overlapping regions, so it
@@ -771,18 +782,18 @@ The schema and editor cover C4's notational essentials:
 | **Direction** — `forward` / `both` / `none` arrowheads | `edge.direction` |
 | **End glyphs** — solid arrow, open chevron, hollow diamond (aggregation), circle, bar | `edge.startHead` / `edge.endHead`; an explicit `startHead` renders even on a `forward` edge. Drawn back from the attachment so nodes can't cover them |
 | **Self-loops** | `source === target` draws a retry arrow out one face and back into an adjacent one; drag an edge's endpoint onto its own source to make one |
-| **Routing** — curved / right-angle / straight | `meta.routing` sets the diagram default (Arrange ▾ → connector picker); `edge.routing` overrides per edge. Right-angle elbows are rounded |
-| **Flow-chart kinds** — `decision` (diamond), `terminator` (stadium), `io` (parallelogram) | Insert ▾ or the kind picker; Mermaid exports each by its shape |
+| **Routing** — curved / right-angle / straight | `meta.routing` sets the diagram default (Arrange → connector picker); `edge.routing` overrides per edge. Right-angle elbows are rounded |
+| **Flow-chart kinds** — `decision` (diamond), `terminator` (stadium), `io` (parallelogram) | Insert or the kind picker; Mermaid exports each by its shape |
 | **Language models** — `lm-small`, `lm-medium`, `llm` | One hue at three strengths, so the weight class is legible at a glance: a 1B router never looks like a frontier model. Provider-neutral — name the model in `description` ("Phi-3 mini", "Claude Opus 5"); use a cloud's own kind (`azure-openai`, `aws-bedrock`, `gcp-vertex-ai`) when the box is the hosting *service* |
 | **Collapsible groups** | ▾ on a group collapses it to a chip; contents hide, their edges re-route to the chip, and the stored size survives expand. Never destructive — collapse is view state that rides the undo stack |
-| **Tags + filter** | `node.tags`; the View ▾ tag filter dims non-matching nodes — dim only, never hide, so the filter can't touch what persists |
+| **Tags + filter** | `node.tags`; the View tag filter dims non-matching nodes — dim only, never hide, so the filter can't touch what persists |
 | **Doc links** | `node.url` renders an ↗ affix (a real link in read-only) |
-| **Team ownership** | `node.team` renders a tag riding the node's edge, coloured stably per team name (same hue on screen and in image exports); View ▾ → Show team badges toggles them while editing |
+| **Team ownership** | `node.team` renders a tag riding the node's edge, coloured stably per team name (same hue on screen and in image exports); View → Show team badges toggles them while editing |
 | **Lifecycle status** | `node.status`: `proposed` (dotted) / `planned` (dashed) / `stubbed` (heavy construction dashes + faint hatch — scaffolding with no implementation) / `dark` (black/white hazard-tape outline — built and shipped but not yet enabled) / `active` (default, never stored) / `deprecated` (dimmed, salmon status text sharpening to red on hover/selection) / `retired` (dimmed + struck through). Every dulled stage brightens to full strength under the cursor so its label stays readable. Same conventions in image exports; C4-PlantUML gets `$tags` |
-| **Version tag** | `meta.versionTag` ("v2.1", "2026-Q3 draft") renders as a corner notice — `meta.versionTagPosition` picks the corner; click it to edit, View ▾ → Set version tag… to create one. Stamped into image exports |
+| **Version tag** | `meta.versionTag` ("v2.1", "2026-Q3 draft") renders as a corner notice — `meta.versionTagPosition` picks the corner; click it to edit, View → Set version tag… to create one. Stamped into image exports |
 | **Lock** | `node.locked` / zone lock pins an element against drags and resizes |
 | **Search** | ⌘K, matches id/label/description/kind/tags, Enter cycles and centres |
-| **Snap & align** | Arrange ▾: snap-to-grid, align left/centre/right/top/middle/bottom (2+ selected), distribute (3+), clear routes |
+| **Snap & align** | Arrange: snap-to-grid, align left/centre/right/top/middle/bottom (2+ selected), distribute (3+), clear routes |
 | **Title block** | `meta.title` stamps exported images |
 | **C4-PlantUML export** | `Person`/`ContainerDb`/`ContainerQueue`/`System_Ext`/`Container`, `Container_Boundary` for groups, `Deployment_Node` for zones, `Rel`/`BiRel` with tech |
 
@@ -801,7 +812,7 @@ save, theming, version tag) but sequence-style:
 | Participants | `participants[]` — `kind` (actor/service/database/queue/external), `team`, `status` | Header row; drag a header past the halfway point to reorder columns |
 | Messages | `messages[]` — `style` (sync/async/reply), `tech`, self-messages (`from === to`), lost/found (`null` endpoint, pick "(the environment)" as an end) | Horizontal arrows; click the label to select, **drag it up/down to reorder time**; drag between headers to connect |
 | Activation bars | `activations[]` — anchored to message ids | **Press-drag on a lifeline to add one** (a click selects the column instead), resize its ends, Delete to remove |
-| Fragments | `fragments[]` — loop/alt/opt/par/break with else branches | Frames with operator tabs; wrap the selected messages via Insert ▾. Branch guards are editable and removable one at a time, and `+ branch` is offered only on the kinds that can hold one |
+| Fragments | `fragments[]` — loop/alt/opt/par/break with else branches | Frames with operator tabs; wrap the selected messages via Insert. Branch guards are editable and removable one at a time, and `+ branch` is offered only on the kinds that can hold one |
 | Notes | `notes[]` — side, anchor message | Dog-eared cards; drag onto another lifeline to re-anchor, above the first row to float free |
 
 The document stores **no coordinates**: participant column = array order, message time = array
@@ -843,7 +854,7 @@ from the active architecture — it never overwrites an existing document.
 
 The example app also carries a **⇄ mode switch** (flips a blank file between architecture and
 sequence in place; on a file with content it opens a new blank file of the other type) and a
-**✦ Copy schema** button. On an architecture file that button opens the `SchemaCopyModal`
+**Copy schema** button. On an architecture file that button opens the `SchemaCopyModal`
 described above — which clouds and which of their resources the copied contract should teach,
 seeded with the open document's own — rather than copying blind; sequence files have no
 provider vocabulary to scope, so they copy straight to the clipboard.
@@ -854,14 +865,14 @@ the repo root, one plain `.json` per document, debounced. Renaming a file rename
 deletes the old one; deleting a file deletes it. `scratch/` is git-ignored — it's rewritten
 every session — while `templates/examples/` is tracked, curated, and read-only to the app:
 drop a template there (or copy one up from scratch) and it's loadable but never overwritten.
-Both folders appear under **Settings ▾ → Templates**, re-read each time the menu opens. The
+Both folders appear under **Settings → Templates**, re-read each time the menu opens. The
 files are ordinary templates — the same shape Import and the paste box accept. The route
 exists only in the dev server: a built app finds nothing there and carries on with
 localStorage, which is still the app's own source of truth.
 
 **AI is optional, per editor.** Pass the same `generate` function the architecture editor takes
 (`createProxyGenerator` works unchanged — the sequence system prompt travels with each request)
-and the Sequence tab gains the ✦ AI panel: a context box for describing who participates, how
+and the Sequence tab gains the AI panel: a context box for describing who participates, how
 the flow goes, and the steps in order, plus a refine input against the current document. Omit
 `generate` and no network code runs; the example app's "AI panel" checkbox toggles it for both
 tabs.
@@ -918,7 +929,7 @@ image exports, so a roadmap survives into the shared artefact.
 
 The dates **are** the timeline — there is no separate phases structure to keep in sync with the
 diagram. `templateTimeline(doc)` collects the distinct dates into ascending *stops*, and the
-toolbar's **⏱ Timeline** button appears as soon as one element is dated. The cursor is a
+toolbar's **Timeline** button appears as soon as one element is dated. The cursor is a
 **date, not a stop index**: scrubbing is continuous over days, so "what did this look like on
 the 20th of April" is answerable even though nothing is dated then. The stops still matter —
 each gets a tick, and the handle **snaps** to one whenever it comes within a few pixels (the
@@ -955,7 +966,7 @@ the whole document from every format, because that is what it is showing. Dates 
 Mermaid exports as well as the image ones; C4-PlantUML has no honest slot for them (`$tags` is a
 styling hook), so they are omitted there.
 
-**Interactive HTML** (Export ▾ → Interactive HTML, both editors) writes one self-contained
+**Interactive HTML** (Export → Interactive HTML, both editors) writes one self-contained
 `.html` file — no network requests, no dependencies — with the diagram as inline SVG and the
 timeline scrubber working *inside the file*: continuous over days with snap-to-stop, hover
 landing preview, a click-to-type date readout, ◀ ▶ / arrow-key stop stepping, and an "N ahead"
@@ -1023,7 +1034,7 @@ node's edges" when they are simply underneath. A fragment also carries **absolut
 for its roots, so copying a node out of a group puts the copy beside it rather than wherever its
 parent-relative numbers happened to point.
 
-**Duplicate** (`⌘D`, or the ⧉ button in the inspector) is different by design: it happens in
+**Duplicate** (`⌘D`, or the duplicate button in the inspector) is different by design: it happens in
 the same document, so it carries the selection's **direct connections** — internal lines clone
 between the copies, and boundary lines re-attach their cloned end to the copy while keeping the
 original neighbour (`duplicateWithConnections` in the contract).
@@ -1032,10 +1043,10 @@ original neighbour (`duplicateWithConnections` in the contract).
 node references it is *reused* by id when pasting into the same diagram (pasting a node from
 "Cloud Region" must not spawn a second region), but a zone you select and copy is a **subject**
 — it brings its member nodes and their internal edges, and paste always clones it under a fresh
-id, re-zoning the copied members into the clone. `⌘D` / ⧉ on a zone duplicates the whole region
+id, re-zoning the copied members into the clone. `⌘D` (or the duplicate button) on a zone duplicates the whole region
 with its members and mirrors their boundary connections.
 
-**Show hidden nodes** (View ▾) ghosts the nodes the active provider hides, so they stay
+**Show hidden nodes** (View) ghosts the nodes the active provider hides, so they stay
 selectable and editable instead of being unreachable. Ghosts never appear in exports — an export
 shows the active scenario.
 
@@ -1087,7 +1098,7 @@ left live, a band that began on a selected card's corner resized the card instea
 
 ## Keyboard
 
-Press **`?`** for the full sheet (also in View ▾). Bindings follow Excalidraw's conventions
+Press **`?`** for the full sheet (also in View). Bindings follow Excalidraw's conventions
 wherever this editor has the same concept, so muscle memory carries over.
 
 | | |
@@ -1147,7 +1158,7 @@ stored per node — so none of those are bound.
 
 Sequence mode binds the subset that means something there (`N` participant, `A` actor,
 `M` message, `T` note, `⌘D` duplicate, plus the essentials and zoom); its `?` sheet lists only
-those, and its View ▾ menu points at the sheet. `Insert ▸ Message` uses the participants you have
+those, and its View menu points at the sheet. `Insert ▸ Message` uses the participants you have
 selected and lands after the selected message rather than always appending Customer → Web App at
 the bottom of the flow.
 

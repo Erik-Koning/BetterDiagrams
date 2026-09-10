@@ -298,7 +298,7 @@ describe("fragments that no renderer could parse", () => {
 
     press(await labelOf("two"));
     press(await labelOf("three"), { shiftKey: true });
-    await user.click(screen.getByRole("button", { name: "Insert ▾" }));
+    await user.click(screen.getByRole("button", { name: "Insert" }));
     await user.click(screen.getByRole("menuitem", { name: /Fragment around selection/ }));
 
     expect(await screen.findByText(/crosses the opt fragment/)).toBeInTheDocument();
@@ -311,7 +311,7 @@ describe("fragments that no renderer could parse", () => {
     mount(<SequenceStudio defaultValue={framed} onChange={onChange} />);
 
     press(await labelOf("two"));
-    await user.click(screen.getByRole("button", { name: "Insert ▾" }));
+    await user.click(screen.getByRole("button", { name: "Insert" }));
     await user.click(screen.getByRole("menuitem", { name: /Fragment around selection/ }));
 
     await waitFor(() => expect(last(onChange).fragments).toHaveLength(2));
@@ -547,7 +547,7 @@ describe("a model reply that was cut off", () => {
   });
 });
 
-describe("View ▾", () => {
+describe("View", () => {
   it("points at the keyboard shortcuts sheet", async () => {
     const user = userEvent.setup();
     mount(<SequenceStudio defaultValue={example} />);

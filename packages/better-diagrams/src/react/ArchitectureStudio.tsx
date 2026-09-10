@@ -71,6 +71,7 @@ import {
   wrappedTitleHeight,
   fieldsBoxHeight,
   KIND_DEFAULT_SIZE,
+  absolutePosition,
   activeScenario,
   assignZonesByGeometry,
   snapNodesIntoZones,
@@ -85,12 +86,15 @@ import {
   resolveRouting,
   scaleZoneMembers,
   setAllZoneProviders,
+  templateBounds,
   templateProviders,
   toReactFlow,
   toZoneNodeId,
   validateTemplate,
+  ZONE_DRAG_HANDLE,
   visibleElements,
   type DiagramEdgeData,
+  type DiagramNode,
   type DiagramNodeData,
   type DiagramTemplate,
   type EdgeColor,
@@ -150,6 +154,7 @@ import {
   type StudioFile,
   type StudioFileInit,
 } from "./chrome";
+import { UiIcon, type UiIconName } from "./ui-icons";
 import { useMarqueeSelect } from "./marquee";
 import {
   WelcomeModal,
@@ -344,6 +349,13 @@ export interface ArchitectureStudioProps {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/**
+ * Which edge (or centreline) a selection lines up on. Named because three
+ * places spell it — the keyboard chords, the Arrange menu and the multi-select
+ * inspector — and a union repeated three times drifts.
+ */
+export type AlignMode = "left" | "centerX" | "right" | "top" | "centerY" | "bottom";
+
 /** First usable number among React Flow's three places a size can live. */
 function firstNumber(...values: unknown[]): number | undefined {
   for (const v of values) if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
@@ -359,6 +371,106 @@ function firstNumber(...values: unknown[]): number | undefined {
  * same glance.
  */
 const PASTE_OFFSET = 60;
+
+/** Breathing room a newly placed zone keeps from the viewport edge and from
+ *  anything already on the canvas. */
+const ZONE_DROP_MARGIN = 24;
+
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+const overlaps = (a: Box, b: Box): boolean =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+/** A new zone's preferred size, and the floor it may be shrunk to. */
+const ZONE_DEFAULT_SIZE = { w: 520, h: 360 };
+const ZONE_DROP_MIN = { w: 240, h: 160 };
+
+/**
+ * Where a new zone should land, and how big it should be: a corner of the
+ * visible canvas that is clear of everything already drawn.
+ *
+ * It used to be dropped dead-centre in the viewport at a fixed 520x360, which
+ * put it straight over whatever the person was looking at. Worse, a zone is
+ * dragged by the small chip at its TOP-LEFT corner, so that corner could land
+ * under the toolbar or past the edge of the canvas, leaving a zone that could
+ * not be picked up at all.
+ *
+ * Two things follow from that. The zone is SIZED to the visible canvas first,
+ * because a box larger than the viewport cannot have all four of its corners
+ * in view whichever one you anchor it to. Then it is placed at the first free
+ * corner in reading order, so its drag chip is always somewhere a pointer can
+ * reach.
+ *
+ * `occupied` is every node and zone box in absolute canvas coordinates. When
+ * no corner is clear the zone goes below the whole diagram instead, and the
+ * caller pans to it — an honest "there was no room here" rather than a
+ * pile-up on top of the work.
+ */
+/**
+ * Which nodes travel with a zone that is being dragged.
+ *
+ * Every member of the zone, minus two groups that must not be moved:
+ *
+ * - a node whose CONTAINER is also coming, because React Flow stores a
+ *   child's position relative to its container — the child moves for free,
+ *   and applying the delta to both would move it twice as far;
+ * - anything not on the canvas the drag is happening on. `onCanvas` is the
+ *   guard for that: a node that lives on a drilled-in level keeps its
+ *   declared `zoneId` while its coordinates are in its parent's space, not
+ *   root space, so a root-space delta would shove it across a level nobody
+ *   is looking at.
+ */
+export function zoneDragMembers(
+  nodes: readonly DiagramNode[],
+  zoneId: string,
+  onCanvas?: ReadonlySet<string>,
+): string[] {
+  const members = new Set<string>();
+  for (const n of nodes) {
+    if (n.zoneId === zoneId && (!onCanvas || onCanvas.has(n.id))) members.add(n.id);
+  }
+  const parentOf = new Map(nodes.map((n) => [n.id, n.parentId ?? null]));
+  return [...members].filter((id) => {
+    const parent = parentOf.get(id);
+    return !parent || !members.has(parent);
+  });
+}
+
+export function placeNewZone(
+  view: Box,
+  occupied: readonly Box[],
+  bounds: { minX: number; minY: number; maxX: number; maxY: number },
+): Box & { offscreen: boolean } {
+  const m = ZONE_DROP_MARGIN;
+  const size = {
+    w: Math.max(ZONE_DROP_MIN.w, Math.min(ZONE_DEFAULT_SIZE.w, view.w - m * 2)),
+    h: Math.max(ZONE_DROP_MIN.h, Math.min(ZONE_DEFAULT_SIZE.h, view.h - m * 2)),
+  };
+  const corners = [
+    { x: view.x + m, y: view.y + m },
+    { x: view.x + view.w - size.w - m, y: view.y + m },
+    { x: view.x + m, y: view.y + view.h - size.h - m },
+    { x: view.x + view.w - size.w - m, y: view.y + view.h - size.h - m },
+  ];
+  for (const at of corners) {
+    const box = { ...at, ...size };
+    if (!occupied.some((o) => overlaps(box, o))) {
+      return { x: Math.round(box.x), y: Math.round(box.y), ...size, offscreen: false };
+    }
+  }
+  // Nothing free in view: sit below everything, clear of the last row.
+  return {
+    x: Math.round(bounds.minX),
+    y: Math.round(bounds.maxY) + m * 2,
+    ...size,
+    offscreen: true,
+  };
+}
 
 let idCounter = 0;
 /** Collision-resistant without pulling in a uuid dependency. */
@@ -955,9 +1067,25 @@ function StudioInner({
     // do-nothing entry in the undo stack and burn a ⌘Z press on it).
     const docChanged =
       signature.split("|hidden:")[0] !== zoneSignatureRef.current.split("|hidden:")[0];
+    // A rebuild replaces every node OBJECT, which silently dropped whatever
+    // was selected. Inserting a zone is the case that made it visible: the
+    // new zone is created selected, adding it changes the signature, the
+    // rebuild ran, and the zone came back unselected — so its inspector never
+    // opened and its body was not yet a drag surface, leaving "click it
+    // first" as an undocumented step. Selection is view state about IDS, and
+    // ids survive a rebuild, so carry it across.
+    const selected = new Set(flow.getNodes().filter((n) => n.selected).map((n) => n.id));
     const next = materializeTemplate(template);
+    if (selected.size) {
+      // A node the rebuild removed (hidden by a provider switch, collapsed
+      // into its frame) is simply not in the new list, so it drops out here
+      // without needing a special case.
+      setNodes((current) =>
+        current.map((n) => (selected.has(n.id) ? { ...n, selected: true } : n)),
+      );
+    }
     if (docChanged) commit(next.nodes, next.edges, template);
-  }, [template, focusId, materializeTemplate, showHidden, commit]);
+  }, [template, focusId, materializeTemplate, showHidden, commit, flow, setNodes]);
 
   // ── Replace the whole document ────────────────────────────────────────────
 
@@ -1294,7 +1422,7 @@ function StudioInner({
   );
 
   const alignSelection = useCallback(
-    (mode: "left" | "centerX" | "right" | "top" | "centerY" | "bottom") => {
+    (mode: AlignMode) => {
       transformSelection((boxes) => {
         const minX = Math.min(...boxes.map((b) => b.x));
         const maxR = Math.max(...boxes.map((b) => b.x + b.w));
@@ -1647,10 +1775,39 @@ function StudioInner({
   const addZone = useCallback(() => {
     if (readOnly) return;
     const rect = canvasRef.current?.getBoundingClientRect();
-    const size = { w: 520, h: 360 };
-    const center = rect
-      ? flow.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
+    const doc = templateRef.current;
+
+    // The visible canvas in FLOW coordinates — what "a corner" means depends
+    // on where the person is looking and how far they are zoomed in.
+    const topLeft = rect
+      ? flow.screenToFlowPosition({ x: rect.left, y: rect.top })
       : { x: 0, y: 0 };
+    const bottomRight = rect
+      ? flow.screenToFlowPosition({ x: rect.right, y: rect.bottom })
+      : { x: ZONE_DEFAULT_SIZE.w * 2, y: ZONE_DEFAULT_SIZE.h * 2 };
+    // No floor on the size here: clamping the VIEW up to the zone's own
+    // dimensions was the original mistake, because it made a viewport that
+    // could not hold the zone report that it could, and the bottom corners
+    // were then computed off the edge of the screen.
+    const view = {
+      x: topLeft.x,
+      y: topLeft.y,
+      w: Math.max(1, bottomRight.x - topLeft.x),
+      h: Math.max(1, bottomRight.y - topLeft.y),
+    };
+
+    // Everything already drawn, in absolute coordinates. Nodes nested in a
+    // container carry their parent's offset, which is what `absolutePosition`
+    // resolves; a zone's box is already absolute.
+    const byId = new Map(doc.nodes.map((n) => [n.id, n]));
+    const occupied: Box[] = [
+      ...doc.nodes.map((n) => {
+        const at = absolutePosition(n, byId);
+        return { x: at.x, y: at.y, w: n.w ?? 170, h: n.h ?? 76 };
+      }),
+      ...(doc.zones ?? []).map((z) => ({ x: z.x, y: z.y, w: z.w, h: z.h })),
+    ];
+    const spot = placeNewZone(view, occupied, templateBounds(doc));
 
     // Offer every registered provider so the toggle is useful immediately.
     const providers = registry.providerOrder.length ? registry.providerOrder : ["onprem"];
@@ -1662,10 +1819,10 @@ function StudioInner({
       id: nextId("zone"),
       label: "New Zone",
       shape: "rounded",
-      x: center.x - size.w / 2,
-      y: center.y - size.h / 2,
-      w: size.w,
-      h: size.h,
+      x: spot.x,
+      y: spot.y,
+      w: spot.w,
+      h: spot.h,
       providers: [...providers],
       provider: providers[0],
       opacity: DEFAULT_ZONE_OPACITY,
@@ -1681,7 +1838,7 @@ function StudioInner({
       height: zone.h,
       style: { width: zone.w, height: zone.h },
       zIndex: -1000 + (zone.z ?? 0),
-      dragHandle: ".as-zone__header",
+      dragHandle: ZONE_DRAG_HANDLE,
       selected: true,
       data: { zone } as unknown as Node["data"],
     };
@@ -1689,7 +1846,16 @@ function StudioInner({
     // Zones must precede real nodes in the array so they paint behind them.
     setNodes((current) => [node, ...current.map((n) => ({ ...n, selected: false }))]);
     commitLater();
-  }, [readOnly, flow, registry.providerOrder, setNodes, commitLater]);
+    // Nowhere in view was free, so the zone went below the diagram. Pan to it
+    // rather than leaving the person looking at the space it could not use.
+    if (spot.offscreen) {
+      flow.setCenter(zone.x + spot.w / 2, zone.y + spot.h / 2, {
+        zoom: flow.getZoom(),
+        duration: 300,
+      });
+      showToast("No clear space in view — new zone placed below the diagram");
+    }
+  }, [readOnly, flow, registry.providerOrder, setNodes, commitLater, showToast]);
 
   const setScenario = useCallback(
     (provider: string) => {
@@ -2052,12 +2218,40 @@ function StudioInner({
    * state is identical either way — the user drags the original away and the
    * clone is left where the drag began.
    */
+  /**
+   * A zone drag in progress: which nodes travel with the region, and where
+   * the region was on the previous frame.
+   *
+   * A zone is not a container — a node references one by `zoneId` rather than
+   * being parented to it — so React Flow moves the backdrop and nothing else,
+   * and a region dragged across the canvas slid out from under its own
+   * contents. Resizing a zone has always carried its members (see
+   * `scaleZoneMembers`), so this is what makes the two gestures agree.
+   *
+   * Membership is captured at drag START and not re-judged mid-gesture: the
+   * commit re-derives it from geometry, and a set that changed every frame
+   * would enrol whatever the region swept over on its way past.
+   */
+  const zoneDrag = useRef<{ ids: string[]; last: { x: number; y: number } } | null>(null);
+
   const altDragOrigins = useRef<Map<string, { x: number; y: number }> | null>(null);
   /** Ties an alt-drag's clone and its move into one undo entry. */
   const altDragCommitKey = useRef<string | null>(null);
 
   const onNodeDragStart = useCallback(
-    (event: MouseEvent | TouchEvent, _node: Node, dragged: Node[]) => {
+    (event: MouseEvent | TouchEvent, node: Node, dragged: Node[]) => {
+      zoneDrag.current = null;
+      // Exactly one zone, dragged on its own: the contents come along. A
+      // mixed selection is left alone — the person picked those nodes
+      // themselves, and moving them twice would double every delta.
+      if (!readOnly && isZoneNodeId(node.id) && dragged.length === 1) {
+        const ids = zoneDragMembers(
+          templateRef.current.nodes,
+          fromZoneNodeId(node.id),
+          new Set(flow.getNodes().map((n) => n.id)),
+        );
+        if (ids.length) zoneDrag.current = { ids, last: { ...node.position } };
+      }
       // Touch has no alt key, so a touch drag simply never clones.
       if (readOnly || !("altKey" in event && event.altKey)) {
         altDragOrigins.current = null;
@@ -2069,7 +2263,34 @@ function StudioInner({
           .map((n) => [n.id, { x: n.position.x, y: n.position.y }]),
       );
     },
-    [readOnly],
+    [readOnly, flow],
+  );
+
+  /**
+   * Carry a dragging zone's members with it, one frame at a time.
+   *
+   * Applied as a DELTA rather than an absolute offset from the gesture's
+   * start, so it composes with anything else moving a node mid-drag and
+   * cannot drift if a frame is dropped.
+   */
+  const dragZoneMembers = useCallback(
+    (node: Node) => {
+      const state = zoneDrag.current;
+      if (!state) return;
+      const dx = node.position.x - state.last.x;
+      const dy = node.position.y - state.last.y;
+      if (!dx && !dy) return;
+      state.last = { ...node.position };
+      const ids = new Set(state.ids);
+      setNodes((current) =>
+        current.map((n) =>
+          ids.has(n.id)
+            ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
+            : n,
+        ),
+      );
+    },
+    [setNodes],
   );
 
   const finishAltDrag = useCallback(() => {
@@ -2178,6 +2399,7 @@ function StudioInner({
   const onNodeDrag = useCallback(
     (_event: unknown, node: Node, dragged: Node[]) => {
       if (readOnly) return;
+      dragZoneMembers(node);
       const boxOf = (id: string) => {
         const internal = flow.getInternalNode(id);
         if (!internal) return null;
@@ -2239,11 +2461,15 @@ function StudioInner({
       // thing decides the last few pixels.
       pendingSnap.current = snapEnabled ? null : { id: node.id, moving: movingIds };
     },
-    [readOnly, flow, registry, snapEnabled, bestAlignment],
+    [readOnly, flow, registry, snapEnabled, bestAlignment, dragZoneMembers],
   );
 
   const onNodeDragStop = useCallback(
-    (_event: unknown, _node: Node, dragged: Node[]) => {
+    (_event: unknown, node: Node, dragged: Node[]) => {
+      // The last pointer move can land after the final `onNodeDrag`, so the
+      // members settle here too before the gesture is forgotten.
+      dragZoneMembers(node);
+      zoneDrag.current = null;
       setDragGuides(null);
       setDropTargetId(null);
       const snap = pendingSnap.current;
@@ -2455,7 +2681,7 @@ function StudioInner({
       }
       commitLater(dragKey);
     },
-    [readOnly, flow, registry, setNodes, showToast, commitLater, deriveTemplate, materializeTemplate, commit, finishAltDrag],
+    [readOnly, flow, registry, setNodes, showToast, commitLater, deriveTemplate, materializeTemplate, commit, finishAltDrag, dragZoneMembers],
   );
 
   // ── Undo / redo ───────────────────────────────────────────────────────────
@@ -4347,7 +4573,8 @@ function StudioInner({
               className={`as-btn ${panelOpen ? "as-btn--on" : "as-btn--primary"}`}
               onClick={() => setPanelOpen((open) => !open)}
             >
-              ✦ AI
+              <UiIcon name="sparkle" />
+              AI
             </button>
           ) : null}
 
@@ -4588,45 +4815,48 @@ function StudioInner({
                 <div className="as-menu__sep" role="separator" />
                 {(
                   [
-                    ["left", "⇤ Align left"],
-                    ["centerX", "⇹ Align centre"],
-                    ["right", "⇥ Align right"],
-                    ["top", "⤒ Align top"],
-                    ["centerY", "⇳ Align middle"],
-                    ["bottom", "⤓ Align bottom"],
+                    ["left", "Align left", "alignLeft"],
+                    ["centerX", "Align centre", "alignCenterX"],
+                    ["right", "Align right", "alignRight"],
+                    ["top", "Align top", "alignTop"],
+                    ["centerY", "Align middle", "alignCenterY"],
+                    ["bottom", "Align bottom", "alignBottom"],
                   ] as const
-                ).map(([mode, label]) => (
+                ).map(([mode, label, icon]) => (
                   <button
                     key={mode}
                     type="button"
                     role="menuitem"
-                    className="as-menu__item"
+                    className="as-menu__item as-menu__item--lead"
                     disabled={selectedDiagramIds.length < 2}
                     title={selectedDiagramIds.length < 2 ? "Select at least two nodes" : undefined}
                     onClick={() => alignSelection(mode)}
                   >
-                    <div className="as-menu__label">{label}</div>
+                    <UiIcon name={icon} size={13} />
+                    <span className="as-menu__label">{label}</span>
                   </button>
                 ))}
                 <button
                   type="button"
                   role="menuitem"
-                  className="as-menu__item"
+                  className="as-menu__item as-menu__item--lead"
                   disabled={selectedDiagramIds.length < 3}
                   title={selectedDiagramIds.length < 3 ? "Select at least three nodes" : undefined}
                   onClick={() => distributeSelection("x")}
                 >
-                  <div className="as-menu__label">↔ Distribute horizontally</div>
+                  <UiIcon name="distributeX" size={13} />
+                  <span className="as-menu__label">Distribute horizontally</span>
                 </button>
                 <button
                   type="button"
                   role="menuitem"
-                  className="as-menu__item"
+                  className="as-menu__item as-menu__item--lead"
                   disabled={selectedDiagramIds.length < 3}
                   title={selectedDiagramIds.length < 3 ? "Select at least three nodes" : undefined}
                   onClick={() => distributeSelection("y")}
                 >
-                  <div className="as-menu__label">↕ Distribute vertically</div>
+                  <UiIcon name="distributeY" size={13} />
+                  <span className="as-menu__label">Distribute vertically</span>
                 </button>
                 <div className="as-menu__sep" role="separator" />
                 {/* Unnamed radios: each is its own group, so two studios on
@@ -4885,7 +5115,7 @@ function StudioInner({
                 title={`Undo (${modKey}Z)`}
                 aria-label="Undo"
               >
-                ↺
+                <UiIcon name="undo" />
               </button>
               <button
                 type="button"
@@ -4895,14 +5125,17 @@ function StudioInner({
                 title={`Redo (⇧${modKey}Z)`}
                 aria-label="Redo"
               >
-                ↻
+                <UiIcon name="redo" />
               </button>
             </div>
           ) : null}
 
           <div className="as-toolbar__group">
             <ToolbarMenu
-              label={findings.length ? `Checks (${findings.length})` : "Checks ✓"}
+              label={findings.length ? `Checks (${findings.length})` : "Checks"}
+              /* The one place a toolbar icon earns its keep: whether the
+                 document is clean is readable without opening anything. */
+              icon={findings.length ? "warning" : "shield"}
               title="Architecture lint — governance findings for this document"
               active={findings.some((f) => f.severity === "error")}
               open={openMenu === "checks"}
@@ -5063,7 +5296,8 @@ function StudioInner({
                   timeline.stops.length === 1 ? "" : "s"
                 } in this diagram`}
               >
-                ⏱ Timeline
+                <UiIcon name="clock" />
+                Timeline
               </button>
             ) : null}
 
@@ -5181,7 +5415,7 @@ function StudioInner({
                   onClick={() => setPanelOpen(false)}
                   aria-label="Close panel"
                 >
-                  ✕
+                  <UiIcon name="close" />
                 </button>
               </div>
 
@@ -5238,7 +5472,7 @@ function StudioInner({
                 />
                 <button
                   type="button"
-                  className="as-btn"
+                  className="as-btn as-btn--outline"
                   onClick={() => void runGenerate("refine")}
                   disabled={busy || !refineInput.trim()}
                 >
@@ -5567,7 +5801,7 @@ function StudioInner({
                       : `Duplicate this node together with its direct connections (${modKey}D)`
                   }
                 >
-                  ⧉
+                  <UiIcon name="copy" />
                 </button>
               ) : null}
               <button type="button" className="as-btn as-btn--danger" onClick={deleteSelection}>
@@ -5592,8 +5826,13 @@ function StudioInner({
                 </p>
                 {!readOnly ? (
                   <div className="as-focus-empty__actions">
-                    <button type="button" className="as-btn" onClick={() => addNode("service")}>
-                      ＋ Add node
+                    <button
+                      type="button"
+                      className="as-btn as-btn--outline"
+                      onClick={() => addNode("service")}
+                    >
+                      <UiIcon name="plus" />
+                      Add node
                     </button>
                     {generate ? (
                       <button
@@ -5601,7 +5840,8 @@ function StudioInner({
                         className="as-btn as-btn--primary"
                         onClick={() => setPanelOpen(true)}
                       >
-                        ✦ Draft with AI
+                        <UiIcon name="sparkle" />
+                        Draft with AI
                       </button>
                     ) : null}
                   </div>
@@ -5624,7 +5864,7 @@ function StudioInner({
                 aria-label="Dismiss this error"
                 title="Dismiss"
               >
-                ✕
+                <UiIcon name="close" size={13} />
               </button>
             </div>
           ) : null}
@@ -5825,7 +6065,7 @@ function DateSection({
           aria-label="Clear date"
           title="Clear the date — the element goes back to being always present"
         >
-          ✕
+          <UiIcon name="close" size={13} />
         </button>
       ) : null}
     </InspectorSection>
@@ -5970,6 +6210,22 @@ function ContextItem({
  * Each shows the shared value, or blank when they disagree — and setting one
  * writes it to everything selected, which is the whole point.
  */
+
+/**
+ * The six alignment buttons, in reading order: the three horizontal edges,
+ * then the three vertical ones. Each icon draws the rail it aligns TO plus two
+ * bars of unequal length measured against it, which is what makes "left"
+ * readable as left rather than as right seen in a mirror.
+ */
+const ALIGN_BUTTONS = [
+  ["left", "alignLeft"],
+  ["centerX", "alignCenterX"],
+  ["right", "alignRight"],
+  ["top", "alignTop"],
+  ["centerY", "alignCenterY"],
+  ["bottom", "alignBottom"],
+] as const satisfies readonly (readonly [AlignMode, UiIconName])[];
+
 function MultiInspector({
   nodeIds,
   edgeIds,
@@ -5989,7 +6245,7 @@ function MultiInspector({
   onPatchNode: (id: string, patch: Partial<DiagramNodeData>) => void;
   onPatchEdge: (id: string, patch: Partial<DiagramEdgeData>) => void;
   onPatchZone: (id: string, patch: Partial<DiagramZone>) => void;
-  onAlign: (mode: "left" | "centerX" | "right" | "top" | "centerY" | "bottom") => void;
+  onAlign: (mode: AlignMode) => void;
   onDistribute: (axis: "x" | "y") => void;
   onDuplicate: () => void;
   onDelete: () => void;
@@ -6133,16 +6389,7 @@ function MultiInspector({
       ) : null}
 
       <InspectorSection caption="Arrange">
-        {(
-          [
-            ["left", "⇤"],
-            ["centerX", "⇹"],
-            ["right", "⇥"],
-            ["top", "⤒"],
-            ["centerY", "⇳"],
-            ["bottom", "⤓"],
-          ] as const
-        ).map(([edge, glyph]) => (
+        {ALIGN_BUTTONS.map(([edge, icon]) => (
           <button
             key={edge}
             type="button"
@@ -6151,7 +6398,7 @@ function MultiInspector({
             aria-label={`Align ${edge}`}
             title={`Align ${edge}`}
           >
-            {glyph}
+            <UiIcon name={icon} />
           </button>
         ))}
         <button
@@ -6161,7 +6408,7 @@ function MultiInspector({
           aria-label="Distribute horizontally"
           title="Distribute horizontally"
         >
-          ↔
+          <UiIcon name="distributeX" />
         </button>
         <button
           type="button"
@@ -6170,12 +6417,13 @@ function MultiInspector({
           aria-label="Distribute vertically"
           title="Distribute vertically"
         >
-          ↕
+          <UiIcon name="distributeY" />
         </button>
       </InspectorSection>
 
       {nodeIds.length > 1 ? (
         <button type="button" className="as-btn" onClick={onGroup} title="Wrap the selection in a container">
+          <UiIcon name="group" />
           Group
         </button>
       ) : null}
@@ -6191,7 +6439,7 @@ function MultiInspector({
         aria-label={sharedLocked ? "Unlock the selection" : "Lock the selection in place"}
         title={sharedLocked ? "Unlock the selection" : "Lock the selection in place"}
       >
-        {sharedLocked ? "🔒" : "🔓"}
+        <UiIcon name={sharedLocked ? "lock" : "unlock"} />
       </button>
       <button
         type="button"
@@ -6200,7 +6448,7 @@ function MultiInspector({
         aria-label="Duplicate the selection"
         title="Duplicate the selection with its direct connections"
       >
-        ⧉
+        <UiIcon name="copy" />
       </button>
       <button type="button" className="as-btn as-btn--danger" onClick={onDelete}>
         Delete
@@ -6414,7 +6662,7 @@ function ZoneInspector({
         aria-label={zone.locked ? "Unlock" : "Lock in place"}
         title={zone.locked ? "Unlock — allow moving and resizing" : "Lock in place"}
       >
-        {zone.locked ? "🔒" : "🔓"}
+        <UiIcon name={zone.locked ? "lock" : "unlock"} />
       </button>
       {/* Swap with the neighbour rather than ±1 on `z`: equal z resolves by
           array order, so incrementing past a zone two levels up looks like
@@ -6427,7 +6675,7 @@ function ZoneInspector({
         aria-label="Send this zone behind the one below it"
         title="Send backward — behind the zone below it"
       >
-        ⤓
+        <UiIcon name="sendBackward" />
       </button>
       <button
         type="button"
@@ -6436,7 +6684,7 @@ function ZoneInspector({
         aria-label="Bring this zone in front of the one above it"
         title="Bring forward — in front of the zone above it"
       >
-        ⤒
+        <UiIcon name="bringForward" />
       </button>
     </>
   );
@@ -6804,7 +7052,7 @@ function NodeInspector({
               title={`Open ${data.url}`}
               aria-label="Open link"
             >
-              ↗
+              <UiIcon name="externalLink" />
             </a>
           ) : null}
         </InspectorSection>
@@ -6818,7 +7066,7 @@ function NodeInspector({
         aria-label={data.locked ? "Unlock" : "Lock in place"}
         title={data.locked ? "Unlock — allow moving and resizing" : "Lock in place"}
       >
-        {data.locked ? "🔒" : "🔓"}
+        <UiIcon name={data.locked ? "lock" : "unlock"} />
       </button>
     </>
   );
@@ -6894,7 +7142,7 @@ function FieldsEditor({
               aria-label={`${field.required ? "Optional" : "Required"}: ${field.name || `field ${index + 1}`}`}
               title={field.required ? "Required — click to make optional" : "Optional — click to require"}
             >
-              *
+              <UiIcon name="asterisk" size={12} />
             </button>
             {/* Both directions. Row order is meaning here — a foreign-key
                 line anchors to a column by its position — and with only ↑,
@@ -6912,7 +7160,7 @@ function FieldsEditor({
               aria-label={`Move ${field.name || `field ${index + 1}`} up`}
               title="Move up"
             >
-              ↑
+              <UiIcon name="arrowUp" size={13} />
             </button>
             <button
               type="button"
@@ -6926,7 +7174,7 @@ function FieldsEditor({
               aria-label={`Move ${field.name || `field ${index + 1}`} down`}
               title="Move down"
             >
-              ↓
+              <UiIcon name="arrowDown" size={13} />
             </button>
             <button
               type="button"
@@ -6935,7 +7183,7 @@ function FieldsEditor({
               aria-label={`Remove ${field.name || `field ${index + 1}`}`}
               title="Remove this field"
             >
-              ×
+              <UiIcon name="close" size={12} />
             </button>
           </span>
         ))}
@@ -6951,7 +7199,8 @@ function FieldsEditor({
             : "Add a field"
         }
       >
-        + field
+        <UiIcon name="plus" size={13} />
+        Add field
       </button>
     </span>
   );
@@ -7006,7 +7255,7 @@ function EdgeInspector({
           aria-label="Reverse this connection"
           title="Reverse — swap which end it starts from"
         >
-          ⇄
+          <UiIcon name="swap" />
         </button>
       </InspectorSection>
 

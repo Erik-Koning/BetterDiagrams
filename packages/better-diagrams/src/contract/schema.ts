@@ -1749,6 +1749,13 @@ export function snapNodesIntoZones(
  * minima (react/nodes.tsx), which read this table — one source of truth for
  * "how small can it get" whether the user drags a corner or a zone scales it.
  */
+/**
+ * The class a press must land on to drag a zone. Shared by the renderer (which
+ * puts it on the header chip and on a selected zone's grab pad) and by both
+ * places that build a zone's React Flow node, so the two can never drift.
+ */
+export const ZONE_DRAG_HANDLE = ".as-zone__grab";
+
 export const NODE_MIN_SIZE = {
   shape: { w: 110, h: 52 },
   group: { w: 160, h: 120 },
@@ -2612,9 +2619,12 @@ export function toReactFlow(
       style: { width: zone.w, height: zone.h },
       // Negative so every real node paints on top, whatever its own zIndex.
       zIndex: -1000 + index,
-      // Only the header chip drags the zone; the body stays click-through so
-      // it never steals a click meant for a node sitting on it.
-      dragHandle: ".as-zone__header",
+      // What a press has to land on to move the zone. The header chip always
+      // carries this class; a SELECTED zone also lays a full-size pad under
+      // its contents, so once you have picked a region up you can drag it
+      // from anywhere inside it. Unselected, the body stays click-through and
+      // never steals a press meant for a node sitting on top of it.
+      dragHandle: ZONE_DRAG_HANDLE,
       ...(zone.locked ? { draggable: false } : {}),
       selectable: true,
     })) as RFNode[];

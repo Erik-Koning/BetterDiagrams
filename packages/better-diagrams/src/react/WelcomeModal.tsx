@@ -13,6 +13,7 @@ import { BrandMark, Modal } from "./chrome";
 import { JsonCodeEditor } from "./JsonCodeEditor";
 import { CloudScopePicker, scopeFor, type CloudScope } from "./CloudScopePicker";
 import { copyText } from "./copy-text";
+import { UiIcon } from "./ui-icons";
 import { SEQUENCE_LINT, buildArchitectureLint, type JsonDocLint } from "./schema-lint";
 import { approximateJsonFix } from "../contract/json-repair";
 import type { CloudResourceOption } from "./template-prompt";
@@ -342,9 +343,7 @@ export function WelcomeModal({
             onClick={() => onDismiss(finalName())}
           >
             <span>Insert Node Manually</span>
-            <span className="as-welcome__arrow" aria-hidden="true">
-              →
-            </span>
+            <UiIcon name="chevronRight" size={14} className="as-welcome__arrow" />
           </button>
           {/* Hover (or keyboard focus) reveals the form picker; a plain click
               keeps the historical behaviour and copies the full schema. */}
@@ -354,10 +353,12 @@ export function WelcomeModal({
             }`}
           >
             <button type="button" className="as-btn as-welcome__cta" onClick={() => handleCopy("full")}>
-              <span>{copied === "full" ? "Copied ✓" : "Copy Schema & System Prompt"}</span>
-              <span className="as-welcome__arrow" aria-hidden="true">
-                →
-              </span>
+              <span>{copied === "full" ? "Copied" : "Copy Schema & System Prompt"}</span>
+              <UiIcon
+                name={copied === "full" ? "check" : "chevronRight"}
+                size={14}
+                className="as-welcome__arrow"
+              />
             </button>
             {contentPromptAvailable ? (
               // A real disclosure button, not hover alone. On a touch device
@@ -372,7 +373,7 @@ export function WelcomeModal({
                 title="Choose the form: elements only, or elements and positioning"
                 onClick={() => setCopyFormOpen((open) => !open)}
               >
-                ▾
+                <UiIcon name="chevronDown" />
               </button>
             ) : null}
             {contentPromptAvailable ? (
@@ -384,7 +385,7 @@ export function WelcomeModal({
                   onClick={() => handleCopy("content")}
                 >
                   <div className="as-menu__label">
-                    {copied === "content" ? "Copied ✓" : "Elements only"}
+                    {copied === "content" ? "Copied" : "Elements only"}
                   </div>
                   <div className="as-menu__hint">
                     No positions — you or the editor keep the layout; best for complex diagrams
@@ -397,7 +398,7 @@ export function WelcomeModal({
                   onClick={() => handleCopy("full")}
                 >
                   <div className="as-menu__label">
-                    {copied === "full" ? "Copied ✓" : "Full schema"}
+                    {copied === "full" ? "Copied" : "Full schema"}
                   </div>
                   <div className="as-menu__hint">
                     Elements and positioning — the AI lays out the whole diagram
@@ -469,8 +470,13 @@ export function WelcomeModal({
 
         {text.trim() ? (
           <div className="as-welcome__insert-row">
+            {/* "Insert diagram", not "Insert": the toolbar behind this modal
+                has an Insert menu of its own, and two controls whose whole
+                accessible name is the same word are two ambiguous targets —
+                the decorative caret that used to tell them apart was never
+                announced. */}
             <button type="button" className="as-btn as-btn--primary" onClick={handleInsert}>
-              Insert
+              Insert diagram
             </button>
           </div>
         ) : null}

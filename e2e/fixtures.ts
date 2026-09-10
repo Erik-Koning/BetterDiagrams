@@ -98,9 +98,9 @@ export class Studio {
 
   // ── Toolbar ──────────────────────────────────────────────────────────────
 
-  /** A dropdown trigger: "Insert", "Export", "Arrange"… (rendered as "Insert ▾"). */
+  /** A dropdown trigger: "Insert", "Export", "Arrange"… (rendered as "Insert"). */
   menuButton(label: string): Locator {
-    return this.root.getByRole("button", { name: `${label} ▾`, exact: true });
+    return this.root.getByRole("button", { name: `${label}`, exact: true });
   }
 
   async openMenu(label: string): Promise<Locator> {
@@ -151,7 +151,7 @@ export class Studio {
   async openFile(name: string): Promise<void> {
     const menu = await this.openFileMenu();
     await menu.getByTitle(`Open ${name}`).click();
-    await expect(this.fileButton).toHaveText(new RegExp(`^${escapeRegExp(name)}\\s*▾$`));
+    await expect(this.fileButton).toHaveText(exact(name));
   }
 
   async newFile(): Promise<void> {

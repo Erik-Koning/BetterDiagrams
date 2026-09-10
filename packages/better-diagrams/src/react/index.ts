@@ -47,6 +47,11 @@ export type {
 
 export { BUILTIN_ICON_PATHS, SvgIcon } from "./icons";
 export type { IconPaths } from "./icons";
+/* The chrome's own icon set, so a host filling `toolbarExtras` or
+   `inspectorExtras` draws its buttons in the same hand as the ones beside
+   them instead of reaching for a second icon library. */
+export { UI_ICONS, UiIcon } from "./ui-icons";
+export type { UiIconName, UiIconProps } from "./ui-icons";
 
 export {
   BUILTIN_EXPORTERS,

@@ -109,6 +109,7 @@ import {
   type StudioFile,
   type StudioFileInit,
 } from "../chrome";
+import { UiIcon } from "../ui-icons";
 import { isTypingTarget } from "../keys";
 import {
   WelcomeModal,
@@ -1453,7 +1454,8 @@ function SequenceInner({
               className={`as-btn ${panelOpen ? "as-btn--on" : "as-btn--primary"}`}
               onClick={() => setPanelOpen((open) => !open)}
             >
-              ✦ AI
+              <UiIcon name="sparkle" />
+              AI
             </button>
           ) : null}
 
@@ -1522,10 +1524,10 @@ function SequenceInner({
           {!readOnly ? (
             <div className="as-toolbar__group">
               <button type="button" className="as-btn as-btn--icon" onClick={doUndo} disabled={!history.canUndo} title="Undo (⌘Z)" aria-label="Undo">
-                ↺
+                <UiIcon name="undo" />
               </button>
               <button type="button" className="as-btn as-btn--icon" onClick={doRedo} disabled={!history.canRedo} title="Redo (⇧⌘Z)" aria-label="Redo">
-                ↻
+                <UiIcon name="redo" />
               </button>
             </div>
           ) : null}
@@ -1590,10 +1592,11 @@ function SequenceInner({
                   timeline.stops.length === 1 ? "" : "s"
                 } in this flow`}
               >
-                ⏱ Timeline
+                <UiIcon name="clock" />
+                Timeline
               </button>
             ) : null}
-            <span className="as-zoom">{Math.round(zoom * 100)}%</span>
+            <span className="as-zoom as-zoom--static">{Math.round(zoom * 100)}%</span>
             <button type="button" className="as-btn" onClick={() => flow.fitView({ padding: 0.15, duration: 300 })}>
               Fit
             </button>
@@ -1655,7 +1658,7 @@ function SequenceInner({
                   onClick={() => setPanelOpen(false)}
                   aria-label="Close panel"
                 >
-                  ✕
+                  <UiIcon name="close" />
                 </button>
               </div>
 
@@ -1687,7 +1690,7 @@ function SequenceInner({
                 />
                 <button
                   type="button"
-                  className="as-btn"
+                  className="as-btn as-btn--outline"
                   onClick={() => void runGenerate("refine")}
                   disabled={busy || !refineInput.trim()}
                 >
@@ -1863,7 +1866,7 @@ function SequenceInner({
               back.
             </p>
             <div className="as-modal__actions">
-              <button type="button" className="as-btn" onClick={() => setPendingDelete(null)}>
+              <button type="button" className="as-btn as-btn--outline" onClick={() => setPendingDelete(null)}>
                 Cancel
               </button>
               <button
@@ -2053,7 +2056,7 @@ function SeqDateSection({
           aria-label="Clear date"
           title="Clear the date — the element goes back to being always present"
         >
-          ✕
+          <UiIcon name="close" size={13} />
         </button>
       ) : null}
     </InspectorSection>
@@ -2131,7 +2134,7 @@ function MessageInspector({
           title="Swap direction"
           aria-label="Swap message direction"
         >
-          ⇄
+          <UiIcon name="swap" />
         </button>
       </InspectorSection>
       <InspectorSection caption="Style">
@@ -2254,7 +2257,7 @@ function FragmentInspector({
                 aria-label={`Remove branch ${i + 1}`}
                 title="Remove this branch"
               >
-                −
+                <UiIcon name="minus" size={13} />
               </button>
             </span>
           ))}

@@ -67,6 +67,35 @@
      widgets over the dark editor. LIGHT_THEME sets it to `light`. */
   color-scheme: var(--as-color-scheme, dark);
   --as-radius: 8px;
+  /* Corner rounding, one step apart, so a chip, a control, and the card it
+     sits in are visibly three sizes rather than three guesses. `--as-radius`
+     stays the themable one; these are derived from the same intent. */
+  --as-radius-sm: 6px;
+  --as-radius-md: 8px;
+  --as-radius-lg: 12px;
+  /* The hover and press wash every surface in the chrome shares.
+     Mixed from the TEXT ink rather than from white, so one declaration
+     darkens on a light theme and lightens on a dark one — and, being
+     translucent, it lands correctly on a toolbar, a menu, or the frosted
+     inspector without any of them needing a variant of their own. */
+  --as-hover: color-mix(in srgb, var(--as-text) 9%, transparent);
+  --as-hover-strong: color-mix(in srgb, var(--as-text) 15%, transparent);
+  /* A hairline INSIDE a panel — a menu's section rule, an inspector's section
+     divider — is quieter than the outline around the panel itself. Same hue,
+     less of it, so the two never compete. */
+  --as-line: color-mix(in srgb, var(--as-border) 60%, transparent);
+  /* The accent, twice: as the wash under a pressed toggle, and as the ring on
+     a control that wants attention without a second colour. */
+  --as-accent-wash: color-mix(in srgb, var(--as-accent) 15%, transparent);
+  --as-ring: color-mix(in srgb, var(--as-accent) 40%, transparent);
+  /* Two elevations and no more: things that float just off the bar (a chip, a
+     toast) and things that float over the page (menus, the inspector, cards).
+     Both are built from `--as-shadow-ink`, so a light theme's softer ink
+     reaches every shadow in the editor from one token. */
+  --as-elev-1: 0 1px 2px color-mix(in srgb, var(--as-shadow-ink) 55%, transparent);
+  --as-elev-2:
+    0 10px 30px var(--as-shadow-ink),
+    0 1px 2px color-mix(in srgb, var(--as-shadow-ink) 60%, transparent);
   /* One height for every toolbar/inspector control. Glyph metrics differ
      between fonts (↺ and ⌐ fall back to different faces than Latin text), so
      padding alone cannot keep buttons, selects, and inputs aligned. */
@@ -132,15 +161,104 @@
   box-sizing: border-box;
 }
 
+/*
+ * ── Checkboxes and radios, drawn ────────────────────────────────────────────
+ *
+ * `accent-color` alone gets the browser's own widget into the palette but not
+ * into the design: under `color-scheme: dark` Chrome fills the UNCHECKED box
+ * with a muddy tint of the accent, which is the state most of them are in, and
+ * the three engines disagree about size, corner and tick weight. So the box is
+ * ours — a hairline square at rest, an accent tick when set — and one look
+ * covers the menus, the modals and the inspector.
+ *
+ * The tick is two 45° gradient bands rather than an SVG data URI, for the same
+ * reason the select chevron is: a data URI cannot read a custom property, so
+ * its ink would be frozen at whichever theme it was authored for. Bands are
+ * `currentcolor`, so the mark follows whatever it sits on.
+ *
+ * The range slider keeps `accent-color`. A track, a thumb and a fill are three
+ * pseudo-elements per engine, and the native one already reads correctly.
+ */
+/*
+ * `.as-modal` rides alongside `.as-root` in every selector here because a
+ * dialog can be mounted OUTSIDE the editor root — the example's Edit-JSON and
+ * Copy-schema dialogs are — so a `.as-root`-only rule would leave those lists
+ * of checkboxes as raw browser widgets. The tokens carry dark fallbacks for
+ * the same reason (see the note on `.as-modal`).
+ */
+:is(.as-root, .as-modal) input[type="checkbox"],
+:is(.as-root, .as-modal) input[type="radio"] {
+  appearance: none;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1.5px solid currentcolor;
+  border-radius: 4px;
+  background: transparent;
+  background-repeat: no-repeat;
+  color: color-mix(in srgb, var(--as-text-dim, #94a3b8) 75%, transparent);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+:is(.as-root, .as-modal) input[type="radio"] {
+  border-radius: 50%;
+}
+
+:is(.as-root, .as-modal) label:hover > input[type="checkbox"],
+:is(.as-root, .as-modal) label:hover > input[type="radio"] {
+  color: var(--as-text-dim, #94a3b8);
+}
+
+:is(.as-root, .as-modal) input[type="checkbox"]:checked,
+:is(.as-root, .as-modal) input[type="radio"]:checked {
+  border-color: var(--as-accent, #38bdf8);
+  color: var(--as-accent, #38bdf8);
+}
+
+/* Two arms of one stroke, so the percentages differ: a band's thickness is a
+   fraction of its OWN box's diagonal, and the arms are not the same length.
+   32/68 on the short arm and 40/60 on the long one both land at ~1.5px, which
+   is what makes the corner read as a single bend rather than two marks. */
+:is(.as-root, .as-modal) input[type="checkbox"]:checked {
+  background-image:
+    linear-gradient(45deg, transparent 32%, currentcolor 32%, currentcolor 68%, transparent 68%),
+    linear-gradient(135deg, transparent 40%, currentcolor 40%, currentcolor 60%, transparent 60%);
+  background-position: 1.8px 5.2px, 3.6px 3px;
+  background-size: 3px 3px, 5px 5px;
+}
+
+/* A radio is one choice, so it fills rather than ticks. */
+:is(.as-root, .as-modal) input[type="radio"]:checked {
+  background-image: radial-gradient(circle, currentcolor 0 48%, transparent 50%);
+}
+
+:is(.as-root, .as-modal) input[type="range"] {
+  accent-color: var(--as-accent, #38bdf8);
+  cursor: pointer;
+}
+
+:is(.as-root, .as-modal) input[type="checkbox"]:disabled,
+:is(.as-root, .as-modal) input[type="radio"]:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* ── Toolbar ─────────────────────────────────────────────────────────────── */
 
 /* No z-index here on purpose — see the stacking ledger above. */
+/* `column-gap` is tight because the bar no longer separates its controls with
+   a box around each one: the buttons are ghosts, and what tells the clusters
+   apart is the hairline on `.as-toolbar__group`. `row-gap` is larger, so a
+   bar that wraps reads as two rows rather than one crowded block. */
 .as-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  column-gap: 3px;
+  row-gap: 6px;
   flex-wrap: wrap;
-  padding: 8px 12px;
+  padding: 7px 10px;
   border-bottom: 1px solid var(--as-border);
   background: var(--as-surface);
   flex: 0 0 auto;
@@ -160,7 +278,7 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 2px;
   /* A flex item sized `auto` is as wide as its content wants, so the group's
      own `flex-wrap` never engaged — it simply grew past the bar and the last
      few buttons were cut off by the editor's `overflow: hidden`. Capping it at
@@ -172,15 +290,47 @@
   flex: 0 0 auto;
 }
 
+/* One hairline between clusters instead of a border around all ~30 buttons.
+   The grouping was always in the markup; it used to be invisible under the
+   noise of every control wearing its own box. */
+.as-toolbar__group:not(:first-child)::before {
+  content: "";
+  flex: none;
+  align-self: center;
+  width: 1px;
+  height: 18px;
+  margin: 0 6px 0 3px;
+  background: var(--as-line);
+}
+
+/*
+ * Grows, never shrinks.
+ *
+ * Growing is what closes the dead gap on a wrapped bar: the trailing cluster
+ * is pushed right by the auto margin, so when it dropped to its own row it
+ * left the whole width of the editor empty to its left. Now it spans that row
+ * and the search field (the one item allowed to flex) absorbs the slack.
+ *
+ * Shrinking stays off for the reason `.as-toolbar > *` gives: a squeezed
+ * group clips a label mid-word rather than wrapping it.
+ */
 .as-toolbar__spacer {
   margin-left: auto;
+  flex: 1 0 auto;
+  justify-content: flex-end;
+}
+
+/* The auto margin already separates it; a rule as well would read as a stray
+   mark floating in the middle of the bar. */
+.as-toolbar__spacer::before {
+  display: none;
 }
 
 .as-brand {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-right: 4px;
+  margin: 0 6px 0 4px;
   font-family: var(--as-mono);
   font-size: 0.8125rem;
   font-weight: 600;
@@ -198,18 +348,47 @@
   height: 18px;
 }
 
+/* ── Icons ───────────────────────────────────────────────────────────────── */
+
+/*
+ * Every icon in the chrome (see ui-icons.tsx) is a 24-unit stroke drawing sized
+ * down to ~15px, drawn in `currentColor` so it inherits whatever state its
+ * button is in. The only thing this class owns is that it must never be
+ * squeezed: an icon in a flex row is not text and has no smaller size that is
+ * still the same picture.
+ */
+.as-icon {
+  flex: none;
+  display: block;
+}
+
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 
+/*
+ * One button, four states, and no box at rest.
+ *
+ * A toolbar where every control is a filled, outlined pill has no hierarchy
+ * left to spend: Save looked exactly as loud as Fit, and thirty identical
+ * rectangles read as texture rather than as thirty things you can do. So the
+ * resting state is a ghost — label only — and the ink is spent where it means
+ * something: a wash for what is ON, a fill for the one primary action, the
+ * danger hue for what destroys. Everything else is silent until you reach for
+ * it.
+ *
+ * The border stays declared (transparent) rather than removed, so the on and
+ * outline variants can colour it without any of them changing the button's
+ * measured size mid-interaction.
+ */
 .as-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 6px;
   height: var(--as-control-h);
-  padding: 0 10px;
-  border: 1px solid var(--as-border);
-  border-radius: 6px;
-  background: var(--as-surface-2);
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: var(--as-radius-md);
+  background: transparent;
   color: var(--as-text-dim);
   font: inherit;
   font-size: 0.75rem;
@@ -217,18 +396,27 @@
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
-  transition: background 120ms, color 120ms, border-color 120ms;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
-/* Hover moves the surface toward the TEXT colour, never toward white: mixing
-   with #fff lightened a light theme's already-light button by a hair
-   (#f1f5f9 → #f5f8fb, 1.01:1 — invisible), and the two percentages summing to
-   78% also scaled the result's alpha to 0.78, letting the canvas show
-   through. Toward `--as-text` the step darkens on a light theme and lightens
-   on a dark one, from one declaration. */
+/* Hover fills toward the TEXT colour, never toward white: mixing with #fff
+   lightened a light theme's already-light button by a hair (1.01:1 —
+   invisible). Toward `--as-text` the step darkens on a light theme and
+   lightens on a dark one, from one declaration — which is exactly what
+   `--as-hover` is. */
 .as-btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--as-surface-2) 86%, var(--as-text));
+  background: var(--as-hover);
   color: var(--as-text);
+}
+
+/* A press is a deeper hover, not a new colour. Without it a ghost button has
+   no down state at all — the cursor is over it either way. */
+.as-btn:active:not(:disabled) {
+  background: var(--as-hover-strong);
 }
 
 .as-btn:disabled {
@@ -236,14 +424,42 @@
   cursor: not-allowed;
 }
 
+/* An icon inside a button is furniture, not text: a shade quieter than the
+   label at rest, up to full strength with it. */
+.as-btn .as-icon {
+  opacity: 0.75;
+}
+
+.as-btn:hover:not(:disabled) .as-icon,
+.as-btn--on .as-icon,
+.as-btn--primary .as-icon,
+.as-btn--danger .as-icon {
+  opacity: 1;
+}
+
+/* An icon that IS the button carries the whole message, so it never dims. */
+.as-btn--icon .as-icon {
+  opacity: 0.9;
+}
+
+/* The caret on a dropdown is punctuation — quieter than the icon, and pulled
+   in tight so "Insert ⌄" reads as one word plus a mark, not as two items. */
+.as-btn__caret {
+  margin-right: -2px;
+  opacity: 0.5;
+}
+
 .as-btn--on {
-  border-color: var(--as-accent);
-  background: color-mix(in srgb, var(--as-accent) 18%, transparent);
+  background: var(--as-accent-wash);
+  color: var(--as-accent);
+}
+
+.as-btn--on:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--as-accent) 24%, transparent);
   color: var(--as-accent);
 }
 
 .as-btn--primary {
-  border-color: var(--as-accent);
   background: var(--as-accent);
   color: var(--as-accent-ink);
   font-weight: 600;
@@ -252,7 +468,8 @@
 /* Toward the text colour again, not #fff: lightening the accent under the
    cursor pushed a light theme's white button label from 5.9:1 to under 4.5,
    so the hover state was the least readable state. */
-.as-btn--primary:hover:not(:disabled) {
+.as-btn--primary:hover:not(:disabled),
+.as-btn--primary:active:not(:disabled) {
   background: color-mix(in srgb, var(--as-accent) 85%, var(--as-text));
   color: var(--as-accent-ink);
 }
@@ -261,25 +478,82 @@
    alarm: a ring in the accent's own colour, the way a focused field is
    marked, rather than a second colour competing with the button's fill. */
 .as-btn--dirty {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--as-accent) 28%, transparent);
+  box-shadow: 0 0 0 3px var(--as-ring);
 }
 
+/* Destructive, but still a ghost: a 10% wash is enough to stop the eye
+   without the outlined red slab reading as an error message. */
 .as-btn--danger {
-  border-color: color-mix(in srgb, var(--as-danger) 50%, transparent);
-  background: color-mix(in srgb, var(--as-danger) 15%, transparent);
+  background: color-mix(in srgb, var(--as-danger) 10%, transparent);
   color: var(--as-danger);
 }
 
-.as-btn--icon {
-  min-width: var(--as-control-h);
-  padding: 0 8px;
+.as-btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--as-danger) 18%, transparent);
+  color: var(--as-danger);
 }
 
+.as-btn--danger:active:not(:disabled) {
+  background: color-mix(in srgb, var(--as-danger) 26%, transparent);
+}
+
+/*
+ * The one place a ghost has nothing to sit on: a dialog's secondary action
+ * beside a filled primary, where "Cancel" as bare text reads as a caption
+ * rather than as the other half of a choice.
+ */
+.as-btn--outline {
+  border-color: var(--as-border);
+  background: var(--as-surface-2);
+}
+
+.as-btn--outline:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--as-border) 50%, var(--as-text));
+  background: color-mix(in srgb, var(--as-surface-2) 86%, var(--as-text));
+}
+
+/* Square: an icon has no reading direction to pad asymmetrically for. */
+.as-btn--icon {
+  width: var(--as-control-h);
+  min-width: var(--as-control-h);
+  padding: 0;
+}
+
+/* The zoom readout is a button, so it has to say so — a bare `<button>` with
+   four declarations kept the UA's grey slab, which is what made "113%" look
+   like something broken and disabled. Tabular figures so the bar does not
+   twitch sideways as the number changes under a trackpad. */
 .as-zoom {
-  min-width: 44px;
-  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--as-control-h);
+  min-width: 46px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--as-radius-md);
+  background: transparent;
+  color: var(--as-text-dim);
   font-family: var(--as-mono);
   font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.as-zoom:hover {
+  background: var(--as-hover);
+  color: var(--as-text);
+}
+
+/* The sequence editor has no zoom-to-100% action to offer, so its readout is
+   a <span>: same chip, no pointer, no hover. */
+.as-zoom--static {
+  cursor: default;
+}
+
+.as-zoom--static:hover {
+  background: transparent;
   color: var(--as-text-dim);
 }
 
@@ -304,20 +578,33 @@
      (a container query would need `container-type` on `.as-root`, which would
      also make it the containing block for the `position: fixed` right-click
      menu and modals, and those are placed in viewport coordinates). */
-  max-height: min(60vh, var(--as-menu-max-h, 280px));
+  max-height: min(60vh, var(--as-menu-max-h, 340px));
   overflow-y: auto;
+  /* The padding is what lets a row round its own corners without colliding
+     with the panel's; it is also the inset the section rules read as. */
+  padding: 5px;
   border: 1px solid var(--as-border);
-  border-radius: var(--as-radius);
+  border-radius: var(--as-radius-lg);
   background: var(--as-surface);
-  box-shadow: 0 12px 32px var(--as-shadow-ink);
+  box-shadow: var(--as-elev-2);
 }
 
+/*
+ * Rows separate by rhythm, not by rules.
+ *
+ * Every item used to carry a full-bleed 1px bottom border, which turned a
+ * four-item menu into a four-row table and made the hover state fight the
+ * grid it sat in. What tells rows apart now is the gap between them and the
+ * rounded wash that appears under the cursor; the only remaining lines are
+ * the ones that mark a real section change (`.as-menu__sep`, and the rule
+ * above a caption).
+ */
 .as-menu__item {
   display: block;
   width: 100%;
-  padding: 9px 12px;
+  padding: 7px 9px;
   border: 0;
-  border-bottom: 1px solid var(--as-border);
+  border-radius: var(--as-radius-sm);
   background: none;
   color: var(--as-text);
   font: inherit;
@@ -325,12 +612,16 @@
   cursor: pointer;
 }
 
-.as-menu__item:last-child {
-  border-bottom: 0;
+.as-menu__item + .as-menu__item {
+  margin-top: 1px;
 }
 
 .as-menu__item:hover:not(:disabled) {
-  background: var(--as-surface-2);
+  background: var(--as-hover);
+}
+
+.as-menu__item:active:not(:disabled) {
+  background: var(--as-hover-strong);
 }
 
 .as-menu__item:disabled {
@@ -338,32 +629,52 @@
   opacity: 0.4;
 }
 
+/* `block`, not the tag's default: these are <div>s in a plain menu row but
+   <span>s inside `.as-tool__text`, where an inline pair ran the label and its
+   hint together on one line. */
 .as-menu__label {
+  display: block;
   font-size: 0.75rem;
   font-weight: 500;
 }
 
 .as-menu__hint {
-  margin-top: 1px;
+  display: block;
+  margin-top: 2px;
   font-size: 0.625rem;
+  line-height: 1.45;
   color: var(--as-text-dim);
 }
 
-/* Checkbox rows in the tag-filter menu. */
+/* A single-line row that opens with an icon — "New file", and anything a
+   registry adds beside it. */
+.as-menu__item--lead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.as-menu__item--lead .as-icon {
+  color: var(--as-text-dim);
+}
+
+/* Checkbox rows in the tag-filter menu. Same geometry as a plain item, so a
+   menu mixing the two has one left edge and one row height. */
 .as-menu__check {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--as-border);
+  padding: 7px 9px;
+  border-radius: var(--as-radius-sm);
   font-size: 0.75rem;
   color: var(--as-text);
   cursor: pointer;
   user-select: none;
+  accent-color: var(--as-accent);
 }
 
 .as-menu__check:hover {
-  background: var(--as-surface-2);
+  background: var(--as-hover);
 }
 
 /* Left-side toolbar menus anchor to the button's left edge, so they open
@@ -397,7 +708,11 @@
 }
 
 .as-tool--on {
-  background: color-mix(in srgb, var(--as-accent) 12%, transparent);
+  background: var(--as-accent-wash);
+}
+
+.as-tool--on:hover {
+  background: color-mix(in srgb, var(--as-accent) 22%, transparent);
 }
 
 .as-tool__icon {
@@ -418,7 +733,7 @@
 .as-tool__key {
   flex: none;
   padding: 1px 5px;
-  border: 1px solid var(--as-border);
+  border: 1px solid var(--as-line);
   border-radius: 4px;
   background: var(--as-surface-2);
   color: var(--as-text-dim);
@@ -429,14 +744,15 @@
 
 .as-menu__sep {
   height: 1px;
-  margin: 3px 0;
-  background: var(--as-border);
+  margin: 5px 3px;
+  background: var(--as-line);
 }
 
 /* Non-interactive header row inside a menu (e.g. the tag-filter section). */
 .as-menu__caption {
-  padding: 7px 12px 3px;
-  border-top: 1px solid var(--as-border);
+  margin-top: 5px;
+  padding: 8px 9px 4px;
+  border-top: 1px solid var(--as-line);
   font-family: var(--as-mono);
   font-size: 0.625rem;
   text-transform: uppercase;
@@ -445,6 +761,7 @@
 }
 
 .as-menu__caption:first-child {
+  margin-top: 0;
   border-top: 0;
 }
 
@@ -469,11 +786,11 @@
   max-width: 260px;
   max-height: min(60vh, 320px);
   overflow-y: auto;
-  padding: 4px;
+  padding: 5px;
   border: 1px solid var(--as-border);
-  border-radius: var(--as-radius);
+  border-radius: var(--as-radius-lg);
   background: var(--as-surface);
-  box-shadow: 0 12px 32px var(--as-shadow-ink);
+  box-shadow: var(--as-elev-2);
 }
 
 .as-context__item {
@@ -486,7 +803,7 @@
   min-height: 24px;
   padding: 6px 8px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--as-radius-sm);
   background: none;
   color: var(--as-text);
   font: inherit;
@@ -496,7 +813,11 @@
 }
 
 .as-context__item:hover:not(:disabled) {
-  background: var(--as-surface-2);
+  background: var(--as-hover);
+}
+
+.as-context__item:active:not(:disabled) {
+  background: var(--as-hover-strong);
 }
 
 .as-context__item:disabled {
@@ -524,17 +845,23 @@
    would collapse the menu's padding into a gap. */
 .as-context__rule {
   height: 1px;
-  margin: 4px 0;
+  margin: 5px 3px;
   border: 0;
-  background: var(--as-border);
+  background: var(--as-line);
 }
 
 /* Toolbar search. */
 /* Doubled class on purpose: the shared `.as-input { width: 100% }` below is
    later in the file and would otherwise win, stretching the field across the
    whole toolbar and pushing everything after it onto another row. */
+/* The one control on the bar allowed to flex: it takes whatever width the
+   trailing cluster has spare, which is what keeps a wrapped row from opening
+   a gap the width of the editor. It never shrinks below a usable field. */
 .as-input.as-search {
-  width: 150px;
+  width: 168px;
+  flex: 1 1 168px;
+  min-width: 132px;
+  max-width: 520px;
   padding-inline: 9px;
   font-size: 0.75rem;
 }
@@ -571,16 +898,18 @@
 
 .as-panel__title {
   margin: 0;
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
   font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--as-text);
 }
 
 .as-panel__section {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding-top: 12px;
-  border-top: 1px solid var(--as-border);
+  padding-top: 14px;
+  border-top: 1px solid var(--as-line);
 }
 
 .as-panel__label {
@@ -590,6 +919,14 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--as-text-dim);
+}
+
+/* The panel is a column, so its buttons stretch the full width — at the
+   toolbar's 30px a stretched button reads as a strip of text rather than as
+   something to press. */
+.as-panel > .as-btn,
+.as-panel__section > .as-btn {
+  height: 34px;
 }
 
 .as-panel__foot {
@@ -607,11 +944,21 @@
   width: 100%;
   padding: 7px 9px;
   border: 1px solid var(--as-border);
-  border-radius: 6px;
+  border-radius: var(--as-radius-md);
   background: var(--as-surface-2);
   color: var(--as-text);
   font: inherit;
   font-size: 0.8125rem;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+/* Fields keep their outline where buttons dropped theirs — a box you can type
+   into has to look like one — so the hover state is the border warming up
+   rather than a fill, which would make a field look pressed. */
+.as-input:hover:not(:disabled, :focus),
+.as-select:hover:not(:disabled, :focus),
+.as-textarea:hover:not(:disabled, :focus) {
+  border-color: color-mix(in srgb, var(--as-border) 45%, var(--as-text));
 }
 
 /* Single-line controls share the button height exactly; the textarea is
@@ -648,13 +995,39 @@
 
 .as-textarea {
   min-height: 120px;
+  padding-block: 8px;
   resize: vertical;
   font-family: var(--as-mono);
   font-size: 0.75rem;
+  line-height: 1.5;
 }
 
+/*
+ * The native drop-down marker, replaced.
+ *
+ * Chrome, Safari and Firefox each draw their own — three different arrows at
+ * three different weights — and every one of them disagreed with the caret
+ * the toolbar's own dropdowns wear. Two 45° gradient bands make the same
+ * stroked chevron out of `currentColor`, which a data-URI SVG cannot do: the
+ * mark follows the field's ink, so it re-colours with the theme and dims with
+ * a disabled control for free.
+ */
 .as-select {
   cursor: pointer;
+  appearance: none;
+  padding-right: 24px;
+  --as-caret: color-mix(in srgb, currentcolor 60%, transparent);
+  background-image:
+    linear-gradient(45deg, transparent 45%, var(--as-caret) 45%, var(--as-caret) 55%, transparent 55%),
+    linear-gradient(135deg, transparent 45%, var(--as-caret) 45%, var(--as-caret) 55%, transparent 55%);
+  background-position: right 12px center, right 7.5px center;
+  background-size: 5.5px 5.5px;
+  background-repeat: no-repeat;
+}
+
+.as-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ── Keyboard focus ──────────────────────────────────────────────────────── */
@@ -688,8 +1061,8 @@
 
 .as-error {
   padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--as-danger) 50%, transparent);
-  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--as-danger) 45%, transparent);
+  border-radius: var(--as-radius-md);
   background: color-mix(in srgb, var(--as-danger) 12%, transparent);
   color: var(--as-danger);
   font-size: 0.75rem;
@@ -1283,10 +1656,50 @@
 }
 
 /* The header is the only interactive part, and the drag handle. */
+/*
+ * `.as-zone__grab` is a MARKER, not a box.
+ *
+ * It is the selector React Flow matches to decide whether a press may drag
+ * the zone (see ZONE_DRAG_HANDLE), and it is worn by two elements whose
+ * geometry has nothing in common: the header chip, which hugs its content at
+ * the top-left corner, and the interior pad below, which fills the region.
+ * So it must declare NO geometry at all — an `inset: 0` here stretched the
+ * header chip across the whole zone, because the header's own rule sets
+ * `top` and `left` but has no reason to set `right` and `bottom`, and the
+ * two survived to pull the chip open.
+ */
+.as-zone__grab {
+  cursor: grab;
+}
+
+.as-zone__grab:active {
+  cursor: grabbing;
+}
+
+/*
+ * The zone's interior, as a drag surface — present from the first press, so a
+ * region picks up on mouse down the way a node does.
+ *
+ * Sits under everything the zone draws and under every node, so the only
+ * press it takes is one on the empty space inside a region. `z-index: 0`
+ * keeps it below the header chip and the polygon vertices, which have jobs of
+ * their own on the same box.
+ */
+.as-zone__pad {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: var(--as-zone-radius, 10px);
+  pointer-events: all;
+}
+
 .as-zone__header {
   position: absolute;
   top: 0;
   left: 0;
+  /* Above the interior pad — the chip is also a drag handle, but it carries
+     the label and the provider control, which have to stay clickable. */
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2316,16 +2729,16 @@
   align-items: center;
   flex-wrap: wrap;
   justify-content: flex-start;
-  gap: 8px;
+  gap: 6px;
   width: fit-content;
   max-width: min(94%, 900px);
   margin-inline: auto;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border: 1px solid var(--as-border);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--as-surface) 97%, transparent);
-  box-shadow: 0 12px 32px var(--as-shadow-ink);
-  backdrop-filter: blur(8px);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--as-surface) 94%, transparent);
+  box-shadow: var(--as-elev-2);
+  backdrop-filter: blur(12px) saturate(140%);
 }
 
 /*
@@ -2422,8 +2835,10 @@
   align-items: center;
 }
 
+/* Wider than the 62px it used to be: the select now reserves ~16px on its
+   right for the chevron, and "pfk" needs the rest. */
 .as-inspector .as-fieldrow__key {
-  width: 62px;
+  width: 78px;
   flex: none;
 }
 
@@ -2439,15 +2854,48 @@
   font-family: var(--as-mono);
 }
 
-/* Inline checkbox inside an inspector section. */
+/* Inline checkbox inside an inspector section, or a row in a dialog's list. */
 .as-check {
   display: inline-flex;
-  gap: 5px;
+  gap: 7px;
   align-items: center;
   font-size: 0.6875rem;
   color: var(--as-text-dim);
   cursor: pointer;
   user-select: none;
+}
+
+/*
+ * In the inspector it is not a row but a control, standing in a line of
+ * selects and inputs — so it takes their height, their corner and their
+ * outline. Without the box it was a 13px tick and a word floating between two
+ * 30px fields, which is what made the bar look like three sizes of thing.
+ *
+ * Scoped to the inspector on purpose: the same class lists options down the
+ * side of the export dialog, where a column of outlined chips would be a wall.
+ */
+.as-inspector .as-check {
+  height: var(--as-control-h);
+  padding: 0 10px;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-md);
+  background: var(--as-surface-2);
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.as-inspector .as-check:hover {
+  border-color: color-mix(in srgb, var(--as-border) 45%, var(--as-text));
+  color: var(--as-text);
+}
+
+/* `:has`, not a class: the checked state already lives on the input. */
+.as-inspector .as-check:has(input:checked) {
+  border-color: var(--as-accent);
+  background: var(--as-accent-wash);
+  color: var(--as-text);
 }
 
 .as-swatches {
@@ -2482,9 +2930,9 @@
 .as-inspector__section {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding-left: 10px;
-  border-left: 1px solid var(--as-border);
+  gap: 5px;
+  padding-left: 9px;
+  border-left: 1px solid var(--as-line);
 }
 
 /* Sections holding a growable text field absorb their row's leftover width,
@@ -2508,9 +2956,9 @@
   align-items: center;
   gap: 4px;
   padding: 3px 6px;
-  border: 1px solid var(--as-border);
-  border-radius: 7px;
-  background: var(--as-bg);
+  border: 1px solid var(--as-line);
+  border-radius: var(--as-radius-md);
+  background: color-mix(in srgb, var(--as-bg) 60%, transparent);
 }
 
 .as-inspector__caption {
@@ -2529,8 +2977,8 @@
   align-items: center;
   min-height: 24px;
   padding: 3px 7px;
-  border: 1px solid var(--as-border);
-  border-radius: 5px;
+  border: 1px solid var(--as-line);
+  border-radius: var(--as-radius-sm);
   background: none;
   color: var(--as-text-dim);
   font: inherit;
@@ -2556,11 +3004,13 @@
 }
 
 /* Free-text add inside a chip group. */
+/* 24px like `.as-chip`, so the row inside a chip group has one height. */
 .as-chip__add {
   width: 64px;
-  padding: 3px 6px;
+  height: 24px;
+  padding: 0 6px;
   border: 1px dashed var(--as-border);
-  border-radius: 5px;
+  border-radius: var(--as-radius-sm);
   background: none;
   color: var(--as-text);
   font: inherit;
@@ -2595,9 +3045,12 @@
   color: var(--as-text-dim);
 }
 
+/* `padding-left` alone: `.as-select` reserves its right inset for the chevron
+   it draws there, and a `padding-inline` shorthand here would take that inset
+   back and print the caret over the last letter of the value. */
 .as-scenario__select {
   width: auto;
-  padding-inline: 8px;
+  padding-left: 8px;
   font-size: 0.75rem;
 }
 
@@ -2695,7 +3148,7 @@
 }
 
 .as-focusbar__crumb:hover:not(:disabled) {
-  background: var(--as-surface-2);
+  background: var(--as-hover);
   color: var(--as-text);
 }
 
@@ -2708,8 +3161,8 @@
 .as-focusbar__level {
   margin-left: 6px;
   padding: 2px 8px;
-  border: 1px solid currentcolor;
   border-radius: 999px;
+  background: var(--as-accent-wash);
   color: var(--as-accent);
   font-family: var(--as-mono);
   font-size: 0.6875rem;
@@ -3322,11 +3775,18 @@
 }
 
 /* The readout doubles as the jump-to-a-date control. */
+/* The scrub bar carries the same controls as the toolbar above it, so it runs
+   at the same height: the date readout used to be a 20px word between two
+   30px buttons and a 24px toggle — four sizes in one strip. */
 .as-timeline__date {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: var(--as-control-h);
   min-width: 96px;
-  padding: 2px 6px;
+  padding: 0 8px;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--as-radius-md);
   background: none;
   color: var(--as-text);
   font-family: var(--as-mono);
@@ -3335,6 +3795,13 @@
   text-align: right;
   white-space: nowrap;
   cursor: pointer;
+}
+
+/* 28px + the toggle's own hairline = the bar's 30. On a zone header the same
+   segments stay at their own 24px — there they ride a small on-canvas chip,
+   not a toolbar. */
+.as-timeline .as-zone__seg {
+  min-height: 28px;
 }
 
 .as-timeline__date:hover {
@@ -3405,17 +3872,18 @@
   width: min(420px, 100%);
   max-height: 80%;
   overflow-y: auto;
-  padding: 18px 20px;
+  padding: 20px 22px;
   border: 1px solid var(--as-border, #334155);
-  border-radius: 12px;
+  border-radius: 16px;
   background: var(--as-surface, #0b1220);
-  box-shadow: 0 18px 48px var(--as-shadow-ink);
+  box-shadow: 0 24px 60px var(--as-shadow-ink);
 }
 
 .as-modal__title {
   margin: 0 0 10px;
-  font-size: 0.875rem;
+  font-size: 0.9375rem;
   font-weight: 650;
+  letter-spacing: -0.01em;
   color: var(--as-text, #e2e8f0);
 }
 
@@ -3430,8 +3898,8 @@
   display: flex;
   flex-direction: column;
   margin-bottom: 16px;
-  border: 1px solid var(--as-border);
-  border-radius: var(--as-radius);
+  border: 1px solid var(--as-line);
+  border-radius: var(--as-radius-md);
   overflow: hidden;
 }
 
@@ -3440,7 +3908,7 @@
   gap: 8px;
   align-items: center;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--as-border);
+  border-bottom: 1px solid var(--as-line);
   font-size: 0.75rem;
 }
 
@@ -3457,6 +3925,7 @@
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+  align-items: center;
 }
 
 /* The nesting dialog's one control: "It becomes a [kind]". Sits between the
@@ -3545,7 +4014,7 @@
 
 .as-kbd {
   padding: 1px 5px;
-  border: 1px solid var(--as-border);
+  border: 1px solid var(--as-line);
   border-bottom-width: 2px;
   border-radius: 4px;
   background: var(--as-surface-2);
@@ -3649,19 +4118,36 @@
   gap: 10px;
 }
 
+/* The welcome screen's two big choices. A ghost has nothing to sit on here —
+   the card behind them is the same surface — so these keep a real box: a
+   hairline and the raised surface, and they lift a shade under the cursor. */
 .as-welcome__cta {
   flex: 1;
   justify-content: space-between;
-  height: 40px;
-  font-size: 0.7812rem;
+  height: 42px;
+  padding: 0 14px;
+  border-color: var(--as-border);
+  border-radius: var(--as-radius-lg);
+  background: var(--as-surface-2);
+  color: var(--as-text);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.as-welcome__cta:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--as-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--as-surface-2) 88%, var(--as-text));
+  color: var(--as-text);
 }
 
 .as-welcome__arrow {
-  transition: transform 160ms ease;
+  opacity: 0.7;
+  transition: transform 160ms ease, opacity 160ms ease;
 }
 
 .as-welcome__cta:hover:not(:disabled) .as-welcome__arrow {
   transform: translateX(5px);
+  opacity: 1;
 }
 
 /* The copy CTA's wrapper shares the row with its sibling button, so it takes
@@ -3673,6 +4159,29 @@
 
 .as-welcome__copy .as-welcome__cta {
   width: 100%;
+}
+
+/* The disclosure sits flush against the copy button and reads as its right
+   edge, not as a third choice — so it borrows the CTA's box and drops the
+   border they would otherwise share. */
+.as-welcome__copy-toggle {
+  flex: none;
+  height: 42px;
+  margin-left: -1px;
+  border: 1px solid var(--as-border);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-radius: 0 var(--as-radius-lg) var(--as-radius-lg) 0;
+  background: var(--as-surface-2);
+}
+
+.as-welcome__copy:has(.as-welcome__copy-toggle) .as-welcome__cta {
+  border-radius: var(--as-radius-lg) 0 0 var(--as-radius-lg);
+}
+
+.as-welcome__copy-toggle:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--as-surface-2) 88%, var(--as-text));
+  color: var(--as-text);
 }
 
 /* Schema-form picker: hidden until the pointer or keyboard reaches the copy
@@ -3732,14 +4241,22 @@
   vertical-align: bottom;
 }
 
+/* Rows in the file list follow the menu's own rhythm: rounded, gapped, no
+   rules. The row is what rounds — the select button and the two icon buttons
+   inside it share one hover surface, so the whole row lights up as one thing
+   rather than in three pieces. */
 .as-filemenu__row {
   display: flex;
   align-items: center;
-  border-bottom: 1px solid var(--as-border);
+  border-radius: var(--as-radius-sm);
 }
 
-.as-filemenu__row:last-of-type {
-  border-bottom: 0;
+.as-filemenu__row + .as-filemenu__row {
+  margin-top: 1px;
+}
+
+.as-filemenu__row:hover {
+  background: var(--as-hover);
 }
 
 .as-filemenu__row--active .as-filemenu__label {
@@ -3752,18 +4269,15 @@
   gap: 8px;
   align-items: center;
   min-width: 0;
-  padding: 9px 12px;
+  padding: 7px 9px;
   border: 0;
+  border-radius: var(--as-radius-sm);
   background: none;
   color: var(--as-text);
   font: inherit;
   font-size: 0.75rem;
   text-align: left;
   cursor: pointer;
-}
-
-.as-filemenu__select:hover {
-  background: var(--as-surface-2);
 }
 
 .as-filemenu__label {
@@ -3776,16 +4290,38 @@
   flex-shrink: 0;
   margin-left: auto;
   padding: 1px 6px;
-  border: 1px solid var(--as-border);
+  border: 1px solid var(--as-line);
   border-radius: 999px;
   font-family: var(--as-mono);
   font-size: 0.625rem;
   color: var(--as-text-dim);
 }
 
-.as-filemenu__rename-btn {
+/*
+ * The two row actions recede until the row is under the cursor — a list of six
+ * files should read as six names, not as eighteen controls.
+ *
+ * Faded, not hidden: `visibility: hidden` takes a control out of the
+ * accessibility tree and out of the tab order, so rename and delete would
+ * exist only for a mouse — unreachable by keyboard, by screen reader, and on
+ * a touch screen that has no hover to offer. At 45% they are quiet but
+ * present, which is the point.
+ */
+.as-filemenu__rename-btn,
+.as-filemenu__delete {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
   color: var(--as-text-dim);
-  font-size: 0.6875rem;
+  opacity: 0.45;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.as-filemenu__row:hover .as-filemenu__rename-btn,
+.as-filemenu__row:hover .as-filemenu__delete,
+.as-filemenu__rename-btn:focus-visible,
+.as-filemenu__delete:focus-visible {
+  opacity: 1;
 }
 
 .as-filemenu__rename-btn:hover {
@@ -3793,16 +4329,16 @@
 }
 
 .as-filemenu__delete {
-  margin-right: 6px;
-  color: var(--as-text-dim);
+  margin-right: 4px;
 }
 
 .as-filemenu__delete:hover {
+  background: color-mix(in srgb, var(--as-danger) 14%, transparent);
   color: var(--as-danger);
 }
 
 .as-filemenu__row--editing {
-  padding: 6px 10px;
+  padding: 4px 6px;
 }
 
 .as-filemenu__rename {
@@ -3876,6 +4412,12 @@
 .as-version-tag--editing .as-select,
 .as-version-tag--editing .as-btn {
   height: 24px;
+}
+
+/* Square at the chip's height, not the toolbar's. */
+.as-version-tag--editing .as-btn--icon {
+  width: 24px;
+  min-width: 24px;
 }
 
 .as-version-tag__input {
@@ -4192,9 +4734,11 @@
 .as-toast {
   max-width: 100%;
   padding: 6px 10px;
-  border: 1px solid color-mix(in srgb, var(--as-accent) 45%, transparent);
-  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--as-accent) 40%, transparent);
+  border-radius: var(--as-radius-md);
   background: color-mix(in srgb, var(--as-surface) 92%, transparent);
+  box-shadow: var(--as-elev-1);
+  backdrop-filter: blur(6px);
   color: var(--as-accent);
   font-family: var(--as-mono);
   font-size: 0.6875rem;
@@ -4218,10 +4762,10 @@
   gap: 8px;
   max-width: min(560px, calc(100% - var(--as-canvas-gutter) - 12px));
   padding: 8px 8px 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--as-danger) 55%, transparent);
-  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--as-danger) 45%, transparent);
+  border-radius: var(--as-radius-lg);
   background: color-mix(in srgb, var(--as-danger) 14%, var(--as-surface));
-  box-shadow: 0 8px 24px var(--as-shadow-ink);
+  box-shadow: var(--as-elev-2);
   color: var(--as-danger);
   font-size: 0.75rem;
   line-height: 1.4;
@@ -4236,9 +4780,9 @@
 
 .as-errorbar .as-btn {
   flex: none;
+  width: 24px;
   height: 24px;
   min-width: 24px;
-  border-color: color-mix(in srgb, var(--as-danger) 40%, transparent);
   background: none;
   color: var(--as-danger);
 }
@@ -4357,20 +4901,40 @@
   pointer-events: all;
 }
 
+/* React Flow's zoom column, dressed in the chrome's own button language: a
+   floating card of ghost buttons rather than three bordered boxes stacked on
+   the canvas. */
+.as-root .react-flow__controls {
+  overflow: hidden;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-lg);
+  box-shadow: var(--as-elev-1);
+}
+
 .as-root .react-flow__controls-button {
-  border-bottom: 1px solid var(--as-border);
-  background: var(--as-surface);
+  border: 0;
+  border-bottom: 1px solid var(--as-line);
+  background: color-mix(in srgb, var(--as-surface) 92%, transparent);
+  backdrop-filter: blur(6px);
   fill: var(--as-text-dim);
+  transition: background 120ms ease, fill 120ms ease;
+}
+
+.as-root .react-flow__controls-button:last-child {
+  border-bottom: 0;
 }
 
 .as-root .react-flow__controls-button:hover {
-  background: var(--as-surface-2);
+  background: color-mix(in srgb, var(--as-surface-2) 92%, transparent);
+  fill: var(--as-text);
 }
 
 .as-root .react-flow__minimap {
   border: 1px solid var(--as-border);
-  border-radius: 6px;
+  border-radius: var(--as-radius-lg);
   background: var(--as-surface);
+  box-shadow: var(--as-elev-1);
+  overflow: hidden;
 }
 
 .as-root .react-flow__attribution {
@@ -4526,9 +5090,10 @@
   min-width: 0;
 }
 
+/* The box is drawn for every checkbox in the editor now (see "Checkboxes and
+   radios, drawn"); the row only has to stop it shrinking in the flex line. */
 .as-scope__row input {
-  accent-color: var(--as-accent);
-  cursor: pointer;
+  flex: none;
 }
 
 .as-scope__row-label {
@@ -4645,7 +5210,12 @@
   position: relative;
 }
 
+/* A <button> wearing the field styling, so the node-kind picker matches the
+   real <select>s beside it in the inspector — the chevron comes from
+   `.as-select` itself, which is why there is no glyph in the markup. */
 .as-kindselect__button {
+  display: inline-flex;
+  align-items: center;
   text-align: left;
   cursor: pointer;
 }
@@ -5300,6 +5870,14 @@
  * restated with those.
  */
 @media (forced-colors: active) {
+  /* A ghost button is a label with a transparent border. Forced colours drop
+     the hover wash that normally reveals it, so the border comes back — it is
+     the only thing left that can say "this is pressable". */
+  .as-btn,
+  .as-zoom {
+    border-color: ButtonBorder;
+  }
+
   .as-btn--on,
   .as-chip--on,
   .as-kind-chip[aria-pressed="true"],

@@ -99,9 +99,9 @@ describe("WelcomeModal", () => {
   it("reveals Insert only once there is text", async () => {
     const user = userEvent.setup();
     mountModal();
-    expect(screen.queryByRole("button", { name: "Insert" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Insert diagram" })).not.toBeInTheDocument();
     await user.type(screen.getByLabelText("Diagram JSON"), "x");
-    expect(screen.getByRole("button", { name: "Insert" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Insert diagram" })).toBeInTheDocument();
   });
 
   it("surfaces parse errors as an alert and does not insert", async () => {
@@ -112,7 +112,7 @@ describe("WelcomeModal", () => {
       },
     });
     await user.type(screen.getByLabelText("Diagram JSON"), "not json");
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
     expect(screen.getByRole("alert")).toHaveTextContent("bad template");
     expect(props.onInsert).not.toHaveBeenCalled();
   });
@@ -124,14 +124,14 @@ describe("WelcomeModal", () => {
     await user.click(editor);
     // The real-world mangle: a copy dropped text, fusing icon into description.
     await user.paste('{"kind":"client","icon":y React 18+ app","x":40}');
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
     expect(screen.getByRole("alert")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Approximate a fix \(1 guess\)/ }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect((editor as HTMLTextAreaElement).value).toContain('"icon": "y React 18+ app"');
 
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
     expect(props.onInsert).toHaveBeenCalledWith(
       { kind: "client", icon: "y React 18+ app", x: 40 },
       "Untitled 1",
@@ -146,7 +146,7 @@ describe("WelcomeModal", () => {
       },
     });
     await user.type(screen.getByLabelText("Diagram JSON"), "not json");
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Approximate a fix/ })).not.toBeInTheDocument();
   });
@@ -162,7 +162,7 @@ describe("WelcomeModal", () => {
     // paste — typing JSON through user.type trips on the {} keystroke syntax
     await user.click(editor);
     await user.paste('{"version": 1, "participants": []}');
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
     expect(screen.getByRole("alert")).toHaveTextContent(/looks like a sequence document/);
   });
 
@@ -175,7 +175,7 @@ describe("WelcomeModal", () => {
     const editor = screen.getByLabelText("Diagram JSON");
     await user.click(editor);
     await user.paste('{"version": 1, "nodes": [], "edges": []}');
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
     expect(props.onInsert).toHaveBeenCalledWith(
       { version: 1, nodes: [], edges: [] },
       "From LLM",
@@ -188,7 +188,7 @@ describe("WelcomeModal", () => {
     expect(screen.getByLabelText("Diagram JSON")).toHaveValue(
       '{"version": 1, "nodes": [], "edges": []}',
     );
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
     expect(props.onInsert).toHaveBeenCalledWith(
       { version: 1, nodes: [], edges: [] },
       "Untitled 1",
@@ -376,7 +376,7 @@ describe("type picker", () => {
     const editor = screen.getByLabelText("Diagram JSON");
     await user.click(editor);
     await user.paste(seqJson);
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
     expect(onInsertOther).toHaveBeenCalledWith(JSON.parse(seqJson), "Untitled 1");
     expect(props.onInsert).not.toHaveBeenCalled();
   });
@@ -409,7 +409,7 @@ describe("type picker", () => {
     expect(writeText).toHaveBeenLastCalledWith("CONTENT PROMPT");
     await user.click(screen.getByRole("button", { name: /Copy Schema & System Prompt/ }));
     expect(writeText).toHaveBeenLastCalledWith("THE PROMPT");
-    // "Copied ✓" holds the clicked item's label for 1.5s; wait it out.
+    // "Copied" holds the clicked item's label for 1.5s; wait it out.
     await user.click(await screen.findByRole("menuitem", { name: /Full schema/ }, { timeout: 2500 }));
     expect(writeText).toHaveBeenLastCalledWith("THE PROMPT");
   });
@@ -485,7 +485,7 @@ describe("type picker", () => {
       "aria-pressed",
       "true",
     );
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
     expect(screen.getByRole("alert")).toHaveTextContent(/looks like a sequence document/);
   });
 });

@@ -145,7 +145,22 @@ function hslToHex(h: number, s: number, l: number): string {
  * text in every raster export.
  */
 export function teamColor(team: string): string {
+  return stableColor(team);
+}
+
+/**
+ * A deterministic colour for a name nobody registered — the same input always
+ * gives the same hue, on every machine and in every export, with no table to
+ * maintain. Saturation and lightness are pinned mid-range so every hue stays
+ * readable on both the dark and the light theme.
+ *
+ * Used for owning-team pills and for infra providers a host never declared:
+ * without it every unregistered provider drew in the same grey, so two of
+ * them were indistinguishable on the canvas, in the legend, and in the
+ * provider toggle.
+ */
+export function stableColor(name: string): string {
   let h = 0;
-  for (let i = 0; i < team.length; i++) h = (h * 31 + team.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
   return hslToHex(h % 360, 0.6, 0.55);
 }

@@ -18,6 +18,7 @@ import { useMemo, useRef, useState, useEffect } from "react";
 import { Modal } from "./chrome";
 import { CloudScopePicker, scopeFor, type CloudScope } from "./CloudScopePicker";
 import { copyText } from "./copy-text";
+import { UiIcon } from "./ui-icons";
 import type { CloudOption, CloudResourceOption } from "./template-prompt";
 
 /** Which form of the schema the copy carries. */
@@ -147,11 +148,12 @@ export function SchemaCopyModal({
             {prompt.length.toLocaleString()} characters
           </span>
           <div className="as-schema-copy__actions">
-            <button type="button" className="as-btn" onClick={onClose}>
+            <button type="button" className="as-btn as-btn--outline" onClick={onClose}>
               Done
             </button>
             <button type="button" className="as-btn as-btn--primary" onClick={handleCopy}>
-              {copied ? "Copied ✓" : "Copy schema"}
+              <UiIcon name={copied ? "check" : "copy"} size={14} />
+              {copied ? "Copied" : "Copy schema"}
             </button>
           </div>
         </div>

@@ -9,7 +9,7 @@ test.describe("pasting JSON", () => {
     await welcome.getByLabel("File name", { exact: true }).fill("Pasted diagram");
     await welcome.getByLabel("Diagram JSON").fill(JSON.stringify(SMALL_TEMPLATE, null, 2));
     await expect(welcome.getByRole("button", { name: "Architecture" })).toHaveAttribute("aria-pressed", "true");
-    await welcome.getByRole("button", { name: "Insert", exact: true }).click();
+    await welcome.getByRole("button", { name: "Insert diagram", exact: true }).click();
 
     await expect(welcome).toBeHidden();
     await expect(studio.fileButton).toHaveText(/^Pasted diagram/);
@@ -25,7 +25,7 @@ test.describe("pasting JSON", () => {
     await welcome.getByLabel("Diagram JSON").fill(JSON.stringify(SMALL_SEQUENCE, null, 2));
     // The picker follows the shape of the paste.
     await expect(welcome.getByRole("button", { name: "Sequence" })).toHaveAttribute("aria-pressed", "true");
-    await welcome.getByRole("button", { name: "Insert", exact: true }).click();
+    await welcome.getByRole("button", { name: "Insert diagram", exact: true }).click();
 
     await expect(welcome).toBeHidden();
     await expect(studio.participant("Alice")).toBeVisible();
@@ -41,7 +41,7 @@ test.describe("pasting JSON", () => {
     await studio.goto();
     const json = await studio.showJson();
 
-    await page.getByRole("button", { name: "✎ Edit template JSON" }).click();
+    await page.getByRole("button", { name: "Edit template JSON" }).click();
     const dialog = page.getByRole("dialog", { name: "Get started" });
     await expect(dialog.getByLabel("File name", { exact: true })).toHaveValue(ARCH_FILE);
     // This dialog edits the current file, so its kind is pinned.
@@ -49,7 +49,7 @@ test.describe("pasting JSON", () => {
     await expect(dialog.getByLabel("Diagram JSON")).toContainText('"version": 1');
 
     await dialog.getByLabel("Diagram JSON").fill(JSON.stringify(SMALL_TEMPLATE, null, 2));
-    await dialog.getByRole("button", { name: "Insert", exact: true }).click();
+    await dialog.getByRole("button", { name: "Insert diagram", exact: true }).click();
 
     await expect(dialog).toBeHidden();
     await expect(studio.nodeTitled("Auth Service")).toBeVisible();

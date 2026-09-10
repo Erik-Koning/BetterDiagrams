@@ -10,6 +10,9 @@ import type { DiagramTemplate, IconName, NodeKind } from "../contract/schema";
 import { DEFAULT_ZONE_OPACITY } from "../contract/schema";
 import type { DiagramZone } from "../contract/zones";
 import type { LintRuleDef } from "../contract/lint";
+// `shapes.ts` imports only TYPES from this module, so the pair is a
+// type-level cycle that erases at build time, not a runtime one.
+import { stableColor } from "./shapes";
 
 // ─── Node kinds ──────────────────────────────────────────────────────────────
 
@@ -198,8 +201,32 @@ export function iconPaths(registry: ResolvedRegistry, icon: IconName): IconPaths
 }
 
 /** Look up a provider, falling back to a neutral grey for unregistered ids. */
+/**
+ * The definition for a provider id, falling back for one a host never
+ * registered — which is what every provider typed into the zone inspector's
+ * free-text box starts life as.
+ *
+ * The fallback used to hand back the raw id and one shared grey, so a
+ * hand-added "render" sat in the toggle as lowercase `render` in exactly the
+ * same colour as a hand-added "vercel". It now reads as a name and carries a
+ * colour of its own, derived from the id so it is stable across sessions,
+ * exports and machines. A host that registers the provider still wins
+ * outright; this only fills the gap until it does.
+ */
 export function providerDef(registry: ResolvedRegistry, provider: string): ProviderDef {
-  return registry.providers[provider] ?? { ...FALLBACK_PROVIDER, label: provider || "Unknown" };
+  const known = registry.providers[provider];
+  if (known) return known;
+  if (!provider) return FALLBACK_PROVIDER;
+  return { ...FALLBACK_PROVIDER, label: titleCase(provider), color: stableColor(provider) };
+}
+
+/** "render" → "Render", "my-cloud" → "My Cloud". Ids are slugs; names are not. */
+function titleCase(id: string): string {
+  return id
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
 }
 
 // ─── Zone colour resolution ──────────────────────────────────────────────────

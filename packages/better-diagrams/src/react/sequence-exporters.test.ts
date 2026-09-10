@@ -155,6 +155,40 @@ describe("emitSequence images", () => {
     expect(svg).toContain("right of last");
   });
 
+  /**
+   * The canvas paints every message label through `EdgeLabelRenderer`, over
+   * everything. An export that let a later row's arrow — or a note card —
+   * bury the words above it is the canvas/export drift this emitter exists to
+   * prevent, so message TEXT is the last thing before the title chrome.
+   */
+  it("paints message text over every line, arrow and note card", () => {
+    const { cmds } = emitSequence(t);
+    const isMessage = (i: number) => cmds[i].tag?.id.startsWith("message:");
+    const messageText = cmds
+      .map((cmd, i) => ({ cmd, i }))
+      .filter(({ cmd, i }) => cmd.op === "text" && isMessage(i));
+    expect(messageText.length).toBeGreaterThan(0);
+
+    const firstLabel = messageText[0].i;
+    // Nothing a message draws WITH ink — its line, its arrowhead, its
+    // lost/found dot — may come after the first word any message says.
+    const lastMessageInk = cmds.reduce(
+      (last, cmd, i) => (cmd.op !== "text" && isMessage(i) ? i : last),
+      -1,
+    );
+    expect(lastMessageInk).toBeLessThan(firstLabel);
+    // Nor may a note card, which sits at a lower zIndex on the canvas.
+    const lastNote = cmds.reduce(
+      (last, cmd, i) => (cmd.tag?.id.startsWith("note:") ? i : last),
+      -1,
+    );
+    expect(lastNote).toBeLessThan(firstLabel);
+    // The label text itself survived the move.
+    expect(messageText.map(({ cmd }) => (cmd as { text: string }).text)).toContain(
+      "1. Place order",
+    );
+  });
+
   it("changes only colours between palettes, never structure", () => {
     const dark = emitSequence(t);
     const light = emitSequence(t, LIGHT_EXPORT_PALETTE);

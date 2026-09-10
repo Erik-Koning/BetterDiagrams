@@ -230,7 +230,7 @@ describe("canvas", () => {
     mount(<ArchitectureStudio defaultValue={MODEL} welcome={false} onChange={onChange} />);
 
     await selectNode("orders");
-    await user.click(await screen.findByRole("button", { name: "+ field" }));
+    await user.click(await screen.findByRole("button", { name: "Add field" }));
     expect(
       (onChange.mock.calls.at(-1)?.[0] as DiagramTemplate).nodes.find((n) => n.id === "orders")
         ?.fields,
@@ -248,7 +248,7 @@ describe("canvas", () => {
     const onChange = vi.fn();
     mount(<ArchitectureStudio defaultValue={MODEL} welcome={false} onChange={onChange} />);
 
-    await user.click(await screen.findByRole("button", { name: "Insert ▾" }));
+    await user.click(await screen.findByRole("button", { name: "Insert" }));
     await user.click(await screen.findByRole("menuitem", { name: /Table/ }));
 
     const doc = onChange.mock.calls.at(-1)?.[0] as DiagramTemplate;
@@ -268,6 +268,6 @@ describe("canvas", () => {
     mount(<ArchitectureStudio defaultValue={plain} welcome={false} />);
     await selectNode("API");
     await screen.findByLabelText("Node label");
-    expect(screen.queryByRole("button", { name: "+ field" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add field" })).toBeNull();
   });
 });

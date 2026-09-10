@@ -81,7 +81,7 @@ describe("SchemaCopyModal", () => {
     await user.click(screen.getByRole("button", { name: "Copy schema" }));
 
     expect(writeText).toHaveBeenCalledWith("PROMPT[aws|aws-s3|full]");
-    expect(screen.getByRole("button", { name: "Copied ✓" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
   });
 
   it("unticking a cloud takes its resources back out", async () => {
@@ -149,7 +149,7 @@ describe("SchemaCopyModal", () => {
     mount();
     await user.click(screen.getByRole("button", { name: "Copy schema" }));
     expect(screen.getByRole("alert")).toHaveTextContent(/Clipboard is blocked/);
-    expect(screen.queryByRole("button", { name: "Copied ✓" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copied" })).not.toBeInTheDocument();
   });
 
   it("Done closes without copying", async () => {

@@ -9,6 +9,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { VERSION_TAG_POSITIONS, type VersionTagPosition } from "../contract/schema";
 import { SvgIcon } from "./icons";
+import { UiIcon, type UiIconName } from "./ui-icons";
 import { isMac } from "./keys";
 import {
   TIMELINE_FUTURE_MODES,
@@ -82,6 +83,7 @@ export function BrandMark({ className }: { className?: string }) {
  */
 export function ToolbarMenu({
   label,
+  icon,
   title,
   active = false,
   open,
@@ -90,6 +92,12 @@ export function ToolbarMenu({
   children,
 }: {
   label: string;
+  /**
+   * An optional leading icon. Only worth spending where it carries something
+   * the label cannot — the Checks menu swaps a shield for a warning triangle
+   * to say, without being opened, whether the document is clean.
+   */
+  icon?: UiIconName;
   title?: string;
   /** Highlight the button even while closed (an active filter, say). */
   active?: boolean;
@@ -131,7 +139,9 @@ export function ToolbarMenu({
         aria-haspopup="menu"
         title={title}
       >
-        {label} ▾
+        {icon ? <UiIcon name={icon} size={14} /> : null}
+        {label}
+        <UiIcon name="chevronDown" size={13} className="as-btn__caret" />
       </button>
       {open ? (
         <div
@@ -322,7 +332,8 @@ export function ToolPicker({
         }}
       >
         <SvgIcon paths={current.paths} size={15} />
-        {current.label} ▾
+        {current.label}
+        <UiIcon name="chevronDown" size={13} className="as-btn__caret" />
       </button>
       {open ? (
         <div
@@ -448,7 +459,7 @@ export function VersionTagChip({
         ))}
       </select>
       <button type="button" className="as-btn as-btn--icon" onClick={commit} aria-label="Done editing version tag">
-        ✓
+        <UiIcon name="check" />
       </button>
     </span>
   );
@@ -591,7 +602,7 @@ export function TimelineScrubber({
         title="Previous dated point"
         aria-label="Previous dated point"
       >
-        ◀
+        <UiIcon name="chevronLeft" />
       </button>
 
       <div
@@ -678,7 +689,7 @@ export function TimelineScrubber({
         title="Next dated point"
         aria-label="Next dated point"
       >
-        ▶
+        <UiIcon name="chevronRight" />
       </button>
 
       <span className="as-timeline__ahead">
@@ -1075,7 +1086,9 @@ export function FileMenu({
         aria-haspopup="menu"
         title="Files — switch, create, rename, delete"
       >
-        <span className="as-filemenu__name">{active?.name ?? "Untitled"}</span> ▾
+        <UiIcon name="file" size={14} />
+        <span className="as-filemenu__name">{active?.name ?? "Untitled"}</span>
+        <UiIcon name="chevronDown" size={13} className="as-btn__caret" />
       </button>
       {open ? (
         <div className="as-menu as-menu--left" role="menu">
@@ -1124,7 +1137,7 @@ export function FileMenu({
                     aria-label={`Rename ${file.name}`}
                     title={`Rename ${file.name}`}
                   >
-                    ✎
+                    <UiIcon name="pencil" size={13} />
                   </button>
                 ) : null}
                 {/* Deleting the last file is allowed — the editor greets the
@@ -1137,7 +1150,7 @@ export function FileMenu({
                     aria-label={`Delete ${file.name}`}
                     title={`Delete ${file.name}`}
                   >
-                    ×
+                    <UiIcon name="close" size={13} />
                   </button>
                 ) : null}
               </div>
@@ -1145,24 +1158,33 @@ export function FileMenu({
           )}
           {onCreate ? (
             // Wrapped so the click event doesn't leak into the init argument.
-            <button type="button" role="menuitem" className="as-menu__item" onClick={() => onCreate()}>
-              <div className="as-menu__label">＋ New file</div>
+            <button
+              type="button"
+              role="menuitem"
+              className="as-menu__item as-menu__item--lead"
+              onClick={() => onCreate()}
+            >
+              <UiIcon name="plus" size={13} />
+              <span className="as-menu__label">New file</span>
             </button>
           ) : null}
           {removedFiles?.length && onFileRestore ? (
             <button
               type="button"
               role="menuitem"
-              className="as-menu__item"
+              className="as-menu__item as-tool"
               onClick={() => {
                 onToggle();
                 setShowRemoved(true);
               }}
             >
-              <div className="as-menu__label">🗑 Recently removed…</div>
-              <div className="as-menu__hint">
-                {removedFiles.length} recoverable file{removedFiles.length === 1 ? "" : "s"}
-              </div>
+              <UiIcon name="trash" size={13} className="as-tool__icon" />
+              <span className="as-tool__text">
+                <span className="as-menu__label">Recently removed…</span>
+                <span className="as-menu__hint">
+                  {removedFiles.length} recoverable file{removedFiles.length === 1 ? "" : "s"}
+                </span>
+              </span>
             </button>
           ) : null}
         </div>
@@ -1176,7 +1198,7 @@ export function FileMenu({
             afterwards from <em>Recently removed</em>.
           </p>
           <div className="as-modal__actions">
-            <button type="button" className="as-btn" onClick={() => setPendingDelete(null)}>
+            <button type="button" className="as-btn as-btn--outline" onClick={() => setPendingDelete(null)}>
               Cancel
             </button>
             <button
@@ -1216,7 +1238,7 @@ export function FileMenu({
             <p className="as-modal__body">Everything has been restored.</p>
           )}
           <div className="as-modal__actions">
-            <button type="button" className="as-btn" onClick={() => setShowRemoved(false)}>
+            <button type="button" className="as-btn as-btn--outline" onClick={() => setShowRemoved(false)}>
               Close
             </button>
           </div>

@@ -55,7 +55,7 @@ describe("clearing edge routes", () => {
     const onChange = vi.fn();
     mount(<ArchitectureStudio value={doc} onChange={onChange} welcome={false} />);
 
-    await user.click(screen.getByRole("button", { name: "Arrange ▾" }));
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
     const item = screen.getByRole("menuitem", { name: /Clear routes/ });
     // The count is the number of lines it would actually change — e3 has no
     // bends, so it is not offered as one of them.
@@ -84,7 +84,7 @@ describe("clearing edge routes", () => {
       edges: [],
     });
     mount(<ArchitectureStudio value={straight} welcome={false} />);
-    await user.click(screen.getByRole("button", { name: "Arrange ▾" }));
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
     expect(screen.getByRole("menuitem", { name: /Clear routes/ })).toBeDisabled();
   });
 
@@ -115,7 +115,7 @@ describe("clearing edge routes", () => {
     const { container } = mount(<ArchitectureStudio value={doc} readOnly welcome={false} />);
     // read-only hides the whole Arrange menu, and with it every editing
     // action — the straighten included, rather than shown-but-inert.
-    expect(screen.queryByRole("button", { name: "Arrange ▾" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Arrange" })).toBeNull();
     expect(container.querySelector(".as-edge__waypoint")).toBeNull();
   });
 });

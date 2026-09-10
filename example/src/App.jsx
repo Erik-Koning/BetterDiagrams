@@ -24,6 +24,7 @@ import {
   LIGHT_THEME,
   SchemaCopyModal,
   SequenceStudio,
+  UiIcon,
   WelcomeModal,
   buildSequencePrompt,
   createProxyGenerator,
@@ -645,7 +646,10 @@ export default function App() {
       : `${active.doc.nodes.length} nodes · ${active.doc.edges.length} edges`;
 
   return (
-    <div className="app" data-theme={mode}>
+    // The Accent picker drives the shell's own toggles too, not just the
+    // editor's `theme` prop — a colour control that restyles half the page and
+    // leaves the other half on a default reads as a bug.
+    <div className="app" data-theme={mode} style={{ "--shell-accent": themeAccent }}>
       <Toaster theme={mode} position="bottom-right" closeButton richColors />
       <header className="app__bar">
         <div className="app__brand">
@@ -653,7 +657,7 @@ export default function App() {
           <div>
             <h1 className="app__title">BetterDiagrams</h1>
             <p className="app__sub">
-              A workspace of files · controlled by <code>value</code> / <code>onChange</code>
+              Schema driven diagrams your AI agent can understand, and you can edit.
             </p>
           </div>
         </div>
@@ -695,6 +699,8 @@ export default function App() {
             Accent
             <input type="color" value={themeAccent} onChange={(e) => setAccent(e.target.value)} />
           </label>
+          <span className="app__controls-sep" aria-hidden="true" />
+
           {active && !isSequence ? (
             <button
               type="button"
@@ -702,7 +708,12 @@ export default function App() {
               onClick={deriveSequenceFile}
               title="Derive a NEW sequence file from this diagram's numbered flow (edge seq) — deterministic, no AI"
             >
-              → Sequence
+              <UiIcon name="arrowRight" size={14} />
+              {/* "Derive sequence", not "Sequence": the switch-kind button
+                  beside it is already named for the kind it switches to, and
+                  the ⇄/→ glyphs that used to tell the two apart were never
+                  announced to a screen reader. */}
+              Derive sequence
             </button>
           ) : null}
           {active ? (
@@ -717,7 +728,8 @@ export default function App() {
                     : "This file has content — open a new blank file of the other type"
                 }
               >
-                ⇄ {isSequence ? "Architecture" : "Sequence"}
+                <UiIcon name="swap" size={14} />
+                {isSequence ? "Architecture" : "Sequence"}
               </button>
               <button
                 type="button"
@@ -725,7 +737,8 @@ export default function App() {
                 onClick={copySchema}
                 title="Copy Schema Definition For Diagram — paste it into your AI agent"
               >
-                ✦ Copy schema
+                <UiIcon name="sparkle" size={14} />
+                Copy schema
               </button>
             </>
           ) : null}
@@ -745,7 +758,8 @@ export default function App() {
               aria-haspopup="menu"
               aria-expanded={settingsOpen}
             >
-              ⚙ Settings
+              <UiIcon name="settings" size={14} />
+              Settings
             </button>
             {settingsOpen ? (
               <div className="app__dropdown" role="menu" aria-label="Settings">
@@ -906,7 +920,8 @@ export default function App() {
                 className="app__json-edit"
                 onClick={() => setEditJsonOpen(true)}
               >
-                ✎ Edit template JSON
+                <UiIcon name="pencil" size={13} />
+                Edit template JSON
               </button>
             </div>
           </aside>
@@ -924,7 +939,7 @@ export default function App() {
           aria-label={showJson ? "Collapse the live template panel" : "Show the live template panel"}
           aria-expanded={showJson}
         >
-          {showJson ? "»" : "«"}
+          <UiIcon name={showJson ? "chevronRight" : "chevronLeft"} size={14} />
         </button>
         {/* Hover card for the collapsed handle. Must stay the button's next
             sibling — CSS `.app__side-tab:hover + .app__side-pop` shows it,

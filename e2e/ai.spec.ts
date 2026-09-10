@@ -23,7 +23,7 @@ test.describe("AI generation through the host's proxy route", () => {
       return json(route, 200, { text: "```json\n" + JSON.stringify(SMALL_TEMPLATE) + "\n```" });
     });
 
-    await studio.root.getByRole("button", { name: "✦ AI" }).click();
+    await studio.root.getByRole("button", { name: "AI" }).click();
     const panel = studio.root.locator(".as-panel");
     await panel.getByPlaceholder(/Paste requirements/).fill("An auth service backed by a users database");
     await panel.getByRole("button", { name: "Generate diagram" }).click();
@@ -55,7 +55,7 @@ test.describe("AI generation through the host's proxy route", () => {
       });
     });
 
-    await studio.root.getByRole("button", { name: "✦ AI" }).click();
+    await studio.root.getByRole("button", { name: "AI" }).click();
     const refine = studio.root.locator(".as-panel").getByPlaceholder(/add a CDN/);
     await refine.fill("add a CDN in front of the API");
     await refine.press("Enter");
@@ -72,7 +72,7 @@ test.describe("AI generation through the host's proxy route", () => {
     await studio.goto();
     await page.route("**/api/diagram", (route) => json(route, 503, { error: "Model unavailable" }));
 
-    await studio.root.getByRole("button", { name: "✦ AI" }).click();
+    await studio.root.getByRole("button", { name: "AI" }).click();
     const panel = studio.root.locator(".as-panel");
     await panel.getByPlaceholder(/Paste requirements/).fill("anything");
     await panel.getByRole("button", { name: "Generate diagram" }).click();
@@ -84,7 +84,7 @@ test.describe("AI generation through the host's proxy route", () => {
 
   test("the host can withhold the generator, which removes the AI button", async ({ page, studio }) => {
     await studio.goto();
-    const ai = studio.root.getByRole("button", { name: "✦ AI" });
+    const ai = studio.root.getByRole("button", { name: "AI" });
 
     await expect(ai).toBeVisible();
     await page.getByLabel("AI panel", { exact: true }).uncheck();

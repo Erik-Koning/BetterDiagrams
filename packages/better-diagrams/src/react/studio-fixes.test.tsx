@@ -196,7 +196,7 @@ describe("the keyboard", () => {
       fireEvent.click(el);
     };
 
-    await user.click(screen.getByRole("button", { name: "Export ▾" }));
+    await user.click(screen.getByRole("button", { name: "Export" }));
     clickNode(node(container, "api"));
 
     // The click that got rid of the menu is spent on getting rid of it.
@@ -367,7 +367,7 @@ describe("lighting a path", () => {
 
   it("offers the Paths menu only when the document names a path", () => {
     mount(<ArchitectureStudio defaultValue={doc({ nodes: WIRED.nodes, edges: WIRED.edges })} />);
-    expect(screen.queryByRole("button", { name: "Paths ▾" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Paths" })).toBeNull();
   });
 
   it("glows the members of a ticked path — and the document is not an edit away", async () => {
@@ -376,7 +376,7 @@ describe("lighting a path", () => {
     const { container } = mount(<ArchitectureStudio defaultValue={WIRED} onChange={onChange} />);
     const emitted = onChange.mock.calls.length;
 
-    await user.click(screen.getByRole("button", { name: "Paths ▾" }));
+    await user.click(screen.getByRole("button", { name: "Paths" }));
     await user.click(screen.getByRole("checkbox", { name: "Read a record" }));
 
     await waitFor(() => expect(lit(container, "api")).toBe(true));
@@ -392,7 +392,7 @@ describe("lighting a path", () => {
     // The key, and the count on the button.
     expect(container.querySelector(".as-legend")!.textContent).toContain("Paths");
     expect(container.querySelector(".as-legend")!.textContent).toContain("Read a record");
-    expect(screen.getByRole("button", { name: "Paths (1) ▾" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Paths (1)" })).toBeTruthy();
     // Lighting is a view: nothing was committed.
     expect(onChange.mock.calls.length).toBe(emitted);
 
@@ -400,7 +400,7 @@ describe("lighting a path", () => {
     await user.click(screen.getByRole("menuitem", { name: "Select all" }));
     await waitFor(() => expect(lit(container, "q")).toBe(true));
     expect(container.querySelector(".as-legend")!.textContent).toContain("Enqueue a job");
-    await user.click(screen.getByRole("button", { name: "Paths (2) ▾" }));
+    await user.click(screen.getByRole("button", { name: "Paths (2)" }));
     await user.click(screen.getByRole("menuitem", { name: "Clear" }));
     await waitFor(() => expect(lit(container, "api")).toBe(false));
     expect(container.querySelectorAll(".as-edge__flow")).toHaveLength(0);
@@ -411,7 +411,7 @@ describe("lighting a path", () => {
   it("keeps the key out of a legend-less editor", async () => {
     const user = userEvent.setup();
     const { container } = mount(<ArchitectureStudio defaultValue={WIRED} legend={false} />);
-    await user.click(screen.getByRole("button", { name: "Paths ▾" }));
+    await user.click(screen.getByRole("button", { name: "Paths" }));
     await user.click(screen.getByRole("checkbox", { name: "Enqueue a job" }));
     await waitFor(() => expect(lit(container, "q")).toBe(true));
     expect(container.querySelector(".as-legend")).toBeNull();

@@ -205,6 +205,8 @@ const REACT_EXPORTS = [
   // icons
   "BUILTIN_ICON_PATHS",
   "SvgIcon",
+  "UI_ICONS",
+  "UiIcon",
   // exporters
   "BUILTIN_EXPORTERS",
   "renderTemplateToCanvas",

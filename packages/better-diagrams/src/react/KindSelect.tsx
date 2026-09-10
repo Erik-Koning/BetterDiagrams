@@ -104,7 +104,7 @@ export function KindSelect({ registry, value, onChange, relevantProviders, omit 
         aria-label="Node kind"
         title="Node kind"
       >
-        {registry.nodeKinds[value]?.label ?? value} ▾
+        {registry.nodeKinds[value]?.label ?? value}
       </button>
       {open ? (
         <div className="as-menu as-kindmenu" role="listbox" aria-label="Node kind">

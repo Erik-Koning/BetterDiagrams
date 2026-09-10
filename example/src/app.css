@@ -35,6 +35,19 @@ body {
   --shell-json-hit: rgb(226 232 240 / 11%);
   /* Shadows are a colour too — 35% black over a white page reads as soot. */
   --shell-shadow: rgb(0 0 0 / 35%);
+  /* The same hover/press wash the editor uses (`--as-hover` in styles.css),
+     mixed from the text ink so one declaration works in both themes. The
+     shell's controls are ghosts for the same reason the editor's are. */
+  --shell-hover: color-mix(in srgb, var(--shell-text) 9%, transparent);
+  --shell-hover-strong: color-mix(in srgb, var(--shell-text) 15%, transparent);
+  /* The default matches DARK_THEME.accent; App.jsx overrides it inline from
+     the Accent picker so the shell and the editor never disagree. */
+  --shell-accent: #38bdf8;
+  --shell-accent-wash: color-mix(in srgb, var(--shell-accent) 15%, transparent);
+  /* One height for every control on the top bar — buttons, toggles, the
+     colour chip. It is the editor's `--as-control-h`, restated here because
+     the shell deliberately shares no stylesheet with the library. */
+  --shell-control-h: 30px;
 
   /* The shell's own native widgets (the accent colour input, scrollbars,
      select popups) follow the toggle, the same way the editor's do — see
@@ -61,6 +74,8 @@ body {
   --shell-code: #4f46e5;
   --shell-json-hit: rgb(15 23 42 / 8%);
   --shell-shadow: rgb(15 23 42 / 14%);
+  /* Matches LIGHT_THEME.accent — see `.app__logo`. */
+  --shell-accent: #0369a1;
 
   color-scheme: light;
 }
@@ -112,7 +127,6 @@ body {
   color: var(--shell-text-dim);
 }
 
-.app__sub code,
 .app__note code,
 .app__side-pop code {
   padding: 1px 4px;
@@ -150,22 +164,119 @@ body {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 14px;
+  gap: 4px;
 }
 
+/* The switches on the left are settings; the buttons on the right are
+   actions. A hairline says so, the way the editor's toolbar groups do. */
+.app__controls-sep {
+  align-self: center;
+  width: 1px;
+  height: var(--shell-control-h);
+  margin: 0 8px;
+  background: var(--shell-border-2);
+}
+
+/*
+ * A checkbox and its word, drawn as one outlined control.
+ *
+ * The bare `<input>` + text it replaces had a 13px hit target, no hover, and —
+ * the reason it looked wrong — no box, so a row of settings read as smaller
+ * and flimsier than the actions sitting beside it in the same bar. Now it is
+ * the same height and the same corner as `.app__btn`; what it adds is an
+ * outline, because unlike an action a setting has a state worth showing at
+ * rest. Ticked, the whole chip takes the accent, so the bar can be read
+ * without looking at the boxes.
+ */
 .app__toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 7px;
+  height: var(--shell-control-h);
+  padding: 0 10px;
+  border: 1px solid var(--shell-border-2);
+  border-radius: 8px;
+  background: transparent;
   color: var(--shell-text-mid);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
   user-select: none;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
+.app__toggle:hover {
+  border-color: color-mix(in srgb, var(--shell-border-2) 45%, var(--shell-text));
+  background: var(--shell-hover);
+  color: var(--shell-text);
+}
+
+/* `:has`, not a class on the label: the checked state already lives on the
+   input, and mirroring it into React state would be a second source of truth
+   for something the DOM already knows. */
+.app__toggle:has(input:checked) {
+  border-color: var(--shell-accent);
+  background: var(--shell-accent-wash);
+  color: var(--shell-text);
+}
+
+.app__toggle:has(input:focus-visible) {
+  outline: 2px solid var(--shell-accent);
+  outline-offset: 1px;
+}
+
+/*
+ * The box, drawn rather than borrowed.
+ *
+ * `accent-color` gets the browser's own checkbox into the palette but not into
+ * the design: under `color-scheme: dark` Chrome fills the UNCHECKED box with a
+ * muddy tint of the accent, which is the one state these chips are mostly in.
+ * So the square is ours — a hairline at rest, a tick when set.
+ *
+ * The tick is two 45° gradient bands rather than an SVG data URI, for the same
+ * reason the editor's select chevron is: a data URI cannot read a custom
+ * property, so its ink would be frozen at one theme's value. Bands are
+ * `currentcolor`, so the tick follows the chip.
+ */
+.app__toggle input[type="checkbox"] {
+  appearance: none;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1.5px solid currentcolor;
+  border-radius: 4px;
+  background: transparent;
+  background-repeat: no-repeat;
+  color: var(--shell-text-faint);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.app__toggle:hover input[type="checkbox"] {
+  color: var(--shell-text-dim);
+}
+
+.app__toggle input[type="checkbox"]:checked {
+  border-color: var(--shell-accent);
+  color: var(--shell-accent);
+  /* Two arms of one stroke, so the percentages differ: the band's thickness is
+     a fraction of its own box's diagonal, and the arms are not the same
+     length. 32/68 on the short one and 40/60 on the long one both land at
+     ~1.5px, which is what makes the corner read as a single bend. */
+  background-image:
+    linear-gradient(45deg, transparent 32%, currentcolor 32%, currentcolor 68%, transparent 68%),
+    linear-gradient(135deg, transparent 40%, currentcolor 40%, currentcolor 60%, transparent 60%);
+  background-position: 1.8px 5.2px, 3.6px 3px;
+  background-size: 3px 3px, 5px 5px;
+}
+
+/* The accent swatch rides inside the same chip, sized like a checkbox rather
+   than like a third control — the chip is what holds the row's height. */
 .app__toggle input[type="color"] {
-  width: 28px;
-  height: 22px;
+  width: 20px;
+  height: 16px;
   padding: 0;
   border: 1px solid var(--shell-border-2);
   border-radius: 4px;
@@ -173,19 +284,47 @@ body {
   cursor: pointer;
 }
 
+/* Same button as the editor's `.as-btn`, spelled in the shell's own tokens:
+   a ghost at rest, a wash under the cursor, one height for the whole row. */
 .app__btn {
-  padding: 6px 12px;
-  border: 1px solid var(--shell-border-2);
-  border-radius: 6px;
-  background: var(--shell-surface-2);
-  color: var(--shell-text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--shell-control-h);
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--shell-text-mid);
   font: inherit;
   font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
 }
 
 .app__btn:hover {
-  background: var(--shell-border-2);
+  background: var(--shell-hover);
+  color: var(--shell-text);
+}
+
+.app__btn:active {
+  background: var(--shell-hover-strong);
+}
+
+.app__btn svg {
+  flex: none;
+  opacity: 0.75;
+}
+
+.app__btn:hover svg {
+  opacity: 1;
+}
+
+.app__btn[aria-expanded="true"] {
+  background: var(--shell-hover);
+  color: var(--shell-text);
 }
 
 /* Anchor for the settings dropdown. */
@@ -236,7 +375,7 @@ body {
 }
 
 .app__dropdown-item:hover:not(:disabled) {
-  background: var(--shell-surface-2);
+  background: var(--shell-hover);
 }
 
 .app__dropdown-item:disabled {
@@ -311,16 +450,18 @@ body {
   top: 50%;
   right: 0;
   z-index: 30;
-  padding: 10px 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 6px;
   border: 1px solid var(--shell-border-2);
   border-right: 0;
-  border-radius: 8px 0 0 8px;
+  border-radius: 10px 0 0 10px;
   background: var(--shell-surface);
   color: var(--shell-text-faint);
   transform: translateY(-50%);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
   cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
 }
 
 .app__side-tab:hover {
@@ -395,16 +536,21 @@ body {
   position: absolute;
   left: 50%;
   bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   transform: translateX(-50%);
-  padding: 6px 14px;
+  padding: 7px 14px;
   border: 1px solid var(--shell-border-2);
   border-radius: 999px;
-  background: var(--shell-surface-2);
+  background: var(--shell-surface);
+  box-shadow: 0 6px 18px var(--shell-shadow);
   color: var(--shell-text-mid);
+  font: inherit;
   font-size: 12px;
   white-space: nowrap;
   cursor: pointer;
-  transition: color 120ms, border-color 120ms;
+  transition: color 120ms, border-color 120ms, background 120ms;
 }
 
 .app__json-edit:hover {
@@ -446,5 +592,14 @@ body {
   .app__side {
     max-height: 40vh;
     padding: 0 14px 14px;
+  }
+}
+
+/* The shell's own hovers, matched to the library's rule — the editor already
+   drops every transition under `prefers-reduced-motion`, and a host that kept
+   its animating while the component beside it stopped would be the odd one. */
+@media (prefers-reduced-motion: reduce) {
+  .app * {
+    transition: none !important;
   }
 }

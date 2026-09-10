@@ -71,20 +71,20 @@ describe("ArchitectureStudio", () => {
   it("mounts and renders the toolbar", () => {
     mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
     expect(screen.getByText("arch·studio")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Insert ▾" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Arrange ▾" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Export ▾" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Insert" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Arrange" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export" })).toBeInTheDocument();
   });
 
   it("opens one toolbar menu at a time and closes on outside click", async () => {
     const user = userEvent.setup();
     mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
 
-    await user.click(screen.getByRole("button", { name: "Insert ▾" }));
+    await user.click(screen.getByRole("button", { name: "Insert" }));
     expect(screen.getByRole("menu")).toBeInTheDocument();
 
     // Opening another menu replaces the first — never two at once.
-    await user.click(screen.getByRole("button", { name: "Arrange ▾" }));
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
     expect(screen.getAllByRole("menu")).toHaveLength(1);
     expect(screen.getByRole("menuitem", { name: /^Tidy / })).toBeInTheDocument();
 
@@ -112,10 +112,10 @@ describe("ArchitectureStudio", () => {
 
   it("hides editing affordances in readOnly mode", () => {
     mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} readOnly />);
-    expect(screen.queryByRole("button", { name: "Insert ▾" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Insert" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Import" })).not.toBeInTheDocument();
     // Export stays available — read-only should still be exportable.
-    expect(screen.getByRole("button", { name: "Export ▾" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export" })).toBeInTheDocument();
   });
 
   it("omits the AI panel entirely when no generator is supplied", () => {
@@ -158,7 +158,7 @@ describe("ArchitectureStudio", () => {
     const onChange = vi.fn();
     mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
 
-    await fromMenu(user, "Insert ▾", /^Node /);
+    await fromMenu(user, "Insert", /^Node /);
 
     expect(onChange).toHaveBeenCalled();
     const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
@@ -179,7 +179,7 @@ describe("ArchitectureStudio", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Export ▾" }));
+    await user.click(screen.getByRole("button", { name: "Export" }));
     const menu = screen.getByRole("menu");
     expect(within(menu).getByText("Terraform")).toBeInTheDocument();
     expect(within(menu).getByText("PNG image")).toBeInTheDocument();
@@ -197,7 +197,7 @@ describe("ArchitectureStudio", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Export ▾" }));
+    await user.click(screen.getByRole("button", { name: "Export" }));
     await user.click(screen.getByText("Custom"));
 
     expect(run).toHaveBeenCalledTimes(1);
@@ -305,7 +305,7 @@ describe("ArchitectureStudio", () => {
     });
 
     const { rerender } = mount(<ArchitectureStudio value={current} onChange={onChange} />);
-    await fromMenu(user, "Insert ▾", /^Node /);
+    await fromMenu(user, "Insert", /^Node /);
     rerender(<ArchitectureStudio value={current} onChange={onChange} />);
 
     expect(current.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length + 1);
@@ -321,7 +321,7 @@ describe("ArchitectureStudio", () => {
     const undo = screen.getByRole("button", { name: "Undo" });
     expect(undo).toBeDisabled();
 
-    await fromMenu(user, "Insert ▾", /^Node /);
+    await fromMenu(user, "Insert", /^Node /);
     expect(undo).toBeEnabled();
 
     await user.click(undo);
@@ -452,7 +452,7 @@ describe("ArchitectureStudio", () => {
     const onChange = vi.fn();
     mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
 
-    await fromMenu(user, "Insert ▾", /^Zone /);
+    await fromMenu(user, "Insert", /^Zone /);
 
     const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
     expect(latest.zones).toHaveLength(1);
@@ -495,7 +495,7 @@ describe("ArchitectureStudio", () => {
     mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} readOnly />);
     const toggle = screen.getByRole("group", { name: "Cloud Region provider" });
     expect(within(toggle).getByRole("button", { name: "AWS" })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: "Insert ▾" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Insert" })).not.toBeInTheDocument();
   });
 
   // ── The example app's exact wiring: StrictMode + controlled ───────────────
@@ -580,7 +580,7 @@ describe("ArchitectureStudio", () => {
       </StrictMode>,
     );
 
-    await fromMenu(user, "Insert ▾", /^Node /);
+    await fromMenu(user, "Insert", /^Node /);
     expect(seen.at(-1)!.nodes).toHaveLength(EXAMPLE_ZONED_TEMPLATE.nodes.length + 1);
 
     await user.click(screen.getByRole("button", { name: "Undo" }));
@@ -632,7 +632,7 @@ describe("ArchitectureStudio", () => {
     };
     mount(<ArchitectureStudio defaultValue={stacked} onChange={onChange} />);
 
-    await fromMenu(user, "Arrange ▾", /^Tidy /);
+    await fromMenu(user, "Arrange", /^Tidy /);
 
     const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
     const xs = latest.nodes.map((n) => n.x);
@@ -1095,7 +1095,7 @@ describe("ArchitectureStudio", () => {
     const onChange = vi.fn();
     mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
 
-    await user.click(screen.getByRole("button", { name: "Arrange ▾" }));
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
     await user.click(screen.getByRole("radio", { name: "Right-angle connectors" }));
     expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).meta?.routing).toBe("orthogonal");
 
@@ -2127,20 +2127,20 @@ describe("ArchitectureStudio", () => {
     await user.click(screen.getByRole("button", { name: /Timeline/ }));
     await user.click(screen.getByRole("button", { name: "Hide later" }));
     await scrubToEnd(user, "Previous");
-    await fromMenu(user, "Export ▾", "Probe");
+    await fromMenu(user, "Export", "Probe");
 
     // A PNG of the June view must not come back as the finished architecture.
     await waitFor(() => expect(seen).toHaveLength(1));
     expect(seen[0].nodes.map((n) => n.id).sort()).toEqual(["core", "wrk"]);
 
     // A fullDocument exporter gets everything even while the slice is showing.
-    await fromMenu(user, "Export ▾", "Fullprobe");
+    await fromMenu(user, "Export", "Fullprobe");
     await waitFor(() => expect(seen).toHaveLength(2));
     expect(seen[1].nodes).toHaveLength(3);
 
     // Ghost mode shows the whole document, so it exports the whole document.
     await user.click(screen.getByRole("button", { name: "Ghost later" }));
-    await fromMenu(user, "Export ▾", "Probe");
+    await fromMenu(user, "Export", "Probe");
     await waitFor(() => expect(seen).toHaveLength(3));
     expect(seen[2].nodes).toHaveLength(3);
   });
@@ -2157,7 +2157,7 @@ describe("ArchitectureStudio", () => {
 
     // Insert while the September node is hidden — the commit this causes is
     // exactly the moment a re-materializing design would delete it.
-    await fromMenu(user, "Insert ▾", /^Node /);
+    await fromMenu(user, "Insert", /^Node /);
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     const last = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
     expect(last.nodes.some((n) => n.id === "pay")).toBe(true);
@@ -2203,7 +2203,7 @@ describe("ArchitectureStudio", () => {
     // announce every tick.)
     expect(screen.getByText(/New elements dated/)).toBeInTheDocument();
 
-    await fromMenu(user, "Insert ▾", /^Node /);
+    await fromMenu(user, "Insert", /^Node /);
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     const last = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
     const added = last.nodes.find((n) => !dated.nodes.some((d) => d.id === n.id));
@@ -2264,7 +2264,7 @@ describe("ArchitectureStudio", () => {
     );
 
     expect(screen.queryByText("arch·studio")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Platform" }));
     expect(screen.getByRole("menuitem", { name: /Order flow/ })).toBeInTheDocument();
     // Kind badges render.
     expect(screen.getByText("arch")).toBeInTheDocument();
@@ -2285,12 +2285,12 @@ describe("ArchitectureStudio", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Platform" }));
     await user.click(screen.getByRole("menuitem", { name: /Order flow/ }));
     expect(onFileSelect).toHaveBeenCalledWith("f2");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Platform" }));
     await user.click(screen.getByRole("menuitem", { name: /New file/ }));
     expect(onFileCreate).toHaveBeenCalledTimes(1);
   });
@@ -2312,7 +2312,7 @@ describe("ArchitectureStudio", () => {
     await waitFor(() => expect(onFileRename).toHaveBeenCalledWith("f1", "Clinic platform"));
     onFileRename.mockClear();
 
-    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Platform" }));
     await user.click(screen.getByRole("button", { name: "Rename Platform" }));
     const input = screen.getByLabelText("File name");
     await user.clear(input);
@@ -2339,7 +2339,7 @@ describe("ArchitectureStudio", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Platform" }));
     await user.click(screen.getByRole("button", { name: "Rename Platform" }));
     const input = screen.getByLabelText("File name");
     await user.clear(input);
@@ -2402,7 +2402,7 @@ describe("ArchitectureStudio", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Platform" }));
     await user.click(screen.getByRole("button", { name: "Delete Order flow" }));
     // Nothing to lose, so no dialog.
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -2419,7 +2419,7 @@ describe("ArchitectureStudio", () => {
         onFileDelete={onFileDelete}
       />,
     );
-    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Platform" }));
     expect(screen.getByRole("button", { name: "Delete Platform" })).toBeInTheDocument();
   });
 
@@ -2436,7 +2436,7 @@ describe("ArchitectureStudio", () => {
     );
 
     // Cancel leaves the file alone.
-    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Platform" }));
     await user.click(screen.getByRole("button", { name: "Delete Order flow" }));
     const dialog = screen.getByRole("dialog", { name: "Delete Order flow?" });
     expect(within(dialog).getByText(/still has content/)).toBeInTheDocument();
@@ -2445,13 +2445,13 @@ describe("ArchitectureStudio", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     // Escape also cancels.
-    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Platform" }));
     await user.click(screen.getByRole("button", { name: "Delete Order flow" }));
     await user.keyboard("{Escape}");
     expect(onFileDelete).not.toHaveBeenCalled();
 
     // Confirming deletes.
-    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Platform" }));
     await user.click(screen.getByRole("button", { name: "Delete Order flow" }));
     await user.click(screen.getByRole("button", { name: "Delete file" }));
     expect(onFileDelete).toHaveBeenCalledWith("f2");
@@ -2464,7 +2464,7 @@ describe("ArchitectureStudio", () => {
       <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} files={workspaceFiles} activeFileId="f1" />,
     );
     // No trash, no entry.
-    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Platform" }));
     expect(screen.queryByRole("menuitem", { name: /Recently removed/ })).not.toBeInTheDocument();
     unmount();
 
@@ -2477,7 +2477,7 @@ describe("ArchitectureStudio", () => {
         onFileRestore={onFileRestore}
       />,
     );
-    await user.click(screen.getByRole("button", { name: "Platform ▾" }));
+    await user.click(screen.getByRole("button", { name: "Platform" }));
     await user.click(screen.getByRole("menuitem", { name: /Recently removed/ }));
 
     const dialog = screen.getByRole("dialog", { name: "Recently removed" });
@@ -2516,7 +2516,7 @@ describe("ArchitectureStudio", () => {
     const onChange = vi.fn();
     mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
 
-    await fromMenu(user, "Insert ▾", /^Node /);
+    await fromMenu(user, "Insert", /^Node /);
     await user.click(screen.getByRole("button", { name: "Undo" }));
     await user.click(screen.getByRole("button", { name: "Redo" }));
 
@@ -2615,7 +2615,7 @@ describe("ArchitectureStudio welcome modal", () => {
     await user.paste(
       '{"version":1,"nodes":[{"id":"a","label":"A"},{"id":"b","label":"B"}],"edges":[]}',
     );
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
 
     const doc = onFileCreate.mock.calls[0][0].doc as DiagramTemplate;
     const positions = new Set(doc.nodes.map((n) => `${n.x},${n.y}`));
@@ -2631,7 +2631,7 @@ describe("ArchitectureStudio welcome modal", () => {
     await user.paste(
       '{"version":1,"nodes":[{"id":"a","label":"A","x":100,"y":50},{"id":"b","label":"B","x":400,"y":50}],"edges":[]}',
     );
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
 
     const doc = onFileCreate.mock.calls[0][0].doc as DiagramTemplate;
     expect(doc.nodes.map((n) => [n.x, n.y])).toEqual([
@@ -2664,7 +2664,7 @@ describe("multi-state export modal", () => {
     const user = userEvent.setup();
     mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
 
-    await fromMenu(user, "Export ▾", /SVG vector/);
+    await fromMenu(user, "Export", /SVG vector/);
     const dialog = screen.getByRole("dialog", { name: "Export SVG" });
     expect(within(dialog).getByRole("radio", { name: /Current state/ })).toBeChecked();
     // The axes are on display (greyed) even before Custom is chosen.
@@ -2681,7 +2681,7 @@ describe("multi-state export modal", () => {
     const user = userEvent.setup();
     mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
 
-    await fromMenu(user, "Export ▾", /SVG vector/);
+    await fromMenu(user, "Export", /SVG vector/);
     const dialog = screen.getByRole("dialog", { name: "Export SVG" });
     await user.click(within(dialog).getByRole("radio", { name: /All states/ }));
     expect(within(dialog).getByText("9 files → architecture-states.zip")).toBeInTheDocument();
@@ -2694,7 +2694,7 @@ describe("multi-state export modal", () => {
     const user = userEvent.setup();
     mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
 
-    await fromMenu(user, "Export ▾", /SVG vector/);
+    await fromMenu(user, "Export", /SVG vector/);
     const dialog = screen.getByRole("dialog", { name: "Export SVG" });
     await user.click(within(dialog).getByRole("radio", { name: /Custom/ }));
 
@@ -2712,7 +2712,7 @@ describe("multi-state export modal", () => {
     const user = userEvent.setup();
     mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} />);
 
-    await fromMenu(user, "Export ▾", /PDF document/);
+    await fromMenu(user, "Export", /PDF document/);
     const dialog = screen.getByRole("dialog", { name: "Export PDF" });
     await user.click(within(dialog).getByRole("radio", { name: /All states/ }));
     expect(within(dialog).getByRole("radio", { name: /One PDF, one page/ })).toBeChecked();
@@ -2729,7 +2729,7 @@ describe("multi-state export modal", () => {
     const user = userEvent.setup();
     mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
 
-    await fromMenu(user, "Export ▾", /SVG vector/);
+    await fromMenu(user, "Export", /SVG vector/);
     expect(screen.queryByRole("dialog", { name: "Export SVG" })).not.toBeInTheDocument();
     await screen.findByText("Exported architecture.svg");
   });
@@ -2744,7 +2744,7 @@ describe("multi-state export modal", () => {
       />,
     );
 
-    await fromMenu(user, "Export ▾", /SVG vector/);
+    await fromMenu(user, "Export", /SVG vector/);
     expect(screen.queryByRole("dialog", { name: "Export SVG" })).not.toBeInTheDocument();
     expect(run).toHaveBeenCalledTimes(1);
   });
@@ -2825,7 +2825,7 @@ describe("ArchitectureStudio cloud packs", () => {
     await user.paste(
       '{"version":1,"nodes":[{"id":"f","label":"Checkout Fn","kind":"aws-lambda","x":10,"y":10}],"edges":[]}',
     );
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
 
     const doc = onFileCreate.mock.calls[0][0].doc as DiagramTemplate;
     expect(doc.nodes[0].kind).toBe("aws-lambda");
@@ -2890,7 +2890,7 @@ describe("welcome modal type picker (cross-kind insert)", () => {
       "true",
     );
 
-    await user.click(screen.getByRole("button", { name: "Insert" }));
+    await user.click(screen.getByRole("button", { name: "Insert diagram" }));
     expect(onFileCreate).toHaveBeenCalledTimes(1);
     const init = onFileCreate.mock.calls[0][0];
     expect(init.kind).toBe("sequence");
@@ -3028,7 +3028,7 @@ describe("content/presentation split", () => {
       <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} generate={generate} />,
     );
 
-    await user.click(screen.getByRole("button", { name: "✦ AI" }));
+    await user.click(screen.getByRole("button", { name: "AI" }));
     await user.type(
       screen.getByPlaceholderText('"make the queue edges dotted" · "add a CDN"'),
       "add metrics",
@@ -3121,7 +3121,7 @@ describe("drill-down (C4 levels)", () => {
     mount(<ArchitectureStudio defaultValue={DRILL_DOC} onChange={onChange} />);
     await drillIntoLabel("Payments Core");
 
-    await fromMenu(user, "Insert ▾", /^Node /);
+    await fromMenu(user, "Insert", /^Node /);
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     const emitted = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
 
@@ -3166,7 +3166,7 @@ describe("drill-down (C4 levels)", () => {
     mount(<ArchitectureStudio defaultValue={DRILL_DOC} />);
     await drillIntoLabel("Payments Core");
 
-    await user.click(screen.getByRole("button", { name: "Insert ▾" }));
+    await user.click(screen.getByRole("button", { name: "Insert" }));
     expect(screen.getByRole("menu")).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
@@ -3209,7 +3209,7 @@ describe("drill-down (C4 levels)", () => {
     mount(<ArchitectureStudio defaultValue={DRILL_DOC} />);
     await drillIntoLabel("Storefront");
     expect(screen.getByText(/has no internals yet/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "＋ Add node" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add node" })).toBeInTheDocument();
     // Its external contracts still show: the card it talks to stands in.
     expect(screen.getByTitle("External to this view — double-click to visit")).toBeInTheDocument();
   });
@@ -3317,7 +3317,7 @@ describe("drill-down AI scope", () => {
       { timeout: 2000 },
     );
 
-    await user.click(screen.getByRole("button", { name: "✦ AI" }));
+    await user.click(screen.getByRole("button", { name: "AI" }));
     // Generate is unavailable while focused — the panel hands the way out.
     expect(screen.queryByPlaceholderText(/Paste requirements/)).not.toBeInTheDocument();
     expect(screen.getByText(/Generate replaces the whole diagram/)).toBeInTheDocument();
@@ -3378,7 +3378,7 @@ describe("drill-down under StrictMode + controlled mode", () => {
     // Edit inside the level, then leave it. Two presses: Escape does ONE
     // thing at a time, and the node just inserted is selected — dropping the
     // selection is what the first press means everywhere else in the editor.
-    await fromMenu(user, "Insert ▾", /^Node /);
+    await fromMenu(user, "Insert", /^Node /);
     fireEvent.keyDown(window, { key: "Escape" });
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() =>
@@ -3422,7 +3422,7 @@ describe("Tidy respects the level you are looking at", () => {
       { timeout: 2000 },
     );
 
-    await fromMenu(user, "Arrange ▾", /^Tidy/);
+    await fromMenu(user, "Arrange", /^Tidy/);
     await screen.findByText("Tidied this level");
 
     const emitted = onChange.mock.calls.at(-1)![0] as DiagramTemplate;

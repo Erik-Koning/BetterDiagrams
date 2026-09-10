@@ -5,7 +5,7 @@ test.describe("the timeline", () => {
     await studio.goto();
 
     // Offered because the example has dated elements.
-    await studio.root.getByRole("button", { name: "⏱ Timeline" }).click();
+    await studio.root.getByRole("button", { name: "Timeline" }).click();
     const scrubber = studio.root.getByRole("group", { name: "Timeline scrubber" });
     await expect(scrubber).toBeVisible();
 
