@@ -217,6 +217,48 @@ export class Studio {
     await this.page.mouse.up();
   }
 
+  // ── Canvas tools ─────────────────────────────────────────────────────────
+
+  /** The tool tray's trigger — it shows whichever tool is live. */
+  get toolButton(): Locator {
+    return this.root.locator(".as-toolpicker > button");
+  }
+
+  /** Pick a tool the way a user does: hover the tray open, click a row. */
+  async pickTool(name: "Cursor" | "Select" | "Pan"): Promise<void> {
+    await this.toolButton.hover();
+    const tray = this.root.getByRole("menu", { name: "Canvas tools" });
+    await expect(tray).toBeVisible();
+    await tray.getByRole("menuitemradio", { name: new RegExp(`^${name}`) }).click();
+    await expect(tray).toBeHidden();
+    await expect(this.toolButton).toHaveText(new RegExp(`^${name}`));
+  }
+
+  /** The screen-space box that holds every one of these cards, plus a margin. */
+  async boxAround(ids: readonly string[], pad = 10): Promise<{ x1: number; y1: number; x2: number; y2: number }> {
+    const boxes = await Promise.all(ids.map((id) => this.node(id).boundingBox()));
+    boxes.forEach((box, i) => expect(box, `${ids[i]} has a bounding box`).toBeTruthy());
+    return {
+      x1: Math.min(...boxes.map((b) => b!.x)) - pad,
+      y1: Math.min(...boxes.map((b) => b!.y)) - pad,
+      x2: Math.max(...boxes.map((b) => b!.x + b!.width)) + pad,
+      y2: Math.max(...boxes.map((b) => b!.y + b!.height)) + pad,
+    };
+  }
+
+  /** Rubber-band a screen-space rectangle, optionally holding a modifier. */
+  async band(
+    area: { x1: number; y1: number; x2: number; y2: number },
+    modifier?: "Shift" | "Meta",
+  ): Promise<void> {
+    if (modifier) await this.page.keyboard.down(modifier);
+    await this.page.mouse.move(area.x1, area.y1);
+    await this.page.mouse.down();
+    await this.page.mouse.move(area.x2, area.y2, { steps: 12 });
+    await this.page.mouse.up();
+    if (modifier) await this.page.keyboard.up(modifier);
+  }
+
   /** Drag a card by a screen-space offset. */
   async dragNode(id: string, dx: number, dy: number): Promise<void> {
     const from = await this.center(this.node(id));

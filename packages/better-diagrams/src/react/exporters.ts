@@ -11,6 +11,7 @@
  * an optional `ExportPalette`, which is how light-mode exports work.
  */
 import {
+  EDGE_COLOR_HEX,
   ghostSourceId,
   hiddenInline,
   onlyEdgeBetween,
@@ -31,9 +32,16 @@ import { CLOUD_NODE_KINDS } from "./cloud-kinds";
 // Imports `./registry-types`, not `./registry` — registry.ts imports
 // BUILTIN_EXPORTERS from here, so depending on it directly would be a cycle.
 import type { ExportContext, ExporterDef, ResolvedRegistry } from "./registry-types";
-import { emitTemplate, type ExportPalette } from "./draw";
+import { emitTemplate, paletteRecord, type ExportPalette } from "./draw";
+import { resolveStudioMode } from "./theme";
 import { levelLabel } from "./chrome";
-import { buildMultiViewHtml, buildTimelineHtml, type ViewEntry } from "./html-export";
+import {
+  buildMultiViewHtml,
+  buildTimelineHtml,
+  type HtmlPathEntry,
+  type ViewEntry,
+} from "./html-export";
+import { pathColor, resolvePath } from "../contract/paths";
 import {
   blobToUint8,
   buildSinglePageJpegPdf,
@@ -55,8 +63,15 @@ export function renderTemplateToCanvas(
   registry: ResolvedRegistry,
   scale = 2,
   palette: Partial<ExportPalette> = {},
+  /**
+   * `mode` is a loose string here rather than `StudioMode`: this is the
+   * host-facing wrapper, and the value a host has is the one it threaded in
+   * from a query string or a saved preference. Anything unrecognised resolves
+   * to technical rather than half-applying a look.
+   */
+  opts: { mode?: string } = {},
 ): RenderedCanvas {
-  return emittedToCanvas(emitTemplate(template, registry, palette), scale);
+  return emittedToCanvas(emitTemplate(template, registry, palette, { mode: resolveStudioMode(opts.mode) }), scale);
 }
 
 // ─── SVG ─────────────────────────────────────────────────────────────────────
@@ -66,9 +81,37 @@ export function renderTemplateToSvg(
   template: DiagramTemplate,
   registry: ResolvedRegistry,
   palette: Partial<ExportPalette> = {},
-  opts: { gridId?: string } = {},
+  opts: { gridId?: string; mode?: string } = {},
 ): string {
-  return emittedToSvg(emitTemplate(template, registry, palette), opts);
+  return emittedToSvg(emitTemplate(template, registry, palette, { mode: resolveStudioMode(opts.mode) }), opts);
+}
+
+// ─── Interactive HTML: paths ─────────────────────────────────────────────────
+
+/**
+ * The document's paths, resolved for the HTML player: members by the tag the
+ * SVG backend stamps on their group, colours as hex from the export palette
+ * so a light export glows in its light-theme hues.
+ */
+function htmlPathEntries(
+  template: DiagramTemplate,
+  palette: Partial<ExportPalette> | undefined,
+): HtmlPathEntry[] {
+  const edgeHex: Record<string, string> = { ...EDGE_COLOR_HEX, ...paletteRecord(palette?.edgeColors) };
+  return (template.paths ?? []).map((path, i) => {
+    const resolved = resolvePath(template, path);
+    return {
+      id: path.id,
+      title: path.title,
+      color: edgeHex[pathColor(path, i)] ?? EDGE_COLOR_HEX.slate,
+      members: resolved.steps.map((step) => ({
+        el: `${step.kind}:${step.id}`,
+        step: step.index,
+        steps: resolved.steps.length,
+        ...(step.reversed ? { reversed: true } : {}),
+      })),
+    };
+  });
 }
 
 // ─── C4-PlantUML ─────────────────────────────────────────────────────────────
@@ -104,7 +147,15 @@ function rootLevelProjection(template: DiagramTemplate): DiagramTemplate {
   if (!hidden.size) return template;
   const byId = new Map(template.nodes.map((n) => [n.id, n]));
   const seen = new Set<string>();
-  const alone = onlyEdgeBetween(template.edges, (id) => visibleAnchor(id, byId, hidden));
+  // Asked of the edges that will actually be emitted, as the canvas and the
+  // image emitter ask it: a provider-hidden sibling must not talk a visible
+  // edge out of its own label. (The projection keeps every edge; the caller
+  // applies visibility afterwards — but the COUNT has to see it now.)
+  const shownEdges = visibleElements(template).edges;
+  const alone = onlyEdgeBetween(
+    template.edges.filter((e) => shownEdges.has(e.id)),
+    (id) => visibleAnchor(id, byId, hidden),
+  );
   return {
     ...template,
     nodes: template.nodes.filter((n) => !hidden.has(n.id)),
@@ -484,6 +535,7 @@ function buildDrillViews(
   template: DiagramTemplate,
   registry: ResolvedRegistry,
   palette: Partial<ExportPalette> = {},
+  mode?: string,
 ): ViewEntry[] {
   const parents = drillableIds(template);
   const parentSet = new Set(parents);
@@ -512,7 +564,7 @@ function buildDrillViews(
       crumb: [{ key: "", label: rootLabel }],
       levelLabel: levelLabel(0),
       parent: null,
-      svg: renderTemplateToSvg(template, registry, palette, { gridId: "as-grid-v0" }),
+      svg: renderTemplateToSvg(template, registry, palette, { gridId: "as-grid-v0", mode }),
       drills: rootDrills,
     },
   ];
@@ -534,7 +586,7 @@ function buildDrillViews(
       crumb: crumbFor(focusId),
       levelLabel: levelLabel(focusPath(template, focusId).length + 1),
       parent: homeViewOf(focusId),
-      svg: renderTemplateToSvg(view, registry, palette, { gridId: `as-grid-v${i + 1}` }),
+      svg: renderTemplateToSvg(view, registry, palette, { gridId: `as-grid-v${i + 1}`, mode }),
       drills,
     });
   });
@@ -545,20 +597,20 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
   png: {
     label: "PNG image",
     hint: "Raster snapshot at 2x",
-    async run({ template, registry, filename, palette }: ExportContext) {
-      const { canvas } = renderTemplateToCanvas(template, registry, 2, palette);
+    async run({ template, registry, filename, palette, mode }: ExportContext) {
+      const { canvas } = renderTemplateToCanvas(template, registry, 2, palette, { mode });
       return { blob: await canvasToBlob(canvas, "image/png"), filename: `${filename}.png` };
     },
   },
   pdf: {
     label: "PDF document",
     hint: "Single page, sized to fit",
-    async run({ template, registry, filename, palette }: ExportContext) {
+    async run({ template, registry, filename, palette, mode }: ExportContext) {
       // The PAGE is sized in CSS pixels, not backing-store pixels: the canvas
       // is rendered at 2x for sharpness, and handing those dimensions to the
       // PDF writer prints the diagram at twice its physical size (a 1036px
       // document came out as a 21-inch page).
-      const { canvas, width, height } = renderTemplateToCanvas(template, registry, 2, palette);
+      const { canvas, width, height } = renderTemplateToCanvas(template, registry, 2, palette, { mode });
       const jpegBlob = await canvasToBlob(canvas, "image/jpeg", 0.92);
       const jpeg = await blobToUint8(jpegBlob);
       return {
@@ -570,9 +622,9 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
   svg: {
     label: "SVG vector",
     hint: "Editable in Figma or Illustrator",
-    run({ template, registry, filename, palette }: ExportContext) {
+    run({ template, registry, filename, palette, mode }: ExportContext) {
       return {
-        blob: new Blob([renderTemplateToSvg(template, registry, palette)], { type: "image/svg+xml" }),
+        blob: new Blob([renderTemplateToSvg(template, registry, palette, { mode })], { type: "image/svg+xml" }),
         filename: `${filename}.svg`,
       };
     },
@@ -583,19 +635,21 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
     // The page carries its own scrubber, so it needs every element and every
     // date — a hide-mode slice would leave it nothing to scrub.
     fullDocument: true,
-    run({ template, registry, filename, palette }: ExportContext) {
+    run({ template, registry, filename, palette, mode }: ExportContext) {
       const title = String(template.meta?.title ?? filename);
       const stops = templateTimeline(template).stops;
+      const paths = htmlPathEntries(template, palette);
       // Any nesting makes the page multi-view: one pre-rendered SVG per
       // drillable level, clickable in place. A flat document keeps the
       // original single-view page byte-for-byte.
       const page = drillableIds(template).length
-        ? buildMultiViewHtml({ views: buildDrillViews(template, registry, palette), title, stops, palette })
+        ? buildMultiViewHtml({ views: buildDrillViews(template, registry, palette, mode), title, stops, palette, paths })
         : buildTimelineHtml({
-            svg: renderTemplateToSvg(template, registry, palette),
+            svg: renderTemplateToSvg(template, registry, palette, { mode }),
             title,
             stops,
             palette,
+            paths,
           });
       return { blob: new Blob([page], { type: "text/html" }), filename: `${filename}.html` };
     },

@@ -99,7 +99,11 @@ function signature(snapshot: Snapshot): string {
     JSON.stringify(n.data ?? {}),
   ]);
   const edges = snapshot.edges.map((e) => [e.id, e.source, e.target, JSON.stringify(e.data ?? {})]);
-  return JSON.stringify({ nodes, edges, meta: snapshot.meta ?? null });
+  // Paths have no canvas representation, so they are read off the document
+  // the snapshot carries. Without this a paths-only edit collapsed into the
+  // entry before it, and undoing a later edit silently reverted the paths.
+  const paths = (snapshot.template as { paths?: unknown } | undefined)?.paths ?? null;
+  return JSON.stringify({ nodes, edges, meta: snapshot.meta ?? null, paths });
 }
 
 export function useHistory(initial?: Snapshot): History {

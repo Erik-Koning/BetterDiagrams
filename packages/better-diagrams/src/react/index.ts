@@ -77,8 +77,18 @@ export type { TimelineHtmlOptions } from "./html-export";
 export { silhouettePath } from "./shapes";
 export type { Silhouette } from "./shapes";
 
-export { themeToStyle, paletteFromTheme, DARK_THEME, LIGHT_THEME } from "./theme";
-export type { Theme } from "./theme";
+export {
+  themeToStyle,
+  paletteFromTheme,
+  DARK_THEME,
+  LIGHT_THEME,
+  STUDIO_MODES,
+  DEFAULT_STUDIO_MODE,
+  resolveStudioMode,
+  modeClassName,
+  modeLayoutOptions,
+} from "./theme";
+export type { Theme, StudioMode } from "./theme";
 
 export { BrandMark, DateChip, TimelineScrubber } from "./chrome";
 export { WelcomeModal } from "./WelcomeModal";

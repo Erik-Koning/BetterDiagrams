@@ -4,14 +4,19 @@ import react from "@vitejs/plugin-react";
 import { templatesPlugin } from "./vite-plugin-templates.js";
 
 /**
- * Where auto-save puts documents while you develop: a plain folder of `.json`
- * templates at the repo root, so the diagrams you make are files you can read,
- * diff, and commit — not just rows in localStorage.
+ * Where templates live while you develop, at the repo root:
+ *   templates/examples/ — curated and tracked; the app reads, never writes
+ *   templates/scratch/  — auto-save's own folder; git-ignored, rewritten as
+ *                         you work
+ * Both show up under Settings ▾ → Templates.
  */
-const TEMPLATES_DIR = fileURLToPath(new URL("../templates", import.meta.url));
+const TEMPLATE_DIRS = {
+  examples: fileURLToPath(new URL("../templates/examples", import.meta.url)),
+  scratch: fileURLToPath(new URL("../templates/scratch", import.meta.url)),
+};
 
 export default defineConfig({
-  plugins: [react(), templatesPlugin({ dir: TEMPLATES_DIR })],
+  plugins: [react(), templatesPlugin(TEMPLATE_DIRS)],
   server: {
     port: 5173,
     // Optional: proxy AI generation to the local example server (npm run server).

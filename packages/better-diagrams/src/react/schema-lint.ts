@@ -45,6 +45,7 @@ import {
   validateTemplate,
 } from "../contract/schema";
 import { ZONE_KEYS, ZONE_OUTLINES, ZONE_SHAPES } from "../contract/zones";
+import { PATH_KEYS } from "../contract/paths";
 import {
   ACTIVATION_KEYS,
   FRAGMENT_ELSE_KEYS,
@@ -88,11 +89,13 @@ interface ValueRule {
 interface RefRule {
   path: string;
   key: string;
-  pool: "node" | "zone" | "field" | "participant" | "message";
+  pool: "node" | "zone" | "field" | "element" | "participant" | "message";
   /** null / "" / absent are legal (lost/found messages, unparented nodes). */
   optional?: boolean;
   noun: string;
   consequence: string;
+  /** The value is an array of ids — check each entry (a path's steps). */
+  each?: boolean;
 }
 
 interface DateRule {
@@ -127,6 +130,8 @@ const architectureKeyLookup: KeyLookup = (path) => {
       return EDGE_KEYS;
     case "zones.*":
       return ZONE_KEYS;
+    case "paths.*":
+      return PATH_KEYS;
     default:
       return null;
   }
@@ -173,8 +178,9 @@ function rawIds(list: unknown): string[] {
  * naming a doomed message's id stays quiet; only the root cause warns.
  */
 function architecturePools(parsed: unknown): Record<string, ReadonlySet<string>> {
-  const doc = parsed as { nodes?: unknown; zones?: unknown };
+  const doc = parsed as { nodes?: unknown; edges?: unknown; zones?: unknown };
   const node = new Set(rawIds(doc?.nodes));
+  const edge = new Set(rawIds(doc?.edges));
   const zone = new Set(rawIds(doc?.zones));
   // Every field id in the document, not just the ones on this edge's own
   // endpoints. A pool is global by construction, so this catches the typo it
@@ -195,11 +201,14 @@ function architecturePools(parsed: unknown): Record<string, ReadonlySet<string>>
       node.add(n.id);
       for (const f of n.fields ?? []) field.add(f.id);
     }
+    for (const e of validated.edges) edge.add(e.id);
     for (const z of validated.zones ?? []) zone.add(z.id);
   } catch {
     // Unvalidatable doc — the raw pools still serve.
   }
-  return { node, zone, field };
+  // A path step may name either a node or an edge, so its pool is the union.
+  const element = new Set([...node, ...edge]);
+  return { node, edge, zone, field, element };
 }
 
 function sequencePools(parsed: unknown): Record<string, ReadonlySet<string>> {
@@ -265,6 +274,7 @@ export function buildArchitectureLint(
       { path: "edges.*", key: "routing", allowed: setOf(EDGE_ROUTINGS), noun: "routing", describe: "a routing", consequence: "It will be ignored (the edge inherits the diagram default)." },
       { path: "zones.*", key: "shape", allowed: setOf(ZONE_SHAPES), noun: "zone shape", describe: "a zone shape", consequence: 'It will be inserted as "rounded".' },
       { path: "zones.*", key: "outline", allowed: setOf(ZONE_OUTLINES), noun: "zone outline", describe: "a zone outline", consequence: "It will be ignored (the outline stays solid)." },
+      { path: "paths.*", key: "color", allowed: setOf(EDGE_COLORS), noun: "path color", describe: "an edge color", consequence: "It will be ignored (the path takes the next colour in the cycle)." },
       providersRule("nodes.*"),
       providersRule("edges.*"),
       providersRule("zones.*"),
@@ -276,6 +286,7 @@ export function buildArchitectureLint(
       { path: "nodes.*", key: "zoneId", pool: "zone", optional: true, noun: "zone id", consequence: "It will be cleared on insert." },
       { path: "edges.*", key: "startField", pool: "field", optional: true, noun: "field id", consequence: "It will be cleared on insert (the line attaches to the box)." },
       { path: "edges.*", key: "endField", pool: "field", optional: true, noun: "field id", consequence: "It will be cleared on insert (the line attaches to the box)." },
+      { path: "paths.*", key: "steps", pool: "element", each: true, noun: "node or edge id", consequence: "It will be dropped from the path on insert." },
     ],
     dates: [
       { path: "nodes.*", key: "date" },
@@ -469,7 +480,15 @@ export function docDiagnostics(state: EditorState, lint: JsonDocLint): Diagnosti
         }
 
         const refRule = refRules.get(id);
-        if (refRule && value.name === "String") checkRef(value, refRule);
+        if (refRule) {
+          if (refRule.each && value.name === "Array") {
+            for (let entry = value.firstChild; entry; entry = entry.nextSibling) {
+              if (entry.name === "String") checkRef(entry, refRule);
+            }
+          } else if (value.name === "String") {
+            checkRef(value, refRule);
+          }
+        }
 
         if (dateRules.has(id) && value.name === "String") {
           const date = stringAt(value.from, value.to);

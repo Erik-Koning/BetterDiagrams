@@ -9,6 +9,7 @@
  * assertion can say exactly where things land. The full studio wiring
  * (routing pickers, inspector) is covered by ArchitectureStudio.test.tsx.
  */
+import { EDGE_COLOR_HEX } from "../contract/schema";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { ConnectionMode, ReactFlow, useReactFlow, type ReactFlowInstance } from "@xyflow/react";
@@ -73,6 +74,7 @@ function mountEdge(
   const ctx: StudioContextValue = {
     registry: createRegistry(),
     readOnly: false,
+    mode: "technical",
     tagFilter: [],
     showTeams: true,
     requestCommit,
@@ -557,6 +559,7 @@ describe("compare overlay", () => {
     const ctx: StudioContextValue = {
       registry: createRegistry(),
       readOnly: false, // the editor around the overlay IS editable
+      mode: "technical",
       tagFilter: [],
       showTeams: true,
       requestCommit,
@@ -594,5 +597,40 @@ describe("compare overlay", () => {
 
     expect(container.querySelector(".as-edge__stroke")!.getAttribute("d")).toBe(before);
     expect(requestCommit).not.toHaveBeenCalled();
+  });
+});
+
+describe("a lit path", () => {
+  it("draws a halo and a dash flow under the line, reversed when walked against the arrow", async () => {
+    const { container } = mountEdge(
+      edgeData({ color: "rose", pathGlow: [{ pathId: "p", color: "violet", step: 1, steps: 3, reversed: true }] }),
+      { selected: false },
+    );
+    await waitFor(() => expect(container.querySelector(".as-edge__glow")).not.toBeNull());
+    const glow = container.querySelector<SVGPathElement>(".as-edge__glow")!;
+    const flow = container.querySelector<SVGPathElement>(".as-edge__flow")!;
+    const stroke = container.querySelector<SVGPathElement>(".as-edge__stroke")!;
+    // The PATH's colour, not the edge's own — as a hex attribute and a themable class.
+    expect(glow.getAttribute("stroke")).toBe(EDGE_COLOR_HEX.violet);
+    expect(glow.classList.contains("as-edge--c-violet")).toBe(true);
+    expect(stroke.getAttribute("stroke")).toBe(EDGE_COLOR_HEX.rose);
+    expect(flow.classList.contains("as-edge__flow--reverse")).toBe(true);
+    // The line's own geometry, painted before the line so it sits underneath.
+    expect(glow.getAttribute("d")).toBe(stroke.getAttribute("d"));
+    expect(glow.compareDocumentPosition(stroke) & 4).toBeTruthy(); // DOCUMENT_POSITION_FOLLOWING
+    // Placed in the pulse that travels the path.
+    const group = glow.parentElement as HTMLElement;
+    expect(group.style.getPropertyValue("--as-path-step")).toBe("1");
+    expect(group.style.getPropertyValue("--as-path-steps")).toBe("3");
+    // The arrowhead reads the path's ink from the edge's root group.
+    const root = group.parentElement as HTMLElement;
+    expect(root.style.getPropertyValue("--as-path-ink")).toBe("var(--as-edge-violet)");
+  });
+
+  it("draws nothing extra on an ordinary edge", async () => {
+    const { container } = mountEdge(edgeData(), { selected: false });
+    await waitFor(() => expect(container.querySelector(".as-edge__stroke")).not.toBeNull());
+    expect(container.querySelector(".as-edge__glow")).toBeNull();
+    expect(container.querySelector(".as-edge__flow")).toBeNull();
   });
 });

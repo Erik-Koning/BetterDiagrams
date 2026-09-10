@@ -8,6 +8,7 @@
  */
 import {
   DARK_EXPORT_PALETTE,
+  makeSkin,
   paletteRecord,
   GRID,
   approxTextWidth,
@@ -16,8 +17,11 @@ import {
   wrapText,
   type DrawCmd,
   type Emitted,
+  type EmitOptions,
   type ExportPalette,
+  type Skin,
 } from "./draw";
+import { resolveStudioMode } from "./theme";
 import {
   activationBox,
   fragmentBox,
@@ -64,8 +68,12 @@ export const SEQ_KIND_ACCENT: Record<string, string> = {
 export function emitSequence(
   template: SequenceTemplate,
   paletteOverride: Partial<ExportPalette> = {},
+  opts: EmitOptions = {},
 ): Emitted {
   const palette: ExportPalette = { ...DARK_EXPORT_PALETTE, ...paletteOverride };
+  // The same dressing table the architecture emitter reads, so the two
+  // editors' marketing exports are the one look rather than two.
+  const skin = makeSkin(resolveStudioMode(opts.mode), palette);
   // Per-kind accents re-resolve through the palette, mirroring the editor's
   // --as-seq-* variables.
   const accents = { ...SEQ_KIND_ACCENT, ...paletteRecord(palette.seqAccents) };
@@ -234,16 +242,23 @@ export function emitSequence(
             : status === "stubbed"
               ? 0.85
               : 1;
-    const headRect = roundedRectPath(x, 0, HEADER_W, HEADER_H, 8);
-    cmds.push({ op: "path", d: headRect, fill: palette.surface });
+    const headRect = roundedRectPath(x, 0, HEADER_W, HEADER_H, skin.radius);
+    const paint = skin.card(accent, { x, y: 0, width: HEADER_W, height: HEADER_H });
     cmds.push({
       op: "path",
       d: headRect,
-      fill: accent,
-      fillAlpha: 0.08 * dim,
-      stroke: accent,
-      strokeAlpha: 0.5 * dim,
-      strokeWidth: 1.2,
+      fill: palette.surface,
+      ...(paint.shadow && dim >= 1 ? { shadow: paint.shadow } : {}),
+    });
+    cmds.push({
+      op: "path",
+      d: headRect,
+      ...(paint.gradient
+        ? { gradient: paint.gradient, ...(dim < 1 ? { fillAlpha: dim } : {}) }
+        : { fill: accent, fillAlpha: 0.08 * dim }),
+      stroke: paint.stroke,
+      strokeAlpha: (skin.marketing ? 1 : 0.5) * dim,
+      strokeWidth: paint.strokeWidth,
       ...(statusDash ? { dash: statusDash } : {}),
     });
     if (status === "dark") {
@@ -265,37 +280,47 @@ export function emitSequence(
     // salmon, the date token wears overdue's amber, everything else the kind
     // accent. One mechanism instead of a branch per special case; the last
     // segment absorbs the ellipsis.
-    const segments: Array<{ text: string; color: string }> = [
-      { text: p.kind.toUpperCase(), color: accent },
-    ];
+    // Marketing tucks the KIND away here too — the eyebrow keeps only what
+    // the header does not already say (`.as-root--marketing .as-seq-head__kind`).
+    const segments: Array<{ text: string; color: string }> = skin.marketing
+      ? []
+      : [{ text: p.kind.toUpperCase(), color: accent }];
+    const sep = (text: string) => (segments.length ? ` · ${text}` : text);
     if (p.status) {
       segments.push({
-        text: ` · ${p.status.toUpperCase()}`,
+        text: sep(p.status.toUpperCase()),
         color: p.status === "deprecated" ? (palette.warn ?? "#fa8072") : accent,
       });
     }
     if (p.date) {
       segments.push({
-        text: ` · ${exportDate(p.date)}`,
+        text: sep(exportDate(p.date)),
         color: isOverdue(p.date, p.status) ? (palette.overdue ?? "#f59e0b") : accent,
       });
     }
     let segX = textX;
     segments.forEach((seg, si) => {
       const remaining = Math.max(0, textW - (segX - textX));
-      const text = si === segments.length - 1 ? ellipsise(seg.text, 8, "mono", remaining) : seg.text;
-      cmds.push({ op: "text", x: segX, y: 20, text, size: 8, font: "mono", color: seg.color, alpha: 0.85 });
-      segX += approxTextWidth(text, 8, "mono");
+      const text = si === segments.length - 1 ? ellipsise(seg.text, 8, skin.chipFont, remaining) : seg.text;
+      cmds.push({ op: "text", x: segX, y: 20, text, size: 8, font: skin.chipFont, ...(skin.marketing ? { weight: 600 } : {}), color: seg.color, alpha: 0.85 });
+      segX += approxTextWidth(text, 8, skin.chipFont);
     });
-    cmds.push({ op: "text", x: textX, y: 36, text: ellipsise(p.label, 13, "sans", textW), size: 13, font: "sans", weight: 600, color: palette.text });
+    // With the eyebrow empty the name is the only line, so it centres in the
+    // fixed header instead of sitting under a row that is not there.
+    const nameY = segments.length ? 36 : HEADER_H / 2 + 5;
+    // 13 → 15, the step `.as-root--marketing .as-seq-head__label` takes. It
+    // stops there rather than at the card title's 16 for the same reason it
+    // does on screen: the header is a fixed box and 15 fills it exactly.
+    const nameSize = skin.marketing ? 15 : 13;
+    cmds.push({ op: "text", x: textX, y: nameY, text: ellipsise(p.label, nameSize, "sans", textW), size: nameSize, font: "sans", weight: 600, color: palette.text });
     if (p.team) {
       const c = teamColor(p.team);
-      const pillW = approxTextWidth(p.team, 9, "mono") + 14;
+      const pillW = approxTextWidth(p.team, 9, skin.chipFont) + 14;
       const px = x + HEADER_W - pillW - 6;
       const d = roundedRectPath(px, HEADER_H - 8, pillW, 16, 8);
       cmds.push({ op: "path", d, fill: palette.surface });
       cmds.push({ op: "path", d, fill: c, fillAlpha: 0.14, stroke: c, strokeAlpha: 0.55, strokeWidth: 1 });
-      cmds.push({ op: "text", x: px + 7, y: HEADER_H + 3.5, text: p.team, size: 9, font: "mono", weight: 600, color: c });
+      cmds.push({ op: "text", x: px + 7, y: HEADER_H + 3.5, text: p.team, size: 9, font: skin.chipFont, weight: 600, color: c });
     }
     stamp(headStart, `participant:${p.id}`, dayOf(p.date));
   });
@@ -306,7 +331,7 @@ export function emitSequence(
     const msgStart = cmds.length;
     const y = rowY(i);
     const dash = m.style === "sync" ? undefined : m.style === "async" ? [7, 5] : [4, 4];
-    pushMessage(cmds, palette, order, m, i, y, dash, autonumber);
+    pushMessage(cmds, palette, skin, order, m, i, y, dash, autonumber);
     stamp(msgStart, `message:${m.id}`, dayOf(mDate.get(m.id)));
   });
 
@@ -360,6 +385,7 @@ export function emitSequence(
 function pushMessage(
   cmds: DrawCmd[],
   palette: ExportPalette,
+  skin: Skin,
   order: Map<string, number>,
   m: SeqMessage,
   index: number,
@@ -391,10 +417,11 @@ function pushMessage(
       dash,
     });
     arrowAt(x + 1, -1, open);
-    cmds.push({ op: "text", x: x + 12, y: y - 16, text: labelText, size: 11, font: "mono", color: palette.textDim, knockout: { color: palette.bg, padX: 4, height: 15 } });
-    if (m.tech) cmds.push({ op: "text", x: x + 12, y: y + 26, text: `[${m.tech}]`, size: 9, font: "mono", color: palette.textDim, alpha: 0.8 });
+    cmds.push({ op: "text", x: x + 12, y: y - 16, text: labelText, size: skin.labelSize, font: skin.labelFont, ...(skin.marketing ? { weight: 500 } : {}), color: skin.labelColor, knockout: { color: palette.bg, padX: 4, height: 15 } });
+    const selfTech = m.tech && skin.edgeTech;
+    if (selfTech) cmds.push({ op: "text", x: x + 12, y: y + 26, text: `[${m.tech}]`, size: 9, font: "mono", color: palette.textDim, alpha: 0.8 });
     if (m.date) {
-      cmds.push({ op: "text", x: x + 12, y: y + (m.tech ? 37 : 26), text: exportDate(m.date), size: 9, font: "mono", color: palette.textDim, alpha: 0.7 });
+      cmds.push({ op: "text", x: x + 12, y: y + (selfTech ? 37 : 26), text: exportDate(m.date), size: 9, font: skin.chipFont, color: palette.textDim, alpha: 0.7 });
     }
     return;
   }
@@ -413,9 +440,9 @@ function pushMessage(
 
   const midX = (x1 + x2) / 2;
   if (labelText.trim()) {
-    cmds.push({ op: "text", x: midX, y: y - 6, text: labelText, size: 11, font: "mono", color: palette.textDim, anchor: "middle", knockout: { color: palette.bg, padX: 4, height: 15 } });
+    cmds.push({ op: "text", x: midX, y: y - 6, text: labelText, size: skin.labelSize, font: skin.labelFont, ...(skin.marketing ? { weight: 500 } : {}), color: skin.labelColor, anchor: "middle", knockout: { color: palette.bg, padX: 4, height: 15 } });
   }
-  if (m.tech) {
+  if (m.tech && skin.edgeTech) {
     cmds.push({ op: "text", x: midX, y: y + 13, text: `[${m.tech}]`, size: 9, font: "mono", color: palette.textDim, alpha: 0.8, anchor: "middle", knockout: { color: palette.bg, padX: 3, height: 11 } });
   }
   if (m.date) {

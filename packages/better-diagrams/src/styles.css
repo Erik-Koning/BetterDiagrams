@@ -39,6 +39,13 @@
   --as-edge-amber: #f59e0b;
   --as-edge-rose: #fb7185;
   --as-edge-violet: #a78bfa;
+  /* A lit path's halo: alpha and blur (LIGHT_THEME tightens both — a glow
+     on white has nothing to bloom into), and the two clocks the animation
+     runs on: one pulse slot per step, and one dash cycle along an edge. */
+  --as-glow-alpha: 0.65;
+  --as-glow-blur: 18px;
+  --as-path-step-dur: 420ms;
+  --as-path-flow-dur: 900ms;
   /* How much of a node kind's accent survives when the accent is used as TEXT
      (the kind eyebrow, a key badge, the icon). The kind accents are chosen for
      the dark canvas and land at 2.2–2.5:1 on a light card, so anything a
@@ -102,6 +109,7 @@
  *    25  the dismissible error strip (above the strip it sits on)
  *    40  the AI panel
  *    41  the timeline bar and the drill breadcrumb bar
+ *    30  the Select tool's rubber band (.as-marquee)
  *    45  the inspector
  *    50  the drop-a-file overlay
  *    60  toolbar dropdowns (.as-menu, .as-kindmenu)
@@ -363,6 +371,60 @@
 .as-menu--left {
   right: auto;
   left: 0;
+}
+
+/* ── Canvas tools ────────────────────────────────────────────────────────── */
+
+/* Its own positioned wrapper rather than `.as-menu-wrap`: the shared
+   dismiss handler keys off that class and would eat the press that closes
+   the tray, which is wrong for a tray that opens on hover. */
+.as-toolpicker {
+  position: relative;
+}
+
+.as-btn--tool {
+  gap: 6px;
+}
+
+.as-menu--tools {
+  width: 272px;
+}
+
+.as-tool {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.as-tool--on {
+  background: color-mix(in srgb, var(--as-accent) 12%, transparent);
+}
+
+.as-tool__icon {
+  margin-top: 1px;
+  color: var(--as-text-dim);
+}
+
+.as-tool--on .as-tool__icon {
+  color: var(--as-accent);
+}
+
+/* `min-width: 0` so a long hint wraps inside the row instead of widening it. */
+.as-tool__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.as-tool__key {
+  flex: none;
+  padding: 1px 5px;
+  border: 1px solid var(--as-border);
+  border-radius: 4px;
+  background: var(--as-surface-2);
+  color: var(--as-text-dim);
+  font-family: var(--as-mono);
+  font-size: 0.625rem;
+  line-height: 1.5;
 }
 
 .as-menu__sep {
@@ -639,6 +701,65 @@
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/* What the active tool promises the pointer will do. The cursor is the only
+   affordance a canvas has for a mode, so it has to change on the boxes as
+   well as on the empty pane — under Select and Pan a box is not draggable. */
+.as-canvas--tool-select .react-flow__pane,
+.as-canvas--tool-select .react-flow__node {
+  cursor: crosshair;
+}
+
+/* A band dragged across labels would otherwise leave a trail of highlighted
+   text behind it — the press is a selection gesture, just not a textual one. */
+.as-canvas--tool-select .react-flow__viewport {
+  user-select: none;
+}
+
+.as-canvas--tool-pan .react-flow__pane,
+.as-canvas--tool-pan .react-flow__node {
+  cursor: grab;
+}
+
+.as-canvas--tool-pan .react-flow__pane:active,
+.as-canvas--tool-pan .react-flow__node:active {
+  cursor: grabbing;
+}
+
+/* Resizing and reshaping are Cursor-tool gestures. Left live, a band that
+   began on a selected card's corner handle resized the card instead of
+   drawing — and under Pan the same press resized rather than panned. Gone
+   rather than merely inert, so the mode is visible before the press. */
+.as-canvas--tool-select .react-flow__resize-control,
+.as-canvas--tool-pan .react-flow__resize-control,
+.as-canvas--tool-select .as-zone__vertex,
+.as-canvas--tool-pan .as-zone__vertex {
+  display: none;
+}
+
+/* Connect handles are a Cursor-tool affordance too — `nodesConnectable` is
+   off under the other two, so four dots that cannot start a connection were
+   waking up on every hover and promising something the tool does not do.
+   `!important` because the rules that light them (see `.react-flow__handle`)
+   are keyed off `:hover`/`.selected` on the node, which no ancestor selector
+   can outrank without restating all three of them. */
+.as-canvas--tool-select .react-flow__handle,
+.as-canvas--tool-pan .react-flow__handle {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* The Select tool's rubber band. Same ink as React Flow's own (see
+   `.react-flow__selection`) so the two tools draw one gesture, not two.
+   Positioned imperatively by marquee.ts; `hidden` while no drag is running. */
+.as-marquee {
+  position: absolute;
+  z-index: 30;
+  border: 1px solid var(--as-accent);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--as-accent) 10%, transparent);
+  pointer-events: none;
 }
 
 .as-canvas--dropping::after {
@@ -2823,12 +2944,12 @@
    the component sets as an attribute fallback — one mechanism for themes to
    darken the whole palette. Strokes and fills split so the line's own
    fill="none" survives. */
-.as-edge__stroke.as-edge--c-slate, .as-edge__crow.as-edge--c-slate { stroke: var(--as-edge-slate); }
-.as-edge__stroke.as-edge--c-sky, .as-edge__crow.as-edge--c-sky { stroke: var(--as-edge-sky); }
-.as-edge__stroke.as-edge--c-emerald, .as-edge__crow.as-edge--c-emerald { stroke: var(--as-edge-emerald); }
-.as-edge__stroke.as-edge--c-amber, .as-edge__crow.as-edge--c-amber { stroke: var(--as-edge-amber); }
-.as-edge__stroke.as-edge--c-rose, .as-edge__crow.as-edge--c-rose { stroke: var(--as-edge-rose); }
-.as-edge__stroke.as-edge--c-violet, .as-edge__crow.as-edge--c-violet { stroke: var(--as-edge-violet); }
+.as-edge__stroke.as-edge--c-slate, .as-edge__crow.as-edge--c-slate, .as-edge__glow.as-edge--c-slate, .as-edge__flow.as-edge--c-slate { stroke: var(--as-edge-slate); }
+.as-edge__stroke.as-edge--c-sky, .as-edge__crow.as-edge--c-sky, .as-edge__glow.as-edge--c-sky, .as-edge__flow.as-edge--c-sky { stroke: var(--as-edge-sky); }
+.as-edge__stroke.as-edge--c-emerald, .as-edge__crow.as-edge--c-emerald, .as-edge__glow.as-edge--c-emerald, .as-edge__flow.as-edge--c-emerald { stroke: var(--as-edge-emerald); }
+.as-edge__stroke.as-edge--c-amber, .as-edge__crow.as-edge--c-amber, .as-edge__glow.as-edge--c-amber, .as-edge__flow.as-edge--c-amber { stroke: var(--as-edge-amber); }
+.as-edge__stroke.as-edge--c-rose, .as-edge__crow.as-edge--c-rose, .as-edge__glow.as-edge--c-rose, .as-edge__flow.as-edge--c-rose { stroke: var(--as-edge-rose); }
+.as-edge__stroke.as-edge--c-violet, .as-edge__crow.as-edge--c-violet, .as-edge__glow.as-edge--c-violet, .as-edge__flow.as-edge--c-violet { stroke: var(--as-edge-violet); }
 
 /* Cardinality symbols: stroked, never filled, with round joins so the foot's
    three prongs meet cleanly at their apex. */
@@ -2863,6 +2984,131 @@
    stroke attribute. */
 .as-edge__stroke.as-edge__stroke--selected {
   stroke: var(--as-text);
+}
+
+/* ── Paths: a lit flow glows, pulses, and ebbs from its start to its end ─── */
+
+/*
+ * Lighting a path is view state (see path-view.ts): the React Flow wrapper of
+ * every node on it gets `as-path-node` and four custom properties, and every
+ * edge on it draws two extra strokes of its own line underneath the real one.
+ * No renderer learns about paths, and nothing here touches what persists.
+ *
+ * Two clocks. The PULSE is one cycle per path, divided into one slot per
+ * step; each element brightens in its own slot, so a bright spot travels the
+ * walk from the first node to the last and starts over. The delay is
+ * negative — every element starts mid-cycle, already in phase — so nothing
+ * sits waiting for its turn when a path is switched on. The FLOW is a dash
+ * pattern sliding along each edge the way the walk takes it, reversed when
+ * the walk runs against the arrow. Both stop under prefers-reduced-motion;
+ * the halo stays.
+ */
+@keyframes as-path-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  14% {
+    opacity: 1;
+  }
+  32% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes as-path-flow {
+  to {
+    stroke-dashoffset: -22;
+  }
+}
+
+.react-flow__node.as-path-node,
+.as-edge__pathglow {
+  --as-path-cycle: calc(var(--as-path-steps, 1) * var(--as-path-step-dur));
+  --as-path-delay: calc(
+    (var(--as-path-step, 0) - var(--as-path-steps, 1)) * var(--as-path-step-dur)
+  );
+}
+
+/* The halo is a pseudo-element on the wrapper, not a shadow on the card: the
+   card's own box-shadow is the selection ring, and the pulse animates the
+   halo's opacity — on the card itself that would fade the text. An outer
+   shadow paints only outside its box, so the transparent box hides nothing. */
+.react-flow__node.as-path-node::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: calc(var(--as-radius) + 2px);
+  box-shadow: var(--as-path-shadow);
+  opacity: 0.45;
+  pointer-events: none;
+  animation: as-path-pulse var(--as-path-cycle) ease-in-out var(--as-path-delay) infinite;
+}
+
+/* Silhouettes (person, cylinder, pipe…) glow along their outline instead: a
+   box-shaped halo would light up the empty corners around the figure. */
+.react-flow__node.as-path-node:has(> .as-node--shaped)::after {
+  display: none;
+}
+
+.as-node__silhouette-glow {
+  display: none;
+}
+
+.react-flow__node.as-path-node .as-node__silhouette {
+  overflow: visible;
+}
+
+.react-flow__node.as-path-node .as-node__silhouette-glow {
+  display: block;
+  fill: none;
+  stroke: var(--as-path-ink);
+  stroke-width: 7;
+  stroke-linejoin: round;
+  stroke-opacity: var(--as-glow-alpha);
+  filter: blur(3px);
+  opacity: 0.45;
+  animation: as-path-pulse var(--as-path-cycle) ease-in-out var(--as-path-delay) infinite;
+}
+
+/* An edge's halo: a wide, soft stroke of the same line, under it. */
+.as-edge__glow {
+  stroke-width: 9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-opacity: var(--as-glow-alpha);
+  opacity: 0.45;
+  filter: blur(2px);
+  animation: as-path-pulse var(--as-path-cycle) ease-in-out var(--as-path-delay) infinite;
+}
+
+/* The dash flow: 7 on, 15 off — one 22px period per cycle, so the pattern
+   rejoins itself seamlessly. Two animations, and the second keeps its
+   direction when the first is reversed (see --reverse). */
+.as-edge__flow {
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-dasharray: 7 15;
+  animation:
+    as-path-flow var(--as-path-flow-dur) linear infinite,
+    as-path-pulse var(--as-path-cycle) ease-in-out var(--as-path-delay) infinite;
+}
+
+.as-edge__flow--reverse {
+  animation-direction: reverse, normal;
+}
+
+/* The arrowhead and any crow's foot catch the light too. */
+.as-path-edge .as-edge__arrow,
+.as-path-edge .as-edge__crow {
+  filter: drop-shadow(0 0 3px var(--as-path-ink));
+}
+
+/* The lit paths' key, under the infra key when both show. */
+.as-legend__section {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--as-border);
 }
 
 /* ── Timeline mode ───────────────────────────────────────────────────────── */
@@ -4477,6 +4723,571 @@
   opacity: 0.45;
 }
 
+/* ── Marketing mode ──────────────────────────────────────────────────────── */
+
+/*
+ * `mode="marketing"`: the same document dressed for a slide or a landing
+ * page. Everything in this section is a RESTYLE — no rule here hides a
+ * control, shrinks a hit target, or changes a size the document stores. It
+ * does three things:
+ *
+ *   1. Bigger, rounder, softer. Larger icon chips and type, 12px corners, a
+ *      quiet gradient on every card derived from its kind's accent — so a
+ *      database warms differently from a queue, and a host's custom kind or
+ *      a node's own `color` gets a gradient of its own for free — under a
+ *      soft accent-tinted shadow. Silhouette shapes get the same gradient as
+ *      an SVG def (see `.as-node__silhouette-grad`). How MUCH of each a card
+ *      gets is the one thing here that splits by theme (see the paint block
+ *      below): a light page needs more of all three before a card lifts off
+ *      the paper, and the icon chip inverts outright — a pale tile carrying a
+ *      saturated glyph, rather than a pool of the kind's hue.
+ *   2. Redundant labels tucked away. A card's kind eyebrow when the icon has
+ *      already said it (a status or a drill badge keeps the row), a column's
+ *      type and required mark, an edge's technology sub-label, a sequence
+ *      message's tech. Every one of them is still in the document, the
+ *      inspector, and the exports.
+ *   3. More air. Tidy and the AI layout spread ranks wider — that part is
+ *      `modeLayoutOptions` in theme.ts, not CSS.
+ *
+ * Every selector is two-class (`.as-root--marketing .x`), so it beats the
+ * single-class defaults regardless of source order. That also means it
+ * would beat the single-class STATES (hover, selected, shaped, a lifecycle
+ * status) — so each state a default draws is restated here at the same
+ * strength rather than silently lost under the base restyle. Technical mode
+ * adds no class at all, so none of this can reach it.
+ */
+
+.as-root--marketing {
+  --as-radius: 12px;
+  /* A touch more of each kind's hue in the text it colours: the gradient
+     card has more accent behind the eyebrow, so the eyebrow can carry more
+     too and still read. */
+  --as-node-ink-mix: 60%;
+  /* Secondary copy — descriptions, edge labels — pulled toward the body ink.
+     `text-dim` was tuned for chrome a reader glances past; a card's own
+     description is read. */
+  --as-mk-text: color-mix(in srgb, var(--as-text-dim) 45%, var(--as-text));
+}
+
+/*
+ * The paints every card is built from — the gradient's two ends, the edge at
+ * rest and under the cursor, and the shadow it sits on.
+ *
+ * Declared ON THE CARD, not on the root above, for two reasons. A custom
+ * property's own `var()`s are substituted where it is DECLARED, so an
+ * `--as-node-accent` written into a root-level token resolves against a root
+ * that has no accent — the trap `--as-node-ink` is declared on `.as-node` to
+ * dodge, and the one that quietly left every resting card's shadow the same
+ * grey. And `light-dark()` reads the element's `color-scheme`, which the root
+ * sets from the theme's `colorScheme` (LIGHT_THEME sets it; a partial theme
+ * that omits it is read as dark here, exactly as the browser already reads it
+ * for its own widgets).
+ *
+ * Both schemes want the same card and a different amount of it. Over the dark
+ * canvas a card is already the bright thing in the frame and its own glow does
+ * the lifting. On a white page nothing is brighter than the paper, so the card
+ * has to earn its edge instead: more of its kind's hue, a firmer border, and a
+ * shadow you can actually see — 14% ink is right under a menu and leaves a
+ * marketing card lying flat on the page, flatter still inside a zone's wash.
+ */
+.as-root--marketing .as-node,
+.as-root--marketing .as-group-chip,
+.as-root--marketing .as-seq-head {
+  /* A card names its accent `--as-node-accent` and a sequence header names
+     the same thing `--as-seq-accent`. One alias, and every paint below is
+     written once for both. The dim ink closes the chain so an element that
+     somehow has neither still gets a card rather than an invalid value and
+     no paint at all. */
+  --as-mk-accent: var(--as-node-accent, var(--as-seq-accent, var(--as-text-dim)));
+  --as-mk-grad-from: light-dark(
+    color-mix(in srgb, var(--as-mk-accent) 24%, var(--as-surface)),
+    color-mix(in srgb, var(--as-mk-accent) 17%, var(--as-surface))
+  );
+  --as-mk-grad-to: light-dark(
+    color-mix(in srgb, var(--as-mk-accent) 7%, var(--as-surface)),
+    color-mix(in srgb, var(--as-mk-accent) 4%, var(--as-surface))
+  );
+  --as-mk-edge: light-dark(
+    color-mix(in srgb, var(--as-mk-accent) 48%, var(--as-border)),
+    color-mix(in srgb, var(--as-mk-accent) 34%, var(--as-border))
+  );
+  --as-mk-edge-hover: light-dark(
+    color-mix(in srgb, var(--as-mk-accent) 68%, var(--as-border)),
+    color-mix(in srgb, var(--as-mk-accent) 55%, var(--as-border))
+  );
+  --as-mk-shadow:
+    0 1px 2px light-dark(
+      color-mix(in srgb, var(--as-mk-accent) 22%, transparent),
+      color-mix(in srgb, var(--as-shadow-ink) 45%, transparent)
+    ),
+    0 14px 30px -18px light-dark(
+      color-mix(in srgb, var(--as-mk-accent) 72%, transparent),
+      color-mix(in srgb, var(--as-mk-accent) 60%, var(--as-shadow-ink))
+    );
+}
+
+/* ── Cards ── */
+
+.as-root--marketing .as-node {
+  gap: 12px;
+  padding: 6px 14px;
+  border-color: var(--as-mk-edge);
+  border-radius: var(--as-radius);
+  background: linear-gradient(135deg, var(--as-mk-grad-from) 0%, var(--as-mk-grad-to) 100%);
+  /* The inset line is a highlight along the top edge — the glint that makes
+     a flat gradient read as a surface. Invisible on a white card, which is
+     correct: white has no glint to add. */
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
+    var(--as-mk-shadow);
+  transition: border-color 160ms, box-shadow 160ms;
+}
+
+/* A record's gradient runs top-down instead: its content is a column of rows,
+   and a band that fades below the title is what makes the header read as a
+   header. */
+.as-root--marketing .as-node--record {
+  background: linear-gradient(
+    180deg,
+    var(--as-mk-grad-from) 0%,
+    var(--as-mk-grad-to) 46px,
+    var(--as-surface) 100%
+  );
+}
+
+.as-root--marketing .as-node:hover {
+  border-color: var(--as-mk-edge-hover);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
+    0 1px 2px light-dark(
+      color-mix(in srgb, var(--as-node-accent) 30%, transparent),
+      color-mix(in srgb, var(--as-shadow-ink) 45%, transparent)
+    ),
+    0 16px 34px -16px light-dark(
+      color-mix(in srgb, var(--as-node-accent) 80%, transparent),
+      color-mix(in srgb, var(--as-node-accent) 75%, var(--as-shadow-ink))
+    );
+}
+
+.as-root--marketing .as-node--selected {
+  border-color: var(--as-accent);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--as-accent) 22%, transparent),
+    var(--as-mk-shadow);
+}
+
+/* The lifecycle stages that paint their OWN background (a hatch, hazard
+   tape) keep it — the base restyle above would otherwise sit on top. */
+.as-root--marketing .as-node--status-stubbed:not(.as-node--shaped) {
+  background-image:
+    repeating-linear-gradient(
+      45deg,
+      transparent 0 9px,
+      color-mix(in srgb, var(--as-node-accent, var(--as-text-dim)) 8%, transparent) 9px 12px
+    ),
+    linear-gradient(135deg, var(--as-mk-grad-from) 0%, var(--as-mk-grad-to) 100%);
+}
+
+/* No box-shadow here: the selection ring is a box-shadow, and this rule
+   outranks the selected one — clearing it would leave a selected dark node
+   with nothing to say it was picked. */
+.as-root--marketing .as-node--status-dark:not(.as-node--shaped) {
+  border: 2px dashed var(--as-hazard-tape);
+  background:
+    linear-gradient(var(--as-surface), var(--as-surface)) padding-box,
+    var(--as-hazard-ink) border-box;
+}
+
+/*
+ * Silhouettes: the CSS box stays gone and the gradient moves into the SVG.
+ *
+ * Two selectors, both deliberately heavier than every card rule above,
+ * including the `:hover` one (a pseudo-class counts, so `.as-root--marketing
+ * .as-node:hover` is 0-3-0 and outranked the plain single-class reset that
+ * used to live here). Without the second line, hovering a diamond or a
+ * cylinder painted the CARD's rounded-rectangle halo and top glint around
+ * the figure — a service-shaped ghost behind a shape that is not a service.
+ * Anything the marketing card ever adds is refused here by specificity
+ * rather than by having to be restated.
+ */
+.as-root--marketing .as-node.as-node--shaped,
+.as-root--marketing .as-node.as-node--shaped:hover {
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+
+/* The figure's own shadow (below) is drawn by an SVG filter, and an <svg>
+   clips to its viewport by default — so the drop shadow was cut off at the
+   node's box on every side. The lit-path glow already does this for the
+   same reason. */
+.as-root--marketing .as-node__silhouette {
+  overflow: visible;
+}
+
+/* The gradient path is rendered in every mode (nodes.tsx) and shown in this
+   one. It sits between the surface base and the accent tint, so the tint's
+   6% wash and the outline stroke are exactly what technical mode draws. */
+.as-node__silhouette-grad {
+  display: none;
+}
+
+.as-root--marketing .as-node__silhouette-grad {
+  display: block;
+  /* A soft shadow under the figure, the way the cards have one. */
+  filter: drop-shadow(0 6px 10px light-dark(
+    color-mix(in srgb, var(--as-node-accent) 40%, transparent),
+    color-mix(in srgb, var(--as-node-accent) 30%, var(--as-shadow-ink))
+  ));
+}
+
+.as-root--marketing .as-node__gradstop--from {
+  stop-color: var(--as-mk-grad-from);
+}
+
+.as-root--marketing .as-node__gradstop--to {
+  stop-color: var(--as-mk-grad-to);
+}
+
+.as-root--marketing .as-node__silhouette-tint {
+  stroke: var(--as-mk-edge);
+}
+
+.as-root--marketing .as-node--shaped:hover .as-node__silhouette-tint {
+  stroke: var(--as-mk-edge-hover);
+}
+
+.as-root--marketing .as-node--selected.as-node--shaped .as-node__silhouette-tint {
+  stroke: var(--as-accent);
+  stroke-width: 1.8;
+}
+
+/* ── Icon chip: larger, with its own gradient and a hairline ring ── */
+
+/*
+ * The chip is the one thing on the card that has to read as an OBJECT rather
+ * than a wash, and the two schemes get there from opposite directions. Over
+ * the dark canvas it is a pool of the kind's hue, brighter than the card it
+ * sits on. On a light page laying more of the same hue over an already-tinted
+ * card just gives the card a second wash of itself — so the chip goes the
+ * other way and becomes the pale tile, with the glyph on it carrying nearly
+ * the raw hue (the light `nodeAccents` are all picked to clear AA on this
+ * surface) and a small drop shadow to say it is sitting on top.
+ */
+.as-root--marketing .as-node__iconbox {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  background: linear-gradient(
+    145deg,
+    light-dark(
+      var(--as-surface),
+      color-mix(in srgb, var(--as-node-accent) 26%, transparent)
+    ),
+    light-dark(
+      color-mix(in srgb, var(--as-node-accent) 12%, var(--as-surface)),
+      color-mix(in srgb, var(--as-node-accent) 10%, transparent)
+    )
+  );
+  /* Dark draws the outer layer in `transparent` — one shadow list, no second
+     rule, and nothing to keep in sync if the ring changes. */
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--as-node-accent) 24%, transparent),
+    0 1px 3px light-dark(color-mix(in srgb, var(--as-node-accent) 32%, transparent), transparent);
+}
+
+.as-root--marketing .as-node__iconbox svg {
+  stroke: light-dark(color-mix(in srgb, var(--as-node-accent) 88%, var(--as-text)), var(--as-node-ink));
+}
+
+/* ── Type: sans throughout, a step larger, secondary copy darker ── */
+
+.as-root--marketing .as-node__kind {
+  font-family: var(--as-font);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+
+/* The kind's name is what the icon already says. The status and the drill
+   badge beside it are not, so the row stays for those — and collapses when
+   the name was all it had. */
+.as-root--marketing .as-node__kindname,
+.as-root--marketing .as-node__statussep {
+  display: none;
+}
+
+.as-root--marketing .as-node__kind:not(:has(.as-node__status, .as-node__drill)) {
+  display: none;
+}
+
+/* The card's own voice, a step up from the 15px this mode started at. A card
+   is a fixed box and the title ellipsises inside it, so every step costs a few
+   characters on the longest labels — worth it here, where the diagram is being
+   read from across a room rather than worked in. A node carrying its own
+   `fontSize` still wins: that number is the author's, not the mode's. */
+.as-root--marketing .as-node__title {
+  font-size: var(--as-node-font, 1rem);
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+/* With the eyebrow gone the title is the top line, where the ↗ affix sat —
+   and a title that has to step 24px clear of it truncates on an ordinary
+   card. The affix becomes a round badge pinned to the corner instead,
+   overhanging the card the way a notification dot does: the same 24px
+   target, but only a sliver of it is over the card, so the body gives up
+   4px rather than 16. */
+.as-root--marketing .as-node__link {
+  top: -8px;
+  right: -8px;
+  border: 1px solid color-mix(in srgb, var(--as-node-accent) 40%, var(--as-border));
+  border-radius: 999px;
+  background: var(--as-surface);
+  color: var(--as-node-ink);
+  box-shadow: 0 2px 6px -2px var(--as-shadow-ink);
+}
+
+.as-root--marketing .as-node__link:hover {
+  border-color: var(--as-accent);
+  background: var(--as-surface-2);
+  color: var(--as-accent);
+}
+
+.as-root--marketing .as-node:has(> .as-node__link) .as-node__body {
+  padding-right: 4px;
+}
+
+/* A wrapped title was MEASURED (contract/text.ts) at its stored font size
+   and the technical chip width, and the stored height holds exactly those
+   lines. Those cards keep both, so the measurement stays true and nothing
+   spills; the larger glyph still sits in the same-sized chip. */
+.as-root--marketing .as-node--wrap {
+  gap: 10px;
+  padding: 6px 12px;
+}
+
+.as-root--marketing .as-node--wrap .as-node__title {
+  font-size: var(--as-node-font, 0.8125rem);
+  letter-spacing: 0;
+}
+
+.as-root--marketing .as-node--wrap .as-node__iconbox {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.as-root--marketing .as-node__desc {
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--as-mk-text);
+}
+
+/* ── Record rows: the type column and required mark are the redundant part
+   here; the key badge is what a lay reader can use. Row height is the
+   contract's FIELD_ROW_H and does not move. ── */
+
+.as-root--marketing .as-node__field {
+  font-size: 0.7188rem;
+}
+
+.as-root--marketing .as-node__fieldname {
+  font-family: var(--as-font);
+}
+
+.as-root--marketing .as-node__fieldtype,
+.as-root--marketing .as-node__fieldreq {
+  display: none;
+}
+
+/* ── Chips that ride the cards ── */
+
+.as-root--marketing .as-date {
+  font-family: var(--as-font);
+  font-size: 0.6875rem;
+  letter-spacing: 0;
+  border-radius: 999px;
+  padding: 0 7px;
+}
+
+.as-root--marketing .as-node__team {
+  font-family: var(--as-font);
+  font-size: 0.6875rem;
+}
+
+.as-root--marketing .as-node__drill {
+  font-family: var(--as-font);
+}
+
+/* ── Groups ── */
+
+.as-root--marketing .as-group {
+  border-radius: 16px;
+}
+
+.as-root--marketing .as-group__label {
+  padding: 3px 10px;
+  border-radius: 16px 0 10px 0;
+  font-family: var(--as-font);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--as-text);
+}
+
+.as-root--marketing .as-group-chip {
+  padding: 6px 12px;
+  border-radius: var(--as-radius);
+  border-color: var(--as-mk-edge);
+  background: linear-gradient(135deg, var(--as-mk-grad-from), var(--as-mk-grad-to));
+  box-shadow: var(--as-mk-shadow);
+}
+
+.as-root--marketing .as-group-chip--selected {
+  border-color: var(--as-accent);
+}
+
+.as-root--marketing .as-group-chip__label {
+  font-family: var(--as-font);
+  font-size: 0.8125rem;
+}
+
+/* ── Zones ── */
+
+.as-root--marketing .as-zone__header {
+  gap: 9px;
+  padding: 5px 10px;
+}
+
+.as-root--marketing .as-zone__label {
+  font-family: var(--as-font);
+  font-size: 0.8125rem;
+}
+
+.as-root--marketing .as-zone__single {
+  font-family: var(--as-font);
+  font-size: 0.6875rem;
+}
+
+.as-root--marketing .as-zone__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+/* ── Edges: a touch heavier, rounded, with sans labels and no tech ── */
+
+.as-root--marketing .as-edge__stroke {
+  stroke-width: 2.2;
+  stroke-linecap: round;
+}
+
+.as-root--marketing .as-edge__stroke.as-edge__stroke--selected {
+  stroke-width: 3;
+}
+
+.as-root--marketing .as-edge__hit:hover ~ .as-edge__stroke {
+  stroke-width: 3.4;
+}
+
+.as-root--marketing .as-edge__label {
+  font-family: var(--as-font);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  fill: var(--as-mk-text);
+  stroke-width: 5px;
+}
+
+.as-root--marketing .as-edge__label--selected,
+.as-root--marketing .as-edge__labelgroup:hover .as-edge__label {
+  fill: var(--as-text);
+}
+
+.as-root--marketing .as-edge__tech {
+  display: none;
+}
+
+.as-root--marketing .as-edge__endlabel,
+.as-root--marketing .as-edge__date {
+  font-family: var(--as-font);
+  font-size: 0.6875rem;
+  letter-spacing: 0;
+}
+
+/* ── Annotations ── */
+
+.as-root--marketing .as-annotation--boxed {
+  padding: 8px 12px;
+  border-radius: var(--as-radius);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--as-surface) 90%, transparent),
+    color-mix(in srgb, var(--as-surface) 72%, transparent)
+  );
+  box-shadow: 0 8px 20px -14px var(--as-shadow-ink);
+}
+
+.as-root--marketing .as-annotation--selected {
+  border-color: var(--as-accent);
+}
+
+/* ── Sequence editor: the same treatment on participant headers ── */
+
+.as-root--marketing .as-seq-head {
+  padding: 6px 14px;
+  border-color: var(--as-mk-edge);
+  background: linear-gradient(135deg, var(--as-mk-grad-from), var(--as-mk-grad-to));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
+    var(--as-mk-shadow);
+}
+
+.as-root--marketing .as-seq-head--selected {
+  border-color: var(--as-accent);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--as-accent) 22%, transparent),
+    var(--as-mk-shadow);
+}
+
+.as-root--marketing .as-seq-head.as-node--status-dark {
+  border: 2px dashed var(--as-hazard-tape);
+  background:
+    linear-gradient(var(--as-surface), var(--as-surface)) padding-box,
+    var(--as-hazard-ink) border-box;
+}
+
+.as-root--marketing .as-seq-head__kind {
+  font-family: var(--as-font);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+
+/* The one place in this section that does NOT take the card title's step up
+   to 1rem. A participant header is a fixed lane box, not an author-sized card:
+   at 0.9375rem a default-width header holds "Payment Gateway" to the pixel,
+   and the next step up ellipsises it. */
+.as-root--marketing .as-seq-head__label {
+  font-size: 0.9375rem;
+  letter-spacing: -0.01em;
+}
+
+.as-root--marketing .as-seq-msg__label {
+  font-family: var(--as-font);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--as-mk-text);
+}
+
+.as-root--marketing .as-seq-msg__label:hover,
+.as-root--marketing .as-seq-msg__label--selected {
+  color: var(--as-text);
+}
+
+.as-root--marketing .as-seq-msg__tech {
+  display: none;
+}
+
 /* ── Forced colours (Windows high contrast) ──────────────────────────────── */
 
 /*
@@ -4528,11 +5339,40 @@
   .as-future {
     opacity: 0.6;
   }
+
+  /* A lit path's halo is a box-shadow, so it vanishes here too: a lit node
+     restates itself with a dashed outline, a lit edge with its dash flow in
+     the Highlight ink. The blurred halo has no honest forced-colour form. */
+  .react-flow__node.as-path-node::after {
+    box-shadow: none;
+    outline: 2px dashed Highlight;
+    outline-offset: 2px;
+  }
+
+  .as-edge__glow,
+  .as-node__silhouette-glow {
+    display: none;
+  }
+
+  .as-edge__flow {
+    stroke: Highlight;
+    forced-color-adjust: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .as-root * {
     transition: none !important;
+  }
+
+  /* A lit path keeps its halo but nothing travels along it: the arrowhead
+     already says which way the flow goes. */
+  .as-root .react-flow__node.as-path-node::after,
+  .as-root .as-node__silhouette-glow,
+  .as-root .as-edge__glow,
+  .as-root .as-edge__flow {
+    animation: none !important;
+    opacity: 0.8;
   }
 
   /* Without its transition the arrow slide would still snap on hover. */

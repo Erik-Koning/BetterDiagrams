@@ -183,15 +183,28 @@ describe("the keyboard", () => {
     const user = userEvent.setup();
     const { container } = mount(<ArchitectureStudio defaultValue={ONE} />);
 
+    // The whole gesture, the way the dismiss logic sees it: pointerdown and
+    // mousedown are what close the menu, the click is what gets swallowed.
+    // Native jsdom events rather than user-event's: user-event pins `view`
+    // to null on its mouse events, and d3-drag (under React Flow's node
+    // drag) dereferences `event.view.document` on mousedown — which the
+    // test-setup shim can only supply for events that leave `view` alone.
+    const clickNode = (el: HTMLElement) => {
+      fireEvent.pointerDown(el);
+      fireEvent.mouseDown(el);
+      fireEvent.mouseUp(el);
+      fireEvent.click(el);
+    };
+
     await user.click(screen.getByRole("button", { name: "Export ▾" }));
-    await user.click(node(container, "api"));
+    clickNode(node(container, "api"));
 
     // The click that got rid of the menu is spent on getting rid of it.
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Node label")).not.toBeInTheDocument();
 
     // A second, ordinary click selects as it always did.
-    await user.click(node(container, "api"));
+    clickNode(node(container, "api"));
     expect(await screen.findByLabelText("Node label")).toBeInTheDocument();
   });
 
@@ -329,5 +342,78 @@ describe("a host that keeps several files", () => {
 
     // B has no title of its own, so nothing should have renamed it.
     expect(onFileRename.mock.calls.filter(([id]) => id === "B")).toEqual([]);
+  });
+});
+
+describe("lighting a path", () => {
+  const WIRED = doc({
+    nodes: [
+      { id: "u", label: "User", kind: "client", x: 0, y: 0 },
+      { id: "api", label: "API", kind: "service", x: 300, y: 0 },
+      { id: "db", label: "DB", kind: "database", x: 600, y: 0 },
+      { id: "q", label: "Queue", kind: "queue", x: 300, y: 200 },
+    ],
+    edges: [
+      { id: "e1", source: "u", target: "api" },
+      { id: "e2", source: "api", target: "db" },
+      { id: "e3", source: "api", target: "q" },
+    ],
+    paths: [
+      { id: "read", title: "Read a record", steps: ["u", "api", "db"] },
+      { id: "enqueue", title: "Enqueue a job", steps: ["api", "q"], color: "violet" },
+    ],
+  });
+  const lit = (container: HTMLElement, id: string) => node(container, id).classList.contains("as-path-node");
+
+  it("offers the Paths menu only when the document names a path", () => {
+    mount(<ArchitectureStudio defaultValue={doc({ nodes: WIRED.nodes, edges: WIRED.edges })} />);
+    expect(screen.queryByRole("button", { name: "Paths ▾" })).toBeNull();
+  });
+
+  it("glows the members of a ticked path — and the document is not an edit away", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    const { container } = mount(<ArchitectureStudio defaultValue={WIRED} onChange={onChange} />);
+    const emitted = onChange.mock.calls.length;
+
+    await user.click(screen.getByRole("button", { name: "Paths ▾" }));
+    await user.click(screen.getByRole("checkbox", { name: "Read a record" }));
+
+    await waitFor(() => expect(lit(container, "api")).toBe(true));
+    expect(lit(container, "u")).toBe(true);
+    expect(lit(container, "db")).toBe(true);
+    expect(lit(container, "q")).toBe(false);
+    // u → e1 → api → e2 → db: the API is the third step of five.
+    expect(node(container, "api").style.getPropertyValue("--as-path-step")).toBe("2");
+    expect(node(container, "api").style.getPropertyValue("--as-path-steps")).toBe("5");
+    expect(node(container, "api").style.getPropertyValue("--as-path-ink")).toBe("var(--as-edge-sky)");
+    // Both inferred edges run their dash flow; the queue's does not.
+    await waitFor(() => expect(container.querySelectorAll(".as-edge__flow")).toHaveLength(2));
+    // The key, and the count on the button.
+    expect(container.querySelector(".as-legend")!.textContent).toContain("Paths");
+    expect(container.querySelector(".as-legend")!.textContent).toContain("Read a record");
+    expect(screen.getByRole("button", { name: "Paths (1) ▾" })).toBeTruthy();
+    // Lighting is a view: nothing was committed.
+    expect(onChange.mock.calls.length).toBe(emitted);
+
+    // Everything, then nothing.
+    await user.click(screen.getByRole("menuitem", { name: "Select all" }));
+    await waitFor(() => expect(lit(container, "q")).toBe(true));
+    expect(container.querySelector(".as-legend")!.textContent).toContain("Enqueue a job");
+    await user.click(screen.getByRole("button", { name: "Paths (2) ▾" }));
+    await user.click(screen.getByRole("menuitem", { name: "Clear" }));
+    await waitFor(() => expect(lit(container, "api")).toBe(false));
+    expect(container.querySelectorAll(".as-edge__flow")).toHaveLength(0);
+    expect(container.querySelector(".as-legend")).toBeNull();
+    expect(onChange.mock.calls.length).toBe(emitted);
+  });
+
+  it("keeps the key out of a legend-less editor", async () => {
+    const user = userEvent.setup();
+    const { container } = mount(<ArchitectureStudio defaultValue={WIRED} legend={false} />);
+    await user.click(screen.getByRole("button", { name: "Paths ▾" }));
+    await user.click(screen.getByRole("checkbox", { name: "Enqueue a job" }));
+    await waitFor(() => expect(lit(container, "q")).toBe(true));
+    expect(container.querySelector(".as-legend")).toBeNull();
   });
 });

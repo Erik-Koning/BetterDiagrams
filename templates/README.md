@@ -1,19 +1,20 @@
 # templates
 
-Diagrams the example app auto-saves while you develop, one `.json` per open
-file. Written by the dev-only route in `example/vite-plugin-templates.js`, so
-this folder fills up under `npm run dev` and never in a production build.
+Diagrams as plain `.json` files — the same `DiagramTemplate` / `SequenceTemplate`
+shape that `Import`, the paste box, and the LLM all speak. Both folders are
+listed under the example app's **Settings ▾ → Templates** while `npm run dev`
+is running (the route lives in `example/vite-plugin-templates.js`, dev-only).
 
-Each file is a plain `DiagramTemplate` (or `SequenceTemplate`) — the same shape
-`Import`, the paste box, and the LLM all speak. That means:
+## `examples/` — curated, tracked
 
-- **Hand-editing works.** Change a file here and it shows up in the app's
-  Settings ▾ → *Saved templates* the next time that menu opens.
-- **Dropping files in works.** Copy a template into this folder and it is
-  listed alongside the rest.
-- **Git works.** These are ordinary files: diff them, review them, commit the
-  ones worth keeping.
+Templates worth keeping. The app can **read** these but never writes here:
+loading one and editing it lands the edited copy in `scratch/`, and the
+example stays as committed. Add one by dropping a file in (or copying it up
+from `scratch/`); it appears the next time the menu opens.
 
-The app is the authority while it is running: renaming a file renames the JSON,
-and deleting a file deletes it. If you want a template kept out of that loop,
-move it somewhere else in the repo.
+## `scratch/` — auto-save, git-ignored
+
+Where every open file is written as you work, one `.json` per workspace file,
+debounced. Renaming a file renames the JSON and removes the old one; deleting a
+file deletes it. It's rewritten on every session, which is exactly why it's
+ignored — promote anything you want to keep into `examples/`.

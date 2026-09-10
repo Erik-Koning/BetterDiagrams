@@ -300,3 +300,33 @@ describe("docDiagnostics — robustness", () => {
     expect(() => warnings("[1, 2")).not.toThrow();
   });
 });
+
+describe("docDiagnostics — paths", () => {
+  const base =
+    '"version": 1, "nodes": [{"id": "a", "label": "A", "kind": "service"}, {"id": "b", "label": "B", "kind": "service"}], "edges": [{"id": "e", "source": "a", "target": "b"}]';
+
+  it("knows the path keys", () => {
+    const found = warnings(`{${base}, "paths": [{"id": "p", "title": "P", "steps": ["a", "b"], "colour": "sky"}]}`);
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toContain('Unknown key "colour"');
+  });
+
+  it("checks every step against the node AND edge ids, positioned on the offender", () => {
+    const doc = `{${base}, "paths": [{"id": "p", "title": "P", "steps": ["a", "e", "nope"]}]}`;
+    const found = warnings(doc);
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toContain('"nope"');
+    expect(found[0].message).toContain("dropped from the path");
+    expect(doc.slice(found[0].from, found[0].to)).toBe('"nope"');
+  });
+
+  it("checks a path colour against the edge palette", () => {
+    const found = warnings(`{${base}, "paths": [{"id": "p", "title": "P", "steps": ["a"], "color": "teal"}]}`);
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toContain("next colour in the cycle");
+  });
+
+  it("lints the example clean", () => {
+    expect(warnings(JSON.stringify(EXAMPLE_ZONED_TEMPLATE))).toEqual([]);
+  });
+});

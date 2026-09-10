@@ -28,7 +28,21 @@ export interface Silhouette {
   contentInlinePad: number;
 }
 
-export function silhouettePath(shape: NodeShape, x: number, y: number, w: number, h: number): Silhouette {
+export function silhouettePath(
+  shape: NodeShape,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  /**
+   * The plain card's corner. Only the card shape has one to set — a cylinder
+   * or a person is curved by its own geometry — and it is a parameter because
+   * marketing mode rounds cards harder (12px, matching `--as-radius` under
+   * `.as-root--marketing`) while the editor's own CSS handles that case with
+   * a border-radius the export has no access to.
+   */
+  opts: { radius?: number } = {},
+): Silhouette {
   switch (shape) {
     case "person": {
       // Head sized against both axes so squat or narrow nodes stay plausible.
@@ -76,7 +90,7 @@ export function silhouettePath(shape: NodeShape, x: number, y: number, w: number
       return { body, contentTop: 0, contentInlinePad: skew * 0.7 };
     }
     default: {
-      const r = 8;
+      const r = opts.radius ?? 8;
       const body =
         `M ${x + r} ${y} H ${x + w - r} A ${r} ${r} 0 0 1 ${x + w} ${y + r} ` +
         `V ${y + h - r} A ${r} ${r} 0 0 1 ${x + w - r} ${y + h} ` +

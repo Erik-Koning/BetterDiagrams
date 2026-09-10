@@ -511,6 +511,14 @@ export const LabeledEdge = memo(function LabeledEdge({
   const endHead = data?.endHead ?? (direction !== "none" ? "arrow" : undefined);
   const startHead = data?.startHead ?? (direction === "both" ? "arrow" : undefined);
   const hasLabel = !!data?.label || !!data?.tech || !!data?.seq || !!data?.date;
+  // Lit paths this edge is on (the view pass sets it; see DiagramEdgeData).
+  // The halo and the dash flow are extra strokes of the SAME `d`, drawn under
+  // the line, so they follow every bend the line takes. The ink variable is
+  // what the arrowhead's drop-shadow reads.
+  const glows = data?.pathGlow ?? [];
+  const glowStyle = glows.length
+    ? ({ "--as-path-ink": `var(--as-edge-${glows[0].color})` } as CSSProperties)
+    : undefined;
   // Stacked under whatever else the label group is showing, so a connection
   // that lands later says so without displacing its own name.
   const dateY = (data?.label ? 8 : -5) + (data?.tech ? 11 : 0);
@@ -718,7 +726,7 @@ export const LabeledEdge = memo(function LabeledEdge({
     };
 
   return (
-    <g>
+    <g style={glowStyle}>
       {/* Wide invisible path so the edge is easy to click — and to grab. */}
       <path
         className="as-edge__hit"
@@ -727,6 +735,32 @@ export const LabeledEdge = memo(function LabeledEdge({
         onDoubleClick={onPathDoubleClick}
         onPointerDown={onPathPointerDown}
       />
+      {/* One halo + one dash flow per lit path. The step variables place this
+          edge in the pulse that travels its path; `--reverse` runs the dashes
+          against the arrow when the walk goes target → source. Colour arrives
+          twice, as on the stroke: a hex attribute and a themable class. */}
+      {glows.map((glow) => (
+        <g
+          key={glow.pathId}
+          className="as-edge__pathglow"
+          style={{ "--as-path-step": glow.step, "--as-path-steps": glow.steps } as CSSProperties}
+        >
+          <path
+            className={`as-edge__glow as-edge--c-${glow.color}`}
+            d={geo.path}
+            fill="none"
+            stroke={EDGE_COLOR_HEX[glow.color]}
+            style={{ pointerEvents: "none" }}
+          />
+          <path
+            className={`as-edge__flow as-edge--c-${glow.color}${glow.reversed ? " as-edge__flow--reverse" : ""}`}
+            d={geo.path}
+            fill="none"
+            stroke={EDGE_COLOR_HEX[glow.color]}
+            style={{ pointerEvents: "none" }}
+          />
+        </g>
+      ))}
       <path
         className={[
           "as-edge__stroke",

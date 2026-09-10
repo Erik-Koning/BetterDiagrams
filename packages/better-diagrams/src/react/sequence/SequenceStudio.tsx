@@ -127,7 +127,15 @@ import {
 import { ExportStatesModal, type ExportStatesChoice } from "../ExportStatesModal";
 import { runStateExport, type StateExportFormat } from "../state-export";
 import { createRegistry } from "../create-registry";
-import { paletteFromTheme, themeToStyle, type Theme } from "../theme";
+import {
+  modeClassName,
+  modeLayoutOptions,
+  paletteFromTheme,
+  resolveStudioMode,
+  themeToStyle,
+  type StudioMode,
+  type Theme,
+} from "../theme";
 
 // The base architecture prompt in its CONTENT form (elements, no geometry) —
 // the "elements only" option of the welcome modal's cross-kind copy menu.
@@ -180,6 +188,12 @@ export interface SequenceStudioProps {
   generate?: DiagramGenerator;
   readOnly?: boolean;
   theme?: Theme;
+  /**
+   * Presentation mode — same contract as the architecture editor:
+   * `"technical"` (default) or `"marketing"`. Restyles only; every capability
+   * is identical in both.
+   */
+  mode?: StudioMode;
   /** Base name for exported files. */
   filename?: string;
   /**
@@ -258,6 +272,7 @@ function SequenceInner({
   generate,
   readOnly = false,
   theme,
+  mode,
   filename = "sequence",
   welcome = true,
   files,
@@ -1176,6 +1191,9 @@ function SequenceInner({
           registry,
           filename,
           palette: exportPalette,
+          // Picture formats dress the drawing the way the screen is dressing
+          // it; the document formats ignore it.
+          mode: resolveStudioMode(mode),
         });
         if (result) {
           download(result.blob, result.filename);
@@ -1187,7 +1205,7 @@ function SequenceInner({
         showToast(`Export failed: ${(err as Error).message}`);
       }
     },
-    [registry, filename, exportPalette, showToast, timelineActive, timelineAt, timelineFuture],
+    [registry, filename, exportPalette, mode, showToast, timelineActive, timelineAt, timelineFuture],
   );
 
   const stateAxes = useMemo(() => sequenceStateAxes(template), [template]);
@@ -1224,8 +1242,8 @@ function SequenceInner({
           combos: choice.combos,
           pdfLayout: choice.pdfLayout,
           materialize: (combo) => materializeSequenceCombo(templateRef.current, combo),
-          renderSvg: (doc) => renderSequenceToSvg(doc, exportPalette),
-          renderCanvas: (doc) => renderSequenceToCanvas(doc, 2, exportPalette),
+          renderSvg: (doc) => renderSequenceToSvg(doc, exportPalette, { mode }),
+          renderCanvas: (doc) => renderSequenceToCanvas(doc, 2, exportPalette, { mode }),
         });
         download(result.blob, result.filename);
         showToast(
@@ -1237,7 +1255,7 @@ function SequenceInner({
         showToast(`Export failed: ${(err as Error).message}`);
       }
     },
-    [pendingExport, runDirectExport, filename, stateAxes, exportPalette, showToast],
+    [pendingExport, runDirectExport, filename, stateAxes, exportPalette, mode, showToast],
   );
 
   const loadFile = useCallback(
@@ -1398,10 +1416,16 @@ function SequenceInner({
       : undefined;
 
   const rootStyle = { ...themeToStyle(theme), ...style };
+  const studioMode = resolveStudioMode(mode);
+  const modeClass = modeClassName(studioMode);
 
   return (
     <SequenceContext.Provider value={context}>
-      <div className={`as-root${className ? ` ${className}` : ""}`} style={rootStyle}>
+      <div
+        className={`as-root${modeClass ? ` ${modeClass}` : ""}${className ? ` ${className}` : ""}`}
+        data-mode={studioMode}
+        style={rootStyle}
+      >
         <div className="as-toolbar">
           {files?.length ? (
             <FileMenu
@@ -1798,7 +1822,11 @@ function SequenceInner({
             systemPrompt={sequencePrompt}
             parse={parseLlmSequence}
             onInsert={handleWelcomeInsert}
-            parseOther={onFileCreate ? parseArchitectureText : undefined}
+            parseOther={
+              onFileCreate
+                ? (text) => parseArchitectureText(text, {}, modeLayoutOptions(studioMode))
+                : undefined
+            }
             onInsertOther={onFileCreate ? handleWelcomeInsertOther : undefined}
             // The sequence studio holds no architecture registry, so the
             // cross-kind copy is deliberately the base architecture prompt.

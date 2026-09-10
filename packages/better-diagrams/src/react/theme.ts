@@ -10,6 +10,7 @@
  * stylesheet's `:where()` defaults without needing `!important`.
  */
 import type { CSSProperties } from "react";
+import type { LayoutOptions } from "../contract/layout";
 
 export interface Theme {
   /** Canvas backdrop. */
@@ -65,6 +66,15 @@ export interface Theme {
    */
   shadowInk?: string;
   /**
+   * How strongly a lit PATH glows: the halo's alpha (a plain number, 0-1)
+   * and its blur radius (a length). A dark canvas wants a wide, soft halo
+   * that reads as light being emitted; a light page has no darkness for a
+   * glow to bloom into, so it gets a tighter, denser one. The hue itself
+   * comes from `edgeColors`, so it re-resolves per theme on its own.
+   */
+  glowAlpha?: string;
+  glowBlur?: string;
+  /**
    * What the browser's OWN widgets should assume — the date input's calendar
    * glyph, `select` popups, scrollbars. Without it they render in the UA's
    * light scheme over the dark editor (a black calendar icon on #1e293b).
@@ -102,6 +112,8 @@ const TOKEN: Record<keyof Theme, string> = {
   seqAccents: "",
   nodeAccents: "",
   shadowInk: "--as-shadow-ink",
+  glowAlpha: "--as-glow-alpha",
+  glowBlur: "--as-glow-blur",
   colorScheme: "--as-color-scheme",
   radius: "--as-radius",
   font: "--as-font",
@@ -126,6 +138,8 @@ export const DARK_THEME: Theme = {
   danger: "#fb7185",
   gridDot: "#1e293b",
   shadowInk: "rgb(0 0 0 / 45%)",
+  glowAlpha: "0.65",
+  glowBlur: "18px",
   colorScheme: "dark",
 };
 
@@ -170,6 +184,10 @@ export const LIGHT_THEME: Theme = {
   // Shadows on a white page are a suggestion, not the 45% black that reads
   // correctly over the dark canvas.
   shadowInk: "rgb(15 23 42 / 14%)",
+  // A glow on white cannot bloom, so it is tighter and denser than the dark
+  // one — the darker light-theme edge hues carry the rest.
+  glowAlpha: "0.85",
+  glowBlur: "12px",
   colorScheme: "light",
   // Darker warning/comparison hues — the dark-canvas values sit near 2:1
   // contrast on a light page.
@@ -257,4 +275,61 @@ export function paletteFromTheme(theme: Theme | undefined): Record<string, strin
   if (theme.seqAccents) out.seqAccents = JSON.stringify(theme.seqAccents);
   if (theme.nodeAccents) out.nodeAccents = JSON.stringify(theme.nodeAccents);
   return Object.keys(out).length ? out : undefined;
+}
+
+// ─── Presentation mode ───────────────────────────────────────────────────────
+
+/**
+ * How the editor DRESSES the document. The document, the registry, the
+ * tools, and every capability are identical in both; only the stylesheet's
+ * reading of them changes.
+ *
+ *   technical  the dense, exact rendering this shipped with: every eyebrow,
+ *              type, and tech label on screen, 8px corners, flat surfaces.
+ *   marketing  the same diagram for a slide or a landing page: bigger icons,
+ *              larger and rounder type, a soft per-kind gradient on every
+ *              card, more air between ranks when tidied, and the labels a
+ *              reader would find redundant (a card's kind eyebrow under its
+ *              icon, a column's type, an edge's technology) tucked away.
+ *
+ * Applied as a class on the root (`as-root--marketing`) so a host can also
+ * reach it from its own CSS. Technical adds no class at all — an existing
+ * host stylesheet keeps matching exactly what it matched before.
+ */
+export type StudioMode = "technical" | "marketing";
+
+export const STUDIO_MODES: readonly StudioMode[] = ["technical", "marketing"];
+
+export const DEFAULT_STUDIO_MODE: StudioMode = "technical";
+
+/**
+ * Coerce whatever a host passed into a mode. An unknown string — a typo, a
+ * value from a future version — falls back to technical rather than crashing
+ * or half-applying a look, so `mode` can be threaded straight from a query
+ * string or a saved preference.
+ */
+export function resolveStudioMode(mode: unknown): StudioMode {
+  return mode === "marketing" ? "marketing" : DEFAULT_STUDIO_MODE;
+}
+
+/** The root class that selects a mode's stylesheet block; empty for technical. */
+export function modeClassName(mode: StudioMode | undefined): string {
+  return resolveStudioMode(mode) === "marketing" ? "as-root--marketing" : "";
+}
+
+/**
+ * The auto-layout spacing a mode tidies with. Marketing spreads ranks and
+ * rank-mates further apart than the dense technical defaults (which are the
+ * layout module's own, so passing this for technical changes nothing) — a
+ * presentation diagram wants air, a working one wants everything on screen.
+ *
+ * The result feeds `autoLayout`'s options and is a no-op for technical, so a
+ * caller can spread it unconditionally.
+ */
+export function modeLayoutOptions(
+  mode: StudioMode | undefined,
+): Pick<LayoutOptions, "rankGap" | "nodeGap" | "padding" | "headerGap"> {
+  return resolveStudioMode(mode) === "marketing"
+    ? { rankGap: 140, nodeGap: 48, padding: 40, headerGap: 66 }
+    : {};
 }

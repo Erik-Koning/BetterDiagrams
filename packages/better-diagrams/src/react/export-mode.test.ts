@@ -1,0 +1,227 @@
+/**
+ * The export's presentation mode.
+ *
+ * A picture has to say what the screen says. Everything the stylesheet's
+ * "Marketing mode" block does — the gradient cards, the bigger type, the
+ * labels it tucks away — has a counterpart in `makeSkin`, and these are the
+ * assertions that the two stay one look rather than two.
+ *
+ * Also here: the legend box, whose padding is computed from named constants
+ * that `padTop` has to agree with before anything is drawn.
+ */
+import { describe, expect, it } from "vitest";
+import { createRegistry } from "./create-registry";
+import { emitTemplate, drawToSvg, LIGHT_EXPORT_PALETTE, type DrawCmd, type ExportPalette } from "./draw";
+import { BUILTIN_EXPORTERS, renderTemplateToSvg } from "./exporters";
+import { EXAMPLE_ZONED_TEMPLATE, validateTemplate, type DiagramTemplate } from "../contract/schema";
+
+const registry = createRegistry();
+const doc = (partial: Record<string, unknown>) =>
+  validateTemplate({ version: 1, edges: [], ...partial } as unknown as DiagramTemplate) as DiagramTemplate;
+
+type TextCmd = Extract<DrawCmd, { op: "text" }>;
+type PathCmd = Extract<DrawCmd, { op: "path" }>;
+const texts = (cmds: DrawCmd[]) => cmds.filter((c): c is TextCmd => c.op === "text");
+const paths = (cmds: DrawCmd[]) => cmds.filter((c): c is PathCmd => c.op === "path");
+
+const CARD = doc({
+  nodes: [
+    { id: "a", label: "REST API", kind: "service", description: "Node / TypeScript", x: 0, y: 0 },
+    { id: "b", label: "Redis", kind: "database", status: "deprecated", x: 320, y: 0 },
+  ],
+  edges: [{ id: "e", source: "a", target: "b", label: "read/write", tech: "SQL" }],
+});
+
+/** The same card with an icon, so the chip is emitted at all. */
+const ICONED = doc({
+  nodes: [{ id: "a", label: "REST API", kind: "service", icon: "box", x: 0, y: 0 }],
+});
+
+describe("export presentation mode", () => {
+  it("defaults to technical, and an unknown mode does not half-apply a look", () => {
+    const base = emitTemplate(CARD, registry);
+    expect(emitTemplate(CARD, registry, {}, { mode: "technical" })).toEqual(base);
+    // `resolveStudioMode` is what the host-facing wrappers coerce through.
+    expect(renderTemplateToSvg(CARD, registry, {}, { mode: "nonsense" })).toEqual(
+      renderTemplateToSvg(CARD, registry),
+    );
+  });
+
+  it("marketing paints cards with a gradient; technical never does", () => {
+    expect(paths(emitTemplate(CARD, registry).cmds).some((p) => p.gradient)).toBe(false);
+    const mk = paths(emitTemplate(CARD, registry, {}, { mode: "marketing" }).cmds);
+    expect(mk.some((p) => p.gradient)).toBe(true);
+    expect(mk.some((p) => p.shadow)).toBe(true);
+  });
+
+  it("marketing tucks the kind eyebrow away but never a lifecycle status", () => {
+    // Deprecated draws its eyebrow as two runs, so the status can wear salmon
+    // while the kind keeps the accent.
+    const tech = texts(emitTemplate(CARD, registry).cmds).map((t) => t.text);
+    expect(tech).toContain("SERVICE");
+    expect(tech).toContain("DATABASE");
+    expect(tech).toContain(" · DEPRECATED");
+
+    const mk = texts(emitTemplate(CARD, registry, {}, { mode: "marketing" }).cmds).map((t) => t.text);
+    expect(mk).not.toContain("SERVICE");
+    expect(mk.some((t) => t.includes("DATABASE"))).toBe(false);
+    expect(mk).toContain("DEPRECATED");
+  });
+
+  it("marketing drops an edge's technology sub-label and sets its labels in sans", () => {
+    const tech = texts(emitTemplate(CARD, registry).cmds);
+    expect(tech.map((t) => t.text)).toContain("[SQL]");
+    expect(tech.find((t) => t.text === "read/write")?.font).toBe("mono");
+
+    const mk = texts(emitTemplate(CARD, registry, {}, { mode: "marketing" }).cmds);
+    expect(mk.map((t) => t.text)).not.toContain("[SQL]");
+    const label = mk.find((t) => t.text === "read/write");
+    expect(label?.font).toBe("sans");
+    expect(label?.size).toBe(13);
+  });
+
+  it("marketing steps the title up, but a node's own fontSize still wins", () => {
+    const sized = doc({ nodes: [{ id: "a", label: "Sized", kind: "service", fontSize: 22, x: 0, y: 0 }] });
+    const title = (t: DiagramTemplate, mode?: string) =>
+      texts(emitTemplate(t, registry, {}, { mode: mode as never }).cmds).find((c) => c.text === "REST API" || c.text === "Sized");
+
+    expect(title(CARD)?.size).toBe(13);
+    expect(title(CARD, "marketing")?.size).toBe(16);
+    expect(title(sized, "marketing")?.size).toBe(22);
+  });
+
+  it("marketing's icon chip inverts on a light palette: the tile, not the wash", () => {
+    const gradientsOf = (palette: Partial<ExportPalette>) =>
+      paths(emitTemplate(ICONED, registry, palette, { mode: "marketing" }).cmds)
+        .map((p) => p.gradient)
+        .filter((g): g is NonNullable<typeof g> => !!g);
+
+    // On white the chip starts AT the surface — a pale tile over a tinted
+    // card. Nothing else in the drawing does, so its presence is the assertion.
+    expect(gradientsOf(LIGHT_EXPORT_PALETTE).map((g) => g.from)).toContain(LIGHT_EXPORT_PALETTE.surface);
+    // Over the dark canvas it stays a pool of the kind's own hue instead.
+    expect(gradientsOf({}).map((g) => g.from)).not.toContain("#0b1220");
+  });
+
+  it("gradients and shadows reach the SVG, with ids that survive being inlined together", () => {
+    const emitted = emitTemplate(CARD, registry, LIGHT_EXPORT_PALETTE, { mode: "marketing" });
+    const a = drawToSvg(emitted.cmds, { gridId: "view-a" });
+    expect(a).toMatch(/<linearGradient id="view-a-d\d+"/);
+    expect(a).toMatch(/<feDropShadow /);
+    // Two views on one page must not collide on a url(#…).
+    const b = drawToSvg(emitted.cmds, { gridId: "view-b" });
+    const ids = (svg: string) => new Set(svg.match(/id="[^"]+"/g) ?? []);
+    expect([...ids(a)].some((id) => ids(b).has(id))).toBe(false);
+  });
+
+  it("marketing drops a record's type column and required mark, and bands its header", () => {
+    const table = doc({
+      nodes: [
+        {
+          id: "t",
+          label: "orders",
+          kind: "table",
+          x: 0,
+          y: 0,
+          fields: [
+            { name: "id", type: "uuid", key: "pk", required: true },
+            { name: "total", type: "numeric" },
+          ],
+        },
+      ],
+    });
+
+    const tech = texts(emitTemplate(table, registry).cmds).map((t) => t.text);
+    expect(tech).toContain("uuid");
+    expect(tech).toContain("id*");
+
+    const mk = texts(emitTemplate(table, registry, {}, { mode: "marketing" }).cmds).map((t) => t.text);
+    expect(mk).not.toContain("uuid");
+    expect(mk).not.toContain("id*");
+    expect(mk).toContain("id");
+
+    // The header band runs straight down and stops at 46px, so the rows below
+    // it sit on flat colour rather than under a corner-to-corner wash.
+    const band = paths(emitTemplate(table, registry, {}, { mode: "marketing" }).cmds).find((p) => p.gradient)!;
+    expect(band.gradient!.x1).toBe(band.gradient!.x2);
+    expect(band.gradient!.y2 - band.gradient!.y1).toBe(46);
+  });
+
+  it("the built-in picture exporters carry the mode through", async () => {
+    const svg = BUILTIN_EXPORTERS.svg.run({
+      template: CARD,
+      registry,
+      filename: "x",
+      mode: "marketing",
+    });
+    const text = await (svg as { blob: Blob }).blob.text();
+    expect(text).toMatch(/<linearGradient/);
+    expect(text).not.toMatch(/\[SQL\]/);
+  });
+});
+
+describe("the export legend", () => {
+  /** `roundedRectPath`'s own point order, read back. */
+  const rectOf = (d: string) => {
+    const n = (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+    const [xr, y, , r] = n;
+    return { x: xr - r, y, right: n[8], bottom: n[17] };
+  };
+  const legendBox = (cmds: DrawCmd[]) => {
+    const i = cmds.findIndex((c) => c.op === "text" && c.text === "INFRASTRUCTURE");
+    expect(i).toBeGreaterThan(0);
+    return { box: rectOf((cmds[i - 1] as PathCmd).d), title: cmds[i] as TextCmd, at: i };
+  };
+
+  const emitted = emitTemplate(EXAMPLE_ZONED_TEMPLATE, registry);
+  const { box, title, at } = legendBox(emitted.cmds);
+  // Page coordinates: the emitter's origin is what lands content at the pad.
+  const pageX = (x: number) => x + emitted.originX;
+  const pageY = (y: number) => y + emitted.originY;
+
+  it("sits a full inset in from the page corner, not hard against it", () => {
+    expect(pageY(box.y)).toBe(16);
+    expect(emitted.width - pageX(box.right)).toBe(16);
+  });
+
+  it("pads its contents evenly, top and bottom", () => {
+    const rows = texts(emitted.cmds.slice(at)).filter((t) => t.size === 11);
+    expect(rows.length).toBeGreaterThan(0);
+    const last = rows.at(-1)!;
+    // The title's cap sits one pad below the top; the last row's baseline
+    // leaves at least as much beneath it. Before, it had one pixel.
+    const above = title.y - 9 - box.y;
+    const below = box.bottom - last.y;
+    expect(above).toBe(12);
+    expect(below).toBeGreaterThanOrEqual(above - 1);
+  });
+
+  it("reserves its own headroom, so it never hangs into the drawing", () => {
+    const tall = validateTemplate({
+      ...EXAMPLE_ZONED_TEMPLATE,
+      zones: ["aws", "azure", "gcp", "onprem", "saas"].map((provider, i) => ({
+        id: `z${i}`,
+        label: provider,
+        provider,
+        x: i * 260,
+        y: 0,
+        w: 240,
+        h: 160,
+      })),
+      nodes: ["aws", "azure", "gcp", "onprem", "saas"].map((provider, i) => ({
+        id: `n${i}`,
+        label: provider,
+        kind: "service",
+        x: i * 260 + 20,
+        y: 40,
+        zone: `z${i}`,
+      })),
+      edges: [],
+    } as unknown as DiagramTemplate) as DiagramTemplate;
+    const out = emitTemplate(tall, registry);
+    const { box: big } = legendBox(out.cmds);
+    // Everything above y=0 in page space is reserved margin; the box lives
+    // entirely inside it.
+    expect(big.bottom + out.originY).toBeLessThanOrEqual(out.originY);
+  });
+});

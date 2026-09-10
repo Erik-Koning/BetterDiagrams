@@ -8,6 +8,7 @@
  */
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { VERSION_TAG_POSITIONS, type VersionTagPosition } from "../contract/schema";
+import { SvgIcon } from "./icons";
 import { isMac } from "./keys";
 import {
   TIMELINE_FUTURE_MODES,
@@ -107,21 +108,7 @@ export function ToolbarMenu({
    * keyboard user has to Tab through every row of every menu to reach the
    * toolbar button after it.
    */
-  const onMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const items = [...(menuRef.current?.querySelectorAll<HTMLElement>(MENU_ITEM) ?? [])].filter(
-      (el) => !el.hasAttribute("disabled"),
-    );
-    if (!items.length) return;
-    const at = items.indexOf(document.activeElement as HTMLElement);
-    const go = (i: number) => {
-      event.preventDefault();
-      items[(i + items.length) % items.length]?.focus();
-    };
-    if (event.key === "ArrowDown") go(at + 1);
-    else if (event.key === "ArrowUp") go(at <= 0 ? items.length - 1 : at - 1);
-    else if (event.key === "Home") go(0);
-    else if (event.key === "End") go(items.length - 1);
-  };
+  const onMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => menuKeyNav(menuRef, event);
 
   // Opening moves focus to the first row, so the arrows have somewhere to go.
   useEffect(() => {
@@ -162,6 +149,223 @@ export function ToolbarMenu({
 
 /** The rows arrow keys walk: real menu items and the checkboxes among them. */
 const MENU_ITEM = '[role="menuitem"], .as-menu__item, .as-menu__check input';
+
+/** Shared by every dropdown here, so they all answer the arrows alike. */
+function menuKeyNav(
+  menuRef: { current: HTMLDivElement | null },
+  event: React.KeyboardEvent<HTMLDivElement>,
+) {
+  const items = [...(menuRef.current?.querySelectorAll<HTMLElement>(MENU_ITEM) ?? [])].filter(
+    (el) => !el.hasAttribute("disabled"),
+  );
+  if (!items.length) return;
+  const at = items.indexOf(document.activeElement as HTMLElement);
+  const go = (i: number) => {
+    event.preventDefault();
+    items[(i + items.length) % items.length]?.focus();
+  };
+  if (event.key === "ArrowDown") go(at + 1);
+  else if (event.key === "ArrowUp") go(at <= 0 ? items.length - 1 : at - 1);
+  else if (event.key === "Home") go(0);
+  else if (event.key === "End") go(items.length - 1);
+}
+
+/**
+ * A canvas tool — what a press and a drag on the canvas MEAN.
+ *
+ * Three modes rather than one overloaded gesture: the arrow you already had,
+ * a dedicated rubber band, and a hand. Each is a whole gesture vocabulary, so
+ * they live in a tray rather than as three more buttons on an already busy bar.
+ */
+export type CanvasTool = "cursor" | "select" | "pan";
+
+export interface CanvasToolDef {
+  id: CanvasTool;
+  label: string;
+  hint: string;
+  /** The single key that picks it, shown on the row and owned by the studio. */
+  shortcut: string;
+  paths: readonly string[];
+}
+
+export const CANVAS_TOOLS: readonly CanvasToolDef[] = [
+  {
+    id: "cursor",
+    label: "Cursor",
+    hint: "Click to select, drag a box to move it · ⇧ or ⌘ adds to the selection",
+    shortcut: "V",
+    paths: ["M5 3l14 7-6.2 1.8L11 18z"],
+  },
+  {
+    id: "select",
+    label: "Select",
+    hint: "Drag anywhere — over the boxes too — to highlight · ⇧ or ⌘ adds to the selection",
+    shortcut: "M",
+    paths: [
+      "M3 8V6a3 3 0 0 1 3-3h2",
+      "M16 3h2a3 3 0 0 1 3 3v2",
+      "M21 16v2a3 3 0 0 1-3 3h-2",
+      "M8 21H6a3 3 0 0 1-3-3v-2",
+      "M11 3h2",
+      "M11 21h2",
+      "M3 11v2",
+      "M21 11v2",
+    ],
+  },
+  {
+    id: "pan",
+    label: "Pan",
+    hint: "Drag to move the canvas — nothing on it can be moved by accident",
+    shortcut: "H",
+    paths: [
+      "M12 3v18",
+      "M3 12h18",
+      "M9 6l3-3 3 3",
+      "M9 18l3 3 3-3",
+      "M6 9l-3 3 3 3",
+      "M18 9l3 3-3 3",
+    ],
+  },
+];
+
+/**
+ * The tool tray. Opens on hover, unlike every other menu on the bar.
+ *
+ * A tool is picked mid-gesture — you reach for the rubber band because of what
+ * is in front of you right now — and a click-to-open, click-to-pick tray puts
+ * two presses in the way of a mode switch that should cost one. Hovering opens
+ * it; the click that picks a tool is the only one the user has to spend.
+ *
+ * Hover is a mouse affordance only: a tap synthesises `pointerenter` on the
+ * very control it is about to press, which would open the tray under the
+ * finger. Touch, pen and the keyboard get the ordinary click/Arrow-down open.
+ */
+export function ToolPicker({
+  tools = CANVAS_TOOLS,
+  active,
+  open,
+  onOpenChange,
+  onSelect,
+}: {
+  tools?: readonly CanvasToolDef[];
+  active: CanvasTool;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSelect: (tool: CanvasTool) => void;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const grace = useRef(0);
+  /** Hover must not steal focus; a deliberate open must hand it to the list. */
+  const focusOnOpen = useRef(false);
+  const current = tools.find((tool) => tool.id === active) ?? tools[0]!;
+
+  const cancelGrace = () => {
+    if (grace.current) window.clearTimeout(grace.current);
+    grace.current = 0;
+  };
+  useEffect(() => cancelGrace, []);
+
+  useEffect(() => {
+    if (!open || !focusOnOpen.current) return;
+    menuRef.current?.querySelector<HTMLElement>(MENU_ITEM)?.focus({ preventScroll: true });
+  }, [open]);
+
+  // A press anywhere else closes it. Deliberately NOT the shared dismiss
+  // effect the other dropdowns use: that one eats the press when it lands on
+  // the canvas, and a tray that opened by itself on the way past must never
+  // cost the user the click they were actually going for.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: Event) => {
+      if ((event.target as HTMLElement | null)?.closest(".as-toolpicker")) return;
+      cancelGrace();
+      onOpenChange(false);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [open, onOpenChange]);
+
+  return (
+    <div
+      className="as-toolpicker"
+      onPointerEnter={(event) => {
+        if (event.pointerType !== "mouse") return;
+        cancelGrace();
+        focusOnOpen.current = false;
+        onOpenChange(true);
+      }}
+      onPointerLeave={(event) => {
+        if (event.pointerType !== "mouse") return;
+        cancelGrace();
+        // The button and the tray below it are two boxes with a gap between
+        // them; a pointer crossing that gap must not close what it is
+        // travelling towards.
+        grace.current = window.setTimeout(() => onOpenChange(false), 180);
+      }}
+    >
+      <button
+        type="button"
+        className={`as-btn as-btn--tool${open || active !== "cursor" ? " as-btn--on" : ""}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={`${current.label} — ${current.hint} (${current.shortcut})`}
+        onClick={() => {
+          cancelGrace();
+          focusOnOpen.current = true;
+          onOpenChange(!open);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowDown" || open) return;
+          event.preventDefault();
+          focusOnOpen.current = true;
+          onOpenChange(true);
+        }}
+      >
+        <SvgIcon paths={current.paths} size={15} />
+        {current.label} ▾
+      </button>
+      {open ? (
+        <div
+          ref={menuRef}
+          className="as-menu as-menu--left as-menu--tools"
+          role="menu"
+          aria-label="Canvas tools"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              cancelGrace();
+              onOpenChange(false);
+              return;
+            }
+            menuKeyNav(menuRef, event);
+          }}
+        >
+          {tools.map((tool) => (
+            <button
+              key={tool.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={tool.id === active}
+              className={`as-menu__item as-tool${tool.id === active ? " as-tool--on" : ""}`}
+              onClick={() => {
+                cancelGrace();
+                onSelect(tool.id);
+                onOpenChange(false);
+              }}
+            >
+              <SvgIcon paths={tool.paths} size={17} className="as-tool__icon" />
+              <span className="as-tool__text">
+                <span className="as-menu__label">{tool.label}</span>
+                <span className="as-menu__hint">{tool.hint}</span>
+              </span>
+              <kbd className="as-tool__key">{tool.shortcut}</kbd>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * The revision notice pinned in a canvas corner. Document data, not view
@@ -672,6 +876,16 @@ export const SHORTCUT_GROUPS: Record<"architecture" | "sequence", ReadonlyArray<
         ["Delete", "Delete selection (cascades into groups)"],
         ["Esc", "Close a panel · drop the selection · leave a level"],
         ["?", "This sheet"],
+      ],
+    },
+    {
+      title: "Tools",
+      items: [
+        ["V", "Cursor — click to select, drag a box to move it"],
+        ["M", "Select — drag anywhere to rubber-band"],
+        ["H", "Pan — drag to move the canvas"],
+        ["⇧/mod+click", "Add to the selection"],
+        ["⇧/mod+drag", "Rubber-band into the existing selection"],
       ],
     },
     {

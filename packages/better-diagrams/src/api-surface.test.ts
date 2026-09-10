@@ -80,6 +80,10 @@ const CONTRACT_EXPORTS = [
   // zones
   "ZONE_OUTLINES",
   "ZONE_SHAPES",
+  // paths
+  "PATH_COLOR_CYCLE",
+  "pathColor",
+  "resolvePath",
   // layout
   "autoLayout",
   "hasOverlaps",
@@ -222,6 +226,12 @@ const REACT_EXPORTS = [
   "paletteFromTheme",
   "DARK_THEME",
   "LIGHT_THEME",
+  // presentation mode (technical / marketing)
+  "STUDIO_MODES",
+  "DEFAULT_STUDIO_MODE",
+  "resolveStudioMode",
+  "modeClassName",
+  "modeLayoutOptions",
   // chrome
   "BrandMark",
   "DateChip",

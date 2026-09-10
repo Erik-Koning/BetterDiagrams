@@ -32,6 +32,7 @@ import { ALL_CLOUD_KIND_IDS } from "./cloud";
 import { normalizeDate, type DiagramDate } from "./timeline";
 import { parseLlmJsonReport } from "./json-repair";
 import { wrappedLineCount } from "./text";
+import { validatePaths, type DiagramPath, type PathGlow } from "./paths";
 
 // ─── Vocabulary ──────────────────────────────────────────────────────────────
 
@@ -91,6 +92,36 @@ export const ICON_NAMES = [
   "box",
   "shield",
   "sparkle",
+  // Second wave — see BUILTIN_ICON_PATHS for what each one is FOR. Appended,
+  // never interleaved: this order is the order of the inspector's picker, and
+  // a reader who knows where `gear` sits should still find it there.
+  "key",
+  "chart",
+  "search",
+  "filter",
+  "folder",
+  "sync",
+  "cpu",
+  "terminal",
+  "balance",
+  "share",
+  "grid",
+  "branch",
+  "clock",
+  "calendar",
+  "bell",
+  "card",
+  "cart",
+  "activity",
+  "eye",
+  "warning",
+  "check",
+  "link",
+  "image",
+  "video",
+  "pin",
+  "robot",
+  "flask",
 ] as const;
 export type IconName = (typeof ICON_NAMES)[number] | (string & {});
 
@@ -550,6 +581,12 @@ export interface DiagramTemplate {
   zones?: DiagramZone[];
   nodes: DiagramNode[];
   edges: DiagramEdge[];
+  /**
+   * Named flows the reader can light up — see `paths.ts`. Optional for the
+   * same reason zones are: a document without them is exactly the document
+   * this schema described before paths existed.
+   */
+  paths?: DiagramPath[];
 }
 
 export const EMPTY_TEMPLATE: DiagramTemplate = { version: 1, nodes: [], edges: [] };
@@ -569,6 +606,7 @@ const TEMPLATE_KEY_MAP: Record<keyof DiagramTemplate, true> = {
   zones: true,
   nodes: true,
   edges: true,
+  paths: true,
 };
 export const TEMPLATE_KEYS: readonly string[] = Object.keys(TEMPLATE_KEY_MAP);
 
@@ -750,7 +788,7 @@ export function buildSystemPrompt(opts: PromptOptions = {}): string {
       : `Use it to show provider-specific services: one node per provider's equivalent service, each carrying only its own provider id.`;
 
   return `You convert software requirements, source code, or natural-language descriptions into an architecture diagram template. Respond with ONLY compact valid JSON (no markdown fences, no commentary) matching:
-{"version":1,"meta":{"title":"Name","routing":"${routings}","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${zoneProvider}"],"provider":"${zoneProvider}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","providers":[],"direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":""${geo ? `,"routing":"${routings}"` : ""},"date":"YYYY-MM-DD"}]}
+{"version":1,"meta":{"title":"Name","routing":"${routings}","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${zoneProvider}"],"provider":"${zoneProvider}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","providers":[],"direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":""${geo ? `,"routing":"${routings}"` : ""},"date":"YYYY-MM-DD"}],"paths":[{"id":"slug","title":"Name","steps":["nodeId","edgeId","nodeId"],"color":"${colors}","description":""}]}
 Rules:
 - "group" = boundary (VPC, cluster, tier, bounded context). Children set parentId${geo ? "; child x/y are RELATIVE to the group's top-left. Size groups to contain all children (+24px sides, +48px top). Children of a NON-group parent use small local coordinates starting near 0,0 (their own drilled canvas); never size the parent to contain them." : "."}
 - "text" = free annotation; put the sentence in label, fontSize 12-16${geo ? ", w~300 h~60" : ""}, no edges.
@@ -761,6 +799,7 @@ Rules:
 - ${geo ? "Regular nodes: w 160-200, h 64-84. Pick" : "Pick"} a fitting icon. description is an optional one-line tech detail (C4 style, e.g. "Node.js / Express").
 - Edge style semantics: dashed = async/event-driven, dotted = cache/optional/telemetry, solid = synchronous. Vary color by concern (e.g. amber = data, violet = messaging).${geo ? " labelT (0.15-0.85) slides the label along the arrow to avoid collisions." : ""}
 - Edge "tech" = protocol/format, C4 style ("JSON/HTTPS", "gRPC", "SQL"); omit when obvious. "direction":"both" for genuinely bidirectional links, "none" for plain association; omit for normal flow. When the user asks for a request flow or sequence, number the participating edges with "seq":1,2,3… in traversal order; omit seq otherwise.
+- PATHS: "paths" names end-to-end flows the reader can light up on the canvas. "steps" is the ORDERED list of node ids the flow visits, start to end; put an edge id between two nodes only when several edges join them (otherwise the connecting edge is inferred). Emit 1-4 paths of 3-8 steps when the user describes a request flow, a user journey, or asks to trace/highlight a sequence; omit the key otherwise. "color" is optional — unset paths each take their own colour.
 - meta.routing "orthogonal" gives right-angle connectors (formal/dense diagrams), "straight" direct point-to-point lines (classic flow charts); omit for curved. meta.title names the diagram. meta.versionTag labels the revision ("v2.1", "2026-Q3 draft") when the user gives one; omit otherwise.
 - Node "tags" = short lowercase labels for cross-cutting concerns the user mentions ("pci","gdpr","deprecated","planned"); omit when none. Node "url" = deep link to docs/repo if the user supplies one; omit otherwise. Node "team" = the owning or contact team when the user names one ("Payments", "Platform"); omit otherwise. Node "status" = lifecycle stage when stated: "planned" for future work, "stubbed" for scaffolding that exists but does nothing yet, "dark" for built-and-shipped but not yet enabled, "deprecated" for being sunset; omit for normal active components. Text notes draw a subtle box by default; set "plain":true only when the user wants bare text with no outline.
 - Node text layout, all optional and all rarely needed — omit unless the user asks: "textAlign":"center"/"right" (default left), "textVAlign":"top"/"bottom" (default middle), "wrap":true to break a long label across lines instead of ellipsising it on one (the editor grows the node's height to fit). "fontSize" sets the label size in px (default 13).
@@ -1065,10 +1104,20 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
     e.id = id;
   }
 
+  // Paths are judged against the FINAL ids: a step naming a node or edge
+  // that was dropped or renamed above is dropped with it.
+  const paths = validatePaths(r.paths, {
+    nodeIds: new Set(nodes.map((n) => n.id)),
+    edgeIds: edgeSeen,
+    colors: EDGE_COLORS,
+  });
+
   const out: DiagramTemplate = { version: 1, nodes, edges };
   // Only attach `zones` when there are some, so a zone-less document
   // round-trips byte-identical to what it was before zones existed.
   if (zones.length) out.zones = zones;
+  // Same rule for paths.
+  if (paths.length) out.paths = paths;
   if (r.meta && typeof r.meta === "object") {
     const meta: NonNullable<DiagramTemplate["meta"]> = { ...r.meta };
     const versionTag = typeof meta.versionTag === "string" ? meta.versionTag.trim() : "";
@@ -2302,6 +2351,13 @@ export type DiagramEdgeData = {
    * cannot reach it. The flag is how the label learns to fade with its line.
    */
   future?: boolean;
+  /**
+   * Set only by the path view pass: this edge is on one or more LIT paths.
+   * View-only, like `future`, and on the data for the same reason — the glow
+   * and its dash flow are drawn by the edge component, which is the only
+   * thing that knows the line's geometry. Never persisted.
+   */
+  pathGlow?: PathGlow[];
 };
 
 export type RFNode = {
@@ -2773,6 +2829,12 @@ export function fromReactFlow(
   opts: ValidateOptions & {
     meta?: DiagramTemplate["meta"];
     /**
+     * The document's paths. They have no canvas representation, so like
+     * `meta` they ride through; absent, `base.paths` serves. Re-validated
+     * against the rebuilt ids, so a deleted node leaves every path it was on.
+     */
+    paths?: DiagramPath[];
+    /**
      * The document the React Flow state was derived from.
      *
      * REQUIRED whenever zones are in play. `toReactFlow` omits nodes hidden by
@@ -2955,6 +3017,7 @@ export function fromReactFlow(
     : opts.carryZones && opts.base?.zones?.length
       ? opts.base.zones
       : [];
+  const carriedPaths = opts.paths ?? opts.base?.paths;
   return validateTemplate(
     {
       version: 1,
@@ -2962,6 +3025,7 @@ export function fromReactFlow(
       ...(carriedZones.length ? { zones: carriedZones } : {}),
       nodes: built,
       edges: builtEdges,
+      ...(carriedPaths?.length ? { paths: carriedPaths } : {}),
     },
     opts,
   );
@@ -3072,5 +3136,11 @@ export const EXAMPLE_ZONED_TEMPLATE: DiagramTemplate = {
     // Pushed along the curve so the label clears the Redis cylinder it used
     // to be printed on top of.
     { id: "z8", source: "api", target: "pay", label: "charge", labelT: 0.78, style: "solid", color: "emerald" },
+  ],
+  // Two flows to light up from the Paths menu. The first names only nodes —
+  // its edges are inferred; the second spells out its edges and its colour.
+  paths: [
+    { id: "checkout", title: "Checkout charge", steps: ["cdn", "api", "pay"] },
+    { id: "jobs", title: "Background job", steps: ["api", "z6", "q", "z7", "wrk"], color: "violet" },
   ],
 };

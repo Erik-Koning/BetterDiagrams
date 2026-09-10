@@ -112,6 +112,14 @@ export interface ExportContext<TDoc = DiagramTemplate> {
    * the concrete shape is `ExportPalette` from the exporters.
    */
   palette?: Record<string, string>;
+  /**
+   * Which presentation mode the editor is showing — `"technical"` (the
+   * default) or `"marketing"`. A picture exporter has to dress the drawing the
+   * way the screen is dressing it; a document exporter ignores it, because a
+   * mode changes nothing the document stores. Untyped as a plain string to
+   * keep this module cycle-free; `StudioMode` in theme.ts is the shape.
+   */
+  mode?: string;
 }
 
 export interface ExportResult {

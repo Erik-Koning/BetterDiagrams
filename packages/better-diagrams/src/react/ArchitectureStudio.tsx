@@ -35,7 +35,9 @@ import {
   useReactFlow,
   type Connection,
   type Edge,
+  type EdgeChange,
   type Node,
+  type NodeChange,
   type OnConnectEnd,
   type OnSelectionChangeParams,
 } from "@xyflow/react";
@@ -104,6 +106,8 @@ import {
   type ZoneBox,
   type ZoneNodeData,
 } from "../contract/schema";
+import { pathColor, type DiagramPath } from "../contract/paths";
+import { applyPathView, buildPathGlowIndex } from "./path-view";
 import {
   DEFAULT_POLYGON_POINTS,
   ZONE_OUTLINES,
@@ -140,10 +144,13 @@ import {
   TimelineScrubber,
   levelLabel,
   ToolbarMenu,
+  ToolPicker,
   VersionTagChip,
+  type CanvasTool,
   type StudioFile,
   type StudioFileInit,
 } from "./chrome";
+import { useMarqueeSelect } from "./marquee";
 import {
   WelcomeModal,
   clearWelcomeSuppression,
@@ -188,7 +195,15 @@ import { NODE_TYPES } from "./nodes";
 import { EDGE_TYPES } from "./edges";
 import { topDropTarget } from "./dangling";
 import { StudioContext } from "./context";
-import { paletteFromTheme, themeToStyle, type Theme } from "./theme";
+import {
+  modeClassName,
+  modeLayoutOptions,
+  paletteFromTheme,
+  resolveStudioMode,
+  themeToStyle,
+  type StudioMode,
+  type Theme,
+} from "./theme";
 import { useHistory, type Snapshot } from "./history";
 import {
   buildRefineMessage,
@@ -207,6 +222,8 @@ const DEFAULT_EDGE_OPTIONS = { zIndex: EDGE_Z_INDEX };
  * — a lift of one band would only reach the things nested on top of it.
  */
 const SELECT_ELEVATION = 100_000;
+/** A stable empty list, so a path-less document does not re-run every memo keyed on it. */
+const EMPTY_PATHS: readonly DiagramPath[] = [];
 
 /**
  * How far a SELECTED edge floats — above a selected node, so its endpoint and
@@ -256,6 +273,16 @@ export interface ArchitectureStudioProps {
   registry?: RegistryExtensions;
   /** Override design tokens. */
   theme?: Theme;
+  /**
+   * Presentation mode. `"technical"` (the default) is the dense, exact look
+   * this shipped with; `"marketing"` restyles the same document for a slide
+   * or a landing page — larger icons and type, a soft per-kind gradient on
+   * every card, wider auto-layout spacing, and the labels a lay reader would
+   * find redundant tucked away. Nothing else changes: every tool, export and
+   * keyboard shortcut works identically in both. Unknown values fall back to
+   * technical.
+   */
+  mode?: StudioMode;
   /** Supply to enable the AI panel. Omit and no network code runs. */
   generate?: DiagramGenerator;
   /** Base name for exported files. Defaults to "architecture". */
@@ -423,6 +450,7 @@ function StudioInner({
   readOnly = false,
   registry: registryExtensions,
   theme,
+  mode,
   generate,
   filename = "architecture",
   minimap = true,
@@ -447,6 +475,11 @@ function StudioInner({
 }: ArchitectureStudioProps) {
   const registry = useMemo(() => createRegistry(registryExtensions), [registryExtensions]);
   const flow = useReactFlow();
+  const studioMode = resolveStudioMode(mode);
+  // Read by effects that must NOT re-run on a mode flip (the controlled-value
+  // sync would re-adopt a content doc and drop the edits since).
+  const studioModeRef = useRef(studioMode);
+  studioModeRef.current = studioMode;
 
   const initialTemplate = useMemo(
     // layoutIfUnpositioned keeps the split contract at the host door too: a
@@ -455,6 +488,7 @@ function StudioInner({
     () =>
       layoutIfUnpositioned(
         validateTemplate(value ?? defaultValue ?? EMPTY_TEMPLATE, registryOpts(registry)),
+        modeLayoutOptions(studioMode),
       ),
     // Only for first mount; `value` changes are handled by the sync effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -465,8 +499,51 @@ function StudioInner({
     [initialTemplate, registry, defaultShowHidden],
   );
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialFlow.nodes as Node[]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialFlow.edges as Edge[]);
+  const [nodes, setNodes, flowNodesChange] = useNodesState<Node>(initialFlow.nodes as Node[]);
+  const [edges, setEdges, flowEdgesChange] = useEdgesState<Edge>(initialFlow.edges as Edge[]);
+
+  /**
+   * What was selected when an additive rubber band started — or null.
+   *
+   * React Flow's own band (the Cursor tool's) calls `resetSelectedElements()`
+   * the moment the drag passes its click threshold and then re-derives the
+   * selection from the band on every frame, so holding ⌘ or ⇧ did nothing:
+   * the second band replaced the first selection instead of adding to it. The
+   * pre-drag set is snapshotted on the pointerdown that starts the gesture and
+   * put back after each of React Flow's own select changes, so it stays
+   * visibly selected THROUGHOUT the drag rather than blinking out and
+   * reappearing at the end. The Select tool's band does its own merging (see
+   * marquee.ts) and never arms this.
+   */
+  const mergeBase = useRef<{ nodes: Set<string>; edges: Set<string> } | null>(null);
+
+  const onNodesChange = useCallback(
+    (changes: NodeChange<Node>[]) => {
+      flowNodesChange(changes);
+      const base = mergeBase.current;
+      if (!base?.nodes.size || !changes.some((change) => change.type === "select")) return;
+      setNodes((current) =>
+        current.some((n) => !n.selected && base.nodes.has(n.id))
+          ? current.map((n) => (!n.selected && base.nodes.has(n.id) ? { ...n, selected: true } : n))
+          : current,
+      );
+    },
+    [flowNodesChange, setNodes],
+  );
+
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange<Edge>[]) => {
+      flowEdgesChange(changes);
+      const base = mergeBase.current;
+      if (!base?.edges.size || !changes.some((change) => change.type === "select")) return;
+      setEdges((current) =>
+        current.some((e) => !e.selected && base.edges.has(e.id))
+          ? current.map((e) => (!e.selected && base.edges.has(e.id) ? { ...e, selected: true } : e))
+          : current,
+      );
+    },
+    [flowEdgesChange, setEdges],
+  );
   const history = useHistory({
     nodes: initialFlow.nodes as Node[],
     edges: initialFlow.edges as Edge[],
@@ -505,8 +582,24 @@ function StudioInner({
    * menu closes whichever other menu was open — no two-menus-at-once states.
    */
   const [openMenu, setOpenMenu] = useState<
-    "files" | "insert" | "arrange" | "view" | "checks" | "export" | null
+    "files" | "insert" | "arrange" | "view" | "paths" | "checks" | "export" | null
   >(null);
+  /**
+   * What a press and a drag on the canvas mean. See CANVAS_TOOLS in chrome.tsx.
+   *
+   * `cursor` is exactly the canvas this editor has always had, so the tray is
+   * additive: nobody who never opens it notices it exists.
+   */
+  const [tool, setTool] = useState<CanvasTool>("cursor");
+  /**
+   * The tool tray, deliberately NOT in the `openMenu` slot above.
+   *
+   * That slot's dismiss handler eats the press that closes a menu when it
+   * lands on the canvas — right for a menu you opened on purpose, wrong for a
+   * tray that opens by itself when the pointer passes over it, which would
+   * then cost the user the click they were actually going for.
+   */
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   /** The `?` shortcuts sheet. */
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -520,6 +613,12 @@ function StudioInner({
   const [zoom, setZoom] = useState(1);
   const [showHidden, setShowHidden] = useState(defaultShowHidden);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
+  /**
+   * Which of the document's paths are lit. View state like the tag filter —
+   * never in the document, never in undo. Ids that stop existing (the path
+   * was edited away in JSON) are simply never matched, so no pruning.
+   */
+  const [activePathIds, setActivePathIds] = useState<string[]>([]);
   const [showTeams, setShowTeams] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -577,6 +676,7 @@ function StudioInner({
   const linkInputRef = useRef<HTMLInputElement>(null);
   /** The component's outermost element — how it tells its own keys from the host's. */
   const rootRef = useRef<HTMLDivElement>(null);
+
   /** Identity for the keyboard claim. See `activeStudio`. */
   const studioId = useMemo(() => Symbol("studio"), []);
   // The first editor on the page claims the keyboard, so a lone one works
@@ -813,7 +913,10 @@ function StudioInner({
     // every render. layoutIfUnpositioned is a no-op on anything this editor
     // ever emitted (always placed), so the echo guard is unaffected; it only
     // fires when the host swaps in a CONTENT doc, which lays itself out.
-    const validated = layoutIfUnpositioned(validateTemplate(value, registryOpts(registry)));
+    const validated = layoutIfUnpositioned(
+      validateTemplate(value, registryOpts(registry)),
+      modeLayoutOptions(studioModeRef.current),
+    );
     const json = JSON.stringify(validated);
     if (json === lastEmitted.current) return; // the echo of our own onChange
 
@@ -1247,6 +1350,21 @@ function StudioInner({
   // ── Tag filter + routing toggle ───────────────────────────────────────────
 
   /** Every tag any node carries, for the filter dropdown. */
+  // ── Paths: the document's named flows, and which of them are lit ─────────
+  const paths = template.paths ?? EMPTY_PATHS;
+  /** The lit paths in document order, each with the colour it always wears. */
+  const activePaths = useMemo(
+    () =>
+      paths
+        .map((path, i) => ({ id: path.id, title: path.title, color: pathColor(path, i) }))
+        .filter((p) => activePathIds.includes(p.id)),
+    [paths, activePathIds],
+  );
+  const pathGlowIndex = useMemo(
+    () => buildPathGlowIndex(template, activePathIds),
+    [template, activePathIds],
+  );
+
   const allTags = useMemo(() => {
     const out: string[] = [];
     for (const n of template.nodes) for (const t of n.tags ?? []) if (!out.includes(t)) out.push(t);
@@ -1301,7 +1419,12 @@ function StudioInner({
         const raw = JSON.parse(await file.text());
         // A content doc as the baseline lays itself out — its removed nodes
         // render in the diff overlay, and the origin pile-up is not a layout.
-        setCompareTemplate(layoutIfUnpositioned(validateTemplate(raw, registryOpts(registry))));
+        setCompareTemplate(
+          layoutIfUnpositioned(
+            validateTemplate(raw, registryOpts(registry)),
+            modeLayoutOptions(studioMode),
+          ),
+        );
         // Compare takes over the canvas; leaving the scrubber "on" underneath
         // would make the toolbar claim a mode the canvas is not in.
         setTimelineCursor(null);
@@ -1312,6 +1435,50 @@ function StudioInner({
       }
     },
     [registry, showToast],
+  );
+
+  // ── Canvas tools ──────────────────────────────────────────────────────────
+  //
+  // Below compare mode rather than up with the other refs: both gestures have
+  // to stand down while DiffCanvas is on screen. It renders its own
+  // <ReactFlow> — with its own pane — inside this canvas, so a band there
+  // would draw over a read-only diff and quietly re-select the editor's
+  // elements underneath it, in coordinates taken from a flow that is no longer
+  // mounted.
+
+  /**
+   * The Select tool's rubber band — ours, not React Flow's.
+   *
+   * React Flow only starts a band on a press that lands on the bare pane, so
+   * its band cannot begin on top of a box; and it resets the selection at the
+   * start of every drag, so it cannot merge. Both are the point of the tool.
+   */
+  const banding = tool === "select" && !activeDiffBase;
+  const { bandRef, onPointerDownCapture: onMarqueePointerDown } = useMarqueeSelect({
+    enabled: banding,
+    surfaceRef: canvasRef,
+    flow,
+    setNodes,
+    setEdges,
+  });
+
+  const onCanvasPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      onMarqueePointerDown(event);
+      mergeBase.current = null;
+      if (activeDiffBase) return;
+      if (event.button !== 0 || !(event.metaKey || event.ctrlKey || event.shiftKey)) return;
+      // Only a band gesture arms the merge. A modifier-CLICK on a box is React
+      // Flow's own add/remove toggle, and restoring the pre-click set would
+      // undo every remove — so this reads the bare pane and nothing else.
+      const target = event.target as HTMLElement | null;
+      if (!target?.classList.contains("react-flow__pane")) return;
+      mergeBase.current = {
+        nodes: new Set(flow.getNodes().filter((n) => n.selected).map((n) => n.id)),
+        edges: new Set(flow.getEdges().filter((e) => e.selected).map((e) => e.id)),
+      };
+    },
+    [activeDiffBase, flow, onMarqueePointerDown],
   );
 
   // ── Timeline mode ─────────────────────────────────────────────────────────
@@ -1376,7 +1543,10 @@ function StudioInner({
    * instead of a full rebuild.
    */
   const { nodes: viewNodes, edges: viewEdges } = useMemo(() => {
-    const view = applyTimelineView(nodes, edges, timelineFutureIds, timelineFuture);
+    const scrubbed = applyTimelineView(nodes, edges, timelineFutureIds, timelineFuture);
+    // Lit paths glow. After the timeline pass (a hidden node stays hidden),
+    // before the lifts below, which append their classes rather than replace.
+    const view = applyPathView(scrubbed.nodes, scrubbed.edges, pathGlowIndex);
     // Manual z-index mode (see the <ReactFlow> props) drops React Flow's
     // built-in elevate-on-select, so restore it here as a display pass: a
     // selected node floats above whatever it is dragged across. Containers
@@ -1408,7 +1578,7 @@ function StudioInner({
         e.selected ? { ...e, zIndex: (e.zIndex ?? 0) + SELECTED_EDGE_ELEVATION } : e,
       ),
     };
-  }, [nodes, edges, timelineFutureIds, timelineFuture, dropTargetId]);
+  }, [nodes, edges, timelineFutureIds, timelineFuture, dropTargetId, pathGlowIndex]);
 
   useEffect(() => {
     timelineAtRef.current = timelineAt;
@@ -1466,12 +1636,13 @@ function StudioInner({
     applyTemplate(
       autoLayout(templateRef.current, {
         containerKinds: registry.containerKinds,
+        ...modeLayoutOptions(studioMode),
         ...(focus ? { frames: { drill: focus } } : {}),
       }),
       { fit: true },
     );
     showToast(focus ? "Tidied this level" : "Tidied");
-  }, [readOnly, applyTemplate, showToast, registry]);
+  }, [readOnly, applyTemplate, showToast, registry, studioMode]);
 
   const addZone = useCallback(() => {
     if (readOnly) return;
@@ -2493,10 +2664,18 @@ function StudioInner({
   const closeContext = useCallback(() => setContextMenu(null), []);
 
   const toggleMenu = useCallback(
-    (id: "files" | "insert" | "arrange" | "view" | "checks" | "export") =>
-      setOpenMenu((current) => (current === id ? null : id)),
+    (id: "files" | "insert" | "arrange" | "view" | "paths" | "checks" | "export") => {
+      setToolsOpen(false);
+      setOpenMenu((current) => (current === id ? null : id));
+    },
     [],
   );
+
+  /** Opening the tool tray closes whichever dropdown was up, and vice versa. */
+  const openTools = useCallback((open: boolean) => {
+    setToolsOpen(open);
+    if (open) setOpenMenu(null);
+  }, []);
 
   // Any open dropdown closes on a click outside its own wrapper. A single
   // document-level listener serves every menu, so no menu needs its own
@@ -2603,7 +2782,9 @@ function StudioInner({
             );
           }
         }
-        const result = await exporter.run({ template: subject, registry, filename, palette: exportPalette });
+        // The mode goes with it: a picture exported out of marketing mode has
+        // to come back dressed the way the screen was dressing it.
+        const result = await exporter.run({ template: subject, registry, filename, palette: exportPalette, mode: studioMode });
         if (result) {
           download(result.blob, result.filename);
           showToast(`Exported ${result.filename}`);
@@ -2613,7 +2794,7 @@ function StudioInner({
         setPanelOpen(true);
       }
     },
-    [registry, template, filename, exportPalette, showToast, timelineActive, timelineAt, timelineFuture, focusId, exportSelectionOnly, selectedDocNodeIds, selectedZoneIds],
+    [registry, template, filename, exportPalette, studioMode, showToast, timelineActive, timelineAt, timelineFuture, focusId, exportSelectionOnly, selectedDocNodeIds, selectedZoneIds],
   );
 
   const stateAxes = useMemo(() => templateStateAxes(template), [template]);
@@ -2665,8 +2846,8 @@ function StudioInner({
               ? scopedView(doc, focusId, { containerKinds: registry.containerKinds })
               : doc;
           },
-          renderSvg: (doc) => renderTemplateToSvg(doc, registry, exportPalette),
-          renderCanvas: (doc) => renderTemplateToCanvas(doc, registry, 2, exportPalette),
+          renderSvg: (doc) => renderTemplateToSvg(doc, registry, exportPalette, { mode: studioMode }),
+          renderCanvas: (doc) => renderTemplateToCanvas(doc, registry, 2, exportPalette, { mode: studioMode }),
         });
         download(result.blob, result.filename);
         showToast(
@@ -2679,7 +2860,7 @@ function StudioInner({
         setPanelOpen(true);
       }
     },
-    [pendingExport, runDirectExport, filename, stateAxes, template, registry, exportPalette, showToast, focusId],
+    [pendingExport, runDirectExport, filename, stateAxes, template, registry, exportPalette, studioMode, showToast, focusId],
   );
 
   const loadFile = useCallback(
@@ -2717,7 +2898,12 @@ function StudioInner({
           : raw;
         // A content doc (or any never-placed JSON) lays itself out, exactly
         // like the welcome modal's paste path.
-        applyTemplate(layoutIfUnpositioned(validateTemplate(incoming, registryOpts(registry))));
+        applyTemplate(
+          layoutIfUnpositioned(
+            validateTemplate(incoming, registryOpts(registry)),
+            modeLayoutOptions(studioMode),
+          ),
+        );
         setError("");
         showToast(`Loaded ${file.name}`);
       } catch (err) {
@@ -2921,8 +3107,8 @@ function StudioInner({
   );
 
   const parseWelcomeJson = useCallback(
-    (text: string) => parseArchitectureText(text, registryOpts(registry)),
-    [registry],
+    (text: string) => parseArchitectureText(text, registryOpts(registry), modeLayoutOptions(studioMode)),
+    [registry, studioMode],
   );
 
   const handleWelcomeInsert = useCallback(
@@ -3105,6 +3291,7 @@ function StudioInner({
           // arrangement to protect on ANY level, so every frame is fair game.
           next = autoLayout(next, {
             containerKinds: registry.containerKinds,
+            ...modeLayoutOptions(studioMode),
             frames: "all",
           });
         }
@@ -3159,7 +3346,7 @@ function StudioInner({
         abortRef.current = null;
       }
     },
-    [generate, busy, createInput, refineInput, template, systemPrompt, refineSystemPrompt, registry, applyTemplate, showToast],
+    [generate, busy, createInput, refineInput, template, systemPrompt, refineSystemPrompt, registry, applyTemplate, showToast, studioMode],
   );
 
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -3225,6 +3412,19 @@ function StudioInner({
   const selectedZoneNode = singleSelected && isZoneNodeId(singleSelected.id) ? singleSelected : undefined;
   const selectedNode = singleSelected && !isZoneNodeId(singleSelected.id) ? singleSelected : undefined;
   const selectedEdge = selectedEdgeIds.length === 1 ? edges.find((e) => e.id === selectedEdgeIds[0]) : undefined;
+
+  /**
+   * The lines a straighten would actually change: those carrying hand-drawn
+   * waypoints, narrowed to the selection when there IS one. Selecting nothing
+   * means "the whole canvas", the same scope Tidy uses — and the count is
+   * what the Arrange item disables on and says out loud, so the menu never
+   * offers an action that would do nothing.
+   */
+  const routedEdgeIds = useMemo(() => {
+    const routed = edges.filter((e) => !!(e.data as DiagramEdgeData | undefined)?.points?.length);
+    const inSelection = routed.filter((e) => selectedEdgeIds.includes(e.id));
+    return (selectedEdgeIds.length ? inSelection : routed).map((e) => e.id);
+  }, [edges, selectedEdgeIds]);
   /** What a node is called, for the bar that says what a line joins. */
   const nodeLabelOf = (id: string): string =>
     ((nodes.find((n) => n.id === id)?.data as DiagramNodeData | undefined)?.label ?? id);
@@ -3259,6 +3459,42 @@ function StudioInner({
       commitLater();
     },
     [readOnly, setEdges, commitLater],
+  );
+
+  /**
+   * Drop the hand-drawn bends from connections, so they route themselves
+   * again. `ids` names which lines; omit it for every line on the canvas.
+   *
+   * ONE `setEdges` and ONE commit for the whole set, so ⌘Z puts every route
+   * back in a single step. A per-edge loop only looked like one entry because
+   * identical snapshots collapse (see history.ts) — that is a coincidence of
+   * batching, not a promise, and it stops being true the moment a straighten
+   * is bundled with anything else. Returns how many lines actually changed,
+   * which is what the toast reports and what disables the menu item.
+   */
+  const clearEdgeRoutes = useCallback(
+    (ids?: readonly string[]): number => {
+      if (readOnly) return 0;
+      const only = ids ? new Set(ids) : null;
+      const drop = new Set(
+        flow
+          .getEdges()
+          .filter((e) => (!only || only.has(e.id)) && !!(e.data as DiagramEdgeData | undefined)?.points?.length)
+          .map((e) => e.id),
+      );
+      if (!drop.size) return 0;
+      setEdges((current) =>
+        current.map((e) => {
+          if (!drop.has(e.id)) return e;
+          const data = { ...(e.data as DiagramEdgeData) };
+          delete data.points;
+          return { ...e, data };
+        }),
+      );
+      commitLater();
+      return drop.size;
+    },
+    [readOnly, flow, setEdges, commitLater],
   );
 
   // The rows the selected edge's ends could attach to. Read off the canvas,
@@ -3819,6 +4055,18 @@ function StudioInner({
         return;
       }
 
+      // ── Tools. Single letters, and above the read-only guard: which tool is
+      //    active changes how you READ the canvas, not what is in it. ──
+      if (!mod && !event.altKey) {
+        const pick: Record<string, CanvasTool> = { v: "cursor", m: "select", h: "pan" };
+        if (pick[key]) {
+          event.preventDefault();
+          setTool(pick[key]!);
+          setToolsOpen(false);
+          return;
+        }
+      }
+
       // ── Rename the selection in place ──
       if (
         editing &&
@@ -3904,12 +4152,23 @@ function StudioInner({
           setShortcutsOpen(false);
           return;
         }
+        if (toolsOpen) {
+          setToolsOpen(false);
+          return;
+        }
         if (openMenu !== null) {
           setOpenMenu(null);
           return;
         }
         if (panelOpen) {
           setPanelOpen(false);
+          return;
+        }
+        // Back to the arrow, before dropping the selection: outermost first
+        // puts a mode of the canvas inside the panels and outside the
+        // selection, and a stuck tool is the likelier thing to be undoing.
+        if (tool !== "cursor") {
+          setTool("cursor");
           return;
         }
         if (selectedNodeIds.length || selectedEdgeIds.length) {
@@ -3926,7 +4185,7 @@ function StudioInner({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave]);
+  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
 
   // ── Zone resize gesture ───────────────────────────────────────────────────
   //
@@ -4030,6 +4289,7 @@ function StudioInner({
     () => ({
       registry,
       readOnly,
+      mode: studioMode,
       tagFilter,
       showTeams,
       requestCommit: commitLater,
@@ -4044,15 +4304,17 @@ function StudioInner({
       setRenamingId,
       showToast,
     }),
-    [registry, readOnly, tagFilter, showTeams, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast],
+    [registry, readOnly, studioMode, tagFilter, showTeams, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast],
   );
   const rootStyle = { ...themeToStyle(theme), ...style };
+  const modeClass = modeClassName(studioMode);
 
   return (
     <StudioContext.Provider value={studioContext}>
       <div
         ref={rootRef}
-        className={`as-root${className ? ` ${className}` : ""}`}
+        className={`as-root${modeClass ? ` ${modeClass}` : ""}${className ? ` ${className}` : ""}`}
+        data-mode={studioMode}
         style={rootStyle}
         onPointerDownCapture={() => {
           activeStudio = studioId;
@@ -4088,6 +4350,18 @@ function StudioInner({
               ✦ AI
             </button>
           ) : null}
+
+          {/* Left of Insert, and outside the read-only guard: picking a tool
+              changes how you LOOK at the canvas, which a read-only viewer
+              needs as much as an editor does. */}
+          <div className="as-toolbar__group">
+            <ToolPicker
+              active={tool}
+              open={toolsOpen}
+              onOpenChange={openTools}
+              onSelect={setTool}
+            />
+          </div>
 
           {!readOnly ? (
             <div className="as-toolbar__group">
@@ -4237,6 +4511,38 @@ function StudioInner({
                 >
                   <div className="as-menu__label">Tidy</div>
                   <div className="as-menu__hint">Arrange nodes within their zones and groups</div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  disabled={!routedEdgeIds.length}
+                  title={
+                    routedEdgeIds.length
+                      ? undefined
+                      : selectedEdgeIds.length
+                        ? "The selected connections have no hand-drawn bends"
+                        : "No connection has hand-drawn bends"
+                  }
+                  onClick={() => {
+                    const cleared = clearEdgeRoutes(routedEdgeIds);
+                    setOpenMenu(null);
+                    if (cleared) {
+                      showToast(
+                        `Cleared ${cleared} route${cleared === 1 ? "" : "s"} · ${modKey}Z to put ${cleared === 1 ? "it" : "them"} back`,
+                      );
+                    }
+                  }}
+                >
+                  <div className="as-menu__label">
+                    Clear routes
+                    {routedEdgeIds.length ? ` (${routedEdgeIds.length})` : ""}
+                  </div>
+                  <div className="as-menu__hint">
+                    {selectedEdgeIds.length
+                      ? "Drop the bends on the selected lines and let them route themselves"
+                      : "Drop every hand-drawn bend and let the lines route themselves"}
+                  </div>
                 </button>
                 <div className="as-menu__sep" role="separator" />
                 <button
@@ -4471,6 +4777,73 @@ function StudioInner({
                       </button>
                     ) : null}
                   </>
+                ) : null}
+              </ToolbarMenu>
+            </div>
+          ) : null}
+
+          {/* Paths: light up a named flow. Offered only when the document
+              names one — and not while comparing, when the diff overlay
+              stands in for the canvas the glow would land on. The count says
+              how many are lit. The rows are the same shape as the tag
+              filter's, with the path's colour in front of its title so the
+              menu doubles as a key. */}
+          {paths.length && !activeDiffBase ? (
+            <div className="as-toolbar__group">
+              <ToolbarMenu
+                label={`Paths${activePaths.length ? ` (${activePaths.length})` : ""}`}
+                title="Light up a flow through the diagram"
+                active={activePaths.length > 0}
+                open={openMenu === "paths"}
+                onToggle={() => toggleMenu("paths")}
+                menuClassName="as-menu--left"
+              >
+                <div className="as-menu__caption">Highlight a flow</div>
+                {paths.map((path, i) => (
+                  <label key={path.id} className="as-menu__check" title={path.description}>
+                    <input
+                      type="checkbox"
+                      checked={activePathIds.includes(path.id)}
+                      onChange={() =>
+                        setActivePathIds((current) =>
+                          current.includes(path.id)
+                            ? current.filter((id) => id !== path.id)
+                            : [...current, path.id],
+                        )
+                      }
+                    />
+                    <span
+                      className="as-legend__swatch"
+                      style={{ "--as-legend-color": `var(--as-edge-${pathColor(path, i)})` } as CSSProperties}
+                    />
+                    {path.title}
+                  </label>
+                ))}
+                {activePaths.length < paths.length ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="as-menu__item"
+                    onClick={() => {
+                      setActivePathIds(paths.map((path) => path.id));
+                      setOpenMenu(null);
+                    }}
+                  >
+                    <div className="as-menu__label">Select all</div>
+                  </button>
+                ) : null}
+                {activePaths.length ? (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="as-menu__item"
+                    onClick={() => {
+                      setActivePathIds([]);
+                      setOpenMenu(null);
+                    }}
+                  >
+                    <div className="as-menu__label">Clear</div>
+                  </button>
                 ) : null}
               </ToolbarMenu>
             </div>
@@ -4787,10 +5160,16 @@ function StudioInner({
 
         <div
           ref={canvasRef}
-          className={`as-canvas${dropActive ? " as-canvas--dropping" : ""}${activeDiffBase ? " as-canvas--diff" : ""}`}
+          className={`as-canvas as-canvas--tool-${tool}${dropActive ? " as-canvas--dropping" : ""}${activeDiffBase ? " as-canvas--diff" : ""}`}
           onDrop={onDrop}
           onDragOver={onDragOver}
           onDragLeave={() => setDropActive(false)}
+          // Capture, so the band is armed before React Flow's own pane
+          // handler sees the press.
+          onPointerDownCapture={onCanvasPointerDown}
+          onPointerUp={() => {
+            mergeBase.current = null;
+          }}
         >
           {aiPanelVisible ? (
             <div className="as-panel">
@@ -4876,6 +5255,11 @@ function StudioInner({
             </div>
           ) : null}
 
+          {/* The Select tool's rubber band. Positioned and shown imperatively
+              (see marquee.ts): it moves every frame, and this component is far
+              too large to re-render sixty times a second for a rectangle. */}
+          {banding ? <div ref={bandRef} className="as-marquee" hidden /> : null}
+
           {activeDiffBase && diff ? (
             <DiffCanvas base={activeDiffBase} current={template} diff={diff} />
           ) : (
@@ -4917,8 +5301,11 @@ function StudioInner({
             zIndexMode="manual"
             defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
             connectionMode={ConnectionMode.Loose}
-            nodesDraggable={!readOnly}
-            nodesConnectable={!readOnly}
+            // Only the Cursor tool moves and wires things. Under Select a drag
+            // is a band and under Pan it is a pan, so leaving nodes draggable
+            // would have every gesture start by shoving whatever it began on.
+            nodesDraggable={!readOnly && tool === "cursor"}
+            nodesConnectable={!readOnly && tool === "cursor"}
             elementsSelectable
             // The component owns Delete/Backspace so it can cascade to children.
             deleteKeyCode={null}
@@ -4936,13 +5323,23 @@ function StudioInner({
             // draw.io all extend a selection with — and it was doing nothing
             // here, so the second click replaced the selection instead.
             multiSelectionKeyCode={["Meta", "Control", "Shift"]}
+            // React Flow bands on ⇧+drag whatever `selectionOnDrag` says, and
+            // under Select that would draw a second band over ours (and under
+            // Pan, one where the user asked for a pan). Ours reads the
+            // modifier itself, so ⇧ still means "add to the selection".
+            selectionKeyCode={tool === "cursor" ? undefined : null}
             // On a COARSE pointer a one-finger drag has to pan: there is no
             // modifier to hold and no second button to pan with, so
             // rubber-band-on-drag left a touch user unable to move the canvas
             // at all. On a mouse, drag-to-select stays the default and pan
             // lives on the middle button, space, and the scroll wheel.
-            selectionOnDrag={!coarsePointer}
-            panOnDrag={coarsePointer ? true : [1, 2]}
+            //
+            // Select hands the band to ours instead (marquee.ts), and Pan puts
+            // the canvas back on the left button, which is the whole tool.
+            selectionOnDrag={tool === "cursor" && !coarsePointer}
+            panOnDrag={
+              tool === "pan" || (tool === "cursor" && coarsePointer) ? true : [1, 2]
+            }
             // Touch a box and it is in the selection. Requiring full
             // enclosure means a rubber band round "these four services" has to
             // clear every edge of every one of them, and misses whichever card
@@ -4995,28 +5392,49 @@ function StudioInner({
               />
             ) : null}
 
-            {/* Infra legend. Corner-anchored so it reads as a map key. */}
-            {legend && legendRows.length ? (
+            {/* Corner legend: the infra key, and the lit paths. One panel for
+                both — React Flow stacks nothing, so a second top-right panel
+                would sit on top of the first. Corner-anchored so it reads as
+                a map key. */}
+            {legend && (legendRows.length || activePaths.length) ? (
               <Panel position="top-right" className="as-legend">
-                <p className="as-legend__title">Infrastructure</p>
-                {legendRows.map((row) => (
-                  <div key={row.id} className="as-legend__row">
-                    <span
-                      className="as-legend__swatch"
-                      style={{ "--as-legend-color": row.def.color } as CSSProperties}
-                    />
-                    {row.def.label}
-                    {legendRows.length > 1 || row.count > 1 ? (
-                      <span className="as-legend__count">{row.count}</span>
+                {legendRows.length ? (
+                  <>
+                    <p className="as-legend__title">Infrastructure</p>
+                    {legendRows.map((row) => (
+                      <div key={row.id} className="as-legend__row">
+                        <span
+                          className="as-legend__swatch"
+                          style={{ "--as-legend-color": row.def.color } as CSSProperties}
+                        />
+                        {row.def.label}
+                        {legendRows.length > 1 || row.count > 1 ? (
+                          <span className="as-legend__count">{row.count}</span>
+                        ) : null}
+                      </div>
+                    ))}
+                    {template.nodes.length - visibility.nodes.size > 0 ? (
+                      <p className="as-legend__hidden">
+                        {template.nodes.length - visibility.nodes.size} node
+                        {template.nodes.length - visibility.nodes.size === 1 ? "" : "s"} hidden by this
+                        selection
+                      </p>
                     ) : null}
+                  </>
+                ) : null}
+                {activePaths.length ? (
+                  <div className={legendRows.length ? "as-legend__section" : undefined}>
+                    <p className="as-legend__title">Paths</p>
+                    {activePaths.map((path) => (
+                      <div key={path.id} className="as-legend__row">
+                        <span
+                          className="as-legend__swatch"
+                          style={{ "--as-legend-color": `var(--as-edge-${path.color})` } as CSSProperties}
+                        />
+                        {path.title}
+                      </div>
+                    ))}
                   </div>
-                ))}
-                {template.nodes.length - visibility.nodes.size > 0 ? (
-                  <p className="as-legend__hidden">
-                    {template.nodes.length - visibility.nodes.size} node
-                    {template.nodes.length - visibility.nodes.size === 1 ? "" : "s"} hidden by this
-                    selection
-                  </p>
                 ) : null}
               </Panel>
             ) : null}
@@ -5117,6 +5535,7 @@ function StudioInner({
                   registry={registry}
                   onPatch={patchEdge}
                   onSwapEnds={swapEdgeEnds}
+                  onClearRoute={() => clearEdgeRoutes([selectedEdge.id])}
                 />
               ) : null}
               {renderSlot(inspectorExtras)}
@@ -5337,10 +5756,13 @@ function StudioInner({
                 ) : (
                   <ContextItem
                     label="Clear route"
-                    disabled={!selectedEdge?.data?.points}
-                    onPick={() => {
-                      for (const id of selectedEdgeIds) patchEdge(id, { points: undefined });
-                    }}
+                    hint={selectedEdgeIds.length > 1 ? `${selectedEdgeIds.length} lines` : undefined}
+                    // Judged on the whole selection, not on `selectedEdge` —
+                    // that is only set for a SINGLE selected edge, so with
+                    // three bent lines picked the item greyed itself out while
+                    // the action behind it would have straightened all three.
+                    disabled={!routedEdgeIds.length}
+                    onPick={() => clearEdgeRoutes(routedEdgeIds)}
                     close={closeContext}
                   />
                 )}
@@ -6545,6 +6967,7 @@ function EdgeInspector({
   registry,
   onPatch,
   onSwapEnds,
+  onClearRoute,
 }: {
   edge: Edge;
   /** Rows of the endpoint nodes — what an end may attach to. */
@@ -6557,6 +6980,13 @@ function EdgeInspector({
   registry: ResolvedRegistry;
   onPatch: (id: string, patch: Partial<DiagramEdgeData>) => void;
   onSwapEnds: (id: string) => void;
+  /**
+   * Drop this line's waypoints. Goes through the studio's shared clear rather
+   * than a `points: undefined` patch of its own, so the inspector, the
+   * right-click menu and the Arrange item are one code path with one
+   * undo entry — they used to be two.
+   */
+  onClearRoute: () => void;
 }) {
   const data = (edge.data ?? {}) as DiagramEdgeData;
   return (
@@ -6823,8 +7253,8 @@ function EdgeInspector({
           <button
             type="button"
             className="as-btn"
-            onClick={() => onPatch(edge.id, { points: undefined })}
-            title="Remove the waypoints this line bends through (drag the line to bend it; double-click edits the label)"
+            onClick={onClearRoute}
+            title="Remove the waypoints this line bends through (drag the line to bend it; double-click edits the label) — ⌘Z restores them"
           >
             Clear route ({data.points.length})
           </button>

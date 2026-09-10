@@ -19,6 +19,19 @@
 import type { ExportPalette } from "./draw";
 import { DARK_EXPORT_PALETTE } from "./draw";
 
+/**
+ * One of the document's paths, resolved for the player: members by the tag
+ * the SVG backend stamps on their group (`node:<id>` / `edge:<id>`), with
+ * each member's position in the walk, and the colour as a hex the page can
+ * paint with (the export palette's, so a light export glows in light hues).
+ */
+export interface HtmlPathEntry {
+  id: string;
+  title: string;
+  color: string;
+  members: Array<{ el: string; step: number; steps: number; reversed?: boolean }>;
+}
+
 export interface TimelineHtmlOptions {
   /** The full standalone `<svg>` document, tagged groups included. */
   svg: string;
@@ -30,6 +43,8 @@ export interface TimelineHtmlOptions {
   palette?: Partial<ExportPalette>;
   /** Accent for the scrubber (the SVG palette has no accent of its own). */
   accent?: string;
+  /** Named flows the reader can light up from the menu. Omit for none. */
+  paths?: HtmlPathEntry[];
 }
 
 /** Rough perceptual luminance test — enough to pick between two accents. */
@@ -61,6 +76,143 @@ export function buildTimelineHtml(opts: TimelineHtmlOptions): string {
   // Dates are [-0-9] only after validation, but the JSON still goes through
   // esc-by-construction: no `<` can appear, so it cannot close the script.
   const stopsJson = JSON.stringify(opts.stops);
+  // Paths ride the same way; titles are user text, so "<" is escaped out of
+  // the script the way the multi-view page escapes its labels.
+  const paths = opts.paths ?? [];
+  const hasPaths = paths.length > 0;
+  const pathsJson = JSON.stringify(paths).replace(/</g, "\\u003c");
+  const light = isLightHex(palette.bg);
+  // Everything path-shaped is emitted only when there is a path to light, so
+  // a document without any produces exactly the page it always did.
+  const pathCss = hasPaths
+    ? `
+  /* ── Paths: a lit flow glows, pulses, and its dashes run the way it goes.
+     Overlays are extra strokes cloned from the element's own first path
+     (an edge's line, a node's body), so they follow every bend and dim with
+     their element. A light page gets a tighter, denser glow. ── */
+  .bd-swatch {
+    display: inline-block; flex: 0 0 auto; width: 10px; height: 10px; border-radius: 3px;
+    border: 1px solid var(--bd-c); background: color-mix(in srgb, var(--bd-c) 35%, transparent);
+  }
+  .bd-stage { position: relative; }
+  .bd-pathlegend {
+    position: absolute; top: 12px; right: 12px; z-index: 5; min-width: 130px; padding: 8px 10px;
+    border: 1px solid ${palette.border}; border-radius: 8px;
+    background: color-mix(in srgb, ${palette.surface} 94%, transparent); font-size: 11px;
+  }
+  .bd-pathlegend[hidden] { display: none; }
+  .bd-pathlegend__title {
+    margin: 0 0 6px; font-family: ui-monospace, Menlo, monospace; font-size: 9px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em; color: ${palette.textDim};
+  }
+  .bd-pathlegend__row { display: flex; align-items: center; gap: 7px; padding: 2px 0; }
+  @keyframes bd-pulse { 0%, 100% { opacity: 0.45; } 14% { opacity: 1; } 32% { opacity: 0.45; } }
+  @keyframes bd-flow { to { stroke-dashoffset: -22; } }
+  [data-path] {
+    --bd-cycle: calc(var(--bd-steps, 1) * 420ms);
+    --bd-delay: calc((var(--bd-step, 0) - var(--bd-steps, 1)) * 420ms);
+    stroke: var(--bd-c); pointer-events: none;
+  }
+  .bd-glowline, .bd-glowbody {
+    stroke-width: 9; stroke-linecap: round; stroke-linejoin: round;
+    stroke-opacity: ${light ? "0.85" : "0.65"}; opacity: 0.45; filter: blur(${light ? "1.5px" : "2.5px"});
+    animation: bd-pulse var(--bd-cycle) ease-in-out var(--bd-delay) infinite;
+  }
+  .bd-glowbody { stroke-width: 7; }
+  .bd-flowline {
+    stroke-width: 2.4; stroke-linecap: round; stroke-dasharray: 7 15;
+    animation: bd-flow 900ms linear infinite, bd-pulse var(--bd-cycle) ease-in-out var(--bd-delay) infinite;
+  }
+  .bd-flowline--reverse { animation-direction: reverse, normal; }
+  @media (prefers-reduced-motion: reduce) { [data-path] { animation: none !important; opacity: 0.8; } }
+`
+    : "";
+  const pathJs = hasPaths
+    ? `
+  // ── Paths: light a named flow. Runs before the timeline guard below, so an
+  //    undated document can still light its paths. ──
+  var PATHS = ${pathsJson};
+  var pathBoxes = [].slice.call(document.querySelectorAll("input.bd-path"));
+  var pathLegend = $("bd-pathlegend"), pathRows = $("bd-pathrows");
+  var STRIP = ["fill", "fill-opacity", "stroke", "stroke-opacity", "stroke-width", "stroke-dasharray", "stroke-linecap", "stroke-linejoin", "class"];
+  // Groups by their tag, looked up by key rather than by a selector built
+  // from the id: an id is free text, and a quote in one must not break this.
+  var groupsByEl = {};
+  [].slice.call(document.querySelectorAll("[data-el]")).forEach(function (g) {
+    var el = g.getAttribute("data-el");
+    (groupsByEl[el] = groupsByEl[el] || []).push(g);
+  });
+  function hasOverlay(g, id) {
+    for (var c = g.firstChild; c; c = c.nextSibling) {
+      if (c.getAttribute && c.getAttribute("data-path") === id) return true;
+    }
+    return false;
+  }
+  function overlay(src, cls, path, m, reversed) {
+    var el = src.cloneNode(false);
+    STRIP.forEach(function (a) { el.removeAttribute(a); });
+    el.setAttribute("class", cls + (reversed ? " " + cls + "--reverse" : ""));
+    el.setAttribute("data-path", path.id);
+    el.setAttribute("fill", "none");
+    el.style.setProperty("--bd-c", path.color);
+    el.style.setProperty("--bd-step", m.step);
+    el.style.setProperty("--bd-steps", m.steps);
+    return el;
+  }
+  function applyPaths() {
+    var lit = {};
+    pathBoxes.forEach(function (box) { if (box.checked) lit[box.value] = true; });
+    [].slice.call(document.querySelectorAll("[data-path]")).forEach(function (el) {
+      if (!lit[el.getAttribute("data-path")]) el.parentNode.removeChild(el);
+    });
+    var rows = [];
+    PATHS.forEach(function (path) {
+      if (!lit[path.id]) return;
+      rows.push(path);
+      path.members.forEach(function (m) {
+        (groupsByEl[m.el] || []).forEach(function (g) {
+          if (hasOverlay(g, path.id)) return;
+          // The element's own first path: an edge's line, a node's body.
+          var src = g.querySelector("path:not([data-path])");
+          if (!src) return;
+          var isEdge = m.el.indexOf("edge:") === 0;
+          g.insertBefore(overlay(src, isEdge ? "bd-glowline" : "bd-glowbody", path, m, false), g.firstChild);
+          if (isEdge) src.parentNode.insertBefore(overlay(src, "bd-flowline", path, m, !!m.reversed), src.nextSibling);
+        });
+      });
+    });
+    pathRows.textContent = "";
+    rows.forEach(function (path) {
+      var row = document.createElement("div"); row.className = "bd-pathlegend__row";
+      var sw = document.createElement("span"); sw.className = "bd-swatch"; sw.style.setProperty("--bd-c", path.color);
+      row.appendChild(sw); row.appendChild(document.createTextNode(path.title));
+      pathRows.appendChild(row);
+    });
+    pathLegend.hidden = !rows.length;
+  }
+  pathBoxes.forEach(function (box) { box.addEventListener("change", applyPaths); });
+  $("bd-paths-all").addEventListener("click", function () { pathBoxes.forEach(function (b) { b.checked = true; }); applyPaths(); });
+  $("bd-paths-none").addEventListener("click", function () { pathBoxes.forEach(function (b) { b.checked = false; }); applyPaths(); });
+`
+    : "";
+  const pathsSection = hasPaths
+    ? `
+        <div class="bd-caption">Paths</div>${paths
+          .map(
+            (p) =>
+              `\n        <label><input type="checkbox" class="bd-path" value="${esc(p.id)}" /><span class="bd-swatch" style="--bd-c:${esc(p.color)}"></span>${esc(p.title)}</label>`,
+          )
+          .join("")}
+        <button class="bd-menubtn" id="bd-paths-all">All paths</button>
+        <button class="bd-menubtn" id="bd-paths-none">No paths</button>`
+    : "";
+  const pathLegend = hasPaths
+    ? `
+    <div class="bd-pathlegend" id="bd-pathlegend" hidden>
+      <div class="bd-pathlegend__title">Paths</div>
+      <div id="bd-pathrows"></div>
+    </div>`
+    : "";
 
   const css = `
   :root { color-scheme: dark light; }
@@ -165,7 +317,7 @@ export function buildTimelineHtml(opts: TimelineHtmlOptions): string {
   .bd-el { transition: opacity 160ms; }
   .bd-dim { opacity: 0.22; filter: grayscale(1); }
   .bd-hidden { display: none; }
-  `;
+  ${pathCss}`;
 
   // The player. Plain script, no modules, nothing external; every hook is
   // looked up by id so the markup above stays the single source of structure.
@@ -200,7 +352,7 @@ export function buildTimelineHtml(opts: TimelineHtmlOptions): string {
   var full2 = $("bd-full2"); if (full2) full2.addEventListener("click", function () { dropdown.hidden = true; fullscreen(); });
   var fit = $("bd-fit");
   fit.addEventListener("change", function () { $("bd-stage").classList.toggle("fit", fit.checked); });
-
+${pathJs}
   if (!STOPS.length) return; // undated document: a plain viewer, and that is all
 
   // ── The scrubber. Cursor is a DAY; stops are where ticks and snapping live. ──
@@ -349,13 +501,13 @@ export function buildTimelineHtml(opts: TimelineHtmlOptions): string {
     <button class="bd-btn bd-btn--icon" id="bd-full" title="Full screen" aria-label="Full screen">&#x26F6;</button>
     <div class="bd-menuwrap">
       <button class="bd-btn bd-btn--icon" id="bd-menu" title="Presentation options" aria-haspopup="menu" aria-label="Presentation options">&#8943;</button>
-      <div class="bd-menu" id="bd-dropdown" hidden>${modeSection}
+      <div class="bd-menu" id="bd-dropdown" hidden>${modeSection}${pathsSection}
         <label><input type="checkbox" id="bd-fit" checked /> Fit to window</label>
         <button class="bd-menubtn" id="bd-full2">Full screen</button>
       </div>
     </div>
   </header>${timelineBar}
-  <main class="bd-stage fit" id="bd-stage">
+  <main class="bd-stage fit" id="bd-stage">${pathLegend}
 ${opts.svg}
   </main>
 <script>
@@ -393,6 +545,7 @@ export interface MultiViewHtmlOptions {
   stops: string[];
   palette?: Partial<ExportPalette>;
   accent?: string;
+  paths?: HtmlPathEntry[];
 }
 
 /**
@@ -542,6 +695,7 @@ export function buildMultiViewHtml(opts: MultiViewHtmlOptions): string {
     stops: opts.stops,
     palette: opts.palette,
     accent: opts.accent,
+    paths: opts.paths,
   });
 
   return page

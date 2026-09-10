@@ -19,3 +19,6 @@ playwright/.cache/
 .claude/
 .DS_Store
 *.log
+
+# Auto-save scratch: rewritten on every dev session. Curated templates go in templates/examples/.
+templates/scratch/

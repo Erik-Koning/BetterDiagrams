@@ -53,3 +53,124 @@ test.describe("pointer work on the canvas", () => {
     expect(after.y).toBe(moved.y);
   });
 });
+
+/**
+ * The tool tray and the rubber band it switches on. Entirely pointer work:
+ * jsdom has no layout, so no band ever catches anything there.
+ */
+test.describe("the canvas tools", () => {
+  test("the tray opens on hover and the Select tool bands across the cards it sweeps", async ({
+    studio,
+  }) => {
+    await studio.goto();
+    await studio.focusEditor();
+
+    // Hover alone, no click: the tray is a mode switch reached for mid-gesture.
+    await studio.toolButton.hover();
+    await expect(studio.root.getByRole("menu", { name: "Canvas tools" })).toBeVisible();
+    await studio.pickTool("Select");
+
+    await studio.band(await studio.boxAround(["cdn", "api"]));
+
+    await expect(studio.node("cdn")).toHaveClass(/selected/);
+    await expect(studio.node("api")).toHaveClass(/selected/);
+    await expect(studio.node("wrk")).not.toHaveClass(/selected/);
+    // The band ends on a click, and the pane answers a click by dropping the
+    // selection — so this is the assertion that the click was swallowed.
+    await expect(studio.selectedNodes).not.toHaveCount(0);
+  });
+
+  test("a second band MERGES into the first when ⇧ is held, and replaces it otherwise", async ({
+    studio,
+  }) => {
+    await studio.goto();
+    await studio.focusEditor();
+    await studio.pickTool("Select");
+
+    await studio.band(await studio.boxAround(["cdn", "api"]));
+    await studio.band(await studio.boxAround(["wrk"]), "Shift");
+
+    await expect(studio.node("cdn")).toHaveClass(/selected/);
+    await expect(studio.node("api")).toHaveClass(/selected/);
+    await expect(studio.node("wrk")).toHaveClass(/selected/);
+
+    // Without the modifier the new band is the whole selection again.
+    await studio.band(await studio.boxAround(["wrk"]));
+    await expect(studio.node("wrk")).toHaveClass(/selected/);
+    await expect(studio.node("cdn")).not.toHaveClass(/selected/);
+    await expect(studio.node("api")).not.toHaveClass(/selected/);
+  });
+
+  test("a press that never moves is still an ordinary click, and cards stay put", async ({
+    studio,
+  }) => {
+    await studio.goto();
+    await studio.showJson();
+    await studio.focusEditor();
+    await studio.pickTool("Select");
+
+    const before = (await studio.liveDoc()).nodes.find((node) => node.id === "cdn")!;
+
+    await studio.node("cdn").click();
+    await expect(studio.node("cdn")).toHaveClass(/selected/);
+    await expect(studio.inspector).toBeVisible();
+
+    // A drag under this tool draws a band rather than moving what it started
+    // on, so the card it began over has not budged.
+    await studio.band(await studio.boxAround(["cdn"], 0));
+    const after = (await studio.liveDoc()).nodes.find((node) => node.id === "cdn")!;
+    expect({ x: after.x, y: after.y }).toEqual({ x: before.x, y: before.y });
+  });
+
+  test("the Cursor tool's own band merges too when ⇧ is held", async ({ studio }) => {
+    await studio.goto();
+    await studio.focusEditor();
+
+    // React Flow's band — the one the Cursor tool uses — only starts on the
+    // bare pane, so both drags begin in the margin outside the infra zone.
+    const pane = (await studio.canvas.boundingBox())!;
+    const zone = (await studio.node("zone:region").boundingBox())!;
+    const gutter = zone.x - pane.x;
+    expect(gutter, "empty pane to the left of the diagram").toBeGreaterThan(8);
+    const outside = zone.x - gutter / 2;
+
+    const first = await studio.boxAround(["cdn", "api"]);
+    await studio.band({ ...first, x1: outside });
+    await expect(studio.node("cdn")).toHaveClass(/selected/);
+    await expect(studio.node("api")).toHaveClass(/selected/);
+
+    const second = await studio.boxAround(["wrk"]);
+    await studio.band({ ...second, x1: outside }, "Shift");
+
+    // Without the merge this second band replaced the first: holding the
+    // modifier did nothing at all, because React Flow drops the selection the
+    // moment a band passes its click threshold.
+    await expect(studio.node("wrk")).toHaveClass(/selected/);
+    await expect(studio.node("cdn")).toHaveClass(/selected/);
+    await expect(studio.node("api")).toHaveClass(/selected/);
+  });
+
+  test("the Pan tool drags the canvas instead of what is under the pointer", async ({ studio }) => {
+    await studio.goto();
+    await studio.showJson();
+    await studio.focusEditor();
+    await studio.pickTool("Pan");
+
+    const before = (await studio.liveDoc()).nodes.find((node) => node.id === "cdn")!;
+    const start = (await studio.node("cdn").boundingBox())!;
+
+    await studio.page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+    await studio.page.mouse.down();
+    await studio.page.mouse.move(start.x + start.width / 2 + 120, start.y + start.height / 2 + 60, {
+      steps: 12,
+    });
+    await studio.page.mouse.up();
+
+    // The card moved on screen…
+    const moved = (await studio.node("cdn").boundingBox())!;
+    expect(moved.x).toBeGreaterThan(start.x + 60);
+    // …but only because the whole canvas did. The document is untouched.
+    const after = (await studio.liveDoc()).nodes.find((node) => node.id === "cdn")!;
+    expect({ x: after.x, y: after.y }).toEqual({ x: before.x, y: before.y });
+  });
+});

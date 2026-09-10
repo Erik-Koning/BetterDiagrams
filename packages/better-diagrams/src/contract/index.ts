@@ -122,6 +122,10 @@ export type {
 export { ZONE_SHAPES, ZONE_OUTLINES } from "./zones";
 export type { DiagramZone, ZoneOutline, ZoneShape, ZonePoint } from "./zones";
 
+// ── Paths (named flows the reader can light up) ──────────────────────────────
+export { PATH_COLOR_CYCLE, pathColor, resolvePath } from "./paths";
+export type { DiagramPath, PathGlow, ResolvedPath, ResolvedPathStep } from "./paths";
+
 // ── Auto-layout ──────────────────────────────────────────────────────────────
 export { autoLayout, hasOverlaps, placeUnpositioned } from "./layout";
 export type { LayoutOptions } from "./layout";

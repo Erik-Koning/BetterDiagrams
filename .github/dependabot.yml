@@ -1,0 +1,26 @@
+# Keeps the workspace's dependencies current and surfaces security advisories
+# as pull requests. One lockfile at the root covers all three workspaces.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    # One PR for the routine bumps, so a week's minors and patches arrive
+    # together and the test suites run once. Majors still get their own PR.
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # React 19 and the tooling majors are deliberate upgrades, not chores:
+      # the library's peer range is ">=18" and its tests mount on 18.
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react-dom"
+        update-types: ["version-update:semver-major"]

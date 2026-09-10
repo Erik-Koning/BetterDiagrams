@@ -151,6 +151,16 @@ describe("themeToStyle", () => {
     );
   });
 
+  it("carries the glow tokens, and the light theme's are tighter and denser", () => {
+    const dark = themeToStyle(DARK_THEME) as Record<string, string>;
+    const light = themeToStyle(LIGHT_THEME) as Record<string, string>;
+    expect(dark["--as-glow-alpha"]).toBe(DARK_THEME.glowAlpha);
+    expect(light["--as-glow-blur"]).toBe(LIGHT_THEME.glowBlur);
+    // A glow on white has nothing to bloom into: more ink, less spread.
+    expect(Number(light["--as-glow-alpha"])).toBeGreaterThan(Number(dark["--as-glow-alpha"]));
+    expect(parseFloat(light["--as-glow-blur"])).toBeLessThan(parseFloat(dark["--as-glow-blur"]));
+  });
+
   it("ignores record tokens when turning a theme into scalars", () => {
     const style = themeToStyle({ nodeAccents: { service: "#123456" } }) as Record<string, string>;
     expect(style["--as-node-service"]).toBe("#123456");

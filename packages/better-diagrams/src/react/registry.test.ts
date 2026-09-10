@@ -14,9 +14,56 @@ import {
 import {
   EXAMPLE_TEMPLATE,
   EXAMPLE_ZONED_TEMPLATE,
+  ICON_NAMES,
   validateTemplate,
   type DiagramTemplate,
 } from "../contract/schema";
+import { BUILTIN_ICON_PATHS } from "./icons";
+
+/**
+ * The icon set lives in two halves that must agree: the GLYPHS in
+ * `react/icons.tsx` (what the picker offers and what the exporters stroke)
+ * and the NAMES in `contract/schema.ts` (what validation, the schema lint and
+ * the LLM prompt accept). A glyph missing from the enum lints as an unknown
+ * icon on a document that renders perfectly; a name with no glyph is a
+ * picker entry that draws nothing. Neither is caught by the compiler, since
+ * one side is a string record and the other a const tuple.
+ */
+describe("the icon set", () => {
+  it("has exactly one glyph per name, and one name per glyph", () => {
+    const glyphs = Object.keys(BUILTIN_ICON_PATHS).sort();
+    // "none" is a name with no glyph on purpose — it is how a node opts out.
+    const named = ICON_NAMES.filter((n) => n !== "none").sort();
+    expect(glyphs).toEqual(named);
+    expect(ICON_NAMES[0]).toBe("none");
+  });
+
+  it("draws every glyph as non-empty 24x24 path data", () => {
+    for (const [name, paths] of Object.entries(BUILTIN_ICON_PATHS)) {
+      expect(paths.length, `${name} has no paths`).toBeGreaterThan(0);
+      for (const d of paths) {
+        // A leading ABSOLUTE move is what makes a subpath independent —
+        // without it a path continues wherever the previous one ended and the
+        // glyph grows a stray connecting line.
+        const start = /^M\s*(-?[\d.]+)[\s,]+(-?[\d.]+)/.exec(d);
+        expect(start, `${name}: "${d}" does not start with an absolute move`).toBeTruthy();
+        // That first point inside the box the viewBox declares. Later numbers
+        // are deltas on relative commands (`c`, `a`, `h`…) and are legitimately
+        // negative, so only the anchor is worth pinning — a glyph anchored
+        // outside the box looks fine on screen (SVG does not clip) and is
+        // cropped in the Canvas2D export, which sizes its icon box exactly.
+        for (const n of start!.slice(1)) {
+          expect(Number(n), `${name}: anchor ${n} outside 0..24`).toBeGreaterThanOrEqual(0);
+          expect(Number(n), `${name}: anchor ${n} outside 0..24`).toBeLessThanOrEqual(24);
+        }
+      }
+    }
+  });
+
+  it("offers every name in the picker's list", () => {
+    expect(resolveRegistry().iconNames.sort()).toEqual([...ICON_NAMES].sort());
+  });
+});
 
 describe("resolveRegistry", () => {
   it("returns the built-ins when given nothing", () => {

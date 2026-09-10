@@ -10,7 +10,7 @@
  *   - the registry adds node kinds, icons, and an exporter without forking
  *   - AI generation is wired through a server route, so no key is in the browser
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import {
   ArchitectureStudio,
@@ -189,6 +189,9 @@ export default function App() {
   const [readOnly, setReadOnly] = useState(false);
   const [minimap, setMinimap] = useState(true);
   const [mode, setMode] = useState("dark");
+  // "technical" | "marketing" — the editor's presentation mode, independent
+  // of light/dark.
+  const [studioMode, setStudioMode] = useState("technical");
   // null = "use the active theme's accent"; set once the user picks a colour.
   const [accent, setAccent] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
@@ -483,7 +486,7 @@ export default function App() {
   // The point is that the diagrams you make are FILES — readable, diffable,
   // committable — rather than rows in localStorage nobody can see.
 
-  /** null until probed; then the folder path the dev server is writing to. */
+  /** null until probed; then `{ examples, scratch }` — the dev server's folders. */
   const [templatesDir, setTemplatesDir] = useState(null);
   const [savedTemplates, setSavedTemplates] = useState([]);
   /** id → what we last wrote for it, so an idle app writes nothing at all. */
@@ -497,7 +500,7 @@ export default function App() {
     let live = true;
     probeTemplates().then((probe) => {
       if (!live || !probe) return;
-      setTemplatesDir(probe.dir);
+      setTemplatesDir(probe.dirs);
       setSavedTemplates(probe.templates);
     });
     return () => {
@@ -508,7 +511,14 @@ export default function App() {
   useEffect(() => {
     if (!templatesDir) return undefined;
     // Debounced: a drag fires dozens of changes and none of them is a moment
-    // worth writing to disk on its own.
+    // worth writing to disk on its own. And CANCELLABLE: a pass awaits the
+    // network, and `files` can change under it. Without the flag, a pass
+    // started against an older file list could reach its delete loop after a
+    // newer pass had written a just-created file — and delete it, because the
+    // older list never had it. Once cancelled, the pass stops touching disk
+    // and the ref; the pass for the new list redoes the work from what
+    // actually landed.
+    let cancelled = false;
     const timer = setTimeout(async () => {
       let touched = false;
       // Two files can carry the same name; their slugs must not collide, or
@@ -522,10 +532,13 @@ export default function App() {
         const json = JSON.stringify(file.doc);
         const before = writtenRef.current.get(file.id);
         if (before?.file === name && before.json === json) continue;
+        if (cancelled) return;
         if (!(await writeTemplate(name, file.doc))) continue;
+        if (cancelled) return;
         // A rename writes the new name and takes the old file with it, rather
         // than leaving a stale twin behind.
         if (before && before.file !== name) await removeTemplate(before.file);
+        if (cancelled) return;
         writtenRef.current.set(file.id, { file: name, json });
         touched = true;
       }
@@ -534,23 +547,28 @@ export default function App() {
       // dropdown.
       for (const [id, record] of [...writtenRef.current]) {
         if (files.some((f) => f.id === id)) continue;
+        if (cancelled) return;
         await removeTemplate(record.file);
+        if (cancelled) return;
         writtenRef.current.delete(id);
         touched = true;
       }
-      if (touched) await refreshTemplates();
+      if (touched && !cancelled) await refreshTemplates();
     }, 900);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [files, templatesDir, refreshTemplates]);
 
   /** Load one back into the active file, the way the examples do. */
   const openTemplate = useCallback(
     async (entry) => {
-      const doc = await readTemplate(entry.file);
+      const doc = await readTemplate(entry.folder, entry.file);
       if (!doc) return;
       setActiveDoc(entry.kind === "sequence" ? validateSequence(doc) : validateTemplate(doc));
       setSettingsOpen(false);
-      toast.success(`Loaded ${entry.name}`, { description: entry.file });
+      toast.success(`Loaded ${entry.name}`, { description: `${entry.folder}/${entry.file}` });
     },
     [setActiveDoc],
   );
@@ -662,6 +680,14 @@ export default function App() {
             Light
           </label>
           <label className="app__toggle">
+            <input
+              type="checkbox"
+              checked={studioMode === "marketing"}
+              onChange={(e) => setStudioMode(e.target.checked ? "marketing" : "technical")}
+            />
+            Marketing
+          </label>
+          <label className="app__toggle">
             <input type="checkbox" checked={showJson} onChange={(e) => setShowJson(e.target.checked)} />
             JSON
           </label>
@@ -723,38 +749,46 @@ export default function App() {
             </button>
             {settingsOpen ? (
               <div className="app__dropdown" role="menu" aria-label="Settings">
-                {templatesDir ? (
-                  <>
-                    <span className="app__dropdown-caption" title={templatesDir}>
-                      Saved templates
-                    </span>
-                    {savedTemplates.length ? (
-                      savedTemplates.map((entry) => (
-                        <button
-                          key={entry.file}
-                          type="button"
-                          role="menuitem"
-                          className="app__dropdown-item"
-                          // A sequence template cannot land in the architecture
-                          // editor, and the reverse — say so rather than
-                          // failing on click.
-                          disabled={!active || entry.kind === "unreadable" || entry.kind !== active.kind}
-                          onClick={() => openTemplate(entry)}
-                        >
-                          {entry.name}
-                          <span className="app__dropdown-desc">
-                            {entry.kind === "unreadable"
-                              ? `${entry.file} — not readable as JSON`
-                              : `${entry.file} · ${entry.nodes} ${entry.kind === "sequence" ? "participants" : "nodes"}`}
+                {templatesDir
+                  ? // One section per folder, in the order a reader ranks them:
+                    // the curated examples first, then whatever auto-save has
+                    // been writing. An empty folder still gets its caption, so
+                    // the two places a template can live are always visible.
+                    [
+                      ["examples", "Templates / examples", "Curated and tracked — read-only to the app"],
+                      ["scratch", "Templates / scratch", "Auto-saved as you work; git-ignored"],
+                    ].map(([folder, caption, note]) => {
+                      const entries = savedTemplates.filter((entry) => entry.folder === folder);
+                      return (
+                        <Fragment key={folder}>
+                          <span className="app__dropdown-caption" title={templatesDir[folder]}>
+                            {caption}
                           </span>
-                        </button>
-                      ))
-                    ) : null}
-                    <span className="app__dropdown-note">
-                      Auto-saving every open file to <code>/templates</code> as you work.
-                    </span>
-                  </>
-                ) : null}
+                          {entries.map((entry) => (
+                            <button
+                              key={`${entry.folder}/${entry.file}`}
+                              type="button"
+                              role="menuitem"
+                              className="app__dropdown-item"
+                              // A sequence template cannot land in the architecture
+                              // editor, and the reverse — say so rather than
+                              // failing on click.
+                              disabled={!active || entry.kind === "unreadable" || entry.kind !== active.kind}
+                              onClick={() => openTemplate(entry)}
+                            >
+                              {entry.name}
+                              <span className="app__dropdown-desc">
+                                {entry.kind === "unreadable"
+                                  ? `${entry.file} — not readable as JSON`
+                                  : `${entry.file} · ${entry.nodes} ${entry.kind === "sequence" ? "participants" : "nodes"}`}
+                              </span>
+                            </button>
+                          ))}
+                          <span className="app__dropdown-note">{note}</span>
+                        </Fragment>
+                      );
+                    })
+                  : null}
                 <span className="app__dropdown-caption">Examples</span>
                 <button
                   type="button"
@@ -810,6 +844,7 @@ export default function App() {
               minimap={minimap}
               registry={registry}
               theme={theme}
+              mode={studioMode}
               {...fileProps}
             />
           ) : isSequence ? (
@@ -820,6 +855,7 @@ export default function App() {
               onSave={handleSave}
               readOnly={readOnly}
               theme={theme}
+              mode={studioMode}
               generate={aiEnabled ? generate : undefined}
               filename={active.name}
               onSelectionChange={setSelection}
@@ -835,6 +871,7 @@ export default function App() {
               minimap={minimap}
               registry={registry}
               theme={theme}
+              mode={studioMode}
               generate={aiEnabled ? generate : undefined}
               filename={active.name}
               onNavigateFile={navigateFile}

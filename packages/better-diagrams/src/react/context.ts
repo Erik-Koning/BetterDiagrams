@@ -9,11 +9,18 @@ import { createContext, useContext } from "react";
 import { createRegistry } from "./create-registry";
 import type { ZoneBox } from "../contract/schema";
 import type { ResolvedRegistry } from "./registry-types";
+import type { StudioMode } from "./theme";
 
 export interface StudioContextValue {
   registry: ResolvedRegistry;
   /** Editing is disabled; renderers hide affordances and block inline edits. */
   readOnly: boolean;
+  /**
+   * The presentation mode (see `StudioMode`). Renderers read it for the few
+   * things a stylesheet cannot decide — an SVG icon's pixel size, a gradient
+   * definition — and never for behaviour: both modes have every capability.
+   */
+  mode: StudioMode;
   /**
    * Active tag filter. Nodes carrying none of these tags render dimmed —
    * dimmed, never hidden, so the filter is purely presentational and can't
@@ -87,6 +94,7 @@ export interface StudioContextValue {
 const FALLBACK: StudioContextValue = {
   registry: createRegistry(),
   readOnly: false,
+  mode: "technical",
   tagFilter: [],
   showTeams: true,
   requestCommit: () => {},

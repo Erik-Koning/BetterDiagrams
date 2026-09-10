@@ -40,7 +40,7 @@ describe("nestContents", () => {
     expect(after.edges).toEqual(base.edges);
   });
 
-  it("drops the frame vocabulary a card cannot render", () => {
+  it("drops the frame vocabulary a card cannot render, and keeps its colour", () => {
     const styled = doc();
     Object.assign(node(styled, "vpc"), {
       fill: false,
@@ -51,9 +51,13 @@ describe("nestContents", () => {
     });
     const after = node(nestContents(styled, "vpc"), "vpc");
 
-    for (const key of ["fill", "outline", "color", "opacity", "collapsed"]) {
+    for (const key of ["fill", "outline", "opacity", "collapsed"]) {
       expect(key in after, key).toBe(false);
     }
+    // A card renders `color` as its accent, so the box keeps the colour it
+    // was given — and gets it back as frame ink on the way home.
+    expect(after.color).toBe("#8b5cf6");
+    expect(node(inlineContents(nestContents(styled, "vpc"), "vpc"), "vpc").color).toBe("#8b5cf6");
   });
 
   it("defaults to a service — C4's 'container' — and adopts a given icon", () => {

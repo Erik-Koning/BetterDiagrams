@@ -8,7 +8,7 @@
  * Which renderer a kind uses is decided by the registry (`container` /
  * `annotation` flags), not by a hard-coded list — see `toReactFlow`.
  */
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   Handle,
   NodeResizer,
@@ -40,6 +40,9 @@ import {
 
 /** Breathing room kept between a frame's edge and the last thing inside it. */
 const GROUP_CONTENT_PAD = 12;
+
+/** The icon glyph's pixel size per presentation mode; the chip around it is CSS. */
+export const ICON_SIZE = { technical: 17, marketing: 22 } as const;
 
 export type ShapeNodeType = Node<DiagramNodeData, "shape">;
 export type GroupNodeType = Node<DiagramNodeData, "group">;
@@ -219,11 +222,22 @@ export const ShapeNode = memo(function ShapeNode({
   width,
   height,
 }: NodeProps<ShapeNodeType>) {
-  const { registry, readOnly, tagFilter, showTeams, requestCommit, navigateFile, drillInto, navigateToNode, childCounts } = useStudio();
+  const { registry, readOnly, mode, tagFilter, showTeams, requestCommit, navigateFile, drillInto, navigateToNode, childCounts } = useStudio();
   const { updateNodeData } = useReactFlow();
   const def = kindDef(registry, data.kind);
   const paths = iconPaths(registry, data.icon);
   const shape = def.shape ?? "card";
+  // Marketing mode draws a bigger glyph in a bigger chip. The size is a
+  // pixel attribute on the SVG, so it cannot come from the stylesheet the way
+  // the chip's does.
+  const iconSize = mode === "marketing" ? ICON_SIZE.marketing : ICON_SIZE.technical;
+  // A silhouette's gradient has to be an SVG <linearGradient>, referenced by
+  // id — CSS gradients don't paint SVG fills. One per MOUNTED node, from
+  // useId rather than the document id: the compare overlay renders a
+  // document id twice, a ghost's id carries a colon, and an author's id can
+  // hold anything — none of which a `url(#…)` reference should have to
+  // survive. Stripped to the characters an id fragment never needs escaping.
+  const gradientId = `as-grad-${useId().replace(/[^A-Za-z0-9_-]/g, "")}`;
 
   // A scoped view's ghost stands in for an element on another level: it
   // renders dimmed-and-dashed, and its double-click visits the real thing.
@@ -324,20 +338,44 @@ export const ShapeNode = memo(function ShapeNode({
       >
         {sil ? (
           <svg className="as-node__silhouette" width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
+            {/* The marketing gradient, as stops the stylesheet colours
+                (`stop-color` is a presentation property, so the same
+                `--as-node-accent` mix the card gradient uses applies here).
+                The path that references it is display:none in technical
+                mode, so the def is inert there. */}
+            <defs>
+              <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+                <stop className="as-node__gradstop as-node__gradstop--from" offset="0" />
+                <stop className="as-node__gradstop as-node__gradstop--to" offset="1" />
+              </linearGradient>
+            </defs>
+            {/* The path glow, traced along the outline: a box-shaped halo
+                around a person or a cylinder would light up the empty
+                corners. Hidden unless the wrapper says the node is lit. */}
+            <path className="as-node__silhouette-glow" d={sil.body} />
             <path className="as-node__silhouette-base" d={sil.body} />
+            <path className="as-node__silhouette-grad" d={sil.body} fill={`url(#${gradientId})`} />
             <path className="as-node__silhouette-tint" d={sil.body} />
             {sil.detail ? <path className="as-node__silhouette-detail" d={sil.detail} /> : null}
           </svg>
         ) : null}
         {paths ? (
           <span className="as-node__iconbox" aria-hidden="true">
-            <SvgIcon paths={paths} size={17} color={nodeAccent(data, def.accent)} />
+            <SvgIcon paths={paths} size={iconSize} color={nodeAccent(data, def.accent)} />
           </span>
         ) : null}
         <div className="as-node__body">
           <div className="as-node__kind">
-            {def.label}
-            {data.status ? <span className="as-node__status"> · {data.status}</span> : null}
+            {/* The kind's name in its own span so marketing mode can tuck it
+                away (the icon already says it) while the status and the
+                drill badge beside it stay. */}
+            <span className="as-node__kindname">{def.label}</span>
+            {data.status ? (
+              <span className="as-node__status">
+                <span className="as-node__statussep"> · </span>
+                {data.status}
+              </span>
+            ) : null}
             {childCount > 0 ? (
               <button
                 type="button"

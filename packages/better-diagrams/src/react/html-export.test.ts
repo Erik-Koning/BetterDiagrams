@@ -16,6 +16,7 @@ import {
 } from "./exporters";
 import { BUILTIN_SEQUENCE_EXPORTERS } from "./sequence-exporters";
 import { createRegistry } from "./create-registry";
+import { LIGHT_THEME, paletteFromTheme } from "./theme";
 import { EXAMPLE_TEMPLATE, EXAMPLE_ZONED_TEMPLATE, validateTemplate } from "../contract/schema";
 import { validateSequence } from "../contract/sequence";
 import { dateToDay, templateTimeline } from "../contract/timeline";
@@ -256,6 +257,31 @@ describe("buildMultiViewHtml — the drill-down page", () => {
     expect(text).not.toContain("bd-crumbbar");
   });
 
+  it("counts only visible edges when deciding whether a projected label survives", () => {
+    // `legacy` exists on AWS only; the zone is showing Azure, so it and its
+    // edge are hidden. The one VISIBLE edge into the card is alone on its
+    // pair and keeps its words — exactly as the canvas and PNG treat it.
+    const doc = validateTemplate({
+      version: 1,
+      zones: [{ id: "z", label: "Z", shape: "rect", x: 0, y: 0, w: 900, h: 400, providers: ["azure", "aws"], provider: "azure" }],
+      nodes: [
+        { id: "web", label: "Storefront", kind: "service", parentId: null, zoneId: "z", x: 100, y: 100, w: 170, h: 76 },
+        { id: "legacy", label: "Legacy", kind: "service", parentId: null, zoneId: "z", providers: ["aws"], x: 100, y: 250, w: 170, h: 76 },
+        { id: "pay", label: "Payments", kind: "service", parentId: null, zoneId: "z", x: 500, y: 100, w: 170, h: 76 },
+        { id: "api", label: "Pay API", kind: "service", parentId: "pay", x: 28, y: 52, w: 170, h: 76 },
+      ],
+      edges: [
+        { id: "buys", source: "web", target: "api", label: "buys" },
+        { id: "old", source: "legacy", target: "api", label: "legacy path" },
+      ],
+    });
+    const mermaid = renderTemplateToMermaid(doc);
+    // The label is what matters; whether the emitter quotes it is its own
+    // business, so the match tolerates both `|buys|` and `|"buys"|`.
+    expect(mermaid).toMatch(/web -->\|"?buys"?\| pay/);
+    expect(mermaid).not.toContain("legacy");
+  });
+
   it("mermaid and c4puml project drill detail onto its card", () => {
     const mermaid = renderTemplateToMermaid(DOC);
     expect(mermaid).not.toContain("Pay API");
@@ -265,5 +291,59 @@ describe("buildMultiViewHtml — the drill-down page", () => {
     const puml = renderTemplateToC4Puml(DOC);
     expect(puml).not.toContain("Pay API");
     expect(puml).toContain("Rel(web, pay");
+  });
+});
+
+describe("the interactive HTML export — paths", () => {
+  const registry = createRegistry();
+
+  it("offers the document's paths in the menu and embeds them for the player", async () => {
+    const result = await BUILTIN_EXPORTERS.html.run({ template: EXAMPLE_ZONED_TEMPLATE, registry, filename: "arch" });
+    const text = await result!.blob.text();
+    expect(text).toContain('<div class="bd-caption">Paths</div>');
+    expect(text).toContain('class="bd-path" value="jobs"');
+    expect(text).toContain("Background job");
+    expect(text).toContain('id="bd-pathlegend"');
+    expect(text).toContain("var PATHS = ");
+    // Members by the SVG tag, with the inferred edge and the walk's numbering.
+    expect(text).toContain('{"el":"node:cdn","step":0,"steps":5}');
+    expect(text).toContain('{"el":"edge:z1","step":1,"steps":5}');
+    expect(text).toContain('"el":"node:pay"');
+    expect(text).toContain('"el":"edge:z6"');
+    // The second path's own violet, as the dark palette paints it.
+    expect(text).toContain("--bd-c:#a78bfa");
+    // Dark page: the wide, soft glow.
+    expect(text).toContain("stroke-opacity: 0.65");
+  });
+
+  it("paints a light page's glow in the light hues, tighter and denser", async () => {
+    const result = await BUILTIN_EXPORTERS.html.run({
+      template: EXAMPLE_ZONED_TEMPLATE,
+      registry,
+      filename: "arch",
+      // The studio's own route: a Theme becomes the string map the exporters take.
+      palette: paletteFromTheme(LIGHT_THEME),
+    });
+    const text = await result!.blob.text();
+    expect(text).toContain("--bd-c:#6d28d9");
+    expect(text).toContain("stroke-opacity: 0.85");
+  });
+
+  it("escapes a hostile title out of the player's script", async () => {
+    const hostile = validateTemplate({
+      ...EXAMPLE_TEMPLATE,
+      paths: [{ id: "p", title: "</script><b>x", steps: ["u", "gw"] }],
+    });
+    const result = await BUILTIN_EXPORTERS.html.run({ template: hostile, registry, filename: "h" });
+    const text = await result!.blob.text();
+    expect(text).not.toContain("</script><b>x");
+    expect(text).toContain("\\u003c/script>");
+  });
+
+  it("leaves a path-less page without any of it", async () => {
+    const result = await BUILTIN_EXPORTERS.html.run({ template: EXAMPLE_TEMPLATE, registry, filename: "plain" });
+    const text = await result!.blob.text();
+    expect(text).not.toContain("bd-path");
+    expect(text).not.toContain("PATHS");
   });
 });

@@ -80,10 +80,11 @@ shadow.
 | `readOnly` | `boolean` | Hides editing affordances; pan/zoom/export still work. |
 | `registry` | `RegistryExtensions` | Add node kinds, icons, exporters. See below. |
 | `theme` | `Theme` | Overrides `--as-*` design tokens. `LIGHT_THEME` / `DARK_THEME` are complete presets — `theme={LIGHT_THEME}` flips the whole editor **and** its image exports (the export palette derives from the theme). |
+| `mode` | `"technical" \| "marketing"` | Presentation mode. Default `"technical"`. `"marketing"` restyles the same document for a slide or a landing page — see **Marketing mode** below. Both editors take it; unknown values fall back to technical. |
 | `generate` | `DiagramGenerator` | Enables the AI panel. Omitted ⇒ no network code runs. |
 | `minimap` | `boolean` | Default `true`. |
 | `welcome` | `boolean` | Default `true`. Shows the **welcome modal** over a brand-new document — see below. |
-| `legend` | `boolean` | Infra legend in the corner. Default `true`; only renders when zones exist. |
+| `legend` | `boolean` | Show the corner legend: the infra key when zones exist, and the key to the lit paths. Defaults to `true`. |
 | `defaultShowHidden` | `boolean` | Start with provider-hidden nodes ghosted rather than omitted. Default `false`. |
 | `diffBase` | `DiagramTemplate` | Baseline to compare against: the canvas becomes a read-only diff view (added/removed/changed) while set. The toolbar's Compare button offers the same via a file picker. |
 | `filename` | `string` | Base name for exports. Default `"architecture"`. |
@@ -92,6 +93,50 @@ shadow.
 | `onNavigateFile` | `(ref) => void` | Fired when a node url with the `file:` prefix (e.g. `file:Order flow`) has its ↗ clicked — resolve by id, then name, and switch documents. |
 | `onSelectionChange` | `(sel) => void` | The canvas selection in **document terms** — ids bucketed by template section (`{ nodes, edges, zones }` here; `{ participants, messages, activations, fragments, notes }` on the sequence editor), so a host can mirror it, e.g. highlight the matching entries of a live JSON view (the example app does exactly this). Fires on mount too, so a host that remounts per file never keeps a stale selection. |
 | `toolbarExtras` / `inspectorExtras` | `ReactNode \| (ctx) => ReactNode` | Slots for your own controls. |
+
+### Marketing mode
+
+```jsx
+<ArchitectureStudio value={template} mode="marketing" />
+```
+
+The default, **technical**, is the dense, exact rendering: every kind eyebrow, column type and
+technology label on screen, 8px corners, flat surfaces. **Marketing** dresses the *same document*
+for a slide, a pitch deck or a landing page. Nothing in the document, the registry, the tools, the
+exports or the keyboard changes — only the stylesheet's reading of it:
+
+- **Bigger, rounder, softer.** Icon glyphs go from 17px to 22px in a 36px chip, titles and
+  labels step up a size and switch to the UI sans, corners are 12px, and every card gets a quiet
+  gradient derived from its kind's accent — so a database warms differently from a queue, and a
+  node's own `color` or a host's custom kind gets a gradient of its own for free — under a soft
+  accent-tinted shadow. Silhouette shapes (person, cylinder, pipe) get the same gradient as an
+  SVG def.
+- **Redundant labels tucked away.** A card's kind eyebrow when the icon has already said it (a
+  status or a drill badge keeps the row), a column's type and required mark, an edge's
+  technology sub-label, a sequence message's tech. They are all still in the document, the
+  inspector, and every document export — only the picture stops printing them.
+- **More air.** Every layout the editor performs spreads ranks and rank-mates wider — Tidy,
+  the AI layout, and a never-placed document arriving by paste, Import, `value`, or as a compare
+  baseline (`modeLayoutOptions` exposes the gaps if you run `autoLayout` yourself).
+
+It composes with `theme`: `mode="marketing" theme={LIGHT_THEME}` is the light marketing look, and
+the two schemes are *not* the same card at two brightnesses. Over the dark canvas a card is
+already the bright object in the frame and its own glow does the lifting; on a white page nothing
+is brighter than the paper, so the card earns its edge instead — more of its kind's hue, a firmer
+border, a shadow you can actually see, and an icon chip that **inverts**: a pale tile carrying a
+near-saturated glyph, rather than a pool of the kind's colour that would only wash an
+already-tinted card twice. The stylesheet does this with `light-dark()`, which reads the
+`colorScheme` token — `LIGHT_THEME` sets it; a partial theme that omits it is read as dark, exactly
+as the browser already reads it for its own widgets.
+
+The root element carries `as-root--marketing` and `data-mode`, so a host stylesheet can reach in;
+technical adds no class at all, so existing host CSS keeps matching exactly what it matched before.
+Titles that are set to wrap keep their technical font size and chip width, because the stored
+height was measured with those, and a sequence participant's name stops one step short of a card
+title's for the same reason — its header is a fixed lane box.
+
+**Exports follow the mode.** PNG, PDF, SVG and the interactive HTML all render the dress the screen
+is wearing, gradients, shadows, tucked-away labels and all — see **Exports** below.
 
 ### Starting from blank — the welcome modal
 
@@ -218,6 +263,39 @@ default, it is stored only when it differs, so pre-existing documents round-trip
 A note's `description` renders as a dim sub-line under its sentence (canvas and image exports
 alike), sized against the note's own `fontSize`; the sentence itself is the `label`, edited by
 double-clicking the note.
+
+### Paths: named flows the reader can light up
+
+A document may name **paths** — ordered walks through the diagram, each with a title — and the
+toolbar's **Paths ▾** menu lists them. Tick one and every node and arrow on it glows in that
+path's colour; tick several and each keeps its own colour, with a key in the corner legend. The
+glow pulses, and the bright spot travels the walk from its first step to its last while each
+arrow's dashes run the way the walk takes it — against the arrowhead when the flow goes back up
+an edge. Which paths are lit is view state, like the tag filter: it never enters the document.
+
+```json
+{
+  "paths": [
+    { "id": "checkout", "title": "Checkout charge", "steps": ["cdn", "api", "pay"] },
+    { "id": "jobs", "title": "Background job", "steps": ["api", "z6", "q", "z7", "wrk"], "color": "violet" }
+  ]
+}
+```
+
+`steps` is one ordered list of ids. Node ids are the normal currency: the edge between two
+consecutive nodes is inferred when exactly one joins them (and walked backwards when it points
+the other way). Put an edge id between two nodes only when several edges join them; an edge
+named on its own brings its endpoints with it. `color` is optional and comes from the edge
+palette — unset paths take the next colour in a fixed cycle, by their position among *all* the
+document's paths, so lighting a second path never recolours the first. `resolvePath(doc, path)`
+exposes the expanded walk. A step naming nothing in the document is dropped on validation, and
+so is a path left with no steps; deleting a node removes it from every path it was on.
+
+The glow is themed: `LIGHT_THEME` ships a tighter, denser halo (`glowAlpha`, `glowBlur`) than the
+dark default, because a glow on white has nothing to bloom into, and the hue itself follows the
+theme's `edgeColors`. Under `prefers-reduced-motion` the halo stays and nothing travels. The
+**Interactive HTML** export carries the paths too: its ⋯ menu lists them, lighting one adds the
+same glow and dash flow to the exported SVG, with a key over the stage.
 
 ## Node text: alignment and wrapping
 
@@ -390,7 +468,9 @@ only a line with no waypoints at all gets a new one, at a deliberately blunt thr
 the same line by its label repeatedly moves one dot instead of leaving a trail of them.
 **Double-click the line or its label to edit the label inline.**
 Drag a waypoint to move it, double-click the dot to remove it, or *Clear route* in the
-inspector. On a selected edge, **drag an endpoint handle** to pin exactly where
+inspector (or right-click). *Arrange ▾ → Clear routes* does the whole canvas at once — or just
+the selected lines, the same scope rule Tidy uses — and says how many it changed. However many
+lines any of them touches, it is **one undo**: `⌘Z` puts every route back in a single step. On a selected edge, **drag an endpoint handle** to pin exactly where
 the line attaches — anywhere along any side of its box — or drop it on another node to
 re-attach the edge there. The inspector's anchor pickers do the same by side (`start: auto`
 follows wherever the line is going, exactly the old behaviour).
@@ -567,7 +647,8 @@ recoloured zone is still hosted where it is hosted.
 
 Beyond the base tokens, the `theme` prop reaches the warning and comparison colours
 (`diffAdded/diffRemoved/diffChanged`, `warn`/`warnStrong` for deprecated's salmon→red,
-`overdue`, `hazardInk`/`hazardTape`), the shadow ink, `colorScheme` (which native date pickers,
+`overdue`, `hazardInk`/`hazardTape`), the shadow ink, the strength of a lit path's glow
+(`glowAlpha`, `glowBlur` — `LIGHT_THEME` tightens both), `colorScheme` (which native date pickers,
 select popups and scrollbars follow), and three record tokens — `edgeColors`, `seqAccents` and
 `nodeAccents` — that fan out to per-entry CSS variables (`--as-edge-sky`, `--as-seq-database`,
 `--as-node-service`).
@@ -600,12 +681,23 @@ partial to override it, pass `null` to remove it:
       region: { label: "AWS Region", container: true },   // nodes can nest inside it
       queue: null,                                         // remove a built-in
     },
-    icons: { lambda: ["M4 4h6l7 16h3", "M20 4h-5L8 20H4"] },  // 24x24 viewBox paths
+    icons: { lambda: ["M4 4h6l7 16h3", "M20 4h-5L8 20H4"] },  // 24x24 viewBox paths, stroke only
     exporters: { terraform: myExporter, pdf: null },
     promptExtraRules: "- This org runs on AWS; prefer lambda for compute.",
   }}
 />
 ```
+
+**Icons.** Forty-five built-in glyphs, listed by `ICON_NAMES` and offered in the node
+inspector's picker: the C4 primitives (`user`, `server`, `database`, `cloud`, `globe`, `box`,
+`shield`, `lock`, `layers`, `code`, `doc`, `mail`, `gear`, `bolt`, `window`, `mobile`, `users`,
+`sparkle`) plus the roles a real diagram keeps needing — `balance` for a load balancer, `share`
+for a topic or a mesh, `grid` for a replica set, `branch` for a pipeline, `key`, `chart`,
+`search`, `filter`, `folder`, `sync`, `cpu`, `terminal`, `clock`, `calendar`, `bell`, `card`,
+`cart`, `activity`, `eye`, `warning`, `check`, `link`, `image`, `video`, `pin`, `robot` and
+`flask`. All one stroke-only 24×24 idiom, so the same path data drives the canvas, the SVG
+export and the Canvas2D raster export. `"none"` opts a node out.
+
 
 A registered kind shows up in the inspector dropdown **and** in the generated system prompt, so
 the model can emit it too. `example/src/extensions.js` demonstrates all of it.
@@ -614,12 +706,22 @@ the model can emit it too. `example/src/extensions.js` demonstrates all of it.
 
 PNG, PDF, SVG, template JSON, Content/Layout JSON (the split — see above), React Flow JSON,
 Mermaid, and C4-PlantUML ship built in. The
-image formats render from one emitter: `emitTemplate(template, registry, palette)` produces a
-backend-neutral command list that `renderTemplateToCanvas` and `renderTemplateToSvg` both
-replay — through the **same** edge geometry the screen uses — so PNG, PDF, and SVG can never
+image formats render from one emitter: `emitTemplate(template, registry, palette, { mode })`
+produces a backend-neutral command list that `renderTemplateToCanvas` and `renderTemplateToSvg`
+both replay — through the **same** edge geometry the screen uses — so PNG, PDF, and SVG can never
 disagree with each other or the editor. The `palette` (see `ExportPalette`, `DARK_EXPORT_PALETTE`,
 `LIGHT_EXPORT_PALETTE`) recolours an export without touching its layout; the editor passes one
 derived from the active `theme`, so a light-mode app exports light images automatically.
+
+`mode` is the other half of that: it is the same `"technical" | "marketing"` the editor takes, and
+it dresses the drawing rather than recolouring it — 12px corners, per-kind gradient cards under an
+accent-tinted shadow, the larger icon chip (inverted to a pale tile on a light palette, the way the
+screen inverts it), the bigger sans type, and the labels marketing tucks away. The editor threads
+its own mode into every picture export, so a slide exported out of marketing mode comes back
+looking like the slide. Whether a palette is light or dark is read off `palette.bg`, not passed in,
+so a headless `renderTemplateToSvg(doc, registry, LIGHT_EXPORT_PALETTE, { mode: "marketing" })`
+gets the light treatment with no theme in sight. Anything unrecognised in `mode` falls back to
+technical rather than half-applying a look.
 
 Image exports draw zones behind everything, honour the active provider selection (hidden nodes
 and their edges are omitted, and the crop tightens to what's visible), and stamp the legend into
@@ -631,7 +733,8 @@ formats never narrow — "export → save to your database" must not quietly bec
 I had highlighted". Mermaid can't express overlapping regions, so it
 records the active selection as `%% zone:` comments and reserves subgraphs for groups.
 
-A custom exporter returns a blob to download, or nothing if it delivered the result itself:
+A custom exporter receives the mode alongside the palette (`{ template, registry, filename,
+palette, mode }`), and returns a blob to download, or nothing if it delivered the result itself:
 
 ```js
 const summary = {
@@ -679,7 +782,7 @@ The schema and editor cover C4's notational essentials:
 | **Version tag** | `meta.versionTag` ("v2.1", "2026-Q3 draft") renders as a corner notice — `meta.versionTagPosition` picks the corner; click it to edit, View ▾ → Set version tag… to create one. Stamped into image exports |
 | **Lock** | `node.locked` / zone lock pins an element against drags and resizes |
 | **Search** | ⌘K, matches id/label/description/kind/tags, Enter cycles and centres |
-| **Snap & align** | Arrange ▾: snap-to-grid, align left/centre/right/top/middle/bottom (2+ selected), distribute (3+) |
+| **Snap & align** | Arrange ▾: snap-to-grid, align left/centre/right/top/middle/bottom (2+ selected), distribute (3+), clear routes |
 | **Title block** | `meta.title` stamps exported images |
 | **C4-PlantUML export** | `Person`/`ContainerDb`/`ContainerQueue`/`System_Ext`/`Container`, `Container_Boundary` for groups, `Deployment_Node` for zones, `Rel`/`BiRel` with tech |
 
@@ -746,13 +849,15 @@ seeded with the open document's own — rather than copying blind; sequence file
 provider vocabulary to scope, so they copy straight to the clipboard.
 
 **Auto-save to the repo, while developing.** `npm run dev` mounts a small dev-only route
-(`example/vite-plugin-templates.js`) that writes every open file to `templates/` at the repo
-root, one plain `.json` per document, debounced. Renaming a file renames the JSON and deletes
-the old one; deleting a file deletes it. They are ordinary templates — the same shape Import
-and the paste box accept — so you can diff them, commit them, hand-edit them, or drop new ones
-in, and they all appear under **Settings ▾ → Saved templates** (re-read each time the menu
-opens). The route exists only in the dev server: a built app finds nothing there and carries on
-with localStorage, which is still the app's own source of truth.
+(`example/vite-plugin-templates.js`) that writes every open file to `templates/scratch/` at
+the repo root, one plain `.json` per document, debounced. Renaming a file renames the JSON and
+deletes the old one; deleting a file deletes it. `scratch/` is git-ignored — it's rewritten
+every session — while `templates/examples/` is tracked, curated, and read-only to the app:
+drop a template there (or copy one up from scratch) and it's loadable but never overwritten.
+Both folders appear under **Settings ▾ → Templates**, re-read each time the menu opens. The
+files are ordinary templates — the same shape Import and the paste box accept. The route
+exists only in the dev server: a built app finds nothing there and carries on with
+localStorage, which is still the app's own source of truth.
 
 **AI is optional, per editor.** Pass the same `generate` function the architecture editor takes
 (`createProxyGenerator` works unchanged — the sequence system prompt travels with each request)
@@ -934,8 +1039,9 @@ with its members and mirrors their boundary connections.
 selectable and editable instead of being unreachable. Ghosts never appear in exports — an export
 shows the active scenario.
 
-The toolbar groups its actions into four dropdowns — **Insert** (node/group/text/zone),
-**Arrange** (tidy, align, distribute, routing, snap), **View** (ghosts, tag filter), and
+The toolbar opens with the **tool tray** (below), then groups its actions into four dropdowns —
+**Insert** (node/group/text/zone),
+**Arrange** (tidy, clear routes, align, distribute, routing, snap), **View** (ghosts, tag filter), and
 **Export** — all sharing one open-menu slot, so opening one closes the rest and a click
 anywhere else closes them all — and the click that dismisses a menu is spent on dismissing it,
 rather than also selecting whatever was under the pointer. The inspector reads as captioned
@@ -947,6 +1053,38 @@ tag to add, line style and colour for the connections — plus align, distribute
 duplicate and delete. Each field shows the shared value, or blank when they disagree, and
 setting it writes to everything selected.
 
+## Canvas tools
+
+What a press and a drag on the canvas MEAN is a mode, and the toolbar's leftmost control is the
+tray that picks it. It **opens on hover**, unlike every other menu on the bar: a tool is reached
+for mid-gesture — you want the rubber band because of what is in front of you right now — and a
+click-to-open, click-to-pick tray puts two presses in the way of a switch that should cost one.
+Hovering opens it; the click that picks a tool is the only one you spend. (Hover is a mouse
+affordance: a tap synthesises `pointerenter` on the very control it is about to press, so touch,
+pen and the keyboard get an ordinary click/`↓` open instead.)
+
+| | | |
+|---|---|---|
+| **Cursor** | `V` | The canvas you already had. Click to select, `⇧`/`⌘`-click to add, drag a card to move it, drag the bare pane to rubber-band |
+| **Select** | `M` | Drag **anywhere** — over the cards too — to rubber-band. Nothing is draggable, so a band never begins by shoving whatever it started on |
+| **Pan** | `H` | Drag anywhere to move the canvas. On touch, where there is no modifier to hold and no middle button, this is how you pan while Select is live |
+
+Two rules hold across both bands:
+
+- **A press that never moves is an ordinary click.** Under Select, click-to-select,
+  double-click-to-drill and right-click all still work; only a real drag (4px) is intercepted.
+- **`⇧` or `⌘` MERGES.** A modified band adds its catch to what was already selected instead of
+  replacing it, and it stays selected *throughout* the drag rather than blinking out and
+  returning at the end. React Flow's own band cannot do this — it calls `resetSelectedElements()`
+  the moment a drag passes the click threshold — so the pre-drag set is snapshotted on the
+  pointerdown that starts the gesture and put back after each of its select changes. The Select
+  tool's band is ours outright (`react/marquee.ts`), for the same reason plus one more: React
+  Flow only starts a band on a press that lands on the bare pane, so its band cannot begin on top
+  of a card.
+
+Resize handles and zone vertices are Cursor-tool affordances and disappear under the other two —
+left live, a band that began on a selected card's corner resized the card instead of drawing.
+
 ## Keyboard
 
 Press **`?`** for the full sheet (also in View ▾). Bindings follow Excalidraw's conventions
@@ -956,6 +1094,7 @@ wherever this editor has the same concept, so muscle memory carries over.
 |---|---|
 | **Essentials** | `⌘Z` undo · `⇧⌘Z` / `⌘Y` redo · `⌘S` save · `⌘A` select all · `F2` (or `Enter`) rename in place · `Delete` remove selection (cascades into groups) · `Esc` one thing at a time — see below |
 | **Clipboard** | `⌘C` · `⌘V` · `⌘X` cut · `⌘D` duplicate with connections · `⌥`-drag to drag a copy and leave the original |
+| **Tools** | `V` cursor · `M` select (rubber-band) · `H` pan · `⇧`/`⌘`-click adds to the selection · `⇧`/`⌘`-drag bands *into* it |
 | **Insert** | `N` node · `G` group · `T` text note · `Z` zone — all land at the canvas centre, exactly as the Insert menu does |
 | **Arrange** | `←↑→↓` nudge 1px · `⇧`+arrows nudge 10px · `⌘⇧`+arrows align · `⌘G` wrap the selection in a container · `⌘⇧G` ungroup · `⌘⇧L` lock |
 | **View** | `⌘=`/`⌘-`/`⌘0` zoom · `⇧1` fit · `⇧2` fit selection · `⌘'` snap to grid · `⌘K` search (`⇧Enter` for the previous match) · `⌘⇧K` the selected node's link · `⌘⇧E` export PNG · `Space`-drag pan |
@@ -966,8 +1105,9 @@ node, hit `⌘S`" is the most natural sequence here and yielding to the field wo
 to the browser. Every other binding stands down while you are typing, and all of them stand
 down while a dialog is open — a shortcut that edits a canvas nobody can see is not a shortcut.
 
-**`Esc` does ONE thing per press**, outermost first: close the shortcut sheet, then a menu, then
-a panel, then drop the selection, then leave the timeline, then step out one drilled level. It
+**`Esc` does ONE thing per press**, outermost first: close the shortcut sheet, then the tool tray,
+then a menu, then a panel, then put the arrow back if another tool is live, then drop the
+selection, then leave the timeline, then step out one drilled level. It
 used to clear everything at once, so dismissing the `?` sheet also threw away the timeline
 cursor you had scrubbed to. `Esc` also abandons a drag in progress — a connection being pulled,
 a line being bent — rather than leaving undo as the only way back.
@@ -1017,7 +1157,8 @@ COLLAPSED frame opens it so you can see the node arrive. Dragging a node also sh
 guides** against its neighbours' edges and centres, and snaps softly to them (off while
 snap-to-grid is on, and only for a single dragged node). Drag an edge label along its curve to
 slide it, or away from the curve to bend the line itself. Shift- or ⌘-click extends a selection;
-a rubber band takes everything it touches, plus the lines whose ends are both inside it. A group
+a rubber band takes everything it touches, plus the lines those elements are wired to, and holding
+the same modifier adds that catch to the selection instead of replacing it (see **Canvas tools**). A group
 is dragged by its label bar, so the space between its children is free for a rubber band.
 **Right-click** anything for the actions that apply to it. Drop a `.json` template file on the
 canvas to load it — a file that would replace a diagram with content in it asks first.

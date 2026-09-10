@@ -90,11 +90,13 @@ export function nestContents(
         w: size.w,
         h: size.h,
       };
-      // Frame vocabulary a card cannot render: the four styling knobs, and a
-      // collapse flag that now means nothing (validation strips it too).
+      // Frame vocabulary a card cannot render — the tint, its outline, its
+      // opacity — and a collapse flag that now means nothing (validation
+      // strips it too). `color` stays: a card wears it as its accent, so the
+      // colour someone chose for the box survives the trip and comes back
+      // as the frame's ink if the contents are inlined again.
       delete card.fill;
       delete card.outline;
-      delete card.color;
       delete card.opacity;
       delete card.collapsed;
       return card;

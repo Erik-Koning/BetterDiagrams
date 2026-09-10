@@ -27,6 +27,7 @@ import {
   DEFAULT_ZONE_OPACITY,
   EDGE_COLOR_HEX,
   EDGE_DASH,
+  DEFAULT_FONT_SIZE,
   FIELD_ROW_H,
   fieldAnchors,
   fieldListTop,
@@ -51,11 +52,9 @@ import {
 } from "../contract/geometry";
 import { seqBadgeOffset, silhouettePath, teamColor } from "./shapes";
 import { kindDef, iconPaths, providerDef, zoneInk, type ResolvedRegistry } from "./registry-types";
+import { resolveStudioMode, type StudioMode } from "./theme";
 
 export const PAD = 48;
-
-/** Half the icon box plus the card's padding: where a pinned icon centres. */
-const ICON_INSET = 20;
 
 /** The container frame's corner, and therefore its name chip's outer corner. */
 const GROUP_RADIUS = 10;
@@ -70,6 +69,19 @@ export const GRID = 24;
  */
 const LEGEND_W = 150;
 const LEGEND_ROW_H = 18;
+/**
+ * The legend's own padding, the height its title row occupies, and how far the
+ * whole box sits in from the page corner.
+ *
+ * They are named because they were not: the box was built from an 8 here and a
+ * 26 there, which left 7px above "INFRASTRUCTURE" and 1px under the last row —
+ * the bottom row's descenders sat ON the border — and pinned the box 8px from
+ * a page edge everything else clears by 48. They also have to agree with
+ * `legendH`, which is computed from them before anything is drawn.
+ */
+const LEGEND_PAD = 12;
+const LEGEND_TITLE_H = 18;
+const LEGEND_INSET = 16;
 const TITLE_BLOCK_H = 46;
 
 /**
@@ -203,6 +215,218 @@ export const LIGHT_EXPORT_PALETTE: ExportPalette = {
   nodeAccents: LIGHT_NODE_ACCENTS,
 };
 
+// ─── Presentation mode ───────────────────────────────────────────────────────
+
+/**
+ * `color-mix(in srgb, a t%, b)`, by hand.
+ *
+ * The stylesheet builds every marketing paint out of that one operation, and
+ * the export has no CSS engine to run it — so it runs here instead, against
+ * the same numbers, which is what keeps a PNG the same picture as the screen.
+ *
+ * Only `#rrggbb` can be mixed. A host palette holding an `hsl()` or a named
+ * colour comes back untouched rather than black: a flat card in the host's own
+ * colour is a small loss, a black one is a broken export.
+ */
+function mix(a: string, b: string, t: number): string {
+  const hex = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i;
+  const ma = hex.exec(a.trim());
+  const mb = hex.exec(b.trim());
+  if (!ma || !mb) return a;
+  const ch = (i: number) =>
+    Math.round(Number.parseInt(ma[i], 16) * t + Number.parseInt(mb[i], 16) * (1 - t))
+      .toString(16)
+      .padStart(2, "0");
+  return `#${ch(1)}${ch(2)}${ch(3)}`;
+}
+
+/** Is this palette a LIGHT one? Relative luminance of the page, nothing more. */
+function isLightPalette(palette: ExportPalette): boolean {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(palette.bg.trim());
+  if (!m) return false;
+  const [r, g, b] = [m[1], m[2], m[3]].map((h) => Number.parseInt(h, 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5;
+}
+
+/**
+ * What a mode dresses the drawing in — the export's half of the stylesheet's
+ * "Marketing mode" section, with the same numbers in the same order.
+ *
+ * It exists as one resolved object rather than `mode === "marketing" ? … : …`
+ * scattered down the emitter for the reason the CSS keeps its restyle in one
+ * block: the two modes must differ in exactly the ways listed here and in no
+ * others, and that is only checkable if the list is in one place.
+ *
+ * The light/dark split is read off the PALETTE, not passed in, because that is
+ * the only thing an export actually knows — a host rendering a light PNG from
+ * a headless script never mentions a theme.
+ */
+export interface Skin {
+  marketing: boolean;
+  /** Card corners, and the collapsed chip's and the boxed note's. */
+  radius: number;
+  /** Container frame corners. */
+  groupRadius: number;
+  /** Title size for a node that carries no `fontSize` of its own. */
+  titleSize: number;
+  /** Description size, its line pitch, and its ink. */
+  descSize: number;
+  descLineH: number;
+  descColor: string;
+  /** Does the kind eyebrow print its KIND, or only a lifecycle status? */
+  kindEyebrow: boolean;
+  /** The icon chip's box and corner. */
+  iconBox: number;
+  iconRadius: number;
+  /** Edge stroke width, and whether its `[tech]` sub-label prints. */
+  edgeWidth: number;
+  edgeTech: boolean;
+  /** Edge labels, cardinalities and end dates. */
+  labelFont: "mono" | "sans";
+  labelSize: number;
+  labelColor: string;
+  /** Record rows: the name's face and size, and whether types/marks print. */
+  fieldFont: "mono" | "sans";
+  fieldSize: number;
+  fieldTypes: boolean;
+  /** Chip furniture — dates, team pills, group names, zone headers. */
+  chipFont: "mono" | "sans";
+  /**
+   * The card's own paints, for one accent over one box. A RECORD's gradient
+   * runs top-down over the header band instead of corner to corner: its
+   * content is a column of rows, and a band that fades below the title is
+   * what makes the header read as a header (`.as-root--marketing
+   * .as-node--record`).
+   */
+  card(accent: string, box: Box, record?: boolean): {
+    gradient?: { from: string; to: string; x1: number; y1: number; x2: number; y2: number };
+    stroke: string;
+    strokeWidth: number;
+    shadow?: { color: string; alpha: number; blur: number; dy: number };
+  };
+  /** The icon chip's fill, and the ink its glyph is stroked in. */
+  iconChip(accent: string, x: number, y: number, size: number): {
+    gradient?: { from: string; to: string; x1: number; y1: number; x2: number; y2: number };
+    fill?: string;
+    fillAlpha?: number;
+    stroke?: string;
+    strokeAlpha?: number;
+  };
+  iconInk(accent: string): string;
+}
+
+export function makeSkin(mode: StudioMode, palette: ExportPalette): Skin {
+  if (mode !== "marketing") {
+    return {
+      marketing: false,
+      radius: 8,
+      groupRadius: GROUP_RADIUS,
+      titleSize: 13,
+      descSize: DESC_FONT_SIZE,
+      descLineH: DESC_LINE_H,
+      descColor: palette.textDim,
+      kindEyebrow: true,
+      iconBox: 28,
+      iconRadius: 7,
+      edgeWidth: 1.8,
+      edgeTech: true,
+      labelFont: "mono",
+      labelSize: 11,
+      labelColor: palette.textDim,
+      fieldFont: "mono",
+      fieldSize: 10.5,
+      fieldTypes: true,
+      chipFont: "mono",
+      card: (accent) => ({ stroke: accent, strokeWidth: 1.2 }),
+      iconChip: (accent) => ({ fill: accent, fillAlpha: 0.13 }),
+      iconInk: (accent) => accent,
+    };
+  }
+
+  const light = isLightPalette(palette);
+  // The stylesheet's `--as-mk-grad-from` / `--as-mk-grad-to` / `--as-mk-edge`,
+  // both branches of each `light-dark()`.
+  const gradFrom = (accent: string) => mix(accent, palette.surface, light ? 0.24 : 0.17);
+  const gradTo = (accent: string) => mix(accent, palette.surface, light ? 0.07 : 0.04);
+  const edge = (accent: string) => mix(accent, palette.border, light ? 0.48 : 0.34);
+
+  return {
+    marketing: true,
+    radius: 12,
+    groupRadius: 16,
+    titleSize: 16,
+    descSize: 12,
+    descLineH: Math.round(12 * 1.35),
+    // `--as-mk-text`: secondary copy pulled off the chrome grey toward the
+    // body ink, because a card's own description is read, not glanced past.
+    descColor: mix(palette.textDim, palette.text, 0.45),
+    kindEyebrow: false,
+    iconBox: 36,
+    iconRadius: 11,
+    edgeWidth: 2.2,
+    edgeTech: false,
+    labelFont: "sans",
+    labelSize: 13,
+    labelColor: mix(palette.textDim, palette.text, 0.45),
+    fieldFont: "sans",
+    fieldSize: 11.5,
+    fieldTypes: false,
+    chipFont: "sans",
+    card: (accent, box, record) => ({
+      gradient: {
+        from: gradFrom(accent),
+        to: gradTo(accent),
+        // 135deg: the CSS angle, which runs top-left to bottom-right. A
+        // record's runs straight down and finishes at the 46px header band —
+        // both backends pad past the last stop, so the rows below it sit on
+        // the flat end colour, which is what the CSS's third stop says too.
+        x1: box.x,
+        y1: box.y,
+        x2: record ? box.x : box.x + box.width,
+        y2: record ? box.y + 46 : box.y + box.height,
+      },
+      stroke: edge(accent),
+      strokeWidth: 1.2,
+      // CSS spreads this one in (`-18px` on a 30px blur) and adds a second
+      // 1px contact shadow; a canvas shadow has no spread, so it is one
+      // tighter, denser layer instead of two.
+      shadow: { color: accent, alpha: light ? 0.34 : 0.3, blur: 18, dy: 7 },
+    }),
+    iconChip: (accent, x, y, size) =>
+      light
+        ? {
+            // On a light page the chip is the PALE tile — laying more of the
+            // kind's hue over an already-tinted card just washes the card
+            // twice. See the same inversion in styles.css.
+            gradient: {
+              from: palette.surface,
+              to: mix(accent, palette.surface, 0.12),
+              x1: x,
+              y1: y,
+              x2: x + size,
+              y2: y + size,
+            },
+            stroke: mix(accent, palette.surface, 0.3),
+            strokeAlpha: 1,
+          }
+        : {
+            gradient: {
+              from: mix(accent, gradFrom(accent), 0.26),
+              to: mix(accent, gradTo(accent), 0.1),
+              x1: x,
+              y1: y,
+              x2: x + size,
+              y2: y + size,
+            },
+            stroke: accent,
+            strokeAlpha: 0.22,
+          },
+    // `--as-node-ink` at the mode's own 60% mix, and nearly the raw hue on a
+    // light page where the glyph has a near-white tile under it.
+    iconInk: (accent) => mix(accent, palette.text, light ? 0.88 : 0.6),
+  };
+}
+
 // ─── Command set ─────────────────────────────────────────────────────────────
 
 /**
@@ -225,6 +449,21 @@ type RawDrawCmd =
       d: string;
       fill?: string;
       fillAlpha?: number;
+      /**
+       * A linear gradient fill, its endpoints in the same user space as `d`.
+       * Wins over `fill` when both are present, so a caller can pass the flat
+       * colour as the fallback a reader without gradient support would want.
+       * Marketing mode is the only thing that emits one.
+       */
+      gradient?: { from: string; to: string; x1: number; y1: number; x2: number; y2: number };
+      /**
+       * A soft drop shadow under the shape — `dy` down, no horizontal offset,
+       * which is every shadow this editor draws. The colour is a hex and the
+       * alpha is separate because the two backends want it both ways round:
+       * the canvas needs one `rgba()` string, SVG needs flood-color plus
+       * flood-opacity.
+       */
+      shadow?: { color: string; alpha: number; blur: number; dy: number };
       stroke?: string;
       strokeAlpha?: number;
       strokeWidth?: number;
@@ -493,12 +732,24 @@ const DATE_CHIP_H = 15;
 
 const exportDate = (date: DiagramDate | undefined) => formatDiagramDate(date, { year: "always" });
 
+export interface EmitOptions {
+  /**
+   * Which presentation mode the editor is showing (see `StudioMode`). An
+   * export has to say what the screen says: a deck exported out of marketing
+   * mode that comes back in the technical dress is the one disagreement
+   * between screen and file this module exists to prevent.
+   */
+  mode?: StudioMode;
+}
+
 export function emitTemplate(
   template: DiagramTemplate,
   registry: ResolvedRegistry,
   paletteOverride: Partial<ExportPalette> = {},
+  opts: EmitOptions = {},
 ): Emitted {
   const palette: ExportPalette = { ...DARK_EXPORT_PALETTE, ...paletteOverride };
+  const skin = makeSkin(resolveStudioMode(opts.mode), palette);
   // Fixed-hex palettes re-resolve per theme: a light export darkens the edge
   // colours the same way the canvas's CSS variables do.
   const edgeHex = { ...EDGE_COLOR_HEX, ...paletteRecord(palette.edgeColors) };
@@ -513,19 +764,24 @@ export function emitTemplate(
   // header. Growing the page is the only way an export carries all of it.
   const tag = template.meta?.versionTag ? String(template.meta.versionTag) : "";
   const tagPos = template.meta?.versionTagPosition ?? "top-left";
-  const tagW = tag ? approxTextWidth(tag, 10, "mono") + 20 : 0;
-  const legendH = legend.length ? 14 + legend.length * LEGEND_ROW_H + 8 : 0;
+  const tagW = tag ? approxTextWidth(tag, 10, skin.chipFont) + 20 : 0;
+  const legendH = legend.length ? LEGEND_PAD * 2 + LEGEND_TITLE_H + legend.length * LEGEND_ROW_H : 0;
   // A top-right tag shares the corner with the legend, so it queues below it.
   const tagOffsetY =
     tagPos === "top-left" ? (template.meta?.title ? TITLE_BLOCK_H : 0) : legendH ? legendH + 8 : 0;
   const padTop = Math.max(
     PAD,
     template.meta?.title ? TITLE_BLOCK_H : 0,
+    // The legend's own headroom. Without this term a legend taller than the
+    // 48px pad hung down INTO the drawing — the very thing the comment above
+    // says reserving the margin was for — and a five-provider document painted
+    // its key over whatever was in the top-right corner.
+    legendH ? LEGEND_INSET * 2 + legendH : 0,
     tag && tagPos.startsWith("top") ? 10 + tagOffsetY + 20 + 8 : 0,
   );
   const padRight =
     Math.max(PAD, tag && tagPos.endsWith("right") ? tagW + 20 : 0) +
-    (legend.length ? LEGEND_W + 16 : 0);
+    (legend.length ? LEGEND_W + LEGEND_INSET : 0);
   const width = Math.max(1, b.maxX - b.minX + PAD + padRight);
   const height = Math.max(1, b.maxY - b.minY + padTop + PAD);
   const cmds: DrawCmd[] = [];
@@ -651,7 +907,7 @@ export function emitTemplate(
     const label = `${zone.label}  ·  ${def.label}${
       zone.date ? `  ·  ${exportDate(zone.date)}` : ""
     }`;
-    const chipW = approxTextWidth(label, 11, "mono") + 26;
+    const chipW = approxTextWidth(label, skin.marketing ? 13 : 11, skin.chipFont) + 26;
     cmds.push({
       op: "path",
       // Same rule as the group chip: the outer corner is the zone's own, so
@@ -663,35 +919,43 @@ export function emitTemplate(
       strokeAlpha: 0.55,
       strokeWidth: 1,
     });
-    cmds.push({ op: "path", d: roundedRectPath(zone.x + 8, zone.y + 8, 7, 7, 1.5), fill: ink });
-    cmds.push({ op: "text", x: zone.x + 21, y: zone.y + 15, text: label, size: 11, font: "mono", weight: 600, color: palette.text });
+    // A 7px square at y+8 in technical, a 10px rounded one centred in the
+    // 22px chip in marketing — the same swatch `.as-zone__swatch` grows into.
+    const swatch = skin.marketing ? 10 : 7;
+    cmds.push({ op: "path", d: roundedRectPath(zone.x + 8, zone.y + (skin.marketing ? 6 : 8), swatch, swatch, skin.marketing ? 3 : 1.5), fill: ink });
+    cmds.push({ op: "text", x: zone.x + (skin.marketing ? 24 : 21), y: zone.y + 15, text: label, size: skin.marketing ? 13 : 11, font: skin.chipFont, weight: 600, color: palette.text });
     stamp(zoneStart, `zone:${zone.id}`, dayOf(zone.date));
   }
 
   // Date chip — the same outlined grey chip the editor renders (.as-date), so
   // "this lands in June" survives into the shared artefact rather than being
   // an editor-only affordance.
-  const dateChipW = (date: string) => approxTextWidth(exportDate(date), 9, "mono") + 12;
+  // Marketing turns it into a sans pill (`.as-root--marketing .as-date`); the
+  // width formula reads the mode's own face so the chip still fits its text.
+  const DATE_SIZE = skin.marketing ? 10 : 9;
+  const DATE_PAD = skin.marketing ? 7 : 6;
+  const dateChipW = (date: string) =>
+    approxTextWidth(exportDate(date), DATE_SIZE, skin.chipFont) + DATE_PAD * 2;
   const pushDateChip = (date: string, x: number, y: number, overdue = false) => {
     const text = exportDate(date);
     // Overdue — past date, element still pre-active — is the chip's one loud
     // moment: amber border and text, same as the editor.
     const ink = overdue ? (palette.overdue ?? "#f59e0b") : palette.textDim;
-    const d = roundedRectPath(x, y, approxTextWidth(text, 9, "mono") + 12, 15, 4);
+    const d = roundedRectPath(x, y, dateChipW(date), 15, skin.marketing ? 7.5 : 4);
     cmds.push({ op: "path", d, fill: palette.surface, fillAlpha: 0.7 });
     cmds.push({ op: "path", d, stroke: ink, strokeAlpha: overdue ? 0.65 : 0.4, strokeWidth: 1 });
-    cmds.push({ op: "text", x: x + 6, y: y + 11, text, size: 9, font: "mono", weight: 500, color: ink });
+    cmds.push({ op: "text", x: x + DATE_PAD, y: y + 11, text, size: DATE_SIZE, font: skin.chipFont, weight: 500, color: ink });
   };
 
   // Owning-team tag — the same pill the editor renders (see .as-node__team),
   // so ownership survives into the shared artefact.
-  const teamPillW = (team: string) => approxTextWidth(team, 9, "mono") + 14;
+  const teamPillW = (team: string) => approxTextWidth(team, 9, skin.chipFont) + 14;
   const pushTeamPill = (team: string, x: number, y: number) => {
     const c = teamColor(team);
     const d = roundedRectPath(x, y, teamPillW(team), 16, 8);
     cmds.push({ op: "path", d, fill: palette.surface });
     cmds.push({ op: "path", d, fill: c, fillAlpha: 0.14, stroke: c, strokeAlpha: 0.55, strokeWidth: 1 });
-    cmds.push({ op: "text", x: x + 7, y: y + 11.5, text: team, size: 9, font: "mono", weight: 600, color: c });
+    cmds.push({ op: "text", x: x + 7, y: y + 11.5, text: team, size: 9, font: skin.chipFont, weight: 600, color: c });
   };
 
   // Expanded container boundaries. Collapsed chips paint later, with the
@@ -717,7 +981,7 @@ export function emitTemplate(
     const frameDash =
       statusDashOf(node.status) ??
       (frameOutline === "dashed" ? [6, 5] : frameOutline === "dotted" ? [2, 4] : undefined);
-    const frameD = roundedRectPath(box.x, box.y, box.width, box.height, GROUP_RADIUS);
+    const frameD = roundedRectPath(box.x, box.y, box.width, box.height, skin.groupRadius);
     cmds.push({
       op: "path",
       d: frameD,
@@ -749,17 +1013,17 @@ export function emitTemplate(
     // boundary has no card body to hang one under, and the chip is where a
     // reader already looks for the group's name.
     const frameStatusText = node.status ? ` · ${node.status.toUpperCase()}` : "";
-    const labelW = approxTextWidth(node.label, 11, "mono");
-    const chipW = Math.max(60, labelW + approxTextWidth(frameStatusText, 11, "mono") + 18);
+    const labelW = approxTextWidth(node.label, 11, skin.chipFont);
+    const chipW = Math.max(60, labelW + approxTextWidth(frameStatusText, 11, skin.chipFont) + 18);
     cmds.push({
       op: "path",
       // border-radius: 10px 0 6px 0 — the top-left is the FRAME's radius, so
       // the two curves lie on top of each other instead of crossing.
-      d: roundedRectCorners(box.x, box.y, chipW, 22, { tl: GROUP_RADIUS, br: 6 }),
+      d: roundedRectCorners(box.x, box.y, chipW, 22, { tl: skin.groupRadius, br: skin.marketing ? 10 : 6 }),
       fill: palette.surface2,
       ...(frameDim < 1 ? { fillAlpha: frameDim } : {}),
     });
-    cmds.push({ op: "text", x: box.x + 9, y: box.y + 15, text: node.label, size: 11, font: "mono", color: palette.textDim, ...(frameDim < 1 ? { alpha: frameDim } : {}) });
+    cmds.push({ op: "text", x: box.x + 9, y: box.y + 15, text: node.label, size: 11, font: skin.chipFont, ...(skin.marketing ? { weight: 600 } : {}), color: skin.marketing ? palette.text : palette.textDim, ...(frameDim < 1 ? { alpha: frameDim } : {}) });
     if (frameStatusText) {
       cmds.push({
         op: "text",
@@ -767,7 +1031,7 @@ export function emitTemplate(
         y: box.y + 15,
         text: frameStatusText,
         size: 11,
-        font: "mono",
+        font: skin.chipFont,
         // Same two-colour rule the leaf eyebrow uses: salmon for the stage
         // that means "on its way out", the element's own ink otherwise.
         color: node.status === "deprecated" ? palette.warn ?? "#fa8072" : frameInk,
@@ -808,7 +1072,7 @@ export function emitTemplate(
     const color = edgeHex[edge.color] ?? edgeHex.slate;
     const direction = edge.direction ?? "forward";
 
-    cmds.push({ op: "path", d: geo.path, stroke: color, strokeWidth: 1.8, dash: EDGE_DASH[edge.style] });
+    cmds.push({ op: "path", d: geo.path, stroke: color, strokeWidth: skin.edgeWidth, dash: EDGE_DASH[edge.style], ...(skin.marketing ? { round: true } : {}) });
     // An end stating its cardinality draws the crow's-foot symbol instead of
     // an end glyph — the same rule the canvas applies, from the same parser.
     // Otherwise, the same glyph resolution as the canvas: `direction` decides
@@ -822,7 +1086,7 @@ export function emitTemplate(
       cmds.push(
         glyph.filled
           ? { op: "path", d: glyph.d, fill: color }
-          : { op: "path", d: glyph.d, stroke: color, strokeWidth: 1.8, round: true },
+          : { op: "path", d: glyph.d, stroke: color, strokeWidth: skin.edgeWidth, round: true },
       );
     }
     if (startHead && !startMarker) {
@@ -830,14 +1094,14 @@ export function emitTemplate(
       cmds.push(
         glyph.filled
           ? { op: "path", d: glyph.d, fill: color }
-          : { op: "path", d: glyph.d, stroke: color, strokeWidth: 1.8, round: true },
+          : { op: "path", d: glyph.d, stroke: color, strokeWidth: skin.edgeWidth, round: true },
       );
     }
     if (endMarker) {
-      cmds.push({ op: "path", d: crowsFootPath(endMarker, geo.tip, geo.angle), stroke: color, strokeWidth: 1.8, round: true });
+      cmds.push({ op: "path", d: crowsFootPath(endMarker, geo.tip, geo.angle), stroke: color, strokeWidth: skin.edgeWidth, round: true });
     }
     if (startMarker) {
-      cmds.push({ op: "path", d: crowsFootPath(startMarker, geo.at(0), startAngle(geo)), stroke: color, strokeWidth: 1.8, round: true });
+      cmds.push({ op: "path", d: crowsFootPath(startMarker, geo.at(0), startAngle(geo)), stroke: color, strokeWidth: skin.edgeWidth, round: true });
     }
 
     // Everything from here down is TEXT the edge carries, and it all paints
@@ -856,14 +1120,17 @@ export function emitTemplate(
         x: geo.label.x + (edge.seq ? 6 : 0),
         y: geo.label.y - 4,
         text: edge.label,
-        size: 11,
-        font: "mono",
-        color: palette.textDim,
+        size: skin.labelSize,
+        font: skin.labelFont,
+        ...(skin.marketing ? { weight: 500 } : {}),
+        color: skin.labelColor,
         anchor: "middle",
         halo: { color: palette.bg, width: 4 },
       });
     }
-    if (edge.tech) {
+    // The technology sub-label is what marketing tucks away — the reader of a
+    // slide does not need "[AMQP]" under "enqueue".
+    if (edge.tech && skin.edgeTech) {
       cmds.push({
         op: "text",
         x: geo.label.x,
@@ -891,7 +1158,7 @@ export function emitTemplate(
         y: at.y - 4,
         text,
         size: 10,
-        font: "mono",
+        font: skin.chipFont,
         weight: 600,
         color: palette.text,
         anchor: "middle",
@@ -902,10 +1169,10 @@ export function emitTemplate(
       cmds.push({
         op: "text",
         x: geo.label.x,
-        y: geo.label.y + (edge.label ? 8 : -4) + (edge.tech ? 11 : 0),
+        y: geo.label.y + (edge.label ? 8 : -4) + (edge.tech && skin.edgeTech ? 11 : 0),
         text: exportDate(edge.date),
         size: 9,
-        font: "mono",
+        font: skin.chipFont,
         color: palette.textDim,
         alpha: 0.7,
         anchor: "middle",
@@ -950,16 +1217,26 @@ export function emitTemplate(
     }
 
     if (def.container) {
-      const d = roundedRectPath(box.x, box.y, box.width, box.height, 9);
-      cmds.push({ op: "path", d, fill: palette.surface });
-      cmds.push({ op: "path", d, fill: accent, fillAlpha: 0.1, stroke: accent, strokeAlpha: 0.45, strokeWidth: 1 });
+      // A collapsed group is a mini-card, so it takes the card's paints
+      // (`.as-root--marketing .as-group-chip` shares them on the canvas too).
+      const chipPaint = skin.card(accent, box);
+      const d = roundedRectPath(box.x, box.y, box.width, box.height, skin.marketing ? skin.radius : 9);
+      cmds.push({ op: "path", d, fill: palette.surface, ...(chipPaint.shadow ? { shadow: chipPaint.shadow } : {}) });
+      cmds.push({
+        op: "path",
+        d,
+        ...(chipPaint.gradient ? { gradient: chipPaint.gradient } : { fill: accent, fillAlpha: 0.1 }),
+        stroke: chipPaint.stroke,
+        strokeAlpha: skin.marketing ? 1 : 0.45,
+        strokeWidth: 1,
+      });
       cmds.push({
         op: "text",
         x: box.x + 10,
         y: box.y + box.height / 2 + 4,
-        text: ellipsise(`▸ ${node.label}`, 11, "mono", box.width - 18),
-        size: 11,
-        font: "mono",
+        text: ellipsise(`▸ ${node.label}`, skin.marketing ? 13 : 11, skin.chipFont, box.width - 18),
+        size: skin.marketing ? 13 : 11,
+        font: skin.chipFont,
         weight: 600,
         color: palette.text,
       });
@@ -980,11 +1257,12 @@ export function emitTemplate(
       if (boxed) {
         cmds.push({
           op: "path",
-          d: roundedRectPath(box.x, box.y, box.width, box.height, 8),
+          d: roundedRectPath(box.x, box.y, box.width, box.height, skin.radius),
           fill: palette.surface,
-          fillAlpha: 0.78,
+          fillAlpha: skin.marketing ? 0.85 : 0.78,
           stroke: palette.border,
           strokeWidth: 1,
+          ...(skin.marketing ? { shadow: { color: palette.text, alpha: 0.14, blur: 14, dy: 6 } } : {}),
         });
       }
       // `.as-annotation` inherits the editor root's 1.4 line-height and does
@@ -1041,16 +1319,30 @@ export function emitTemplate(
     const statusDash = statusDashOf(status);
     const dim = statusDimOf(status);
 
-    const sil = silhouettePath(def.shape ?? "card", box.x + 0.75, box.y + 0.75, box.width - 1.5, box.height - 1.5);
-    cmds.push({ op: "path", d: sil.body, fill: palette.surface });
+    const sil = silhouettePath(def.shape ?? "card", box.x + 0.75, box.y + 0.75, box.width - 1.5, box.height - 1.5, {
+      radius: skin.radius,
+    });
+    const paint = skin.card(accent, box, !!node.fields?.length);
+    // Base coat first, so a gradient with light stops still sits on the
+    // surface rather than on the page. The shadow rides the base coat: it is
+    // the SHAPE's shadow, and stacking it under both layers would double it.
     cmds.push({
       op: "path",
       d: sil.body,
-      fill: accent,
-      fillAlpha: 0.06 * dim,
-      stroke: accent,
-      strokeAlpha: 0.4 * dim,
-      strokeWidth: 1.2,
+      fill: palette.surface,
+      ...(paint.shadow && dim >= 1 ? { shadow: paint.shadow } : {}),
+    });
+    cmds.push({
+      op: "path",
+      d: sil.body,
+      // Technical washes the surface with 6% of the accent; marketing lays a
+      // full gradient over it (`.as-root--marketing .as-node`).
+      ...(paint.gradient
+        ? { gradient: paint.gradient, ...(dim < 1 ? { fillAlpha: dim } : {}) }
+        : { fill: accent, fillAlpha: 0.06 * dim }),
+      stroke: paint.stroke,
+      strokeAlpha: (skin.marketing ? 1 : 0.4) * dim,
+      strokeWidth: paint.strokeWidth,
       ...(statusDash ? { dash: statusDash } : {}),
     });
     if (sil.detail) cmds.push({ op: "path", d: sil.detail, stroke: accent, strokeAlpha: 0.35 * dim, strokeWidth: 1.2 });
@@ -1064,32 +1356,46 @@ export function emitTemplate(
 
     const cTop = sil.contentTop;
     const icon = iconPaths(registry, node.icon);
-    const textX = box.x + sil.contentInlinePad + (icon ? 50 : 14);
+    // The card's own padding and the flex gap either side of the icon chip —
+    // `.as-node` is 6px/12px with a 10px gap, and marketing widens both.
+    const chipInset = skin.marketing ? 14 : 12;
+    const chipGap = skin.marketing ? 12 : 10;
+    const textX = box.x + sil.contentInlinePad + (icon ? chipInset + skin.iconBox + chipGap : 14);
     const contentMidY = box.y + cTop + (box.height - cTop) / 2;
     // Icon and text share one flex line on the canvas, so the icon follows
     // the node's vertical alignment too — centred by default, pinned to the
     // padding edge when the text is (records included, which pin to the top).
+    // Half the chip plus the card's top padding: where a pinned chip centres,
+    // which moves with the chip's own size.
+    const iconInset = 6 + skin.iconBox / 2;
     const iconMidY =
       node.fields?.length || node.textVAlign === "top"
-        ? box.y + cTop + ICON_INSET
+        ? box.y + cTop + iconInset
         : node.textVAlign === "bottom"
-          ? box.y + box.height - ICON_INSET
+          ? box.y + box.height - iconInset
           : contentMidY;
     if (icon) {
+      const chipX = box.x + sil.contentInlinePad + chipInset;
+      const chipY = iconMidY - skin.iconBox / 2;
+      const glyph = skin.iconBox * (17 / 28);
       cmds.push({
         op: "path",
-        d: roundedRectPath(box.x + sil.contentInlinePad + 12, iconMidY - 14, 28, 28, 7),
-        fill: accent,
-        fillAlpha: 0.13,
+        d: roundedRectPath(chipX, chipY, skin.iconBox, skin.iconBox, skin.iconRadius),
+        ...skin.iconChip(accent, chipX, chipY, skin.iconBox),
+        ...(skin.marketing ? { strokeWidth: 1 } : {}),
       });
       for (const d of icon) {
         cmds.push({
           op: "path",
           d,
-          stroke: accent,
+          stroke: skin.iconInk(accent),
           strokeWidth: 1.8,
           round: true,
-          transform: { tx: box.x + sil.contentInlinePad + 17.5, ty: iconMidY - 8.5, scale: 17 / 24 },
+          transform: {
+            tx: chipX + (skin.iconBox - glyph) / 2,
+            ty: chipY + (skin.iconBox - glyph) / 2,
+            scale: glyph / 24,
+          },
         });
       }
     }
@@ -1102,7 +1408,20 @@ export function emitTemplate(
     // reproduces what the user arranged rather than a second interpretation.
     // `anchorX` is where a run of text is placed FROM; the anchor tells the
     // backend which end of the run that x refers to.
-    const fontSize = node.fontSize ?? 13;
+    // A node's own `fontSize` wins — that number is the author's, not the
+    // mode's — but `validateTemplate` stamps every node with the DEFAULT size,
+    // so "the author set one" means "set one that isn't the default". That is
+    // the same test the canvas applies before it declares `--as-node-font`;
+    // without it the marketing step never fired on any real document.
+    //
+    // `wrap` keeps the technical size in both modes for the reason the
+    // stylesheet does (`.as-node--wrap .as-node__title`): the box's height was
+    // MEASURED at 13px and holds exactly those lines.
+    const authorSize = node.fontSize && node.fontSize !== DEFAULT_FONT_SIZE ? node.fontSize : undefined;
+    const fontSize = authorSize ?? (skin.marketing && !node.wrap ? skin.titleSize : DEFAULT_FONT_SIZE);
+    // Marketing tucks the kind away — the icon has already said it — and keeps
+    // the row only for a lifecycle status, which the icon has not.
+    const eyebrow = skin.kindEyebrow || !!status;
     const align = node.textAlign ?? "left";
     const anchor = align === "center" ? "middle" : align === "right" ? "end" : "start";
     const anchorX = align === "center" ? textX + textW / 2 : align === "right" ? textX + textW : textX;
@@ -1130,10 +1449,10 @@ export function emitTemplate(
     // long one prints straight through the silhouette.
     const descRoom = Math.max(
       1,
-      Math.floor((box.height - cTop - 49 - titleOverflow) / DESC_LINE_H) + 1,
+      Math.floor((box.height - cTop - 49 - titleOverflow) / skin.descLineH) + 1,
     );
     const descLines = node.description
-      ? wrapText(node.description, DESC_FONT_SIZE, "sans", textW, rows.length ? 1 : node.wrap ? descRoom : 2)
+      ? wrapText(node.description, skin.descSize, "sans", textW, rows.length ? 1 : node.wrap ? descRoom : 2)
       : [];
 
     // Vertical placement moves the whole text block inside the box.
@@ -1149,7 +1468,13 @@ export function emitTemplate(
     // edge also computes, so shifting them would leave every foreign-key line
     // pointing between columns. (The canvas agrees — .as-node--record pins to
     // the top.)
-    const blockH = 45 + titleOverflow + descLines.length * DESC_LINE_H;
+    // Baselines inside the content box. Technical's are the 16/31/45 this
+    // emitter has always used; a marketing card with its eyebrow gone has to
+    // close that row up, or the title floats where the eyebrow used to be —
+    // the canvas closes it by having one fewer flex child.
+    const TITLE_DY = eyebrow ? 31 : Math.round(fontSize * 1.2) + 2;
+    const DESC_DY = TITLE_DY + 14;
+    const blockH = DESC_DY + titleOverflow + descLines.length * skin.descLineH;
     const slack = Math.max(0, box.height - cTop - blockH);
     const vShift = rows.length
       ? 0
@@ -1160,38 +1485,47 @@ export function emitTemplate(
           : slack / 2;
     const ty = (offset: number) => box.y + cTop + offset + vShift;
 
-    if (status === "deprecated") {
+    // The kind half of the eyebrow, dropped in marketing; the status half is
+    // never dropped, in either mode.
+    const eyebrowKind = skin.kindEyebrow ? kindText : "";
+    const eyebrowSep = skin.kindEyebrow ? statusText : status ? status.toUpperCase() : "";
+    const eyebrowFont = skin.marketing ? "sans" : "mono";
+    if (eyebrow && status === "deprecated") {
       // The status token gets the editor's salmon; the node's own dimming
       // still applies through the shared alpha, exactly as opacity does on
       // the canvas. Centred/right-aligned nodes draw the eyebrow as one run so
       // the two halves can't drift apart under a non-start anchor.
       const eyebrowX = align === "left" ? textX : anchorX;
-      cmds.push({ op: "text", x: eyebrowX, y: ty(16), text: kindText, size: 9, font: "mono", color: accent, alpha: 0.8 * dim, ...aligned });
-      if (align === "left") {
+      if (eyebrowKind) {
+        cmds.push({ op: "text", x: eyebrowX, y: ty(16), text: eyebrowKind, size: 9, font: eyebrowFont, color: accent, alpha: 0.8 * dim, ...aligned });
+      }
+      if (align === "left" || !eyebrowKind) {
         cmds.push({
           op: "text",
-          x: textX + approxTextWidth(kindText, 9, "mono"),
+          x: eyebrowKind ? textX + approxTextWidth(eyebrowKind, 9, eyebrowFont) : eyebrowX,
           y: ty(16),
-          text: statusText,
+          text: eyebrowSep,
           size: 9,
-          font: "mono",
+          font: eyebrowFont,
+          weight: skin.marketing ? 600 : undefined,
           color: palette.warn ?? "#fa8072",
           alpha: 0.8 * dim,
+          ...(eyebrowKind ? {} : aligned),
         });
       }
-    } else {
-      cmds.push({ op: "text", x: anchorX, y: ty(16), text: kindText + statusText, size: 9, font: "mono", color: accent, alpha: 0.8 * dim, ...aligned });
+    } else if (eyebrow) {
+      cmds.push({ op: "text", x: anchorX, y: ty(16), text: eyebrowKind + eyebrowSep, size: 9, font: eyebrowFont, weight: skin.marketing ? 600 : undefined, color: accent, alpha: 0.8 * dim, ...aligned });
     }
     titleLines.forEach((line, i) =>
-      cmds.push({ op: "text", x: anchorX, y: ty(31 + i * lineH), text: line, size: fontSize, font: "sans", weight: 600, color: palette.text, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
+      cmds.push({ op: "text", x: anchorX, y: ty(TITLE_DY + i * lineH), text: line, size: fontSize, font: "sans", weight: 600, color: palette.text, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
     );
     if (status === "retired") {
       const strikeW = approxTextWidth(titleLines[0] ?? "", fontSize, "sans");
       const strikeX = align === "center" ? anchorX - strikeW / 2 : align === "right" ? anchorX - strikeW : textX;
-      cmds.push({ op: "path", d: `M ${strikeX} ${ty(26.5)} L ${strikeX + strikeW} ${ty(26.5)}`, stroke: palette.text, strokeAlpha: dim, strokeWidth: 1 });
+      cmds.push({ op: "path", d: `M ${strikeX} ${ty(TITLE_DY - 4.5)} L ${strikeX + strikeW} ${ty(TITLE_DY - 4.5)}`, stroke: palette.text, strokeAlpha: dim, strokeWidth: 1 });
     }
     descLines.forEach((line, i) =>
-      cmds.push({ op: "text", x: anchorX, y: ty(45 + titleOverflow + i * DESC_LINE_H), text: line, size: DESC_FONT_SIZE, font: "sans", color: palette.textDim, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
+      cmds.push({ op: "text", x: anchorX, y: ty(DESC_DY + titleOverflow + i * skin.descLineH), text: line, size: skin.descSize, font: "sans", color: skin.descColor, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
     );
 
     // Field rows — the same list the canvas draws, from the same metrics.
@@ -1234,16 +1568,20 @@ export function emitTemplate(
         }
         // The type takes the right edge; the name gets whatever is left, so a
         // long column name ellipsises rather than running under its own type.
-        const typeText = field.type ?? "";
+        // Marketing prints neither the type nor the required mark — both are
+        // still in the document, the inspector and the JSON — so the name
+        // takes the whole row (`.as-node__fieldtype`, `.as-node__fieldreq`).
+        const typeText = skin.fieldTypes ? (field.type ?? "") : "";
         const typeW = typeText ? approxTextWidth(typeText, 9.5, "mono") : 0;
         const nameW = rightEdge - nameX - (typeW ? typeW + 8 : 0);
+        const nameText = `${field.name}${field.required && skin.fieldTypes ? "*" : ""}`;
         cmds.push({
           op: "text",
           x: nameX,
           y: rowTop + 13,
-          text: ellipsise(`${field.name}${field.required ? "*" : ""}`, 10.5, "mono", nameW),
-          size: 10.5,
-          font: "mono",
+          text: ellipsise(nameText, skin.fieldSize, skin.fieldFont, nameW),
+          size: skin.fieldSize,
+          font: skin.fieldFont,
           color: palette.text,
           ...(dim < 1 ? { alpha: dim } : {}),
         });
@@ -1273,7 +1611,7 @@ export function emitTemplate(
       // thing this emitter exists to prevent.
       const below = rows.length
         ? listTop + rows.length * FIELD_ROW_H + 2
-        : ty(36 + descLines.length * DESC_LINE_H);
+        : ty(DESC_DY - 9 + descLines.length * skin.descLineH);
       pushDateChip(node.date, textX, below, isOverdue(node.date, node.status));
       dateBottom = below + DATE_CHIP_H;
     }
@@ -1306,24 +1644,36 @@ export function emitTemplate(
     const rowH = LEGEND_ROW_H;
     const boxW = LEGEND_W;
     const boxH = legendH;
-    const lx = b.maxX + padRight - boxW - 8;
-    const ly = b.minY - padTop + 8;
-    cmds.push({ op: "path", d: roundedRectPath(lx, ly, boxW, boxH, 8), fill: palette.surface, fillAlpha: 0.92, stroke: palette.border, strokeWidth: 1 });
-    cmds.push({ op: "text", x: lx + 10, y: ly + 16, text: "INFRASTRUCTURE", size: 9, font: "mono", weight: 600, color: palette.textDim });
+    const lx = b.maxX + padRight - boxW - LEGEND_INSET;
+    const ly = b.minY - padTop + LEGEND_INSET;
+    cmds.push({
+      op: "path",
+      d: roundedRectPath(lx, ly, boxW, boxH, skin.radius),
+      fill: palette.surface,
+      fillAlpha: 0.92,
+      stroke: palette.border,
+      strokeWidth: 1,
+      ...(skin.marketing ? { shadow: { color: palette.text, alpha: 0.16, blur: 16, dy: 6 } } : {}),
+    });
+    // The title's baseline sits one cap-height below the pad; the rows start a
+    // title-row below that, and the last one ends a full pad above the floor.
+    cmds.push({ op: "text", x: lx + LEGEND_PAD, y: ly + LEGEND_PAD + 9, text: "INFRASTRUCTURE", size: 9, font: skin.chipFont, weight: 600, color: palette.textDim });
     legend.forEach(({ provider, count }, i) => {
       const def = providerDef(registry, provider);
-      const y = ly + 26 + i * rowH;
-      cmds.push({ op: "path", d: roundedRectPath(lx + 10, y + 2, 11, 11, 3), fill: def.color, fillAlpha: 0.3, stroke: def.color, strokeAlpha: 0.7, strokeWidth: 1 });
-      cmds.push({ op: "text", x: lx + 28, y: y + 12, text: def.label, size: 11, font: "sans", color: palette.text });
+      const y = ly + LEGEND_PAD + LEGEND_TITLE_H + i * rowH;
+      cmds.push({ op: "path", d: roundedRectPath(lx + LEGEND_PAD, y + 3.5, 11, 11, skin.marketing ? 3 : 2), fill: def.color, fillAlpha: 0.3, stroke: def.color, strokeAlpha: 0.7, strokeWidth: 1 });
+      cmds.push({ op: "text", x: lx + LEGEND_PAD + 18, y: y + 13, text: def.label, size: 11, font: "sans", color: palette.text });
       if (count > 1) {
-        cmds.push({ op: "text", x: lx + boxW - 16, y: y + 12, text: String(count), size: 10, font: "mono", color: palette.textFaint });
+        // Anchored to the box's right pad, not placed at it: a three-digit
+        // count drawn from that x ran out through the border.
+        cmds.push({ op: "text", x: lx + boxW - LEGEND_PAD, y: y + 13, text: String(count), size: 10, font: skin.chipFont, color: palette.textFaint, anchor: "end" });
       }
     });
   }
 
   // Title block — top-left, in the headroom reserved above the content.
   if (template.meta?.title) {
-    cmds.push({ op: "text", x: b.minX - PAD + 10, y: b.minY - padTop + 24, text: String(template.meta.title), size: 15, font: "sans", weight: 700, color: palette.text });
+    cmds.push({ op: "text", x: b.minX - PAD + 10, y: b.minY - padTop + 24, text: String(template.meta.title), size: skin.marketing ? 17 : 15, font: "sans", weight: 700, color: palette.text });
     cmds.push({
       op: "text",
       x: b.minX - PAD + 10,
@@ -1342,7 +1692,7 @@ export function emitTemplate(
     const px = tagPos.endsWith("left") ? b.minX - PAD + 10 : b.maxX + padRight - tagW - 10;
     const py = tagPos.startsWith("top") ? b.minY - padTop + 10 + tagOffsetY : b.maxY + PAD - 30;
     cmds.push({ op: "path", d: roundedRectPath(px, py, tagW, 20, 10), fill: palette.surface, fillAlpha: 0.92, stroke: palette.border, strokeWidth: 1 });
-    cmds.push({ op: "text", x: px + 10, y: py + 14, text: tag, size: 10, font: "mono", weight: 600, color: palette.textDim });
+    cmds.push({ op: "text", x: px + 10, y: py + 14, text: tag, size: 10, font: skin.chipFont, weight: 600, color: palette.textDim });
   }
 
   return { cmds, width, height, originX: -b.minX + PAD, originY: -b.minY + padTop };
@@ -1368,6 +1718,20 @@ const fontOf = (font: "mono" | "sans") => (font === "mono" ? MONO : SANS);
  * and then strokes inside one save/restore and the second must not inherit the
  * first's transparency.
  */
+/**
+ * `#rrggbb` + alpha as an `rgba()` string, for the two places that need the
+ * alpha INSIDE the colour rather than as a separate channel: the canvas
+ * `shadowColor` (which has no alpha of its own) and SVG's flood-color. A
+ * colour that is not a hex comes back untouched and takes the alpha it was
+ * already carrying.
+ */
+function rgba(color: string, alpha: number): string {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(color.trim());
+  if (!m) return color;
+  const [r, g, b] = [m[1], m[2], m[3]].map((h) => Number.parseInt(h, 16));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 function withAlpha(ctx: CanvasRenderingContext2D, color: string, alpha: number | undefined): string {
   ctx.globalAlpha = 1;
   if (alpha === undefined || alpha >= 1) return color;
@@ -1399,10 +1763,28 @@ export function drawToCanvas(ctx: CanvasRenderingContext2D, cmds: DrawCmd[]): vo
           ctx.scale(cmd.transform.scale, cmd.transform.scale);
         }
         const path = new Path2D(cmd.d);
-        if (cmd.fill) {
+        if (cmd.shadow) {
+          ctx.shadowColor = rgba(cmd.shadow.color, cmd.shadow.alpha);
+          ctx.shadowBlur = cmd.shadow.blur;
+          ctx.shadowOffsetY = cmd.shadow.dy;
+        }
+        if (cmd.gradient) {
+          const g = ctx.createLinearGradient(cmd.gradient.x1, cmd.gradient.y1, cmd.gradient.x2, cmd.gradient.y2);
+          g.addColorStop(0, cmd.gradient.from);
+          g.addColorStop(1, cmd.gradient.to);
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = g;
+          ctx.fill(path);
+        } else if (cmd.fill) {
           ctx.fillStyle = withAlpha(ctx, cmd.fill, cmd.fillAlpha);
           ctx.fill(path);
         }
+        // The shadow belongs to the SHAPE, not to each paint of it: leaving it
+        // armed would draw it a second time under the outline, doubling its
+        // density exactly along the edge where it is most visible.
+        ctx.shadowColor = "rgba(0, 0, 0, 0)";
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetY = 0;
         if (cmd.stroke) {
           ctx.strokeStyle = withAlpha(ctx, cmd.stroke, cmd.strokeAlpha);
           ctx.lineWidth = cmd.strokeWidth ?? 1;
@@ -1482,6 +1864,30 @@ export function drawToSvg(cmds: DrawCmd[], opts: { gridId?: string } = {}): stri
   // share a <pattern> id — the browser resolves url(#…) document-wide.
   const gridId = opts.gridId ?? "as-grid";
   const out: string[] = [];
+  // Gradients and drop shadows are referenced by id, and several SVGs are
+  // inlined into one page by the multi-view HTML export — so every id is
+  // built from `gridId`, which is already per-view unique, plus a counter.
+  const defs: string[] = [];
+  const defId = () => `${gridId}-d${defs.length}`;
+  const gradientRef = (g: { from: string; to: string; x1: number; y1: number; x2: number; y2: number }) => {
+    const id = defId();
+    defs.push(
+      `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${g.x1}" y1="${g.y1}" x2="${g.x2}" y2="${g.y2}">` +
+        `<stop offset="0" stop-color="${g.from}"/><stop offset="1" stop-color="${g.to}"/></linearGradient>`,
+    );
+    return id;
+  };
+  const shadowRef = (sh: { color: string; alpha: number; blur: number; dy: number }) => {
+    const id = defId();
+    // A generous region: the default -10%..120% filter box clips a soft
+    // shadow's tail on a small shape, which reads as a hard edge under the
+    // card rather than as light falling off.
+    defs.push(
+      `<filter id="${id}" x="-40%" y="-40%" width="180%" height="180%">` +
+        `<feDropShadow dx="0" dy="${sh.dy}" stdDeviation="${sh.blur / 2}" flood-color="${sh.color}" flood-opacity="${sh.alpha}"/></filter>`,
+    );
+    return id;
+  };
   // Consecutive commands stamped with one tag render inside one group, so a
   // whole element can be shown, dimmed, or hidden by touching a single <g>.
   // The emitters push each element's commands contiguously, which is what
@@ -1510,9 +1916,12 @@ export function drawToSvg(cmds: DrawCmd[], opts: { gridId?: string } = {}): stri
         break;
       }
       case "path": {
+        const gradId = cmd.gradient ? gradientRef(cmd.gradient) : null;
+        const shadowId = cmd.shadow ? shadowRef(cmd.shadow) : null;
         const attrs = [
-          cmd.fill ? `fill="${cmd.fill}"` : `fill="none"`,
-          cmd.fillAlpha !== undefined ? `fill-opacity="${cmd.fillAlpha}"` : "",
+          gradId ? `fill="url(#${gradId})"` : cmd.fill ? `fill="${cmd.fill}"` : `fill="none"`,
+          cmd.fillAlpha !== undefined && !gradId ? `fill-opacity="${cmd.fillAlpha}"` : "",
+          shadowId ? `filter="url(#${shadowId})"` : "",
           cmd.stroke ? `stroke="${cmd.stroke}"` : "",
           cmd.strokeAlpha !== undefined ? `stroke-opacity="${cmd.strokeAlpha}"` : "",
           cmd.strokeWidth ? `stroke-width="${cmd.strokeWidth}"` : "",
@@ -1580,5 +1989,8 @@ export function drawToSvg(cmds: DrawCmd[], opts: { gridId?: string } = {}): stri
     }
   }
   if (openTag !== null) out.push("</g>");
+  // One defs block, first: a `url(#…)` may be resolved before the element that
+  // defines it in some readers, and putting them all up front costs nothing.
+  if (defs.length) out.unshift(`<defs>${defs.join("")}</defs>`);
   return out.join("\n");
 }
