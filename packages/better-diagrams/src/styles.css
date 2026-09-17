@@ -2731,7 +2731,10 @@
   justify-content: flex-start;
   gap: 6px;
   width: fit-content;
-  max-width: min(94%, 900px);
+  /* Wide enough that a multi-selection's bar — every setting the selected
+     nodes (or connections) share — stays a few rows rather than a tower
+     covering the canvas it edits. A single element still fits in two. */
+  max-width: min(94%, 1120px);
   margin-inline: auto;
   padding: 8px 10px;
   border: 1px solid var(--as-border);
@@ -2911,6 +2914,13 @@
   font-size: 0.6875rem;
   color: var(--as-text-dim);
   white-space: nowrap;
+}
+
+/* The count as a tab strip, for a selection of nodes AND connections. */
+.as-inspector__tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* "Source → Target". One line: the pair is an orientation check, and a

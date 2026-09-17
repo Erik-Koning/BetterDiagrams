@@ -25,12 +25,11 @@ import { isOverdue } from "../contract/timeline";
 import { kindDef, iconPaths } from "./registry-types";
 import { ZoneNode } from "./ZoneNode";
 import { silhouettePath, teamColor } from "./shapes";
+import { groupContentBox, shapeMinHeight } from "./resize";
 import {
   DEFAULT_CONTAINER_OPACITY,
   DEFAULT_FONT_SIZE,
   NODE_MIN_SIZE,
-  fieldsBoxHeight,
-  wrappedTitleHeight,
   ghostSourceId,
   isBoundaryNodeId,
   isGhostNodeId,
@@ -39,7 +38,6 @@ import {
 } from "../contract/schema";
 
 /** Breathing room kept between a frame's edge and the last thing inside it. */
-const GROUP_CONTENT_PAD = 12;
 
 /** The icon glyph's pixel size per presentation mode; the chip around it is CSS. */
 export const ICON_SIZE = { technical: 17, marketing: 22 } as const;
@@ -253,19 +251,9 @@ export const ShapeNode = memo(function ShapeNode({
   const h = height ?? 76;
 
   // The same measurement `validateTemplate` uses, so the canvas and the
-  // document can never disagree about how tall this box has to be.
-  const minHeight = Math.max(
-    NODE_MIN_SIZE.shape.h,
-    data.fields?.length ? fieldsBoxHeight(data.fields.length, !!data.description) : 0,
-    data.wrap
-      ? wrappedTitleHeight(
-          data.label,
-          data.fontSize ?? DEFAULT_FONT_SIZE,
-          w,
-          !!data.icon && data.icon !== "none",
-        )
-      : 0,
-  );
+  // document can never disagree about how tall this box has to be — and the
+  // same floor a multi-selection resize holds this box to (see resize.ts).
+  const minHeight = shapeMinHeight(data, w);
   // Absolute-coordinate silhouette in a 1:1 viewBox — no stretch, so the
   // person's head and the pipe's ends stay circular at any aspect ratio.
   const sil = shape !== "card" ? silhouettePath(shape, 0.75, 0.75, w - 1.5, h - 1.5) : null;
@@ -491,16 +479,7 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
   );
 
   /** How much room the children need, in the frame's own coordinates. */
-  const contentBox = (() => {
-    let w = 0;
-    let h = 0;
-    for (const child of getNodes()) {
-      if (child.parentId !== id) continue;
-      w = Math.max(w, child.position.x + (child.width ?? child.measured?.width ?? 0) + GROUP_CONTENT_PAD);
-      h = Math.max(h, child.position.y + (child.height ?? child.measured?.height ?? 0) + GROUP_CONTENT_PAD);
-    }
-    return { w, h };
-  })();
+  const contentBox = groupContentBox(id, getNodes());
 
   // In a scoped view every group child renders as a chip BY FORCE — expanding
   // one there would write the chip's 180×44 over the stored size. The toggle
@@ -586,9 +565,15 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
     </button>
   );
 
-  if (data.collapsed) {
+  if (data.collapsed || data.folded) {
     // The chip: a solid mini-card standing in for the whole group. Edges from
     // the hidden contents attach here (see toReactFlow's re-routing).
+    //
+    // A FOLDED chip is the document's doing (`settings.groupContents`), not
+    // this group's, so it shows no expand toggle: flipping the group's own
+    // flag underneath a fold would change nothing on screen and leave a
+    // stray `collapsed` behind for when the fold lifts. The toolbar's
+    // "Fold groups" toggle is where the fold is undone.
     return (
       <>
         <ConnectHandles hidden={readOnly} />
@@ -599,10 +584,12 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
           title={
             scopeGhost
               ? "External to this view — double-click to visit"
-              : `${data.label} — collapsed · double-click to open`
+              : data.folded
+                ? `${data.label} — contents folded by the diagram's group setting · double-click to open`
+                : `${data.label} — collapsed · double-click to open`
           }
         >
-          {!readOnly && !inScopedView && !scopeGhost ? (
+          {!readOnly && !inScopedView && !scopeGhost && !data.folded ? (
             toggle
           ) : (
             <span className="as-group__collapse">▸</span>

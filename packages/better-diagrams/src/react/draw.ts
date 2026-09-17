@@ -18,6 +18,7 @@
 import {
   absolutePosition,
   depthOf,
+  closedContainers,
   hiddenByCollapse,
   templateBounds,
   visibleAnchor,
@@ -620,6 +621,8 @@ interface Placed {
   node: DiagramNode;
   box: Box;
   depth: number;
+  /** Drawn as a chip — the node's own `collapsed`, or the document folding it. */
+  chip: boolean;
 }
 
 interface Layout {
@@ -633,15 +636,19 @@ interface Layout {
 function layout(template: DiagramTemplate, containerKinds?: readonly string[]): Layout {
   const visible = visibleElements(template);
   const collapseHidden = hiddenByCollapse(template, { containerKinds });
+  // Chips for the same two reasons the canvas draws them: a group's own flag,
+  // or `settings.groupContents: "hide"` folding every group with contents.
+  const closed = closedContainers(template, { containerKinds });
   const nodeById = new Map(template.nodes.map((n) => [n.id, n]));
 
   const placed = template.nodes
     .filter((n) => visible.nodes.has(n.id) && !collapseHidden.has(n.id))
     .map((node) => {
       const { x, y } = absolutePosition(node, nodeById);
-      const width = node.collapsed ? COLLAPSED_SIZE.w : node.w;
-      const height = node.collapsed ? COLLAPSED_SIZE.h : node.h;
-      return { node, box: { x, y, width, height }, depth: depthOf(node, nodeById) };
+      const chip = closed.has(node.id);
+      const width = chip ? COLLAPSED_SIZE.w : node.w;
+      const height = chip ? COLLAPSED_SIZE.h : node.h;
+      return { node, box: { x, y, width, height }, depth: depthOf(node, nodeById), chip };
     });
   placed.sort((a, b) => a.depth - b.depth);
   const placedIds = new Set(placed.map((p) => p.node.id));
@@ -823,9 +830,9 @@ export function emitTemplate(
 
   const levels = stackLevels(
     placed
-      .filter(({ node }) => {
+      .filter(({ node, chip }) => {
         const def = kindDef(registry, node.kind);
-        return !def.container || node.collapsed;
+        return !def.container || chip;
       })
       .map(({ node, box }) => ({ id: node.id, box })),
   );
@@ -960,9 +967,9 @@ export function emitTemplate(
 
   // Expanded container boundaries. Collapsed chips paint later, with the
   // leaves — they are solid cards, and edges travel under cards, not over.
-  for (const { node, box } of placed) {
+  for (const { node, box, chip } of placed) {
     const def = kindDef(registry, node.kind);
-    if (!def.container || node.collapsed) continue;
+    if (!def.container || chip) continue;
     const nodeStart = cmds.length;
     // Frame styling, resolved exactly as GroupNode resolves it for the canvas
     // — the ink is the stored colour (or the kind accent), the fill is derived
@@ -1194,9 +1201,9 @@ export function emitTemplate(
 
   // Leaves, annotations, and collapsed-container chips — everything edges
   // must pass under.
-  for (const { node, box } of placed) {
+  for (const { node, box, chip } of placed) {
     const def = kindDef(registry, node.kind);
-    if (def.container && !node.collapsed) continue;
+    if (def.container && !chip) continue;
     const leafStart = cmds.length;
     const accent = accentOf(node, def.accent);
 

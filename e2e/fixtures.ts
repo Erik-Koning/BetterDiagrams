@@ -178,6 +178,15 @@ export class Studio {
     return this.page.locator(".react-flow__node.selected");
   }
 
+  /**
+   * The lines React Flow has actually DRAWN. Fewer than the document's edges
+   * whenever a provider filter hides some — and, in the bug this exists for,
+   * zero while the document still listed every one of them.
+   */
+  get drawnEdges(): Locator {
+    return this.page.locator(".react-flow__edge");
+  }
+
   /** An architecture node by the label painted on its card. */
   nodeTitled(label: string): Locator {
     return this.page.locator(".as-node__title").filter({ hasText: exact(label) });
@@ -244,6 +253,21 @@ export class Studio {
       x2: Math.max(...boxes.map((b) => b!.x + b!.width)) + pad,
       y2: Math.max(...boxes.map((b) => b!.y + b!.height)) + pad,
     };
+  }
+
+  /**
+   * The same box, with its press point lifted clear of the inspector bar.
+   *
+   * The bar floats over the bottom of the canvas — and a multi-selection's
+   * bar, carrying every setting the selection shares, is several rows tall —
+   * so a press aimed at a card underneath it lands on the bar and starts no
+   * band. A band only has to CROSS a card to take it, so starting higher up
+   * costs nothing.
+   */
+  async clearOfInspector(area: { x1: number; y1: number; x2: number; y2: number }) {
+    const bar = await this.inspector.boundingBox();
+    if (!bar || area.y1 < bar.y - 4) return area;
+    return { ...area, y1: bar.y - 12 };
   }
 
   /** Rubber-band a screen-space rectangle, optionally holding a modifier. */

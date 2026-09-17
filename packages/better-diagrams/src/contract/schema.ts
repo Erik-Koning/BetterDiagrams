@@ -308,6 +308,16 @@ export type NodeStatus = (typeof NODE_STATUSES)[number];
 export const VERSION_TAG_POSITIONS = ["top-left", "top-right", "bottom-left", "bottom-right"] as const;
 export type VersionTagPosition = (typeof VERSION_TAG_POSITIONS)[number];
 
+/**
+ * How groups present what they contain, document-wide. "show" is the default
+ * and never stored: each group renders as an open frame with its children
+ * inside, or as a chip when its own `collapsed` flag says so. "hide" folds
+ * EVERY group that has contents into a chip, whatever its own flag says — a
+ * high-level overview of the same document. See `DiagramSettings`.
+ */
+export const GROUP_CONTENTS = ["show", "hide"] as const;
+export type GroupContents = (typeof GROUP_CONTENTS)[number];
+
 /** Horizontal placement of a node's text. "left" is the default and never stored. */
 export const NODE_TEXT_ALIGNS = ["left", "center", "right"] as const;
 export type NodeTextAlign = (typeof NODE_TEXT_ALIGNS)[number];
@@ -551,6 +561,22 @@ export interface DiagramEdge {
   date?: DiagramDate;
 }
 
+/**
+ * Document-wide rendering preferences — how the diagram is SHOWN, never what
+ * it says. Unlike `meta`, whose index signature lets a host stash anything,
+ * this object is strict: only the keys below survive validation, so the JSON
+ * editor can lint it and every consumer can rely on its shape.
+ */
+export interface DiagramSettings {
+  /**
+   * Whether groups render their contents (the default, "show") or fold them
+   * away behind a chip ("hide"). Stored only when set; the editor's toolbar
+   * offers a toggle whenever the document says something here and some group
+   * has contents to fold.
+   */
+  groupContents?: GroupContents;
+}
+
 export interface DiagramTemplate {
   version: 1;
   /**
@@ -587,6 +613,12 @@ export interface DiagramTemplate {
    * this schema described before paths existed.
    */
   paths?: DiagramPath[];
+  /**
+   * Rendering preferences for the whole document — see `DiagramSettings`.
+   * Optional and omitted when empty, so a document that never set one
+   * round-trips byte-identical.
+   */
+  settings?: DiagramSettings;
 }
 
 export const EMPTY_TEMPLATE: DiagramTemplate = { version: 1, nodes: [], edges: [] };
@@ -607,8 +639,14 @@ const TEMPLATE_KEY_MAP: Record<keyof DiagramTemplate, true> = {
   nodes: true,
   edges: true,
   paths: true,
+  settings: true,
 };
 export const TEMPLATE_KEYS: readonly string[] = Object.keys(TEMPLATE_KEY_MAP);
+
+const SETTINGS_KEY_MAP: Record<keyof DiagramSettings, true> = {
+  groupContents: true,
+};
+export const SETTINGS_KEYS: readonly string[] = Object.keys(SETTINGS_KEY_MAP);
 
 const NODE_KEY_MAP: Record<keyof DiagramNode, true> = {
   id: true,
@@ -788,7 +826,7 @@ export function buildSystemPrompt(opts: PromptOptions = {}): string {
       : `Use it to show provider-specific services: one node per provider's equivalent service, each carrying only its own provider id.`;
 
   return `You convert software requirements, source code, or natural-language descriptions into an architecture diagram template. Respond with ONLY compact valid JSON (no markdown fences, no commentary) matching:
-{"version":1,"meta":{"title":"Name","routing":"${routings}","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${zoneProvider}"],"provider":"${zoneProvider}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","providers":[],"direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":""${geo ? `,"routing":"${routings}"` : ""},"date":"YYYY-MM-DD"}],"paths":[{"id":"slug","title":"Name","steps":["nodeId","edgeId","nodeId"],"color":"${colors}","description":""}]}
+{"version":1,"meta":{"title":"Name","routing":"${routings}","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${zoneProvider}"],"provider":"${zoneProvider}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","providers":[],"direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":""${geo ? `,"routing":"${routings}"` : ""},"date":"YYYY-MM-DD"}],"paths":[{"id":"slug","title":"Name","steps":["nodeId","edgeId","nodeId"],"color":"${colors}","description":""}],"settings":{"groupContents":"${GROUP_CONTENTS.join("|")}"}}
 Rules:
 - "group" = boundary (VPC, cluster, tier, bounded context). Children set parentId${geo ? "; child x/y are RELATIVE to the group's top-left. Size groups to contain all children (+24px sides, +48px top). Children of a NON-group parent use small local coordinates starting near 0,0 (their own drilled canvas); never size the parent to contain them." : "."}
 - "text" = free annotation; put the sentence in label, fontSize 12-16${geo ? ", w~300 h~60" : ""}, no edges.
@@ -801,6 +839,7 @@ Rules:
 - Edge "tech" = protocol/format, C4 style ("JSON/HTTPS", "gRPC", "SQL"); omit when obvious. "direction":"both" for genuinely bidirectional links, "none" for plain association; omit for normal flow. When the user asks for a request flow or sequence, number the participating edges with "seq":1,2,3… in traversal order; omit seq otherwise.
 - PATHS: "paths" names end-to-end flows the reader can light up on the canvas. "steps" is the ORDERED list of node ids the flow visits, start to end; put an edge id between two nodes only when several edges join them (otherwise the connecting edge is inferred). Emit 1-4 paths of 3-8 steps when the user describes a request flow, a user journey, or asks to trace/highlight a sequence; omit the key otherwise. "color" is optional — unset paths each take their own colour.
 - meta.routing "orthogonal" gives right-angle connectors (formal/dense diagrams), "straight" direct point-to-point lines (classic flow charts); omit for curved. meta.title names the diagram. meta.versionTag labels the revision ("v2.1", "2026-Q3 draft") when the user gives one; omit otherwise.
+- "settings" holds document-wide rendering preferences. settings.groupContents "hide" folds every group with contents into a chip (a high-level overview the reader expands from the toolbar); set it ONLY when the user asks for collapsed/folded groups or a summary view, and omit the "settings" key otherwise.
 - Node "tags" = short lowercase labels for cross-cutting concerns the user mentions ("pci","gdpr","deprecated","planned"); omit when none. Node "url" = deep link to docs/repo if the user supplies one; omit otherwise. Node "team" = the owning or contact team when the user names one ("Payments", "Platform"); omit otherwise. Node "status" = lifecycle stage when stated: "planned" for future work, "stubbed" for scaffolding that exists but does nothing yet, "dark" for built-and-shipped but not yet enabled, "deprecated" for being sunset; omit for normal active components. Text notes draw a subtle box by default; set "plain":true only when the user wants bare text with no outline.
 - Node text layout, all optional and all rarely needed — omit unless the user asks: "textAlign":"center"/"right" (default left), "textVAlign":"top"/"bottom" (default middle), "wrap":true to break a long label across lines instead of ellipsising it on one (the editor grows the node's height to fit). "fontSize" sets the label size in px (default 13).
 - A "group" may also be styled as a purely visual grouping frame: "fill":false drops its background, "outline":"none" drops its border, "outline":"dotted"/"solid" changes it (default dashed), and "color" is an "#rrggbb" ink the background tint derives from. Use "fill":false with "outline":"none" only when the user explicitly wants an invisible/abstract grouping box.
@@ -1133,7 +1172,25 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
     if (views) meta.views = views;
     out.meta = meta;
   }
+  const settings = validateSettings(r.settings);
+  if (settings) out.settings = settings;
   return out;
+}
+
+/**
+ * Coerce the settings object. Strict where `meta` is lenient: a key the
+ * schema doesn't define is dropped, a value outside its vocabulary is dropped,
+ * and an object left empty by that is omitted entirely — so `settings` is
+ * present exactly when it says something.
+ */
+function validateSettings(raw: unknown): DiagramSettings | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: DiagramSettings = {};
+  if (GROUP_CONTENTS.includes(r.groupContents as GroupContents)) {
+    out.groupContents = r.groupContents as GroupContents;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /**
@@ -1500,9 +1557,49 @@ function cardParentIds(t: DiagramTemplate, containerKinds?: readonly string[]): 
 }
 
 /**
- * Every node hidden because an ancestor renders closed — a collapsed container
- * or a non-container parent (whose children are drill-in detail, its next C4
- * level, never shown inline).
+ * Containers the document folds: with `settings.groupContents` at "hide",
+ * every container that has something inside it. An empty frame hides nothing,
+ * so it stays open — the same rule a drill-in view applies when it chips the
+ * groups on a level (`scopedView`). Empty under any other setting.
+ *
+ * Distinct from a group's own `collapsed` flag, and never written into it: the
+ * setting is one switch over the whole document, and flipping it back to
+ * "show" must reopen exactly what was open before.
+ */
+export function foldedContainers(
+  t: DiagramTemplate,
+  opts: { containerKinds?: readonly string[] } = {},
+): Set<string> {
+  if (t.settings?.groupContents !== "hide") return new Set();
+  const containerSet = new Set(opts.containerKinds ?? CONTAINER_KINDS);
+  const parentIds = new Set(t.nodes.map((n) => n.parentId).filter((p): p is string => !!p));
+  return new Set(
+    t.nodes
+      .filter((n) => containerSet.has(n.kind as string) && parentIds.has(n.id))
+      .map((n) => n.id),
+  );
+}
+
+/**
+ * Every container rendering closed — as a chip, contents folded away — for
+ * either reason: its own `collapsed` flag, or the document folding it (see
+ * `foldedContainers`). The one set every renderer sizes chips from, so the
+ * canvas, the image exporters and the export crop cannot disagree about
+ * which frames are drawn.
+ */
+export function closedContainers(
+  t: DiagramTemplate,
+  opts: { containerKinds?: readonly string[] } = {},
+): Set<string> {
+  const closed = foldedContainers(t, opts);
+  for (const n of t.nodes) if (n.collapsed) closed.add(n.id);
+  return closed;
+}
+
+/**
+ * Every node hidden because an ancestor renders closed — a collapsed or
+ * folded container or a non-container parent (whose children are drill-in
+ * detail, its next C4 level, never shown inline).
  *
  * The closed node itself stays visible (chip or card); its descendants
  * disappear. Shared by `toReactFlow` and `fromReactFlow` so both sides agree
@@ -1514,7 +1611,7 @@ export function hiddenByCollapse(
   t: DiagramTemplate,
   opts: { containerKinds?: readonly string[] } = {},
 ): Set<string> {
-  const closed = new Set(t.nodes.filter((n) => n.collapsed).map((n) => n.id));
+  const closed = closedContainers(t, opts);
   for (const id of cardParentIds(t, opts.containerKinds)) closed.add(id);
   return hiddenBelow(t, closed);
 }
@@ -2201,11 +2298,12 @@ export function templateBounds(
   const byId = new Map(t.nodes.map((n) => [n.id, n]));
   const containerSet = new Set(opts.containerKinds ?? CONTAINER_KINDS);
 
-  // A collapsed container draws a chip, not its stored (expanded) frame, and
-  // its contents draw nothing at all. Measuring either would leave a large
-  // blank region in the crop where the frame used to be.
+  // A closed container — collapsed itself, or folded by the document — draws
+  // a chip, not its stored (expanded) frame, and its contents draw nothing at
+  // all. Measuring either would leave a large blank region in the crop where
+  // the frame used to be.
   const collapsed = new Set(
-    t.nodes.filter((n) => n.collapsed && containerSet.has(n.kind as string)).map((n) => n.id),
+    [...closedContainers(t, opts)].filter((id) => containerSet.has(byId.get(id)?.kind as string)),
   );
   const insideCollapsed = (n: DiagramNode): boolean => {
     let cur = n.parentId ? byId.get(n.parentId) : undefined;
@@ -2297,6 +2395,13 @@ export type DiagramNodeData = {
    * describes the current view rather than the document.
    */
   ghost?: boolean;
+  /**
+   * A container drawn as a chip because the document's `settings.groupContents`
+   * is "hide" (see `foldedContainers`). Presentational like `ghost` and never
+   * persisted: the group's own `collapsed` flag is untouched underneath, so
+   * flipping the setting back reopens exactly what was open before.
+   */
+  folded?: boolean;
 };
 
 /** Payload for the React Flow node that renders a zone. */
@@ -2636,6 +2741,15 @@ export function toReactFlow(
     opts.applyCollapse === false
       ? new Set<string>()
       : hiddenByCollapse(t, { containerKinds: opts.containerKinds });
+  // The document-wide fold, and with it the chip it makes of every group with
+  // contents. Off alongside collapse: "the whole document, expanded" means
+  // the frames too.
+  const folded =
+    opts.applyCollapse === false
+      ? new Set<string>()
+      : foldedContainers(t, { containerKinds: opts.containerKinds });
+  /** Drawn as a chip — its own flag, or the document's fold. */
+  const chipped = (n: DiagramNode) => n.collapsed === true || folded.has(n.id);
 
   const rendered = [...t.nodes]
     .filter((n) => !collapseHidden.has(n.id) && (!visible || showHidden || visible.nodes.has(n.id)))
@@ -2647,13 +2761,13 @@ export function toReactFlow(
   // over, so nesting in a group must not lift anything.
   const levels = stackLevels(
     rendered
-      .filter((n) => !containers.has(n.kind as string) || n.collapsed)
+      .filter((n) => !containers.has(n.kind as string) || chipped(n))
       .map((n) => ({
         id: n.id,
         box: {
           ...absolutePosition(n, byId),
-          width: n.collapsed ? COLLAPSED_SIZE.w : n.w,
-          height: n.collapsed ? COLLAPSED_SIZE.h : n.h,
+          width: chipped(n) ? COLLAPSED_SIZE.w : n.w,
+          height: chipped(n) ? COLLAPSED_SIZE.h : n.h,
         },
       })),
   );
@@ -2670,10 +2784,11 @@ export function toReactFlow(
           : points.has(n.kind as string)
             ? "point"
             : "shape";
-      // A collapsed container renders as a compact chip; its stored w/h are
+      // A closed container renders as a compact chip; its stored w/h are
       // the expanded size and come back untouched on expand.
-      const w = n.collapsed ? COLLAPSED_SIZE.w : n.w;
-      const h = n.collapsed ? COLLAPSED_SIZE.h : n.h;
+      const chip = chipped(n);
+      const w = chip ? COLLAPSED_SIZE.w : n.w;
+      const h = chip ? COLLAPSED_SIZE.h : n.h;
       return {
         id: n.id,
         type,
@@ -2694,6 +2809,7 @@ export function toReactFlow(
           ...(n.plain ? { plain: true } : {}),
           ...(n.locked ? { locked: true } : {}),
           ...(n.collapsed ? { collapsed: true } : {}),
+          ...(folded.has(n.id) ? { folded: true } : {}),
           ...(n.textAlign ? { textAlign: n.textAlign } : {}),
           ...(n.textVAlign ? { textVAlign: n.textVAlign } : {}),
           ...(n.wrap ? { wrap: true } : {}),
@@ -2708,10 +2824,10 @@ export function toReactFlow(
         height: h,
         style: { width: w, height: h },
         // Containers must render behind their children; deeper nesting wins.
-        // A collapsed container is a solid chip with no children on the
-        // canvas, so it joins the leaf band and edges pass under it too.
+        // A closed container is a solid chip with no children on the canvas,
+        // so it joins the leaf band and edges pass under it too.
         zIndex:
-          isContainer && !n.collapsed
+          isContainer && !chip
             ? depth
             : LEAF_Z_INDEX + (levels.get(n.id) ?? 0) * STACK_BAND + depth,
         ...(n.locked ? { draggable: false } : {}),
@@ -2719,9 +2835,9 @@ export function toReactFlow(
         // With the whole frame as the drag surface there was no empty canvas
         // inside a group to start a rubber band from, so its children could
         // never be marquee-selected — and every press aimed at the space
-        // between them moved the group instead. A collapsed chip IS its label,
+        // between them moved the group instead. A closed chip IS its label,
         // so it keeps the whole surface.
-        ...(isContainer && !n.collapsed ? { dragHandle: ".as-group__label" } : {}),
+        ...(isContainer && !chip ? { dragHandle: ".as-group__label" } : {}),
         // Deliberately NOT `extent: "parent"`. That clamps a child inside its
         // container, which makes it impossible to drag a node back out of a
         // group. The editor re-parents on drop instead, so nesting stays
@@ -2844,6 +2960,8 @@ export function fromReactFlow(
      * against the rebuilt ids, so a deleted node leaves every path it was on.
      */
     paths?: DiagramPath[];
+    /** The document's settings — ride through like `paths`; absent, `base.settings` serves. */
+    settings?: DiagramSettings;
     /**
      * The document the React Flow state was derived from.
      *
@@ -2901,10 +3019,13 @@ export function fromReactFlow(
 
   const built = diagramNodes.map((n) => {
     const collapsed = n.data?.collapsed === true;
-    // A collapsed container renders at chip size — its stored w/h are the
+    // A closed container renders at chip size — its stored w/h are the
     // EXPANDED dimensions and must never be overwritten by the chip's, or
     // expanding would restore a group shrunk to 180×44 with its layout gone.
-    const baseSize = collapsed ? baseNodeById.get(n.id) : undefined;
+    // `folded` is the same chip for the document's reason, with the same
+    // stakes: unfolding a whole diagram must not hand back a row of 180×44
+    // frames.
+    const baseSize = collapsed || n.data?.folded === true ? baseNodeById.get(n.id) : undefined;
     return {
       id: n.id,
       label: n.data?.label ?? n.id,
@@ -3028,6 +3149,7 @@ export function fromReactFlow(
       ? opts.base.zones
       : [];
   const carriedPaths = opts.paths ?? opts.base?.paths;
+  const carriedSettings = opts.settings ?? opts.base?.settings;
   return validateTemplate(
     {
       version: 1,
@@ -3036,6 +3158,7 @@ export function fromReactFlow(
       nodes: built,
       edges: builtEdges,
       ...(carriedPaths?.length ? { paths: carriedPaths } : {}),
+      ...(carriedSettings ? { settings: carriedSettings } : {}),
     },
     opts,
   );

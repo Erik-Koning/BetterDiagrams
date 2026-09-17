@@ -241,6 +241,89 @@ describe("the inspector", () => {
     expect(screen.getByRole("button", { name: "Duplicate the selection" })).toBeInTheDocument();
   });
 
+  it("offers a multi-selection every setting the elements share, and writes it to all", async () => {
+    const onChange = vi.fn();
+    const THREE = doc({
+      nodes: [
+        { id: "a", label: "A", kind: "service", x: 0, y: 0 },
+        { id: "b", label: "B", kind: "service", x: 300, y: 0 },
+        { id: "c", label: "C", kind: "database", x: 600, y: 0 },
+      ],
+      edges: [
+        { id: "ab", source: "a", target: "b", label: "calls" },
+        { id: "bc", source: "b", target: "c", label: "reads" },
+      ],
+    });
+    mount(<ArchitectureStudio defaultValue={THREE} onChange={onChange} />);
+    fireEvent.keyDown(window, { key: "a", metaKey: true });
+    // Nodes and connections together: the count is the tab strip, nodes first.
+    await waitFor(() => expect(screen.getByRole("tab", { name: "3 nodes" })).toBeInTheDocument());
+    expect(screen.getByRole("tab", { name: "3 nodes" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByLabelText("Start anchor")).not.toBeInTheDocument();
+
+    // The settings a single node has, minus the ones that name ONE node.
+    expect(screen.queryByLabelText("Node label")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Node description")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Documentation link")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Text alignment"), { target: { value: "center" } });
+    await waitFor(() =>
+      expect(latest(onChange).nodes.map((n) => n.textAlign)).toEqual(["center", "center", "center"]),
+    );
+    // One write, one undo entry: ⌘Z clears all three at once.
+    fireEvent.keyDown(window, { key: "z", metaKey: true });
+    await waitFor(() =>
+      expect(latest(onChange).nodes.map((n) => n.textAlign)).toEqual([undefined, undefined, undefined]),
+    );
+
+    // Likewise the connections: the side each end leaves from, the heads,
+    // the routing — everything but the label and the step number.
+    fireEvent.click(screen.getByRole("tab", { name: "2 connections" }));
+    expect(screen.queryByLabelText("Text alignment")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Edge label")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Sequence number")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Start anchor"), { target: { value: "right" } });
+    fireEvent.change(screen.getByLabelText("End anchor"), { target: { value: "left" } });
+    fireEvent.change(screen.getByLabelText("Edge direction"), { target: { value: "both" } });
+    await waitFor(() => {
+      for (const e of latest(onChange).edges) {
+        expect(e).toMatchObject({ start: { side: "right" }, end: { side: "left" }, direction: "both" });
+      }
+    });
+  });
+
+  it("shows Mixed where a multi-selection disagrees, until one value is set for all", async () => {
+    const onChange = vi.fn();
+    const MIXED = doc({
+      nodes: [
+        { id: "a", label: "A", kind: "service", status: "planned", tags: ["pci"], x: 0, y: 0 },
+        { id: "b", label: "B", kind: "service", tags: ["pci", "gdpr"], x: 300, y: 0 },
+      ],
+    });
+    mount(<ArchitectureStudio defaultValue={MIXED} onChange={onChange} />);
+    fireEvent.keyDown(window, { key: "a", metaKey: true });
+    await waitFor(() => expect(screen.getByText(/2 nodes/)).toBeInTheDocument());
+
+    const status = screen.getByLabelText("Lifecycle status") as HTMLSelectElement;
+    expect(status.value).toBe("");
+    expect(screen.getByRole("option", { name: "Mixed" })).toBeInTheDocument();
+    fireEvent.change(status, { target: { value: "deprecated" } });
+    await waitFor(() =>
+      expect(latest(onChange).nodes.map((n) => n.status)).toEqual(["deprecated", "deprecated"]),
+    );
+    expect(screen.queryByRole("option", { name: "Mixed" })).not.toBeInTheDocument();
+
+    // Tags: every tag anyone carries is offered; a chip is ON only when all
+    // carry it. Toggling the shared one strips it everywhere; toggling the
+    // partial one gives it to everyone.
+    const chip = (tag: string) => screen.getByRole("button", { name: new RegExp(`^${tag}`) });
+    expect(chip("pci")).toHaveAttribute("aria-pressed", "true");
+    expect(chip("gdpr")).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(chip("gdpr"));
+    await waitFor(() => expect(latest(onChange).nodes.map((n) => n.tags)).toEqual([["pci", "gdpr"], ["pci", "gdpr"]]));
+    fireEvent.click(chip("pci"));
+    await waitFor(() => expect(latest(onChange).nodes.map((n) => n.tags)).toEqual([["gdpr"], ["gdpr"]]));
+  });
+
   it("says what a connection joins, and can turn it round", async () => {
     const onChange = vi.fn();
     const { container } = mount(<ArchitectureStudio defaultValue={TWO} onChange={onChange} />);

@@ -163,7 +163,16 @@ export const LabeledEdge = memo(function LabeledEdge({
     drop: string | null;
   } | null>(null);
   /** Inline label editor open (double-click on the line or its label). */
-  const [editingLabel, setEditingLabel] = useState(false);
+  const [labelEditOpen, setLabelEditOpen] = useState(false);
+  /**
+   * The same edit as every gate below sees it. Read-only has no inline editor,
+   * so a host that flips it mid-edit ends that edit in ONE place rather than
+   * three: keyed to the raw state, the field unmounted while the gates went on
+   * hiding the static text it stands in for — and read-only also refuses the
+   * double-click that would re-open it, so the label stayed gone. The state
+   * itself is left alone, so regaining write access reopens the field.
+   */
+  const editingLabel = labelEditOpen && !readOnly;
   /**
    * Alignment guides while a waypoint drags: the reference lines the dragged
    * point is currently snapped to, drawn as dashed hints.
@@ -543,7 +552,7 @@ export const LabeledEdge = memo(function LabeledEdge({
     if (readOnly || synthetic) return;
     event.stopPropagation();
     event.preventDefault();
-    setEditingLabel(true);
+    setLabelEditOpen(true);
   };
 
   // Drag anywhere on the line to bend it there: past a small threshold the
@@ -911,7 +920,7 @@ export const LabeledEdge = memo(function LabeledEdge({
             );
           })()
         : null}
-      {editingLabel && !readOnly ? (
+      {editingLabel ? (
         <EdgeLabelRenderer>
           {/* HTML, not SVG text: a real caret, selection, and IME. Positioned
               on the label point in FLOW coordinates — the renderer's layer
@@ -935,7 +944,7 @@ export const LabeledEdge = memo(function LabeledEdge({
               );
             }}
             onBlur={() => {
-              setEditingLabel(false);
+              setLabelEditOpen(false);
               // Live edits went through setEdges only — record them so the
               // label is undoable and reaches a controlled host.
               requestCommit();
@@ -953,7 +962,7 @@ export const LabeledEdge = memo(function LabeledEdge({
           />
         </EdgeLabelRenderer>
       ) : null}
-      {startLabelAt || endLabelAt || (hasLabel && !editingLabel) ? (
+      {startLabelAt || endLabelAt || hasLabel || editingLabel ? (
         // Every word an edge carries goes through the viewport portal, which
         // React Flow renders AFTER the node layer: a connection's name is the
         // one thing that must never be covered, and an edge whose line
@@ -961,6 +970,14 @@ export const LabeledEdge = memo(function LabeledEdge({
         // with it. The portal carries the same pan/zoom transform, so these
         // stay plain flow coordinates — the 0×0 `overflow: visible` svg is
         // just the SVG context they need to live in.
+        //
+        // `editingLabel` holds this layer OPEN for the length of an edit, even
+        // while the text it carries is momentarily nothing. Portal children
+        // stack in the order they were inserted and each sibling portal is its
+        // own React tree, so a layer that leaves the container comes back at
+        // the END of it — unmounting for the edit silently re-stacked the
+        // edited label over every other one, permanently. What the edit hides
+        // is the static text, one gate further in.
         <ViewportPortal>
           {/* `as-future` rides the layer itself: the timeline's dimming is a
               class on the edge WRAPPER, which this text no longer lives in. */}

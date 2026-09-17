@@ -37,4 +37,28 @@ describe("useHistory", () => {
     });
     expect((previous!.template as { paths: Array<{ title: string }> }).paths[0].title).toBe("One");
   });
+
+  it("records a settings-only edit the same way", () => {
+    const { result } = renderHook(() => useHistory(snap({ version: 1 })));
+    act(() => result.current.commit(snap({ version: 1, settings: { groupContents: "hide" } })));
+    expect(result.current.canUndo).toBe(true);
+  });
+
+  it("treats two canvases that describe the same document as one entry", () => {
+    // What undo restores is the document, so how React Flow happened to
+    // hold it at commit time cannot make a second entry.
+    const { result } = renderHook(() => useHistory(snap({ version: 1, nodes: [{ id: "a" }] })));
+    const moved = nodes.map((n) => ({ ...n, position: { x: 500, y: 500 }, data: { label: "A", folded: true } }));
+    act(() => result.current.commit({ ...snap({ version: 1, nodes: [{ id: "a" }] }), nodes: moved }));
+    expect(result.current.canUndo).toBe(false);
+  });
+
+  it("falls back to the canvas fields for a snapshot with no document", () => {
+    const bare = { nodes, edges, meta: { title: "T" } };
+    const { result } = renderHook(() => useHistory(bare));
+    act(() => result.current.commit({ ...bare, nodes: nodes.map((n) => ({ ...n, selected: true })) }));
+    expect(result.current.canUndo).toBe(false);
+    act(() => result.current.commit({ ...bare, nodes: nodes.map((n) => ({ ...n, position: { x: 9, y: 9 } })) }));
+    expect(result.current.canUndo).toBe(true);
+  });
 });

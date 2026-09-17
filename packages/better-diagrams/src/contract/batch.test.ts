@@ -6,8 +6,12 @@
 import { describe, expect, it } from "vitest";
 import {
   COLLAPSED_SIZE,
+  SETTINGS_KEYS,
+  TEMPLATE_KEYS,
   assignZonesByGeometry,
   buildSystemPrompt,
+  closedContainers,
+  foldedContainers,
   fromReactFlow,
   hiddenByCollapse,
   hiddenInline,
@@ -634,6 +638,138 @@ describe("collapse", () => {
     for (const n of out.nodes) {
       expect(Number.isFinite(n.x) && Number.isFinite(n.y)).toBe(true);
     }
+  });
+});
+
+describe("settings.groupContents — the document-wide fold", () => {
+  /** Two groups with contents, one empty frame, and a loose node. */
+  const doc = (settings?: Record<string, unknown>) =>
+    validateTemplate({
+      ...(settings ? { settings } : {}),
+      nodes: [
+        node({ id: "g", kind: "group", x: 0, y: 0, w: 400, h: 300 }),
+        node({ id: "inner", parentId: "g", x: 20, y: 60 }),
+        node({ id: "g2", kind: "group", x: 500, y: 0, w: 300, h: 200 }),
+        node({ id: "inner2", parentId: "g2", x: 20, y: 60 }),
+        node({ id: "empty", kind: "group", x: 900, y: 0, w: 200, h: 150 }),
+        node({ id: "outside", x: 0, y: 500 }),
+      ],
+      edges: [
+        { id: "a", source: "inner", target: "outside" },
+        { id: "b", source: "inner", target: "inner2" },
+      ],
+    }) as DiagramTemplate;
+
+  it("validates the vocabulary and is omitted when it says nothing", () => {
+    expect(doc({ groupContents: "hide" }).settings).toEqual({ groupContents: "hide" });
+    expect(doc({ groupContents: "show" }).settings).toEqual({ groupContents: "show" });
+    // A value outside the vocabulary and an unknown key are both dropped —
+    // and an object emptied by that is omitted, not stored as `{}`.
+    expect("settings" in doc({ groupContents: "maybe" })).toBe(false);
+    expect("settings" in doc({ colour: "blue" })).toBe(false);
+    expect("settings" in doc({})).toBe(false);
+    expect("settings" in doc()).toBe(false);
+    expect("settings" in validateTemplate({ nodes: [], settings: "hide" })).toBe(false);
+    // Strict, so the JSON editor can lint it.
+    expect(TEMPLATE_KEYS).toContain("settings");
+    expect(SETTINGS_KEYS).toEqual(["groupContents"]);
+  });
+
+  it("folds every group with contents, never an empty frame", () => {
+    expect([...foldedContainers(doc({ groupContents: "hide" }))].sort()).toEqual(["g", "g2"]);
+    expect(foldedContainers(doc({ groupContents: "show" })).size).toBe(0);
+    expect(foldedContainers(doc()).size).toBe(0);
+  });
+
+  it("closed = folded ∪ each group's own collapsed flag", () => {
+    const t = doc({ groupContents: "hide" });
+    const withFlag = {
+      ...t,
+      nodes: t.nodes.map((n) => (n.id === "empty" ? { ...n, collapsed: true } : n)),
+    };
+    expect([...closedContainers(withFlag)].sort()).toEqual(["empty", "g", "g2"]);
+    expect([...hiddenByCollapse(withFlag)].sort()).toEqual(["inner", "inner2"]);
+  });
+
+  it("renders chips without touching the groups' own flags", () => {
+    const { nodes, edges } = toReactFlow(doc({ groupContents: "hide" }));
+    const ids = nodes.map((n) => n.id);
+    expect(ids).not.toContain("inner");
+    expect(ids).not.toContain("inner2");
+    expect(ids).toContain("empty");
+
+    const chip = nodes.find((n) => n.id === "g")!;
+    expect(chip.width).toBe(COLLAPSED_SIZE.w);
+    expect(chip.height).toBe(COLLAPSED_SIZE.h);
+    // The fold is a presentational flag, like `ghost` — `collapsed` stays off.
+    expect(chip.data.folded).toBe(true);
+    expect("collapsed" in chip.data).toBe(false);
+    // A chip keeps the whole surface as its drag handle; an open frame is
+    // dragged by its label bar.
+    const handleOf = (id: string) =>
+      (nodes.find((n) => n.id === id) as { dragHandle?: string }).dragHandle;
+    expect(handleOf("g")).toBeUndefined();
+    expect(handleOf("empty")).toBe(".as-group__label");
+    expect(nodes.find((n) => n.id === "empty")!.width).toBe(200);
+
+    // Edges into the folded contents re-route to the chips, as for collapse.
+    const rerouted = edges.filter((e) => isCollapsedEdgeId(e.id));
+    expect(rerouted.map((e) => `${e.source}→${e.target}`).sort()).toEqual(["g→g2", "g→outside"]);
+  });
+
+  it("round-trips the setting, the contents, and the stored sizes", () => {
+    const t = doc({ groupContents: "hide" });
+    const rf = toReactFlow(t);
+    const back = fromReactFlow(rf.nodes, rf.edges, { base: t });
+    expect(back.settings).toEqual({ groupContents: "hide" });
+    expect(back.nodes).toHaveLength(t.nodes.length);
+    expect(back.edges.map((e) => e.id).sort()).toEqual(["a", "b"]);
+    // THE guard: a folded chip's 180×44 must never overwrite the frame size.
+    expect(back.nodes.find((n) => n.id === "g")).toMatchObject({ w: 400, h: 300 });
+    expect("collapsed" in back.nodes.find((n) => n.id === "g")!).toBe(false);
+  });
+
+  it("unfolding restores exactly what was open before", () => {
+    // One group collapsed by hand, then the whole document folded and unfolded.
+    let t = doc({ groupContents: "hide" });
+    t = { ...t, nodes: t.nodes.map((n) => (n.id === "g2" ? { ...n, collapsed: true } : n)) };
+    let rf = toReactFlow(t);
+    t = fromReactFlow(rf.nodes, rf.edges, { base: t });
+    t = { ...t, settings: { groupContents: "show" } };
+    rf = toReactFlow(t);
+    const ids = rf.nodes.map((n) => n.id);
+    expect(ids).toContain("inner"); // g reopened
+    expect(ids).not.toContain("inner2"); // g2 stays as the user left it
+    expect(rf.nodes.find((n) => n.id === "g")!.width).toBe(400);
+  });
+
+  it("is left alone by the whole-document export", () => {
+    const { nodes } = toReactFlow(doc({ groupContents: "hide" }), { applyCollapse: false });
+    expect(nodes.map((n) => n.id)).toContain("inner");
+    expect(nodes.find((n) => n.id === "g")!.width).toBe(400);
+    expect(nodes.find((n) => n.id === "g")!.data.folded).toBeUndefined();
+  });
+
+  it("crops exports to the chips, not the frames they stand for", () => {
+    const b = templateBounds(doc({ groupContents: "hide" }));
+    // g2 is a chip at (500, 0), so the right edge is 500 + 180 — not 800.
+    expect(b.maxX).toBe(Math.max(500 + COLLAPSED_SIZE.w, 900 + 200));
+    const open = templateBounds(doc());
+    expect(open.maxX).toBe(1100);
+  });
+
+  it("rides the content half of a split document and merges back byte-identical", async () => {
+    const { mergeTemplate, splitTemplate } = await import("./presentation");
+    const t = doc({ groupContents: "hide" });
+    const { content, presentation } = splitTemplate(t);
+    expect(content.settings).toEqual({ groupContents: "hide" });
+    expect(JSON.stringify(mergeTemplate(content, presentation))).toBe(JSON.stringify(t));
+  });
+
+  it("is advertised to the model as opt-in", () => {
+    const prompt = buildSystemPrompt();
+    expect(prompt).toContain('"settings":{"groupContents":"show|hide"}');
+    expect(prompt).toContain('omit the "settings" key otherwise');
   });
 });
 

@@ -323,6 +323,41 @@ describe("a group's lifecycle stage reaches the export", () => {
   });
 });
 
+// ─── 4b. The document-wide fold reaches the export ───────────────────────────
+
+describe("settings.groupContents folds the export like the canvas", () => {
+  const folded = doc({
+    settings: { groupContents: "hide" },
+    nodes: [
+      { id: "empty", label: "Spare", kind: "group", x: 0, y: 0, w: 300, h: 200 },
+      { id: "g", label: "Tier", kind: "group", x: 500, y: 0, w: 400, h: 200 },
+      { id: "a", label: "A", kind: "service", parentId: "g", x: 24, y: 48, w: 170, h: 76 },
+      { id: "out", label: "Out", kind: "service", x: 0, y: 400, w: 170, h: 76 },
+    ],
+    edges: [{ id: "e", source: "a", target: "out", label: "calls" }],
+  });
+
+  it("draws a chip for the group, hides its contents, and re-routes the edge", () => {
+    const { cmds, width } = emitTemplate(folded, registry);
+    const labels = texts(cmds).map((c) => c.text);
+    expect(labels).toContain("▸ Tier"); // the chip, with its fold glyph
+    expect(labels).not.toContain("A");
+    expect(labels).toContain("Spare"); // the empty frame stays open
+    // A re-routed edge is still drawn — from the chip — and the picture is
+    // cropped to the 180px chip, not to the 400px frame it stands for.
+    expect(cmds.some((c) => c.tag?.id === "edge:e")).toBe(true);
+    const open = emitTemplate({ ...folded, settings: undefined }, registry);
+    expect(open.width - width).toBe(400 - 180);
+  });
+
+  it("the whole-document React Flow export still unfolds it", async () => {
+    const result = await BUILTIN_EXPORTERS.reactflow.run({ template: folded, registry, filename: "d" });
+    const rf = JSON.parse(await result!.blob.text()) as { nodes: Array<{ id: string; width: number }> };
+    expect(rf.nodes.map((n) => n.id)).toContain("a");
+    expect(rf.nodes.find((n) => n.id === "g")!.width).toBe(400);
+  });
+});
+
 // ─── 5. Note line breaks ─────────────────────────────────────────────────────
 
 describe("a note's own line breaks", () => {

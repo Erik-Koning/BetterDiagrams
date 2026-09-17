@@ -86,12 +86,20 @@ function buildOverlay(
     .filter((e) => overlayNodeIds.has(e.source) && overlayNodeIds.has(e.target));
   const removedZones = (base.zones ?? []).filter((z) => diff.zones.removed.includes(z.id));
 
-  return {
+  const overlay: DiagramTemplate = {
     ...current,
     nodes: [...current.nodes.map(stripCollapse), ...removedNodes],
     edges: [...current.edges, ...removedEdges],
     zones: [...(current.zones ?? []), ...removedZones],
   };
+  // The document-wide fold is stripped for the same reason each node's
+  // collapse flag is: a compare shows the architecture inside every group.
+  if (current.settings) {
+    const { groupContents: _fold, ...rest } = current.settings;
+    if (Object.keys(rest).length) overlay.settings = rest;
+    else delete overlay.settings;
+  }
+  return overlay;
 }
 
 export const DiffCanvas = memo(function DiffCanvas({

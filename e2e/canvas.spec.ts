@@ -88,14 +88,15 @@ test.describe("the canvas tools", () => {
     await studio.pickTool("Select");
 
     await studio.band(await studio.boxAround(["cdn", "api"]));
-    await studio.band(await studio.boxAround(["wrk"]), "Shift");
+    // The first band's inspector now floats over the Worker card.
+    await studio.band(await studio.clearOfInspector(await studio.boxAround(["wrk"])), "Shift");
 
     await expect(studio.node("cdn")).toHaveClass(/selected/);
     await expect(studio.node("api")).toHaveClass(/selected/);
     await expect(studio.node("wrk")).toHaveClass(/selected/);
 
     // Without the modifier the new band is the whole selection again.
-    await studio.band(await studio.boxAround(["wrk"]));
+    await studio.band(await studio.clearOfInspector(await studio.boxAround(["wrk"])));
     await expect(studio.node("wrk")).toHaveClass(/selected/);
     await expect(studio.node("cdn")).not.toHaveClass(/selected/);
     await expect(studio.node("api")).not.toHaveClass(/selected/);
@@ -139,7 +140,7 @@ test.describe("the canvas tools", () => {
     await expect(studio.node("cdn")).toHaveClass(/selected/);
     await expect(studio.node("api")).toHaveClass(/selected/);
 
-    const second = await studio.boxAround(["wrk"]);
+    const second = await studio.clearOfInspector(await studio.boxAround(["wrk"]));
     await studio.band({ ...second, x1: outside }, "Shift");
 
     // Without the merge this second band replaced the first: holding the

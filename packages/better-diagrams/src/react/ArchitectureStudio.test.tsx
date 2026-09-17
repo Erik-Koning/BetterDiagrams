@@ -153,6 +153,26 @@ describe("ArchitectureStudio", () => {
     expect(saved.meta).toEqual(EXAMPLE_TEMPLATE.meta);
   });
 
+  it("flags an edit as unsaved before the session's first save, and clears it on Save", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onSave={onSave} />);
+    const save = screen.getByRole("button", { name: /^Save/ });
+    expect(save).toHaveTextContent(/^Save$/);
+
+    // Recolour a line straight after mount — the case a reload used to lose:
+    // the baseline started empty, so nothing counted as unsaved until the
+    // first save had happened.
+    await waitFor(() => expect(container.querySelector(".as-edge__hit")).toBeTruthy());
+    fireEvent.click(container.querySelector(".as-edge__hit")!);
+    await user.click(await screen.findByRole("button", { name: "Edge colour rose" }));
+    await waitFor(() => expect(save).toHaveTextContent("Save •"));
+
+    await user.click(save);
+    await waitFor(() => expect(save).toHaveTextContent(/^Save$/));
+    expect((onSave.mock.calls.at(-1)![0] as DiagramTemplate).edges.some((e) => e.color === "rose")).toBe(true);
+  });
+
   it("emits onChange when a node is added", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -1048,6 +1068,141 @@ describe("ArchitectureStudio", () => {
     const expanded = seen.at(-1)!;
     expect(expanded.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length);
     expect(expanded.edges).toHaveLength(EXAMPLE_TEMPLATE.edges.length);
+  });
+
+  it("folds every group from settings.groupContents and offers the toolbar toggle", async () => {
+    const user = userEvent.setup();
+    const seen: DiagramTemplate[] = [];
+    const folded: DiagramTemplate = { ...EXAMPLE_TEMPLATE, settings: { groupContents: "hide" } };
+    mount(
+      <StrictMode>
+        <ControlledHost spy={(t) => seen.push(t)} initial={folded} />
+      </StrictMode>,
+    );
+    // The group is a chip: contents off the canvas, no per-group expand
+    // toggle (the fold is the document's, not the group's).
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+    expect(screen.getByText("Application VPC")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Expand Application VPC" })).not.toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "Fold groups" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(toggle);
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+    expect(screen.getByText("Worker Service")).toBeInTheDocument();
+    const shown = seen.at(-1)!;
+    expect(shown.settings).toEqual({ groupContents: "show" });
+    // Unfolding hands back the frame, never a row of 180×44 chips — and the
+    // group's own flag was never written.
+    expect(shown.nodes.find((n) => n.id === "vpc")).toMatchObject({ w: 440, h: 380 });
+    expect("collapsed" in shown.nodes.find((n) => n.id === "vpc")!).toBe(false);
+    expect(shown.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length);
+    expect(shown.edges).toHaveLength(EXAMPLE_TEMPLATE.edges.length);
+    // The toggle stays, unpressed, so there is a way back.
+    expect(screen.getByRole("button", { name: "Fold groups" })).toHaveAttribute("aria-pressed", "false");
+    // …and the per-group toggle is back too.
+    expect(screen.getByRole("button", { name: "Collapse Application VPC" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Fold groups" }));
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+    expect(seen.at(-1)!.settings).toEqual({ groupContents: "hide" });
+
+    // The fold is a document edit, so it undoes like one.
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+    expect(seen.at(-1)!.settings).toEqual({ groupContents: "show" });
+  });
+
+  it("lifts the fold when a group is filled by an edit, in the same undo entry", async () => {
+    const seen: DiagramTemplate[] = [];
+    const folded: DiagramTemplate = {
+      ...EXAMPLE_TEMPLATE,
+      settings: { groupContents: "hide" },
+      // A group already folded, so the fold has visibly taken hold.
+      nodes: EXAMPLE_TEMPLATE.nodes,
+    };
+    mount(<ControlledHost spy={(t) => seen.push(t)} initial={folded} />);
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+
+    // Wrap two loose cards in a new group: ⌘G. Under the fold the new frame
+    // would close over them at once — instead the document flips to "show".
+    // Select all, then wrap: the folded VPC chip and the loose cards go
+    // into one new frame together.
+    fireEvent.keyDown(window, { key: "a", metaKey: true });
+    await waitFor(() => expect(screen.getByText(/6 nodes/)).toBeInTheDocument());
+    fireEvent.keyDown(window, { key: "g", metaKey: true });
+
+    await waitFor(() => expect(screen.getByText("New Group")).toBeInTheDocument());
+    expect(screen.getByText("Postgres")).toBeInTheDocument();
+    expect(screen.getByText("REST API")).toBeInTheDocument(); // every group opened
+    const grouped = seen.at(-1)!;
+    expect(grouped.settings).toEqual({ groupContents: "show" });
+    const group = grouped.nodes.find((n) => n.label === "New Group")!;
+    expect(grouped.nodes.filter((n) => n.parentId === group.id).map((n) => n.id)).toContain("db");
+
+    // One ⌘Z undoes the grouping AND restores the fold.
+    fireEvent.keyDown(window, { key: "z", metaKey: true });
+    await waitFor(() => expect(screen.queryByText("New Group")).not.toBeInTheDocument());
+    expect(seen.at(-1)!.settings).toEqual({ groupContents: "hide" });
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+  });
+
+  it("offers the fold toggle only when the document sets it and can fold something", () => {
+    // Never set: the toolbar it always had.
+    const { unmount } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    expect(screen.queryByRole("button", { name: "Fold groups" })).not.toBeInTheDocument();
+    unmount();
+
+    // Set, but every group is empty: nothing to fold, so no switch.
+    const emptyGroups: DiagramTemplate = {
+      ...EXAMPLE_TEMPLATE,
+      settings: { groupContents: "hide" },
+      nodes: EXAMPLE_TEMPLATE.nodes.map((n) => ({ ...n, parentId: null })),
+    };
+    const second = mount(<ArchitectureStudio defaultValue={emptyGroups} />);
+    expect(screen.queryByRole("button", { name: "Fold groups" })).not.toBeInTheDocument();
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+    second.unmount();
+
+  });
+
+  it("lets a read-only viewer unfold as a view override that never touches the document", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const folded: DiagramTemplate = { ...EXAMPLE_TEMPLATE, settings: { groupContents: "hide" } };
+    function Host() {
+      const [readOnly, setReadOnly] = useState(true);
+      return (
+        <>
+          <button type="button" onClick={() => setReadOnly((r) => !r)}>
+            host: toggle read-only
+          </button>
+          <ArchitectureStudio defaultValue={folded} readOnly={readOnly} onChange={onChange} />
+        </>
+      );
+    }
+    mount(<Host />);
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+
+    // The viewer's toggle reveals the contents…
+    const toggle = screen.getByRole("button", { name: "Fold groups" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await user.click(toggle);
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    // …without a document edit: nothing is emitted, nothing to undo.
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+    // And it folds again on request.
+    await user.click(toggle);
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+    await user.click(toggle);
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+
+    // Re-enabling editing drops the override: an editor sees the document's own fold.
+    await user.click(screen.getByRole("button", { name: "host: toggle read-only" }));
+    await waitFor(() => expect(screen.queryByText("REST API")).not.toBeInTheDocument());
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("reports the canvas selection to the host in template terms", async () => {

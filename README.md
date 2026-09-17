@@ -300,6 +300,46 @@ theme's `edgeColors`. Under `prefers-reduced-motion` the halo stays and nothing 
 **Interactive HTML** export carries the paths too: its ⋯ menu lists them, lighting one adds the
 same glow and dash flow to the exported SVG, with a key over the stage.
 
+### Settings: how the whole document is shown
+
+A root-level `settings` object holds rendering preferences that apply document-wide — how the
+diagram is *shown*, never what it says. Unlike `meta`, it is strict: only the keys the schema
+defines survive validation (the JSON editor lints the rest), and an object left saying nothing
+is omitted, so a document that never set one round-trips byte-identical.
+
+```json
+{
+  "settings": { "groupContents": "hide" }
+}
+```
+
+`groupContents` decides what groups do with what they contain. `"show"` — the default, never
+stored — is the canvas you know: every group is an open frame, or a chip when its own
+`collapsed` flag says so. `"hide"` **folds every group that has contents** into a chip, whatever
+its own flag says: contents leave the canvas, their edges re-route to the chip, and the stored
+frame size survives — the same mechanics as collapsing one group by hand, applied to all of
+them at once. An empty frame hides nothing, so it stays open. Image exports and the export crop
+follow the fold; the whole-document exports (Template, React Flow) do not, and neither does a
+Compare overlay — a diff shows the architecture inside every group.
+
+The toolbar gets a **Fold groups** toggle whenever the document says something here and some
+group has contents to fold — a diagram that never set `groupContents` keeps the toolbar it always
+had. Pressed means folded; pressing it writes `"show"` (so the switch stays, and there is a way
+back), and the flip is a document edit like any other: committed, undoable, emitted through
+`onChange`. A **read-only** viewer gets the same toggle as a view-only override — it changes
+what they see, never the document, and is dropped the moment editing is re-enabled. Under a fold
+each chip loses its own ▸ expand toggle — flipping one group's flag underneath the document's
+fold would change nothing on screen — and the groups' own `collapsed` flags are never written,
+so unfolding reopens exactly what was open before.
+
+**The fold never eats an edit.** Under `"hide"`, an edit that gives a group contents — a card
+dropped into a frame, a selection wrapped in a group with `⌘G` — would fold that group at once
+and take the very cards you just placed off the canvas. Instead the document flips to `"show"`
+in the same undo entry (the toast says so), and **Fold groups** folds everything again when you
+are done. Edits that arrive as whole documents — import, paste, an AI reply — fold as authored.
+The setting is opt-in for the model too: the system prompt teaches it, but only for a request
+that asks for folded groups or a summary view.
+
 ## Node text: alignment and wrapping
 
 A node's label is one ellipsised line, left-aligned and vertically centred, unless you say
@@ -785,7 +825,7 @@ The schema and editor cover C4's notational essentials:
 | **Routing** — curved / right-angle / straight | `meta.routing` sets the diagram default (Arrange → connector picker); `edge.routing` overrides per edge. Right-angle elbows are rounded |
 | **Flow-chart kinds** — `decision` (diamond), `terminator` (stadium), `io` (parallelogram) | Insert or the kind picker; Mermaid exports each by its shape |
 | **Language models** — `lm-small`, `lm-medium`, `llm` | One hue at three strengths, so the weight class is legible at a glance: a 1B router never looks like a frontier model. Provider-neutral — name the model in `description` ("Phi-3 mini", "Claude Opus 5"); use a cloud's own kind (`azure-openai`, `aws-bedrock`, `gcp-vertex-ai`) when the box is the hosting *service* |
-| **Collapsible groups** | ▾ on a group collapses it to a chip; contents hide, their edges re-route to the chip, and the stored size survives expand. Never destructive — collapse is view state that rides the undo stack |
+| **Collapsible groups** | ▾ on a group collapses it to a chip; contents hide, their edges re-route to the chip, and the stored size survives expand. Never destructive — collapse is view state that rides the undo stack. `settings.groupContents: "hide"` folds every group with contents at once, with a **Fold groups** toolbar toggle to flip it (see **Settings** above) |
 | **Tags + filter** | `node.tags`; the View tag filter dims non-matching nodes — dim only, never hide, so the filter can't touch what persists |
 | **Doc links** | `node.url` renders an ↗ affix (a real link in read-only) |
 | **Team ownership** | `node.team` renders a tag riding the node's edge, coloured stably per team name (same hue on screen and in image exports); View → Show team badges toggles them while editing |
@@ -1058,11 +1098,30 @@ anywhere else closes them all — and the click that dismisses a menu is spent o
 rather than also selecting whatever was under the pointer. The inspector reads as captioned
 sections (Node · Style · On · Tags · Link) instead of an unbroken run of inputs.
 
-Selecting **more than one** element swaps the inspector for a bulk one: how many are selected,
-then the fields that mean something across a mixed selection — lifecycle status, owning team, a
-tag to add, line style and colour for the connections — plus align, distribute, group, lock,
-duplicate and delete. Each field shows the shared value, or blank when they disagree, and
-setting it writes to everything selected.
+Selecting **more than one** element keeps the same inspector, handed the whole selection: the
+count, then every node setting the selected nodes **share** — kind, icon, lifecycle status, text
+alignment, vertical alignment, label size and wrap, the frame styling when every one is a group,
+a note's outline when every one is a note, provider scoping when they all sit in one zone, tags,
+team, date, lock — and every connection setting the selected lines share: direction, the tail
+and head glyphs, routing, the side each end leaves from and arrives at, cardinality, technology,
+date, style, colour, providers, plus Reverse and Clear routes for the lot. Only what names *one*
+thing is withheld: a node's label, description, rows and link; a line's label, step number and
+row attachments. Each control shows the shared value — or **Mixed** (a disabled option, an
+indeterminate checkbox, a placeholder) when the selection disagrees — and setting it writes to
+everything selected in one undo entry. A tag chip is on when *every* node carries it; toggling
+an on chip strips it everywhere, an off one gives it to everyone. The bar adds align, distribute,
+group, a lock that covers zones too, duplicate and delete. A selection of nodes **and**
+connections edits one side at a time: the count becomes a tab strip (`3 nodes` · `2 connections`),
+so the bar stays a few rows and never buries the canvas it is editing.
+
+**Resizing one node of a multi-selection resizes its peers.** React Flow already drags every
+selected node together; the resize handle now does the same, live, so five cards can be matched
+in one gesture. Peers are boxes of the same class — cards follow cards, frames follow frames,
+notes follow notes — and each keeps its own floor (a table its rows, a wrapped title its lines, a
+group its children), so a size the handle can reach on the dragged box never squashes a
+neighbour's contents. Locked nodes, zones, and dangling-arrow dots stay as they are, and so do
+the resized node's own container and contents: a band across a group selects the frame and what
+is in it, and resizing the frame must not stamp its size onto the cards inside.
 
 ## Canvas tools
 

@@ -74,6 +74,8 @@ import {
   absolutePosition,
   activeScenario,
   assignZonesByGeometry,
+  closedContainers,
+  foldedContainers,
   snapNodesIntoZones,
   fromReactFlow,
   fromZoneNodeId,
@@ -104,6 +106,7 @@ import {
   type EdgeRouting,
   type EdgeStyle,
   type FieldKey,
+  type GroupContents,
   type NodeField,
   type NodeStatus,
   type VersionTagPosition,
@@ -163,6 +166,7 @@ import {
   welcomeSuppressed,
 } from "./WelcomeModal";
 import { buildArchitectureLint } from "./schema-lint";
+import { fanOutResize } from "./resize";
 import { NestingModal } from "./NestingModal";
 import { inlineContents, nestContents } from "../contract/nesting";
 import { KindSelect } from "./KindSelect";
@@ -537,6 +541,15 @@ const TYPED_FIELDS = new Set([
   "fields",
 ]);
 
+/**
+ * What an inspector writes: the fields to set, or a function of the element's
+ * current data producing them — for edits like "add this tag to whatever
+ * each node already has" that a fixed object cannot express across a
+ * selection.
+ */
+type NodePatch = Partial<DiagramNodeData> | ((data: DiagramNodeData) => Partial<DiagramNodeData>);
+type EdgePatch = Partial<DiagramEdgeData> | ((data: DiagramEdgeData) => Partial<DiagramEdgeData>);
+
 /** The coalescing key for a patch, or nothing when it is not a typing run. */
 function typingRunKey(scope: string, id: string, patch: object): string | undefined {
   const keys = Object.keys(patch);
@@ -631,7 +644,9 @@ function StudioInner({
 
   const onNodesChange = useCallback(
     (changes: NodeChange<Node>[]) => {
-      flowNodesChange(changes);
+      // A resize of one selected node is repeated for the rest of the
+      // selection, so they follow the handle together (see resize.ts).
+      flowNodesChange(fanOutResize(changes, flow.getNodes(), registry) as NodeChange<Node>[]);
       const base = mergeBase.current;
       if (!base?.nodes.size || !changes.some((change) => change.type === "select")) return;
       setNodes((current) =>
@@ -640,7 +655,7 @@ function StudioInner({
           : current,
       );
     },
-    [flowNodesChange, setNodes],
+    [flowNodesChange, setNodes, flow, registry],
   );
 
   const onEdgesChange = useCallback(
@@ -724,6 +739,21 @@ function StudioInner({
   const [refineInput, setRefineInput] = useState("");
   const [zoom, setZoom] = useState(1);
   const [showHidden, setShowHidden] = useState(defaultShowHidden);
+  /**
+   * A read-only viewer's own say on the document's fold (see
+   * `settings.groupContents`). The toolbar toggle EDITS the document when
+   * editing is allowed; a viewer cannot edit, but "show me what is inside"
+   * is exactly what a viewer needs most — so for them the toggle overrides
+   * the setting in the view alone. Never persisted, never in undo, and
+   * dropped the moment editing is re-enabled, so the canvas an editor sees
+   * is always the document's own.
+   */
+  const [foldOverride, setFoldOverride] = useState<GroupContents | null>(null);
+  useEffect(() => {
+    if (!readOnly) setFoldOverride(null);
+  }, [readOnly]);
+  /** What the canvas is rendered under — the override while it stands, else nothing. */
+  const viewFold: GroupContents | null = readOnly ? foldOverride : null;
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   /**
    * Which of the document's paths are lit. View state like the tag filter —
@@ -806,7 +836,9 @@ function StudioInner({
   const lastEmitted = useRef<string | null>(JSON.stringify(initialTemplate));
   const meta = useRef<DiagramTemplate["meta"]>(initialTemplate.meta);
   /** Which provider each zone is on; a change here means the canvas must rebuild. */
-  const zoneSignatureRef = useRef<string>(viewSignatureOf(initialTemplate, defaultShowHidden));
+  const zoneSignatureRef = useRef<string>(
+    viewSignatureOf(initialTemplate, defaultShowHidden, null, registry.containerKinds, null),
+  );
   /**
    * Whether the React Flow state currently includes provider-hidden nodes.
    *
@@ -955,10 +987,30 @@ function StudioInner({
    * inspector input undoes as the one edit it was rather than a character at
    * a time. Omit it for anything a person would call a single action.
    */
+  /**
+   * The deferred commit in flight, if any. The rebuild effect below
+   * SUPERSEDES it: when the edit it was queued for also changes what the
+   * canvas shows (a group folding, a provider hiding nodes), the effect
+   * rebuilds and commits the rebuilt canvas itself — and the deferred commit
+   * must then stand down rather than derive a second document from a store
+   * the rebuild has not reached yet. That derive was judged against the
+   * ALREADY-advanced base, so a node the rebuild was about to reveal read as
+   * "absent but visible" — user-deleted — and was dropped: the data-loss
+   * class the FACT refs exist to prevent, arriving by another door. The
+   * token is what a superseded microtask checks; the coalescing key rides
+   * along so the effect's commit joins the same undo run the edit meant to.
+   */
+  const deferredCommit = useRef<{ token: number; coalesce?: string } | null>(null);
   const commitLater = useCallback(
     (coalesce?: string) => {
+      const token = (deferredCommit.current?.token ?? 0) + 1;
+      deferredCommit.current = { token, coalesce };
       // Read the freshest state from the store rather than the render closure.
-      queueMicrotask(() => commit(flow.getNodes(), flow.getEdges(), undefined, coalesce));
+      queueMicrotask(() => {
+        if (deferredCommit.current?.token !== token) return; // superseded
+        deferredCommit.current = null;
+        commit(flow.getNodes(), flow.getEdges(), undefined, coalesce);
+      });
     },
     [commit, flow],
   );
@@ -973,9 +1025,15 @@ function StudioInner({
    * (and loses) hidden nodes. Focus-aware: while drilled in, the canvas shows
    * `scopedView(doc, focus)` and the FACT ref records that; a focus whose
    * node vanished (undo, AI edit, controlled swap) prunes automatically.
+   *
+   * `select` names what the rebuilt canvas should have selected — the copies
+   * a paste just made, say — in place of the selection carried from before.
+   * It is applied IN the rebuild rather than by a follow-up `setNodes`: a
+   * second write straight after a rebuild is exactly what wipes the handle
+   * geometry (see the `measured` carry below).
    */
   const materializeTemplate = useCallback(
-    (doc: DiagramTemplate) => {
+    (doc: DiagramTemplate, select?: { nodes: readonly string[]; edges?: readonly string[] }) => {
       const stack = pruneFocusStack(doc, focusStackRef.current);
       const top = stack.at(-1) ?? null;
       if (stack.length !== focusStackRef.current.length) {
@@ -985,19 +1043,48 @@ function StudioInner({
       meta.current = doc.meta;
       baseRef.current = doc; // materialization point
       templateRef.current = doc;
-      zoneSignatureRef.current = viewSignatureOf(doc, showHidden, top);
+      zoneSignatureRef.current = viewSignatureOf(doc, showHidden, top, registry.containerKinds, viewFold);
       rfIncludesHiddenRef.current = showHidden;
       rfFocusRef.current = top;
-      const viewDoc = top
+      const scoped = top
         ? scopedView(doc, top, { containerKinds: registry.containerKinds })
         : doc;
+      // A viewer's fold override is applied to the VIEW document only — the
+      // base the canvas is judged against stays the document as written.
+      const viewDoc = viewFold
+        ? { ...scoped, settings: { ...scoped.settings, groupContents: viewFold } }
+        : scoped;
       const rf = toReactFlow(viewDoc, registryKinds(registry, showHidden));
-      const rfNodes = top ? decorateScopedNodes(rf.nodes as Node[]) : (rf.nodes as Node[]);
+      const fresh = top ? decorateScopedNodes(rf.nodes as Node[]) : (rf.nodes as Node[]);
+
+      // Carry each surviving node's DOM measurement across the rebuild.
+      //
+      // React Flow keeps a node's handle geometry across a `nodes` update
+      // only when the incoming node already carries `measured`; unmeasured,
+      // it is treated as new — handle bounds dropped — until its
+      // ResizeObserver reports again. `toReactFlow` builds unmeasured
+      // objects, so every rebuild used to blink every line out for a frame,
+      // and it opened a window in which any further `setNodes` was fatal: a
+      // write landing after the observer had re-measured but before that
+      // `dimensions` change had round-tripped through React state wiped the
+      // fresh handle bounds — and since the node THEN arrived measured, React
+      // Flow never observed it again. No handle bounds, no edge: that was
+      // "paste deleted every line on the diagram" (the paste's deferred
+      // select was exactly such a write). Carried, a surviving node never
+      // leaves the initialized state. One the document resized is reported
+      // at its old size for a frame, as React Flow itself does for any style
+      // change, until the observer — still attached — sees the new one.
+      const measuredById = new Map(flow.getNodes().map((n) => [n.id, n.measured]));
+      const rfNodes = fresh.map((n) => {
+        const measured = measuredById.get(n.id);
+        return measured?.width && measured?.height ? { ...n, measured } : n;
+      });
 
       // Carry the selection across the rebuild for everything that still
       // exists. `toReactFlow` produces a fresh, unselected canvas, so without
       // this every undo closes the inspector — and "edit a label, press ⌘Z"
       // becomes "edit a label, press ⌘Z, find the node again".
+      if (select) selectionRef.current = { nodes: [...select.nodes], edges: [...(select.edges ?? [])] };
       const keepNodes = new Set(selectionRef.current.nodes);
       const keepEdges = new Set(selectionRef.current.edges);
       const selected = keepNodes.size || keepEdges.size;
@@ -1012,7 +1099,13 @@ function StudioInner({
       setEdges(outEdges);
       return { nodes: outNodes, edges: outEdges };
     },
-    [registry, showHidden, setNodes, setEdges],
+    [registry, showHidden, viewFold, flow, setNodes, setEdges],
+  );
+
+  /** Whether the document folds its groups (`settings.groupContents`), read off the live document. */
+  const documentFolds = useCallback(
+    () => templateRef.current.settings?.groupContents === "hide",
+    [],
   );
 
   // ── Controlled mode: adopt external value changes ─────────────────────────
@@ -1059,7 +1152,7 @@ function StudioInner({
     // and commit it into the new one.
     const live = templateRef.current;
     if (live !== template) return;
-    const signature = viewSignatureOf(template, showHidden, focusId);
+    const signature = viewSignatureOf(template, showHidden, focusId, registry.containerKinds, viewFold);
     if (signature === zoneSignatureRef.current) return;
     // The document part alone decides whether this rebuild is an EDIT
     // (provider switch, collapse — belongs in undo, host must hear) or a pure
@@ -1075,7 +1168,25 @@ function StudioInner({
     // first" as an undocumented step. Selection is view state about IDS, and
     // ids survive a rebuild, so carry it across.
     const selected = new Set(flow.getNodes().filter((n) => n.selected).map((n) => n.id));
-    const next = materializeTemplate(template);
+    // The fold never eats an edit. Under `settings.groupContents: "hide"`
+    // a canvas edit that gives a group contents — a card dropped into a
+    // frame, a selection wrapped in one — would fold that group right here
+    // and take the very cards the user just placed off the canvas. The fold
+    // is for READING; an edit that fills a group is the user working, so
+    // the document flips to "show" in the same commit. (Edits that arrive
+    // as whole documents — import, paste, an AI reply — materialize directly
+    // and never pass through here, so a generated overview folds as
+    // authored.) The toolbar toggle folds it all again.
+    const opts = { containerKinds: registry.containerKinds };
+    const foldedBefore = foldedContainers(baseRef.current, opts);
+    const newlyFolded = [...foldedContainers(template, opts)].some((id) => !foldedBefore.has(id));
+    const doc = newlyFolded
+      ? validateTemplate(
+          { ...template, settings: { ...template.settings, groupContents: "show" } },
+          registryOpts(registry),
+        )
+      : template;
+    const next = materializeTemplate(doc);
     if (selected.size) {
       // A node the rebuild removed (hidden by a provider switch, collapsed
       // into its frame) is simply not in the new list, so it drops out here
@@ -1084,15 +1195,29 @@ function StudioInner({
         current.map((n) => (selected.has(n.id) ? { ...n, selected: true } : n)),
       );
     }
-    if (docChanged) commit(next.nodes, next.edges, template);
-  }, [template, focusId, materializeTemplate, showHidden, commit, flow, setNodes]);
+    if (docChanged) {
+      // This commit is the edit's commit — see `deferredCommit`.
+      const pending = deferredCommit.current;
+      deferredCommit.current = null;
+      commit(next.nodes, next.edges, doc, pending?.coalesce);
+    }
+  }, [template, focusId, materializeTemplate, showHidden, viewFold, commit, flow, setNodes, registry]);
 
   // ── Replace the whole document ────────────────────────────────────────────
 
   const applyTemplate = useCallback(
     (
       incoming: DiagramTemplate,
-      { fit = true, coalesce }: { fit?: boolean; coalesce?: string } = {},
+      {
+        fit = true,
+        coalesce,
+        select,
+      }: {
+        fit?: boolean;
+        coalesce?: string;
+        /** What to leave selected — see materializeTemplate. */
+        select?: { nodes: readonly string[]; edges?: readonly string[] };
+      } = {},
     ) => {
       // The declaration is truth on import: a generated document usually gets
       // membership right and coordinates approximately right, so move the node
@@ -1100,7 +1225,7 @@ function StudioInner({
       const validated = snapNodesIntoZones(validateTemplate(incoming, registryOpts(registry)), {
         containerKinds: registry.containerKinds,
       });
-      const next = materializeTemplate(validated);
+      const next = materializeTemplate(validated, select);
       commitHistory(
         { nodes: next.nodes, edges: next.edges, meta: meta.current, template: validated },
         { coalesce },
@@ -1282,20 +1407,17 @@ function StudioInner({
               ),
             }
           : next;
-      applyTemplate(rooted, { fit: false });
-      // Select the pasted copy, so it can be dragged away immediately.
-      window.setTimeout(() => {
-        setNodes((current) =>
-          current.map((n) => ({ ...n, selected: newNodeIds.includes(n.id) })),
-        );
-      }, 0);
+      // Selected as it lands, so it can be dragged away immediately. Never
+      // as a follow-up `setNodes` on a timer: that second write is what
+      // stripped every line off the canvas (see materializeTemplate).
+      applyTemplate(rooted, { fit: false, select: { nodes: newNodeIds } });
       const parts = [
         newNodeIds.length ? `${newNodeIds.length} node${newNodeIds.length === 1 ? "" : "s"}` : "",
         newZoneIds.length ? `${newZoneIds.length} zone${newZoneIds.length === 1 ? "" : "s"}` : "",
       ].filter(Boolean);
       showToast(`Pasted ${parts.join(" + ")}`);
     },
-    [readOnly, registry, applyTemplate, setNodes, showToast],
+    [readOnly, registry, applyTemplate, showToast],
   );
 
   const duplicateSelection = useCallback(() => {
@@ -1315,16 +1437,14 @@ function StudioInner({
       offset: PASTE_OFFSET,
       zones: zoneIds,
     });
-    applyTemplate(next, { fit: false });
-    // Select the copies, so they can be dragged away immediately.
-    window.setTimeout(() => {
-      setNodes((current) => current.map((n) => ({ ...n, selected: newNodeIds.includes(n.id) })));
-    }, 0);
+    // Selected as they land, so they can be dragged away immediately (and not
+    // by a deferred `setNodes` — see materializeTemplate for why that broke).
+    applyTemplate(next, { fit: false, select: { nodes: newNodeIds } });
     const what = zoneIds.length
       ? `${zoneIds.length} zone${zoneIds.length === 1 ? "" : "s"} + ${newNodeIds.length} node${newNodeIds.length === 1 ? "" : "s"}`
       : `${newNodeIds.length} node${newNodeIds.length === 1 ? "" : "s"}`;
     showToast(`Duplicated ${what} with connections`);
-  }, [readOnly, selectedNodeIds, registry, applyTemplate, setNodes, showToast]);
+  }, [readOnly, selectedNodeIds, registry, applyTemplate, showToast]);
 
   // ── Search ────────────────────────────────────────────────────────────────
 
@@ -1755,6 +1875,54 @@ function StudioInner({
     [readOnly, applyTemplate, showToast],
   );
 
+  // ── Group contents: the document-wide fold ────────────────────────────────
+
+  const groupContents = template.settings?.groupContents;
+  /**
+   * Whether the fold has anything to fold — some group with contents. The
+   * toolbar toggle exists only while it does: a document whose groups are all
+   * empty would otherwise show a switch that changes nothing on the canvas.
+   */
+  const groupsFoldable = useMemo(() => {
+    const containers = new Set(
+      template.nodes.filter((n) => kindDef(registry, n.kind).container).map((n) => n.id),
+    );
+    return template.nodes.some((n) => !!n.parentId && containers.has(n.parentId));
+  }, [template, registry]);
+  /**
+   * The toggle appears once the document says something about group
+   * contents. A diagram that never set `settings.groupContents` keeps the
+   * toolbar it always had; one that folds its groups gets the switch — and
+   * keeps it after unfolding, or there would be no way back. Read-only
+   * viewers get it too, as a view-only override (see `foldOverride`).
+   */
+  const showGroupsToggle = groupContents !== undefined && groupsFoldable;
+  /** What the canvas is actually showing: the viewer's override, else the document. */
+  const groupsShownFolded = (viewFold ?? groupContents) === "hide";
+
+  const setGroupContents = useCallback(
+    (next: GroupContents) => {
+      if (readOnly) {
+        // A viewer's toggle is a view override, never a document edit.
+        setFoldOverride(next);
+        return;
+      }
+      // Through applyTemplate (the setDefaultRouting pattern) so the fold is
+      // validated, committed, undoable, and emitted like any document edit —
+      // and the canvas rebuilds from the document, folding or unfolding every
+      // group at once.
+      applyTemplate(
+        {
+          ...templateRef.current,
+          settings: { ...templateRef.current.settings, groupContents: next },
+        },
+        { fit: false },
+      );
+      showToast(next === "hide" ? "Group contents folded away" : "Group contents shown");
+    },
+    [readOnly, applyTemplate, showToast],
+  );
+
   const tidy = useCallback(() => {
     if (readOnly) return;
     // Tidy arranges the level you are looking at — the focused component's
@@ -2077,13 +2245,22 @@ function StudioInner({
     }
   }, [readOnly, selectedNodeIds, selectedEdgeIds, showToast, registry, materializeTemplate, commit]);
 
-  const patchNode = useCallback(
-    (id: string, patch: Partial<DiagramNodeData>) => {
-      if (readOnly) return;
+  /**
+   * Patch several nodes in ONE state write and ONE commit — what the
+   * multi-selection inspector runs on, so "align five labels centre" is one
+   * undo entry rather than five. `patch` may be a function of each node's
+   * current data, for edits that depend on what the node already has (adding
+   * a tag to whatever tags it carries, say).
+   */
+  const patchNodes = useCallback(
+    (ids: readonly string[], patch: NodePatch) => {
+      if (readOnly || !ids.length) return;
+      const targets = new Set(ids);
       setNodes((current) =>
         current.map((n) => {
-          if (n.id !== id) return n;
-          const data = { ...(n.data as DiagramNodeData), ...patch };
+          if (!targets.has(n.id)) return n;
+          const own = typeof patch === "function" ? patch(n.data as DiagramNodeData) : patch;
+          const data = { ...(n.data as DiagramNodeData), ...own };
           // Explicit undefined means "clear the field", not "keep the old value".
           for (const key of [
             "tags",
@@ -2099,8 +2276,11 @@ function StudioInner({
             "color",
             "opacity",
             "fontSize",
+            "team",
+            "status",
+            "plain",
           ] as const) {
-            if (key in patch && patch[key] === undefined) delete data[key];
+            if (key in own && own[key] === undefined) delete data[key];
           }
           // Changing kind can change which renderer the node needs.
           const def = kindDef(registry, data.kind);
@@ -2118,7 +2298,7 @@ function StudioInner({
           // old height back off it and the extra lines spill out of the box.
           // Anything that changes how many lines the label takes lands here.
           const affectsHeight =
-            "wrap" in patch || "fontSize" in patch || ("label" in patch && data.wrap);
+            "wrap" in own || "fontSize" in own || ("label" in own && data.wrap);
           const grown =
             affectsHeight && data.wrap && !def.container && !def.annotation
               ? wrappedTitleHeight(
@@ -2140,7 +2320,7 @@ function StudioInner({
           // stored size survives the round trip, like a collapsed group's.)
           const wasPoint = kindDef(registry, (n.data as DiagramNodeData).kind).point;
           const bodied =
-            "kind" in patch && wasPoint && !def.point
+            "kind" in own && wasPoint && !def.point
               ? KIND_DEFAULT_SIZE[data.kind] ?? KIND_DEFAULT_SIZE.default
               : null;
 
@@ -2159,31 +2339,34 @@ function StudioInner({
                 ? { height, style: { ...(n.style ?? {}), height } }
                 : {}),
             // React Flow reads draggability from the node object, not data.
-            ...("locked" in patch ? { draggable: !data.locked } : {}),
+            ...("locked" in own ? { draggable: !data.locked } : {}),
           };
         }),
       );
-      commitLater(typingRunKey("node", id, patch));
+      commitLater(typeof patch === "function" ? undefined : typingRunKey("node", ids.join("+"), patch));
     },
     [readOnly, setNodes, registry, commitLater],
   );
 
-  const patchEdge = useCallback(
-    (id: string, patch: Partial<DiagramEdgeData>) => {
-      if (readOnly) return;
+  /** The edge twin of `patchNodes`. */
+  const patchEdges = useCallback(
+    (ids: readonly string[], patch: EdgePatch) => {
+      if (readOnly || !ids.length) return;
+      const targets = new Set(ids);
       setEdges((current) =>
         current.map((e) => {
-          if (e.id !== id) return e;
-          const data = { ...(e.data as DiagramEdgeData), ...patch };
+          if (!targets.has(e.id)) return e;
+          const own = typeof patch === "function" ? patch((e.data ?? {}) as DiagramEdgeData) : patch;
+          const data = { ...(e.data as DiagramEdgeData), ...own };
           // A spread keeps keys explicitly set to undefined; delete them so
           // "routing: default" and a cleared seq, date, anchor, or route
           // genuinely unset the field.
-          for (const key of ["routing", "seq", "direction", "startHead", "endHead", "date", "start", "end", "points"] as const) {
-            if (key in patch && patch[key] === undefined) delete data[key];
+          for (const key of ["routing", "seq", "direction", "startHead", "endHead", "date", "start", "end", "points", "providers", "startLabel", "endLabel", "startField", "endField", "tech"] as const) {
+            if (key in own && own[key] === undefined) delete data[key];
           }
           // The edge's own routing changed (or was cleared) — recompute what
           // the renderer draws from the diagram default.
-          if ("routing" in patch) {
+          if ("routing" in own) {
             data.routingResolved = data.routing ?? resolveRouting(meta.current?.routing);
           }
           return {
@@ -2197,10 +2380,11 @@ function StudioInner({
           };
         }),
       );
-      commitLater(typingRunKey("edge", id, patch));
+      commitLater(typeof patch === "function" ? undefined : typingRunKey("edge", ids.join("+"), patch));
     },
     [readOnly, setEdges, commitLater],
   );
+
 
   // ── Re-parenting on drop ──────────────────────────────────────────────────
 
@@ -2424,7 +2608,7 @@ function StudioInner({
         if (movingIds.has(candidate.id) || isZoneNodeId(candidate.id)) continue;
         if (isBoundaryNodeId(candidate.id) || isGhostNodeId(candidate.id)) continue;
         const data = candidate.data as DiagramNodeData;
-        if (!kindDef(registry, data.kind).container || data.collapsed) continue;
+        if (!kindDef(registry, data.kind).container || data.collapsed || data.folded) continue;
         const box = boxOf(candidate.id);
         if (!box) continue;
         if (cx <= box.x || cx >= box.x + box.w || cy <= box.y || cy >= box.y + box.h) continue;
@@ -2594,8 +2778,14 @@ function StudioInner({
           if (target && (target.data as DiagramNodeData).collapsed) {
             expanded.add(target.id);
           }
+          // Under the document's fold the frame would close over the drop;
+          // the rebuild lifts the fold instead (see the rebuild effect).
           showToast(
-            target ? `Moved into ${(target.data as DiagramNodeData).label}` : "Moved to canvas",
+            target
+              ? `Moved into ${(target.data as DiagramNodeData).label}${
+                  documentFolds() ? " — group contents shown" : ""
+                }`
+              : "Moved to canvas",
           );
         } else if (zoneChanged) {
           // Tinted like the zone it landed in, so the toast and the region
@@ -2681,7 +2871,7 @@ function StudioInner({
       }
       commitLater(dragKey);
     },
-    [readOnly, flow, registry, setNodes, showToast, commitLater, deriveTemplate, materializeTemplate, commit, finishAltDrag, dragZoneMembers],
+    [readOnly, flow, registry, setNodes, showToast, commitLater, documentFolds, deriveTemplate, materializeTemplate, commit, finishAltDrag, dragZoneMembers],
   );
 
   // ── Undo / redo ───────────────────────────────────────────────────────────
@@ -3198,8 +3388,18 @@ function StudioInner({
    * whether there is anything to save. Without it Save looks identical
    * before and after, and the only way to know whether your work is safe is
    * to press it again.
+   *
+   * Seeded with the document as first derived from the canvas — what Save
+   * would hand over if pressed at mount — so the first edit after a load is
+   * unsaved work. (The derived form rather than the host's `value`: the
+   * canvas orders parents before children, so a document written child-first
+   * differs byte-wise from its own round trip without anything having
+   * changed.) It used to start empty, which read as "everything is saved"
+   * for every edit made before the session's first save — a recoloured line
+   * on a freshly opened diagram, say — and a reload then threw the change
+   * away with the button never having said otherwise.
    */
-  const [savedJson, setSavedJson] = useState<string | null>(null);
+  const [savedJson, setSavedJson] = useState<string>(() => JSON.stringify(template));
   const handleSave = useCallback(async () => {
     if (!onSave || savingRef.current) return;
     savingRef.current = true;
@@ -3218,8 +3418,8 @@ function StudioInner({
     }
   }, [onSave, template, showToast]);
 
-  /** Whether the document differs from what was last handed to `onSave`. */
-  const dirty = savedJson !== null && savedJson !== JSON.stringify(template);
+  /** Whether the document differs from what was last handed to `onSave` (or, before any save, to us). */
+  const dirty = savedJson !== JSON.stringify(template);
 
   // ── AI generation ─────────────────────────────────────────────────────────
 
@@ -3634,6 +3834,27 @@ function StudioInner({
 
   const singleSelected =
     selectedNodeIds.length === 1 ? nodes.find((n) => n.id === selectedNodeIds[0]) : undefined;
+  /** The selected document nodes and connections, as React Flow holds them. */
+  const selectedDocNodes = useMemo(
+    () => selectedDocNodeIds.map((id) => nodes.find((n) => n.id === id)).filter((n): n is Node => !!n),
+    // The id list is rebuilt from the selection on every render; its content
+    // is what matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [nodes, selectedDocNodeIds.join("\u0000")],
+  );
+  const selectedEdges = useMemo(
+    () => selectedEdgeIds.map((id) => edges.find((e) => e.id === id)).filter((e): e is Edge => !!e),
+    [edges, selectedEdgeIds],
+  );
+  /**
+   * Authoritative zone membership comes from the derived template. React
+   * Flow's copy can lag by a frame after a zone is dragged, since the
+   * reassignment happens during derivation.
+   */
+  const zoneIdOf = useCallback(
+    (id: string): string | null => template.nodes.find((n) => n.id === id)?.zoneId ?? null,
+    [template],
+  );
   // Zones share React Flow's node array but need their own inspector.
   const selectedZoneNode = singleSelected && isZoneNodeId(singleSelected.id) ? singleSelected : undefined;
   const selectedNode = singleSelected && !isZoneNodeId(singleSelected.id) ? singleSelected : undefined;
@@ -3664,11 +3885,12 @@ function StudioInner({
    * direction is dropped: it bent toward where the line used to go.
    */
   const swapEdgeEnds = useCallback(
-    (id: string) => {
-      if (readOnly) return;
+    (ids: readonly string[]) => {
+      if (readOnly || !ids.length) return;
+      const targets = new Set(ids);
       setEdges((current) =>
         current.map((e) => {
-          if (e.id !== id) return e;
+          if (!targets.has(e.id)) return e;
           const d = (e.data ?? {}) as DiagramEdgeData;
           const next: DiagramEdgeData = { ...d };
           [next.start, next.end] = [d.end, d.start];
@@ -3870,11 +4092,15 @@ function StudioInner({
       const node = flow.getNode(id);
       return node && !isNodeLocked(node);
     });
+    // One write for every node, so the press is one undo entry.
+    patchNodes(
+      selectedNodeIds.filter((id) => !isZoneNodeId(id)),
+      { locked: anyUnlocked || undefined },
+    );
     for (const id of selectedNodeIds) {
       if (isZoneNodeId(id)) patchZone(fromZoneNodeId(id), { locked: anyUnlocked || undefined });
-      else patchNode(id, { locked: anyUnlocked || undefined });
     }
-  }, [readOnly, selectedNodeIds, flow, patchNode, patchZone]);
+  }, [readOnly, selectedNodeIds, flow, patchNodes, patchZone]);
 
   /**
    * Restack a selected ZONE.
@@ -3999,8 +4225,16 @@ function StudioInner({
       return sortByDepth([...next, groupNode]);
     });
     commitLater();
-    showToast(`Grouped ${roots.length} node${roots.length === 1 ? "" : "s"}`);
-  }, [readOnly, selectedNodeIds, flow, setNodes, commitLater, showToast]);
+    // Under the document's fold the new frame would close over its members —
+    // the one thing a person wrapping a selection did not ask for. The
+    // rebuild lifts the fold instead (see the rebuild effect); the toolbar
+    // toggle restores it.
+    showToast(
+      `Grouped ${roots.length} node${roots.length === 1 ? "" : "s"}${
+        documentFolds() ? " — group contents shown" : ""
+      }`,
+    );
+  }, [readOnly, selectedNodeIds, flow, setNodes, commitLater, documentFolds, showToast]);
 
   /** Unwrap: children go back to the group's own parent, the frame is removed. */
   const ungroupSelection = useCallback(() => {
@@ -5012,6 +5246,29 @@ function StudioInner({
             </div>
           ) : null}
 
+          {/* The document-wide fold. A pressed button means every group with
+              contents is drawn as a chip; pressing it again shows the
+              contents. See `showGroupsToggle` for when it is offered. */}
+          {showGroupsToggle ? (
+            <div className="as-toolbar__group">
+              <button
+                type="button"
+                className={`as-btn${groupsShownFolded ? " as-btn--on" : ""}`}
+                onClick={() => setGroupContents(groupsShownFolded ? "show" : "hide")}
+                aria-pressed={groupsShownFolded}
+                title={
+                  (groupsShownFolded
+                    ? "Every group's contents are folded away behind a chip — click to show them"
+                    : "Fold every group's contents away behind a chip") +
+                  (readOnly ? " (read-only: changes the view, not the document)" : "")
+                }
+              >
+                <UiIcon name="group" />
+                Fold groups
+              </button>
+            </div>
+          ) : null}
+
           {/* Paths: light up a named flow. Offered only when the document
               names one — and not while comparing, when the diff overlay
               stands in for the canvas the glow would land on. The count says
@@ -5695,12 +5952,20 @@ function StudioInner({
           {multiSelected && !readOnly && !activeDiffBase ? (
             <div className="as-inspector">
               <MultiInspector
-                nodeIds={selectedDocNodeIds}
-                edgeIds={selectedEdgeIds}
+                nodes={selectedDocNodes}
+                edges={selectedEdges}
                 zoneIds={selectedZoneIds}
-                onPatchNode={patchNode}
-                onPatchEdge={patchEdge}
+                registry={registry}
+                zones={zones}
+                zoneIdOf={zoneIdOf}
+                relevantProviders={referencedProviderSet}
+                fieldsOf={edgeEndFields}
+                labelOf={nodeLabelOf}
+                onPatchNodes={patchNodes}
+                onPatchEdges={patchEdges}
                 onPatchZone={patchZone}
+                onSwapEnds={swapEdgeEnds}
+                onClearRoutes={(ids) => clearEdgeRoutes(ids)}
                 onAlign={alignSelection}
                 onDistribute={distributeSelection}
                 onDuplicate={duplicateSelection}
@@ -5739,16 +6004,13 @@ function StudioInner({
                 </InspectorSection>
               ) : selectedNode ? (
                 <NodeInspector
-                  node={selectedNode}
+                  nodes={[selectedNode]}
                   linkRef={linkInputRef}
                   registry={registry}
                   zones={zones}
-                  // Authoritative membership comes from the derived template.
-                  // React Flow's copy can lag by a frame after a zone is
-                  // dragged, since the reassignment happens during derivation.
-                  zoneId={template.nodes.find((n) => n.id === selectedNode.id)?.zoneId ?? null}
+                  zoneIdOf={zoneIdOf}
                   relevantProviders={referencedProviderSet}
-                  onPatch={patchNode}
+                  onPatch={patchNodes}
                 />
               ) : null}
               {selectedEdge && isGhostEdgeId(selectedEdge.id) ? (
@@ -5760,16 +6022,14 @@ function StudioInner({
                 </InspectorSection>
               ) : selectedEdge ? (
                 <EdgeInspector
-                  edge={selectedEdge}
-                  sourceFields={edgeEndFields(selectedEdge.source)}
-                  targetFields={edgeEndFields(selectedEdge.target)}
-                  sourceLabel={nodeLabelOf(selectedEdge.source)}
-                  targetLabel={nodeLabelOf(selectedEdge.target)}
+                  edges={[selectedEdge]}
+                  fieldsOf={edgeEndFields}
+                  labelOf={nodeLabelOf}
                   relevantProviders={[...referencedProviderSet]}
                   registry={registry}
-                  onPatch={patchEdge}
+                  onPatch={patchEdges}
                   onSwapEnds={swapEdgeEnds}
-                  onClearRoute={() => clearEdgeRoutes([selectedEdge.id])}
+                  onClearRoutes={(ids) => clearEdgeRoutes(ids)}
                 />
               ) : null}
               {renderSlot(inspectorExtras)}
@@ -6037,12 +6297,19 @@ function DateSection({
   date,
   what,
   label,
+  clearable = !!date,
   onChange,
 }: {
   date?: string;
   /** What carries the date — "Node", "Edge", "Zone". Names the control. */
   what: string;
   label: string;
+  /**
+   * Offer the clear button. Defaults to "there is a date to clear"; a
+   * selection whose dates DISAGREE shows no one date yet still has some to
+   * clear, so the bulk bar passes "any of them is dated" instead.
+   */
+  clearable?: boolean;
   onChange: (date: string | undefined) => void;
 }) {
   return (
@@ -6057,7 +6324,7 @@ function DateSection({
         aria-label={`${what} date`}
         title={label}
       />
-      {date ? (
+      {clearable ? (
         <button
           type="button"
           className="as-btn as-btn--icon"
@@ -6203,12 +6470,13 @@ function ContextItem({
  * There was none: the bar rendered only for exactly one element, so selecting
  * five nodes hid it — along with Delete and Duplicate, leaving a
  * multi-selection with fewer controls than a single node. And the fields a
- * team actually sets in bulk (owner, lifecycle stage, a tag, a lock) had to be
- * set one box at a time.
+ * team actually sets in bulk had to be set one box at a time.
  *
- * Only the fields that MEAN something across a mixed selection are offered.
- * Each shows the shared value, or blank when they disagree — and setting one
- * writes it to everything selected, which is the whole point.
+ * The node and edge settings are the SAME inspectors a single element gets,
+ * handed the whole selection: each control shows the shared value (or
+ * "Mixed" when they disagree) and writes to everything selected. This bar
+ * adds only what a selection has and an element doesn't — the count, the
+ * arrangement tools, grouping, and a lock that covers zones too.
  */
 
 /**
@@ -6227,24 +6495,41 @@ const ALIGN_BUTTONS = [
 ] as const satisfies readonly (readonly [AlignMode, UiIconName])[];
 
 function MultiInspector({
-  nodeIds,
-  edgeIds,
+  nodes,
+  edges,
   zoneIds,
-  onPatchNode,
-  onPatchEdge,
+  registry,
+  zones,
+  zoneIdOf,
+  relevantProviders,
+  fieldsOf,
+  labelOf,
+  onPatchNodes,
+  onPatchEdges,
   onPatchZone,
+  onSwapEnds,
+  onClearRoutes,
   onAlign,
   onDistribute,
   onDuplicate,
   onDelete,
   onGroup,
 }: {
-  nodeIds: string[];
-  edgeIds: string[];
+  /** The selected document nodes (ghosts and boundary frames already excluded). */
+  nodes: readonly Node[];
+  edges: readonly Edge[];
   zoneIds: string[];
-  onPatchNode: (id: string, patch: Partial<DiagramNodeData>) => void;
-  onPatchEdge: (id: string, patch: Partial<DiagramEdgeData>) => void;
+  registry: ResolvedRegistry;
+  zones: DiagramZone[];
+  zoneIdOf: (id: string) => string | null;
+  relevantProviders: ReadonlySet<string>;
+  fieldsOf: (nodeId: string) => readonly NodeField[];
+  labelOf: (nodeId: string) => string;
+  onPatchNodes: (ids: readonly string[], patch: NodePatch) => void;
+  onPatchEdges: (ids: readonly string[], patch: EdgePatch) => void;
   onPatchZone: (id: string, patch: Partial<DiagramZone>) => void;
+  onSwapEnds: (ids: readonly string[]) => void;
+  onClearRoutes: (ids: readonly string[]) => void;
   onAlign: (mode: AlignMode) => void;
   onDistribute: (axis: "x" | "y") => void;
   onDuplicate: () => void;
@@ -6252,140 +6537,86 @@ function MultiInspector({
   onGroup: () => void;
 }) {
   const flow = useReactFlow();
-  const [team, setTeam] = useState("");
-  const [tag, setTag] = useState("");
+  const nodeIds = nodes.map((n) => n.id);
 
-  const dataOf = (id: string) => flow.getNode(id)?.data as DiagramNodeData | undefined;
-  /** The one value they all share, or undefined when they disagree. */
-  const shared = <T,>(read: (d: DiagramNodeData) => T): T | undefined => {
-    const values = nodeIds.map((id) => dataOf(id)).filter(Boolean).map((d) => read(d!));
-    if (!values.length) return undefined;
-    const first = values[0];
-    return values.every((v) => v === first) ? first : undefined;
-  };
+  const nodeCount = nodeIds.length ? `${nodeIds.length} node${nodeIds.length === 1 ? "" : "s"}` : "";
+  const zoneCount = zoneIds.length ? `${zoneIds.length} zone${zoneIds.length === 1 ? "" : "s"}` : "";
+  const edgeCount = edges.length ? `${edges.length} connection${edges.length === 1 ? "" : "s"}` : "";
+  /**
+   * A selection of nodes AND connections edits one side at a time: the two
+   * inspectors together ran to five rows and hid the canvas they were for.
+   * The count doubles as the tab strip, so nothing new has to be learned —
+   * and a selection of one kind reads exactly as it always did.
+   */
+  const [wanted, setWanted] = useState<"nodes" | "edges">("nodes");
+  const mixed = nodes.length > 0 && edges.length > 0;
+  const tab: "nodes" | "edges" = mixed ? wanted : nodes.length ? "nodes" : "edges";
 
-  const counts = [
-    nodeIds.length ? `${nodeIds.length} node${nodeIds.length === 1 ? "" : "s"}` : "",
-    zoneIds.length ? `${zoneIds.length} zone${zoneIds.length === 1 ? "" : "s"}` : "",
-    edgeIds.length ? `${edgeIds.length} connection${edgeIds.length === 1 ? "" : "s"}` : "",
-  ].filter(Boolean);
-
-  const sharedStatus = shared((d) => d.status ?? "active");
-  const sharedLocked = shared((d) => !!d.locked);
+  // The lock covers nodes AND zones, so it is read across both.
+  const lockables = [
+    ...nodes.map((n) => !!(n.data as DiagramNodeData).locked),
+    ...zoneIds.map((id) => isNodeLocked(flow.getNode(toZoneNodeId(id)))),
+  ];
+  const allLocked = lockables.length > 0 && lockables.every(Boolean);
 
   return (
     <>
       <InspectorSection caption="Selection">
-        <span className="as-inspector__count">{counts.join(" · ")}</span>
+        {mixed ? (
+          <span
+            className="as-inspector__tabs"
+            role="tablist"
+            aria-label="Which part of the selection to edit"
+          >
+            {(
+              [
+                ["nodes", nodeCount],
+                ["edges", edgeCount],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={tab === key}
+                className={`as-btn${tab === key ? " as-btn--on" : ""}`}
+                onClick={() => setWanted(key)}
+              >
+                {label}
+              </button>
+            ))}
+            {zoneCount ? <span className="as-inspector__count">· {zoneCount}</span> : null}
+          </span>
+        ) : (
+          <span className="as-inspector__count">
+            {[nodeCount, zoneCount, edgeCount].filter(Boolean).join(" · ")}
+          </span>
+        )}
       </InspectorSection>
 
-      {nodeIds.length ? (
-        <>
-          <InspectorSection caption="Status">
-            <select
-              className="as-select"
-              value={sharedStatus ?? ""}
-              aria-label="Lifecycle status for the whole selection"
-              onChange={(event) => {
-                const next = event.target.value as NodeStatus;
-                for (const id of nodeIds) {
-                  onPatchNode(id, { status: next === "active" ? undefined : next });
-                }
-              }}
-            >
-              {sharedStatus === undefined ? (
-                <option value="" disabled>
-                  Mixed
-                </option>
-              ) : null}
-              {NODE_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
-          </InspectorSection>
-
-          <InspectorSection caption="Team">
-            <input
-              className="as-input"
-              value={team}
-              placeholder={shared((d) => d.team ?? "") ?? "Mixed"}
-              aria-label="Owning team for the whole selection"
-              title="Type a team and press Enter to set it on everything selected"
-              onChange={(event) => setTeam(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return event.stopPropagation();
-                const next = team.trim();
-                for (const id of nodeIds) onPatchNode(id, { team: next || undefined });
-                setTeam("");
-                event.stopPropagation();
-              }}
-            />
-          </InspectorSection>
-
-          <InspectorSection caption="Add tag">
-            <input
-              className="as-input"
-              value={tag}
-              placeholder="+ tag…"
-              aria-label="Add a tag to the whole selection"
-              title="Type a tag and press Enter to add it to everything selected"
-              onChange={(event) => setTag(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return event.stopPropagation();
-                const next = tag.trim();
-                if (next) {
-                  for (const id of nodeIds) {
-                    const current = dataOf(id)?.tags ?? [];
-                    if (!current.includes(next)) onPatchNode(id, { tags: [...current, next] });
-                  }
-                }
-                setTag("");
-                event.stopPropagation();
-              }}
-            />
-          </InspectorSection>
-        </>
+      {nodes.length && tab === "nodes" ? (
+        <NodeInspector
+          nodes={nodes}
+          registry={registry}
+          zones={zones}
+          zoneIdOf={zoneIdOf}
+          relevantProviders={relevantProviders}
+          lock={false}
+          onPatch={onPatchNodes}
+        />
       ) : null}
 
-      {edgeIds.length ? (
-        <InspectorSection caption="Line">
-          <select
-            className="as-select"
-            defaultValue=""
-            aria-label="Line style for the selected connections"
-            onChange={(event) => {
-              const next = event.target.value as EdgeStyle;
-              if (!next) return;
-              for (const id of edgeIds) onPatchEdge(id, { style: next });
-            }}
-          >
-            <option value="" disabled>
-              Style…
-            </option>
-            {EDGE_STYLES.map((style) => (
-              <option key={style} value={style}>
-                {style}
-              </option>
-            ))}
-          </select>
-          <span className="as-swatches" role="group" aria-label="Colour for the selected connections">
-            {EDGE_COLORS.map((color) => (
-              <button
-                key={color}
-                type="button"
-                className="as-swatch"
-                style={{ background: EDGE_COLOR_HEX[color] }}
-                aria-label={`Edge colour ${color}`}
-                title={color}
-                onClick={() => {
-                  for (const id of edgeIds) onPatchEdge(id, { color });
-                }}
-              />
-            ))}
-          </span>
-        </InspectorSection>
+      {edges.length && tab === "edges" ? (
+        <EdgeInspector
+          edges={edges}
+          fieldsOf={fieldsOf}
+          labelOf={labelOf}
+          relevantProviders={[...relevantProviders]}
+          registry={registry}
+          onPatch={onPatchEdges}
+          onSwapEnds={onSwapEnds}
+          onClearRoutes={onClearRoutes}
+        />
       ) : null}
 
       <InspectorSection caption="Arrange">
@@ -6427,20 +6658,22 @@ function MultiInspector({
           Group
         </button>
       ) : null}
-      <button
-        type="button"
-        className={`as-btn as-btn--icon${sharedLocked ? " as-btn--on" : ""}`}
-        onClick={() => {
-          const next = !sharedLocked;
-          for (const id of nodeIds) onPatchNode(id, { locked: next || undefined });
-          for (const id of zoneIds) onPatchZone(id, { locked: next || undefined });
-        }}
-        aria-pressed={!!sharedLocked}
-        aria-label={sharedLocked ? "Unlock the selection" : "Lock the selection in place"}
-        title={sharedLocked ? "Unlock the selection" : "Lock the selection in place"}
-      >
-        <UiIcon name={sharedLocked ? "lock" : "unlock"} />
-      </button>
+      {lockables.length ? (
+        <button
+          type="button"
+          className={`as-btn as-btn--icon${allLocked ? " as-btn--on" : ""}`}
+          onClick={() => {
+            const next = !allLocked;
+            onPatchNodes(nodeIds, { locked: next || undefined });
+            for (const id of zoneIds) onPatchZone(id, { locked: next || undefined });
+          }}
+          aria-pressed={allLocked}
+          aria-label={allLocked ? "Unlock the selection" : "Lock the selection in place"}
+          title={allLocked ? "Unlock the selection" : "Lock the selection in place"}
+        >
+          <UiIcon name={allLocked ? "lock" : "unlock"} />
+        </button>
+      ) : null}
       <button
         type="button"
         className="as-btn as-btn--icon"
@@ -6690,161 +6923,291 @@ function ZoneInspector({
   );
 }
 
+/**
+ * A field read across a selection: the value every element carries, and
+ * whether they disagree. Each inspector control reads through this, which is
+ * what lets ONE element and FIVE render through the same markup — the only
+ * thing a multi-selection changes is that a disagreeing field shows "Mixed"
+ * until the user sets it, at which point the value is written to everything
+ * selected. Arrays compare by content, so two nodes tagged ["pci"] agree.
+ */
+function sharedField<D, T>(datas: readonly D[], pick: (d: D) => T): { value: T; mixed: boolean } {
+  const first = pick(datas[0]!);
+  const key = (v: T) => (Array.isArray(v) ? JSON.stringify(v) : v);
+  const mixed = datas.some((d) => !Object.is(key(pick(d)), key(first)));
+  return { value: first, mixed };
+}
+
+/** The placeholder row a <select> shows while the selection disagrees. */
+function MixedOption({ when }: { when: boolean }) {
+  return when ? (
+    <option value="" disabled>
+      Mixed
+    </option>
+  ) : null;
+}
+
+/** A checkbox that reads indeterminate while the selection disagrees. */
+function SharedCheck({
+  checked,
+  mixed,
+  label,
+  title,
+  onChange,
+}: {
+  checked: boolean;
+  mixed: boolean;
+  label: string;
+  title: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="as-check" title={title}>
+      <input
+        type="checkbox"
+        checked={!mixed && checked}
+        ref={(el) => {
+          if (el) el.indeterminate = mixed;
+        }}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      {label}
+    </label>
+  );
+}
+
+/**
+ * The node inspector — for one node, or for every node in a selection.
+ *
+ * One component for both, deliberately. There used to be a second, thinner
+ * bar for multi-selections that offered a handful of bulk fields; every
+ * control the single-node bar grew (text alignment, the frame styling, wrap)
+ * had to be added there a second time or it simply wasn't available in
+ * bulk — and mostly it wasn't. Here every control reads the selection's
+ * shared value (or "Mixed") and writes to every node, so a multi-selection
+ * has exactly the settings a single node has, minus the ones that name ONE
+ * thing: the label, the description, the rows, the link.
+ *
+ * Sections gated on kind (the frame controls, a note's outline) appear when
+ * every selected node qualifies — the settings the selection SHARES — so a
+ * frame picker never writes `outline` onto a service.
+ */
 function NodeInspector({
-  node,
+  nodes,
   linkRef,
   registry,
   zones,
-  zoneId,
+  zoneIdOf,
   relevantProviders,
+  lock = true,
   onPatch,
 }: {
-  node: Node;
+  /** The selection — at least one. */
+  nodes: readonly Node[];
   /** So ⌘⇧K can put the cursor straight in the Link field. */
-  linkRef: React.RefObject<HTMLInputElement>;
+  linkRef?: React.RefObject<HTMLInputElement>;
   registry: ResolvedRegistry;
   zones: DiagramZone[];
-  zoneId: string | null;
+  /** Authoritative zone membership, by node id (from the derived template). */
+  zoneIdOf: (id: string) => string | null;
   /** Providers the document references — the kind picker demotes the rest. */
   relevantProviders: ReadonlySet<string>;
-  onPatch: (id: string, patch: Partial<DiagramNodeData>) => void;
+  /** Render the lock button. A mixed selection's bar draws its own, covering zones too. */
+  lock?: boolean;
+  onPatch: (ids: readonly string[], patch: NodePatch) => void;
 }) {
-  const data = node.data as DiagramNodeData;
-  const def = kindDef(registry, data.kind);
-  const zone = zoneId ? zones.find((z) => z.id === zoneId) : undefined;
+  const ids = nodes.map((n) => n.id);
+  const datas = nodes.map((n) => n.data as DiagramNodeData);
+  const single = nodes.length === 1;
+  const data = datas[0]!;
+  const defs = datas.map((d) => kindDef(registry, d.kind));
+  const def = defs[0]!;
+  const patch = (p: NodePatch) => onPatch(ids, p);
+  const read = <T,>(pick: (d: DiagramNodeData) => T) => sharedField(datas, pick);
+
+  // Which sections the selection qualifies for — ALL of it, or none.
+  const allContainers = defs.every((d) => d.container);
+  const allAnnotations = defs.every((d) => d.annotation);
+  const noAnnotations = defs.every((d) => !d.annotation);
+  const allPlainBoxes = defs.every((d) => !d.container && !d.annotation);
+
+  // Provider scoping lives on a zone, so it is offered when the whole
+  // selection sits in the same one.
+  const zoneIds = new Set(ids.map(zoneIdOf));
+  const sharedZoneId = zoneIds.size === 1 ? [...zoneIds][0] : null;
+  const zone = sharedZoneId ? zones.find((z) => z.id === sharedZoneId) : undefined;
 
   /**
    * Toggling a provider off restricts the node to the remaining ones. Turning
    * every provider on is the same as "always visible", so that clears the list
-   * rather than storing a redundant full set.
+   * rather than storing a redundant full set. Applied per node, since each
+   * starts from its own list.
    */
   const toggleNodeProvider = (provider: string) => {
     if (!zone) return;
-    const current = data.providers?.length ? data.providers : [...zone.providers];
-    const next = current.includes(provider)
-      ? current.filter((p) => p !== provider)
-      : [...current, provider];
-    const all = zone.providers.every((p) => next.includes(p));
-    onPatch(node.id, { providers: all || !next.length ? undefined : next });
+    patch((d) => {
+      const current = d.providers?.length ? d.providers : [...zone.providers];
+      const next = current.includes(provider)
+        ? current.filter((p) => p !== provider)
+        : [...current, provider];
+      const all = zone.providers.every((p) => next.includes(p));
+      return { providers: all || !next.length ? undefined : next };
+    });
   };
+  /** A provider is "on" for the selection when every node shows on it. */
+  const providerOn = (p: string) => datas.every((d) => !d.providers?.length || d.providers.includes(p));
+
+  const kind = read((d) => d.kind as string);
+  const status = read((d) => d.status ?? "active");
+  const icon = read((d) => d.icon as string);
+  const fontSize = read((d) => d.fontSize ?? DEFAULT_FONT_SIZE);
+  const plain = read((d) => !!d.plain);
+  const textAlign = read((d) => d.textAlign ?? "left");
+  const textVAlign = read((d) => d.textVAlign ?? "middle");
+  const wrap = read((d) => !!d.wrap);
+  const outline = read((d) => d.outline ?? "dashed");
+  const fill = read((d) => d.fill !== false);
+  const opacity = read((d) => d.opacity ?? DEFAULT_CONTAINER_OPACITY);
+  const color = read((d) => d.color ?? "");
+  const team = read((d) => d.team ?? "");
+  const date = read((d) => d.date);
+  const locked = read((d) => !!d.locked);
+  // Tags: every tag anyone carries is offered; a chip is ON when everyone
+  // carries it. Toggling an ON chip strips it from all, an OFF one adds it
+  // to all — so "tag these five pci" is one click.
+  const tagUnion = [...new Set(datas.flatMap((d) => d.tags ?? []))];
+  const tagsOnAll = tagUnion.filter((tag) => datas.every((d) => d.tags?.includes(tag)));
 
   return (
     <>
-      <InspectorSection caption="Node">
-        <input
-          className="as-input as-inspector__name"
-          value={data.label}
-          onChange={(event) => onPatch(node.id, { label: event.target.value })}
-          aria-label="Node label"
-        />
+      <InspectorSection caption={single ? "Node" : "Nodes"}>
+        {single ? (
+          <input
+            className="as-input as-inspector__name"
+            value={data.label}
+            onChange={(event) => patch({ label: event.target.value })}
+            aria-label="Node label"
+          />
+        ) : null}
         <KindSelect
           registry={registry}
-          value={data.kind as string}
+          value={kind.mixed ? "" : kind.value}
+          placeholder="Mixed kinds"
           relevantProviders={relevantProviders}
-          onChange={(kind) => {
+          onChange={(next) => {
             // Adopt the new kind's default icon so the node doesn't keep a glyph
             // that made sense only for the old kind.
-            onPatch(node.id, { kind, icon: kindDef(registry, kind).icon });
+            patch({ kind: next, icon: kindDef(registry, next).icon });
           }}
         />
-        {!def.annotation ? (
+        {noAnnotations ? (
           <select
             className="as-select"
-            value={data.status ?? "active"}
+            value={status.mixed ? "" : status.value}
             onChange={(event) => {
               const value = event.target.value as NodeStatus;
+              if (!value) return;
               // `active` is the default and never stored.
-              onPatch(node.id, { status: value === "active" ? undefined : value });
+              patch({ status: value === "active" ? undefined : value });
             }}
             aria-label="Lifecycle status"
             title="Lifecycle stage — proposed/planned/stubbed outline, dark hazard-taped, deprecated/retired dim"
           >
-            {NODE_STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {status}
+            <MixedOption when={status.mixed} />
+            {NODE_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
               </option>
             ))}
           </select>
         ) : null}
       </InspectorSection>
 
-      {!def.container && !def.annotation ? (
+      {allPlainBoxes ? (
         <InspectorSection caption="Style">
           <select
             className="as-select"
-            value={data.icon as string}
-            onChange={(event) => onPatch(node.id, { icon: event.target.value })}
+            value={icon.mixed ? "" : icon.value}
+            onChange={(event) => {
+              if (event.target.value) patch({ icon: event.target.value });
+            }}
             aria-label="Node icon"
           >
-            {registry.iconNames.map((icon) => (
-              <option key={icon} value={icon}>
-                {icon === "none" ? "no icon" : icon}
+            <MixedOption when={icon.mixed} />
+            {registry.iconNames.map((name) => (
+              <option key={name} value={name}>
+                {name === "none" ? "no icon" : name}
               </option>
             ))}
           </select>
-          <input
-            className="as-input as-inspector__desc"
-            value={data.description}
-            placeholder="Description…"
-            onChange={(event) => onPatch(node.id, { description: event.target.value })}
-            aria-label="Node description"
-          />
+          {single ? (
+            <input
+              className="as-input as-inspector__desc"
+              value={data.description}
+              placeholder="Description…"
+              onChange={(event) => patch({ description: event.target.value })}
+              aria-label="Node description"
+            />
+          ) : null}
         </InspectorSection>
       ) : null}
 
-      {def.annotation ? (
+      {allAnnotations ? (
         <InspectorSection caption="Style">
           <select
             className="as-select"
-            value={data.fontSize ?? 13}
-            onChange={(event) => onPatch(node.id, { fontSize: Number(event.target.value) })}
+            value={fontSize.mixed ? "" : fontSize.value}
+            onChange={(event) => {
+              if (event.target.value) patch({ fontSize: Number(event.target.value) });
+            }}
             aria-label="Font size"
           >
+            <MixedOption when={fontSize.mixed} />
             {[11, 13, 16, 20, 26].map((size) => (
               <option key={size} value={size}>
                 {size}px
               </option>
             ))}
           </select>
-          <label className="as-check" title="Draw an outline and background behind this note">
-            <input
-              type="checkbox"
-              checked={!data.plain}
-              onChange={(event) =>
-                // Boxed is the default, so only the opt-OUT is stored.
-                onPatch(node.id, { plain: event.target.checked ? undefined : true })
-              }
-            />
-            Outline
-          </label>
+          <SharedCheck
+            checked={!plain.value}
+            mixed={plain.mixed}
+            label="Outline"
+            title="Draw an outline and background behind this note"
+            // Boxed is the default, so only the opt-OUT is stored.
+            onChange={(checked) => patch({ plain: checked ? undefined : true })}
+          />
           {/* A note's sentence is its label (double-click the note to edit);
               the description is the dim sub-line under it, and this is the
               only place to type one. */}
-          <input
-            className="as-input as-inspector__desc"
-            value={data.description}
-            placeholder="Description…"
-            onChange={(event) => onPatch(node.id, { description: event.target.value })}
-            aria-label="Node description"
-          />
+          {single ? (
+            <input
+              className="as-input as-inspector__desc"
+              value={data.description}
+              placeholder="Description…"
+              onChange={(event) => patch({ description: event.target.value })}
+              aria-label="Node description"
+            />
+          ) : null}
         </InspectorSection>
       ) : null}
 
       {/* Text layout. Every default is left/middle/unwrapped, and validation
           stores a value only when it differs — so touching nothing here leaves
           the document byte-identical. Annotations keep their own editor. */}
-      {!def.annotation ? (
+      {noAnnotations ? (
         <InspectorSection caption="Text">
           <select
             className="as-select"
-            value={data.textAlign ?? "left"}
+            value={textAlign.mixed ? "" : textAlign.value}
             onChange={(event) => {
               const value = event.target.value as NodeTextAlign;
-              onPatch(node.id, { textAlign: value === "left" ? undefined : value });
+              if (value) patch({ textAlign: value === "left" ? undefined : value });
             }}
             aria-label="Text alignment"
             title="Horizontal alignment of the label and description"
           >
+            <MixedOption when={textAlign.mixed} />
             {NODE_TEXT_ALIGNS.map((a) => (
               <option key={a} value={a}>
                 align: {a}
@@ -6853,14 +7216,15 @@ function NodeInspector({
           </select>
           <select
             className="as-select"
-            value={data.textVAlign ?? "middle"}
+            value={textVAlign.mixed ? "" : textVAlign.value}
             onChange={(event) => {
               const value = event.target.value as NodeTextVAlign;
-              onPatch(node.id, { textVAlign: value === "middle" ? undefined : value });
+              if (value) patch({ textVAlign: value === "middle" ? undefined : value });
             }}
             aria-label="Vertical text alignment"
             title="Where the text block sits in the box"
           >
+            <MixedOption when={textVAlign.mixed} />
             {NODE_TEXT_VALIGNS.map((a) => (
               <option key={a} value={a}>
                 vertical: {a}
@@ -6869,92 +7233,88 @@ function NodeInspector({
           </select>
           <select
             className="as-select"
-            value={data.fontSize ?? DEFAULT_FONT_SIZE}
+            value={fontSize.mixed ? "" : fontSize.value}
             onChange={(event) => {
               const value = Number(event.target.value);
-              onPatch(node.id, { fontSize: value === DEFAULT_FONT_SIZE ? undefined : value });
+              if (value) patch({ fontSize: value === DEFAULT_FONT_SIZE ? undefined : value });
             }}
             aria-label="Label size"
             title="Label size"
           >
+            <MixedOption when={fontSize.mixed} />
             {[11, 13, 16, 20, 26].map((size) => (
               <option key={size} value={size}>
                 {size}px
               </option>
             ))}
           </select>
-          <label className="as-check" title="Wrap the label across lines, growing the box to fit">
-            <input
-              type="checkbox"
-              checked={!!data.wrap}
-              onChange={(event) =>
-                // One ellipsised line is the default, so only the opt-IN is stored.
-                onPatch(node.id, { wrap: event.target.checked ? true : undefined })
-              }
-            />
-            Wrap
-          </label>
+          <SharedCheck
+            checked={wrap.value}
+            mixed={wrap.mixed}
+            label="Wrap"
+            title="Wrap the label across lines, growing the box to fit"
+            // One ellipsised line is the default, so only the opt-IN is stored.
+            onChange={(checked) => patch({ wrap: checked ? true : undefined })}
+          />
         </InspectorSection>
       ) : null}
 
       {/* Container frame — the same three controls a zone gets, because it is
           the same vocabulary. Fill off + outline none is an invisible grouping
           box that still nests, still accepts drops, and still drills in. */}
-      {def.container ? (
+      {allContainers ? (
         <InspectorSection caption="Frame">
           <select
             className="as-select"
-            value={data.outline ?? "dashed"}
+            value={outline.mixed ? "" : outline.value}
             onChange={(event) => {
               const value = event.target.value as NodeOutline;
               // `dashed` is the group default and never stored.
-              onPatch(node.id, { outline: value === "dashed" ? undefined : value });
+              if (value) patch({ outline: value === "dashed" ? undefined : value });
             }}
             aria-label="Frame outline style"
             title="Outline — solid, dashed, dotted, or none"
           >
+            <MixedOption when={outline.mixed} />
             {NODE_OUTLINES.map((o) => (
               <option key={o} value={o}>
                 outline: {o}
               </option>
             ))}
           </select>
-          <label className="as-check" title="Draw the background tint">
-            <input
-              type="checkbox"
-              checked={data.fill !== false}
-              onChange={(event) =>
-                // Filled is the default; only the opt-out is stored.
-                onPatch(node.id, { fill: event.target.checked ? undefined : false })
-              }
-            />
-            Fill
-          </label>
+          <SharedCheck
+            checked={fill.value}
+            mixed={fill.mixed}
+            label="Fill"
+            title="Draw the background tint"
+            // Filled is the default; only the opt-out is stored.
+            onChange={(checked) => patch({ fill: checked ? undefined : false })}
+          />
           <input
             className="as-range"
             type="range"
             min={0}
             max={0.6}
             step={0.02}
-            value={data.opacity ?? DEFAULT_CONTAINER_OPACITY}
-            disabled={data.fill === false}
-            onChange={(event) => onPatch(node.id, { opacity: Number(event.target.value) })}
+            value={opacity.mixed ? DEFAULT_CONTAINER_OPACITY : opacity.value}
+            disabled={!fill.mixed && !fill.value}
+            onChange={(event) => patch({ opacity: Number(event.target.value) })}
             aria-label="Frame fill opacity"
-            title="How strong the background tint is"
+            title={opacity.mixed ? "Mixed — drag to set one tint for all" : "How strong the background tint is"}
           />
           <input
             className="as-swatch as-swatch--custom"
             type="color"
-            value={data.color ?? def.accent}
-            onChange={(event) => onPatch(node.id, { color: event.target.value })}
+            value={color.mixed || !color.value ? def.accent : color.value}
+            onChange={(event) => patch({ color: event.target.value })}
             aria-label="Frame colour"
-            title="Frame ink — the outline colour the fill is derived from"
+            title={color.mixed ? "Mixed — pick one ink for all" : "Frame ink — the outline colour the fill is derived from"}
           />
-          {data.color ? (
+          {datas.some((d) => d.color) ? (
             <button
               type="button"
               className="as-chip"
-              onClick={() => onPatch(node.id, { color: undefined, opacity: undefined })}
+              onClick={() => patch({ color: undefined, opacity: undefined })}
               title="Back to the kind's own colour"
             >
               Auto
@@ -6969,7 +7329,7 @@ function NodeInspector({
         <span className="as-inspector__group" role="group" aria-label="Visible on">
           <span className="as-inspector__caption">On</span>
           {zone.providers.map((p) => {
-            const on = !data.providers?.length || data.providers.includes(p);
+            const on = providerOn(p);
             const pd = providerDef(registry, p);
             return (
               <button
@@ -6991,56 +7351,64 @@ function NodeInspector({
       {/* Rows, for the kinds whose substance is rows — plus any node that
           already has some, so a document that arrived with fields on a
           "service" can still be edited rather than only viewed. */}
-      {def.record || data.fields?.length ? (
-        <FieldsEditor
-          fields={data.fields ?? []}
-          onChange={(fields) => onPatch(node.id, { fields })}
-        />
+      {single && (def.record || data.fields?.length) ? (
+        <FieldsEditor fields={data.fields ?? []} onChange={(fields) => patch({ fields })} />
       ) : null}
 
-      {!def.annotation ? (
+      {noAnnotations ? (
         <ChipListEditor
           caption="Tags"
           ariaLabel="Node tags"
           addPlaceholder="+ tag…"
-          options={data.tags ?? []}
-          active={data.tags ?? []}
-          customIds={new Set(data.tags ?? [])}
-          onToggle={(tag) => {
-            const next = (data.tags ?? []).filter((t) => t !== tag);
-            onPatch(node.id, { tags: next.length ? next : undefined });
-          }}
-          onAdd={(tag) => onPatch(node.id, { tags: [...(data.tags ?? []), tag] })}
+          options={tagUnion}
+          active={tagsOnAll}
+          customIds={new Set(tagUnion)}
+          onToggle={(tag) =>
+            tagsOnAll.includes(tag)
+              ? patch((d) => {
+                  const next = (d.tags ?? []).filter((t) => t !== tag);
+                  return { tags: next.length ? next : undefined };
+                })
+              : patch((d) => ({ tags: d.tags?.includes(tag) ? d.tags : [...(d.tags ?? []), tag] }))
+          }
+          onAdd={(tag) =>
+            patch((d) => ({ tags: d.tags?.includes(tag) ? d.tags : [...(d.tags ?? []), tag] }))
+          }
         />
       ) : null}
 
-      {!def.annotation ? (
+      {noAnnotations ? (
         <InspectorSection caption="Team">
           <input
             className="as-input as-inspector__team"
-            value={data.team ?? ""}
-            placeholder="Owning team…"
-            onChange={(event) => onPatch(node.id, { team: event.target.value || undefined })}
+            value={team.mixed ? "" : team.value}
+            placeholder={team.mixed ? "Mixed" : "Owning team…"}
+            onChange={(event) => patch({ team: event.target.value || undefined })}
             aria-label="Owning team"
           />
         </InspectorSection>
       ) : null}
 
       <DateSection
-        date={data.date}
+        date={date.mixed ? undefined : date.value}
+        clearable={datas.some((d) => !!d.date)}
         what="Node"
-        label="When this node lands. Undated means it is always there."
-        onChange={(date) => onPatch(node.id, { date })}
+        label={
+          date.mixed
+            ? "Mixed — pick one date for all"
+            : "When this node lands. Undated means it is always there."
+        }
+        onChange={(next) => patch({ date: next })}
       />
 
-      {!def.annotation ? (
+      {single && noAnnotations ? (
         <InspectorSection caption="Link">
           <input
             ref={linkRef}
             className="as-input as-inspector__url"
             value={data.url ?? ""}
             placeholder="https://… or file:Name"
-            onChange={(event) => onPatch(node.id, { url: event.target.value || undefined })}
+            onChange={(event) => patch({ url: event.target.value || undefined })}
             aria-label="Documentation link"
           />
           {data.url && !data.url.startsWith("file:") ? (
@@ -7058,16 +7426,18 @@ function NodeInspector({
         </InspectorSection>
       ) : null}
 
-      <button
-        type="button"
-        className={`as-btn as-btn--icon${data.locked ? " as-btn--on" : ""}`}
-        onClick={() => onPatch(node.id, { locked: data.locked ? undefined : true })}
-        aria-pressed={!!data.locked}
-        aria-label={data.locked ? "Unlock" : "Lock in place"}
-        title={data.locked ? "Unlock — allow moving and resizing" : "Lock in place"}
-      >
-        <UiIcon name={data.locked ? "lock" : "unlock"} />
-      </button>
+      {lock ? (
+        <button
+          type="button"
+          className={`as-btn as-btn--icon${locked.value && !locked.mixed ? " as-btn--on" : ""}`}
+          onClick={() => patch({ locked: locked.value && !locked.mixed ? undefined : true })}
+          aria-pressed={locked.value && !locked.mixed}
+          aria-label={locked.value && !locked.mixed ? "Unlock" : "Lock in place"}
+          title={locked.value && !locked.mixed ? "Unlock — allow moving and resizing" : "Lock in place"}
+        >
+          <UiIcon name={locked.value && !locked.mixed ? "lock" : "unlock"} />
+        </button>
+      ) : null}
     </>
   );
 }
@@ -7206,60 +7576,104 @@ function FieldsEditor({
   );
 }
 
+/**
+ * The edge inspector — for one connection, or every connection selected.
+ *
+ * Same doctrine as `NodeInspector`: one component, every control reading the
+ * shared value and writing to the whole selection. A multi-selection keeps
+ * every setting a line can share — heads, direction, routing, the side each
+ * end leaves from, style, colour, tech, date, providers, cardinality — and
+ * drops only what names ONE line: its label, its step number, and which row
+ * of which box it attaches to.
+ */
 function EdgeInspector({
-  edge,
-  sourceFields,
-  targetFields,
-  sourceLabel,
-  targetLabel,
+  edges,
+  fieldsOf,
+  labelOf,
   relevantProviders,
   registry,
   onPatch,
   onSwapEnds,
-  onClearRoute,
+  onClearRoutes,
 }: {
-  edge: Edge;
-  /** Rows of the endpoint nodes — what an end may attach to. */
-  sourceFields: readonly NodeField[];
-  targetFields: readonly NodeField[];
-  /** What the ends are called, so the bar can say what this line joins. */
-  sourceLabel: string;
-  targetLabel: string;
+  /** The selection — at least one. */
+  edges: readonly Edge[];
+  /** Rows of a node — what an end may attach to. */
+  fieldsOf: (nodeId: string) => readonly NodeField[];
+  /** What a node is called, so the bar can say what a line joins. */
+  labelOf: (nodeId: string) => string;
   relevantProviders: readonly string[];
   registry: ResolvedRegistry;
-  onPatch: (id: string, patch: Partial<DiagramEdgeData>) => void;
-  onSwapEnds: (id: string) => void;
+  onPatch: (ids: readonly string[], patch: EdgePatch) => void;
+  onSwapEnds: (ids: readonly string[]) => void;
   /**
-   * Drop this line's waypoints. Goes through the studio's shared clear rather
+   * Drop these lines' waypoints. Goes through the studio's shared clear rather
    * than a `points: undefined` patch of its own, so the inspector, the
    * right-click menu and the Arrange item are one code path with one
    * undo entry — they used to be two.
    */
-  onClearRoute: () => void;
+  onClearRoutes: (ids: readonly string[]) => void;
 }) {
-  const data = (edge.data ?? {}) as DiagramEdgeData;
+  const ids = edges.map((e) => e.id);
+  const datas = edges.map((e) => (e.data ?? {}) as DiagramEdgeData);
+  const single = edges.length === 1;
+  const edge = edges[0]!;
+  const data = datas[0]!;
+  const patch = (p: EdgePatch) => onPatch(ids, p);
+  const read = <T,>(pick: (d: DiagramEdgeData) => T) => sharedField(datas, pick);
+
+  const sourceFields = single ? fieldsOf(edge.source) : [];
+  const targetFields = single ? fieldsOf(edge.target) : [];
+  // Cardinality is offered where it means something: an endpoint has rows,
+  // or a line already carries end labels. Across a selection, "any" of them.
+  const anyEndRows = edges.some((e) => fieldsOf(e.source).length || fieldsOf(e.target).length);
+  const anyEndLabels = datas.some((d) => d.startLabel || d.endLabel);
+  const routed = edges.filter((e) => (e.data as DiagramEdgeData | undefined)?.points?.length);
+
+  const tech = read((d) => d.tech ?? "");
+  const direction = read((d) => d.direction ?? "forward");
+  const startHead = read((d) => d.startHead ?? "default");
+  const endHead = read((d) => d.endHead ?? "default");
+  const startLabel = read((d) => d.startLabel ?? "");
+  const endLabel = read((d) => d.endLabel ?? "");
+  const date = read((d) => d.date);
+  const style = read((d) => d.style ?? "solid");
+  const routing = read((d) => d.routing ?? "default");
+  const startSide = read((d) => d.start?.side ?? "auto");
+  const endSide = read((d) => d.end?.side ?? "auto");
+  const color = read((d) => d.color);
+  // Providers, like node tags: every provider any line names is offered, a
+  // chip is ON when every line names it.
+  const providerUnion = [...new Set([...relevantProviders, ...datas.flatMap((d) => d.providers ?? [])])];
+  const providersOnAll = providerUnion.filter((p) => datas.every((d) => d.providers?.includes(p)));
+
   return (
     <>
       {/* Which boxes this line joins, and a way to turn it round. The schema
           has carried edge endpoints since the beginning and the inspector
           never showed them — so "I drew that the wrong way" meant deleting
           the line and drawing it again, losing its label and its route. */}
-      <InspectorSection caption="Between">
-        <span className="as-inspector__ends" title={`${sourceLabel} → ${targetLabel}`}>
-          {sourceLabel} → {targetLabel}
-        </span>
+      <InspectorSection caption={single ? "Between" : "Connections"}>
+        {single ? (
+          <span
+            className="as-inspector__ends"
+            title={`${labelOf(edge.source)} → ${labelOf(edge.target)}`}
+          >
+            {labelOf(edge.source)} → {labelOf(edge.target)}
+          </span>
+        ) : null}
         <button
           type="button"
           className="as-btn as-btn--icon"
-          onClick={() => onSwapEnds(edge.id)}
-          aria-label="Reverse this connection"
+          onClick={() => onSwapEnds(ids)}
+          aria-label={single ? "Reverse this connection" : "Reverse the selected connections"}
           title="Reverse — swap which end it starts from"
         >
           <UiIcon name="swap" />
         </button>
       </InspectorSection>
 
-      {relevantProviders.length ? (
+      {providerUnion.length ? (
         // An edge can be scoped to a topology exactly like a node — the
         // README sells "a replication stream present on AWS but not Azure" —
         // and there was no control for it anywhere, so the field could only
@@ -7268,34 +7682,43 @@ function EdgeInspector({
           caption="On"
           ariaLabel="Providers this connection exists on"
           addPlaceholder="+ add…"
-          options={[...relevantProviders]}
-          active={data.providers ?? []}
+          options={providerUnion}
+          active={providersOnAll}
           labelOf={(p) => providerDef(registry, p).label}
           colorOf={(p) => providerDef(registry, p).color}
-          onToggle={(p) => {
-            const current = data.providers ?? [];
-            const next = current.includes(p)
-              ? current.filter((x) => x !== p)
-              : [...current, p];
-            onPatch(edge.id, { providers: next.length ? next : undefined });
-          }}
-          onAdd={(p) => onPatch(edge.id, { providers: [...(data.providers ?? []), p] })}
+          onToggle={(p) =>
+            providersOnAll.includes(p)
+              ? patch((d) => {
+                  const next = (d.providers ?? []).filter((x) => x !== p);
+                  return { providers: next.length ? next : undefined };
+                })
+              : patch((d) => ({
+                  providers: d.providers?.includes(p) ? d.providers : [...(d.providers ?? []), p],
+                }))
+          }
+          onAdd={(p) =>
+            patch((d) => ({
+              providers: d.providers?.includes(p) ? d.providers : [...(d.providers ?? []), p],
+            }))
+          }
         />
       ) : null}
 
       <InspectorSection caption="Edge">
-        <input
-          className="as-input as-inspector__name"
-          value={data.label ?? ""}
-          placeholder="Edge label"
-          onChange={(event) => onPatch(edge.id, { label: event.target.value })}
-          aria-label="Edge label"
-        />
+        {single ? (
+          <input
+            className="as-input as-inspector__name"
+            value={data.label ?? ""}
+            placeholder="Edge label"
+            onChange={(event) => patch({ label: event.target.value })}
+            aria-label="Edge label"
+          />
+        ) : null}
         <input
           className="as-input as-inspector__tech"
-          value={data.tech ?? ""}
-          placeholder="Tech: JSON/HTTPS"
-          onChange={(event) => onPatch(edge.id, { tech: event.target.value })}
+          value={tech.mixed ? "" : tech.value}
+          placeholder={tech.mixed ? "Tech: mixed" : "Tech: JSON/HTTPS"}
+          onChange={(event) => patch({ tech: event.target.value })}
           aria-label="Edge technology"
         />
       </InspectorSection>
@@ -7303,27 +7726,29 @@ function EdgeInspector({
       <InspectorSection caption="Flow">
         <select
           className="as-select"
-          value={data.direction ?? "forward"}
-          onChange={(event) => onPatch(edge.id, { direction: event.target.value as EdgeDirection })}
+          value={direction.mixed ? "" : direction.value}
+          onChange={(event) => {
+            if (event.target.value) patch({ direction: event.target.value as EdgeDirection });
+          }}
           aria-label="Edge direction"
           title="Arrowheads"
         >
+          <MixedOption when={direction.mixed} />
           <option value="forward">→</option>
           <option value="both">↔</option>
           <option value="none">—</option>
         </select>
         <select
           className="as-select"
-          value={data.startHead ?? "default"}
+          value={startHead.mixed ? "" : startHead.value}
           onChange={(event) => {
             const value = event.target.value;
-            onPatch(edge.id, {
-              startHead: value === "default" ? undefined : (value as EdgeHead),
-            });
+            if (value) patch({ startHead: value === "default" ? undefined : (value as EdgeHead) });
           }}
           aria-label="Start glyph"
           title="Glyph at the source end — default follows the direction setting"
         >
+          <MixedOption when={startHead.mixed} />
           <option value="default">tail: default</option>
           {EDGE_HEADS.map((head) => (
             <option key={head} value={head}>
@@ -7333,16 +7758,15 @@ function EdgeInspector({
         </select>
         <select
           className="as-select"
-          value={data.endHead ?? "default"}
+          value={endHead.mixed ? "" : endHead.value}
           onChange={(event) => {
             const value = event.target.value;
-            onPatch(edge.id, {
-              endHead: value === "default" ? undefined : (value as EdgeHead),
-            });
+            if (value) patch({ endHead: value === "default" ? undefined : (value as EdgeHead) });
           }}
           aria-label="End glyph"
           title="Glyph at the target end — default follows the direction setting"
         >
+          <MixedOption when={endHead.mixed} />
           <option value="default">head: default</option>
           {EDGE_HEADS.map((head) => (
             <option key={head} value={head}>
@@ -7350,31 +7774,33 @@ function EdgeInspector({
             </option>
           ))}
         </select>
-        <input
-          className="as-input as-inspector__seq"
-          type="number"
-          min={0}
-          value={data.seq ?? ""}
-          placeholder="#"
-          onChange={(event) => {
-            const n = Number.parseInt(event.target.value, 10);
-            onPatch(edge.id, { seq: Number.isFinite(n) && n > 0 ? n : undefined });
-          }}
-          aria-label="Sequence number"
-          title="Step number for a dynamic (numbered-flow) diagram"
-        />
+        {single ? (
+          <input
+            className="as-input as-inspector__seq"
+            type="number"
+            min={0}
+            value={data.seq ?? ""}
+            placeholder="#"
+            onChange={(event) => {
+              const n = Number.parseInt(event.target.value, 10);
+              patch({ seq: Number.isFinite(n) && n > 0 ? n : undefined });
+            }}
+            aria-label="Sequence number"
+            title="Step number for a dynamic (numbered-flow) diagram"
+          />
+        ) : null}
       </InspectorSection>
 
       {/* Cardinality and the rows each end attaches to. Offered where it means
           something — either endpoint has rows, or this edge already carries
           end labels — rather than on every architecture connection. */}
-      {sourceFields.length || targetFields.length || data.startLabel || data.endLabel ? (
+      {anyEndRows || anyEndLabels ? (
         <InspectorSection caption="Ends">
           <input
             className="as-input as-inspector__end"
-            value={data.startLabel ?? ""}
-            placeholder="1"
-            onChange={(event) => onPatch(edge.id, { startLabel: event.target.value || undefined })}
+            value={startLabel.mixed ? "" : startLabel.value}
+            placeholder={startLabel.mixed ? "Mixed" : "1"}
+            onChange={(event) => patch({ startLabel: event.target.value || undefined })}
             aria-label="Cardinality at the source end"
             title="Cardinality at the source end — 1, 0..1, 0..*, 1..*"
           />
@@ -7382,7 +7808,7 @@ function EdgeInspector({
             <select
               className="as-select"
               value={data.startField ?? ""}
-              onChange={(event) => onPatch(edge.id, { startField: event.target.value || undefined })}
+              onChange={(event) => patch({ startField: event.target.value || undefined })}
               aria-label="Source field"
               title="Which row of the source this line leaves from"
             >
@@ -7398,7 +7824,7 @@ function EdgeInspector({
             <select
               className="as-select"
               value={data.endField ?? ""}
-              onChange={(event) => onPatch(edge.id, { endField: event.target.value || undefined })}
+              onChange={(event) => patch({ endField: event.target.value || undefined })}
               aria-label="Target field"
               title="Which row of the target this line lands on"
             >
@@ -7412,9 +7838,9 @@ function EdgeInspector({
           ) : null}
           <input
             className="as-input as-inspector__end"
-            value={data.endLabel ?? ""}
-            placeholder="0..*"
-            onChange={(event) => onPatch(edge.id, { endLabel: event.target.value || undefined })}
+            value={endLabel.mixed ? "" : endLabel.value}
+            placeholder={endLabel.mixed ? "Mixed" : "0..*"}
+            onChange={(event) => patch({ endLabel: event.target.value || undefined })}
             aria-label="Cardinality at the target end"
             title="Cardinality at the target end — 1, 0..1, 0..*, 1..*"
           />
@@ -7422,35 +7848,44 @@ function EdgeInspector({
       ) : null}
 
       <DateSection
-        date={data.date}
+        date={date.mixed ? undefined : date.value}
+        clearable={datas.some((d) => !!d.date)}
         what="Edge"
-        label="When this connection lands. It is never shown before the nodes it joins."
-        onChange={(date) => onPatch(edge.id, { date })}
+        label={
+          date.mixed
+            ? "Mixed — pick one date for all"
+            : "When this connection lands. It is never shown before the nodes it joins."
+        }
+        onChange={(next) => patch({ date: next })}
       />
 
       <InspectorSection caption="Style">
         <select
           className="as-select"
-          value={data.style ?? "solid"}
-          onChange={(event) => onPatch(edge.id, { style: event.target.value as EdgeStyle })}
+          value={style.mixed ? "" : style.value}
+          onChange={(event) => {
+            if (event.target.value) patch({ style: event.target.value as EdgeStyle });
+          }}
           aria-label="Edge style"
         >
-          {EDGE_STYLES.map((style) => (
-            <option key={style} value={style}>
-              {style}
+          <MixedOption when={style.mixed} />
+          {EDGE_STYLES.map((s) => (
+            <option key={s} value={s}>
+              {s}
             </option>
           ))}
         </select>
         <select
           className="as-select"
-          value={data.routing ?? "default"}
+          value={routing.mixed ? "" : routing.value}
           onChange={(event) => {
             const value = event.target.value;
-            onPatch(edge.id, { routing: value === "default" ? undefined : (value as EdgeRouting) });
+            if (value) patch({ routing: value === "default" ? undefined : (value as EdgeRouting) });
           }}
           aria-label="Edge routing"
           title="Routing — default follows the diagram setting"
         >
+          <MixedOption when={routing.mixed} />
           <option value="default">routing: default</option>
           {EDGE_ROUTINGS.map((mode) => (
             <option key={mode} value={mode}>
@@ -7460,18 +7895,17 @@ function EdgeInspector({
         </select>
         <select
           className="as-select"
-          value={data.start?.side ?? "auto"}
+          value={startSide.mixed ? "" : startSide.value}
           onChange={(event) => {
             const value = event.target.value;
             // Choosing a side drops any stored fraction: the picker pins the
             // centre of that side; drag the line itself for finer routing.
-            onPatch(edge.id, {
-              start: value === "auto" ? undefined : { side: value as EdgeAnchorSide },
-            });
+            if (value) patch({ start: value === "auto" ? undefined : { side: value as EdgeAnchorSide } });
           }}
           aria-label="Start anchor"
           title="Which side of the source box the line leaves — auto faces wherever it's going"
         >
+          <MixedOption when={startSide.mixed} />
           <option value="auto">start: auto</option>
           {EDGE_ANCHOR_SIDES.map((side) => (
             <option key={side} value={side}>
@@ -7481,16 +7915,15 @@ function EdgeInspector({
         </select>
         <select
           className="as-select"
-          value={data.end?.side ?? "auto"}
+          value={endSide.mixed ? "" : endSide.value}
           onChange={(event) => {
             const value = event.target.value;
-            onPatch(edge.id, {
-              end: value === "auto" ? undefined : { side: value as EdgeAnchorSide },
-            });
+            if (value) patch({ end: value === "auto" ? undefined : { side: value as EdgeAnchorSide } });
           }}
           aria-label="End anchor"
           title="Which side of the target box the line arrives at"
         >
+          <MixedOption when={endSide.mixed} />
           <option value="auto">end: auto</option>
           {EDGE_ANCHOR_SIDES.map((side) => (
             <option key={side} value={side}>
@@ -7498,29 +7931,30 @@ function EdgeInspector({
             </option>
           ))}
         </select>
-        {data.points?.length ? (
+        {routed.length ? (
           <button
             type="button"
             className="as-btn"
-            onClick={onClearRoute}
-            title="Remove the waypoints this line bends through (drag the line to bend it; double-click edits the label) — ⌘Z restores them"
+            onClick={() => onClearRoutes(routed.map((e) => e.id))}
+            title="Remove the waypoints these lines bend through (drag a line to bend it; double-click edits the label) — ⌘Z restores them"
           >
-            Clear route ({data.points.length})
+            Clear route{routed.length > 1 ? "s" : ""} (
+            {single ? data.points!.length : routed.length})
           </button>
         ) : null}
         <div className="as-swatches">
-          {EDGE_COLORS.map((color) => (
+          {EDGE_COLORS.map((c) => (
             <button
-              key={color}
+              key={c}
               type="button"
-              title={color}
-              aria-label={`Edge colour ${color}`}
-              aria-pressed={data.color === color}
-              className={`as-swatch${data.color === color ? " as-swatch--on" : ""}`}
+              title={c}
+              aria-label={`Edge colour ${c}`}
+              aria-pressed={!color.mixed && color.value === c}
+              className={`as-swatch${!color.mixed && color.value === c ? " as-swatch--on" : ""}`}
               // Resolves through the theme's --as-edge-* override when set,
               // so the picker shows the colour the edge will actually be.
-              style={{ background: `var(--as-edge-${color}, ${EDGE_COLOR_HEX[color as EdgeColor]})` }}
-              onClick={() => onPatch(edge.id, { color: color as EdgeColor })}
+              style={{ background: `var(--as-edge-${c}, ${EDGE_COLOR_HEX[c as EdgeColor]})` }}
+              onClick={() => patch({ color: c as EdgeColor })}
             />
           ))}
         </div>
@@ -7592,17 +8026,21 @@ function viewSignatureOf(
   template: DiagramTemplate,
   showHidden: boolean,
   focusId: string | null = null,
+  containerKinds?: readonly string[],
+  /** A read-only viewer's fold override — view state, like `showHidden`. */
+  viewFold: GroupContents | null = null,
 ): string {
   const zones = (template.zones ?? []).map((z) => `${z.id}:${z.provider}`).join("|");
-  const collapsed = template.nodes
-    .filter((n) => n.collapsed)
-    .map((n) => n.id)
-    .join(",");
+  // Every container drawn closed — its own flag, or the document's fold. The
+  // fold makes this depend on what a group CONTAINS: dropping a card into an
+  // empty frame under `settings.groupContents: "hide"` gives the frame
+  // something to fold, and the canvas must rebuild to fold it.
+  const collapsed = [...closedContainers(template, { containerKinds })].sort().join(",");
   // The DOCUMENT part is everything before `|hidden:` — the rebuild effect
   // splits on it to separate edits (provider switch, collapse → commit) from
   // pure view changes (ghost toggle, drill focus → no undo entry). Anything
   // document-derived added later must go BEFORE that marker; view state after.
-  return `${zones}|collapsed:${collapsed}|hidden:${showHidden}|focus:${focusId ?? ""}`;
+  return `${zones}|collapsed:${collapsed}|hidden:${showHidden}|focus:${focusId ?? ""}|fold:${viewFold ?? ""}`;
 }
 
 /** The longest prefix of the focus stack whose nodes still exist in `doc`. */

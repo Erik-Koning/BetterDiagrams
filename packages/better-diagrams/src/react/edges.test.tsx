@@ -62,6 +62,25 @@ function Probe() {
 
 const requestCommit = vi.fn();
 
+/** A fresh editable studio, as every test below gets it. */
+const studioContext = (): StudioContextValue => ({
+  registry: createRegistry(),
+  readOnly: false,
+  mode: "technical",
+  tagFilter: [],
+  showTeams: true,
+  requestCommit,
+  beginZoneResize: () => {},
+  endZoneResize: () => {},
+  focus: null,
+  drillInto: () => {},
+  navigateToNode: () => {},
+  childCounts: new Map(),
+  renamingId: null,
+  setRenamingId: () => {},
+  showToast: () => {},
+});
+
 function mountEdge(
   data: DiagramEdgeData = edgeData(),
   {
@@ -71,25 +90,8 @@ function mountEdge(
     selfLoop = false,
   } = {},
 ) {
-  const ctx: StudioContextValue = {
-    registry: createRegistry(),
-    readOnly: false,
-    mode: "technical",
-    tagFilter: [],
-    showTeams: true,
-    requestCommit,
-    beginZoneResize: () => {},
-    endZoneResize: () => {},
-    focus: null,
-    drillInto: () => {},
-    navigateToNode: () => {},
-    childCounts: new Map(),
-    renamingId: null,
-    setRenamingId: () => {},
-    showToast: () => {},
-  };
   const utils = render(
-    <StudioContext.Provider value={ctx}>
+    <StudioContext.Provider value={studioContext()}>
       <div style={{ width: 800, height: 600 }}>
         <ReactFlow
           defaultNodes={[NODE("a", 0, 0), NODE("b", 300, 0, targetData), NODE("c", 300, 300)]}
@@ -287,6 +289,79 @@ describe("label layer", () => {
     const { container } = mountEdge();
     await waitFor(() => expect(container.querySelector(".as-edge__hit")).toBeTruthy());
     expect(container.querySelector(".as-edge__labellayer")).toBeNull();
+  });
+
+  it("holds its place in the portal across an inline edit", async () => {
+    // Where two labels overlap, DOM order in the portal IS which one wins:
+    // children stack in insertion order, and a sibling portal is its own
+    // React tree, so a layer that unmounts is appended at the END when it
+    // comes back. Tearing the layer down for the edit therefore promoted the
+    // edited label over every other one, for the rest of the session.
+    const { container } = mountEdge(edgeData({ label: "calls" }), {
+      extraEdges: [
+        { id: "e2", source: "a", target: "c", type: "labeled", data: edgeData({ label: "writes" }) },
+      ],
+    });
+    await waitFor(() =>
+      expect(container.querySelectorAll(".as-edge__labellayer")).toHaveLength(2),
+    );
+    const stack = () =>
+      Array.from(container.querySelectorAll(".as-edge__labellayer")).map((l) => l.textContent);
+    expect(stack()).toEqual(["calls", "writes"]);
+
+    const hit = container.querySelector('[data-id="e1"] .as-edge__hit')!;
+    fireEvent.doubleClick(hit, { clientX: 200, clientY: 25 });
+    const input = container.querySelector(".as-edge__labeledit") as HTMLInputElement;
+    // Emptying it mid-edit is the sharp case: the layer has nothing left to
+    // draw and still must not leave the container.
+    fireEvent.change(input, { target: { value: "" } });
+    expect(stack()).toEqual(["", "writes"]);
+    fireEvent.change(input, { target: { value: "publishes" } });
+    fireEvent.blur(input);
+
+    expect(stack()).toEqual(["publishes", "writes"]);
+  });
+
+  it("hands the static text back when read-only arrives mid-edit", async () => {
+    // A host owns `readOnly` and can flip it from anywhere — an edit lock
+    // lost, a viewer joining. The field is unmounted for it, and read-only
+    // then refuses the double-click that would re-open it, so a gate keyed to
+    // the raw open/closed state would leave that label invisible for good.
+    const ctx = studioContext();
+    const Tree = ({ readOnly }: { readOnly: boolean }) => (
+      <StudioContext.Provider value={{ ...ctx, readOnly }}>
+        <div style={{ width: 800, height: 600 }}>
+          <ReactFlow
+            defaultNodes={[NODE("a", 0, 0), NODE("b", 300, 0)]}
+            defaultEdges={
+              [
+                {
+                  id: "e1",
+                  source: "a",
+                  target: "b",
+                  type: "labeled",
+                  data: edgeData({ label: "calls" }),
+                  selected: true,
+                },
+              ] as never[]
+            }
+            nodeTypes={{ plain: PlainNode }}
+            edgeTypes={EDGE_TYPES}
+            connectionMode={ConnectionMode.Loose}
+          />
+        </div>
+      </StudioContext.Provider>
+    );
+    const { container, rerender } = render(<Tree readOnly={false} />);
+    await waitFor(() => expect(container.querySelector(".as-edge__hit")).toBeTruthy());
+
+    fireEvent.doubleClick(container.querySelector(".as-edge__hit")!, { clientX: 200, clientY: 25 });
+    expect(container.querySelector(".as-edge__labeledit")).toBeTruthy();
+    expect(container.querySelector(".as-edge__label")).toBeNull();
+
+    rerender(<Tree readOnly />);
+    expect(container.querySelector(".as-edge__labeledit")).toBeNull();
+    expect(container.querySelector(".as-edge__label")!.textContent).toBe("calls");
   });
 });
 
