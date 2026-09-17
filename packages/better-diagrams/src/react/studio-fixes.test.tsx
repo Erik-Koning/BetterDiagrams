@@ -374,7 +374,7 @@ describe("search", () => {
       />,
     );
 
-    const field = screen.getByLabelText("Search nodes");
+    const field = screen.getByLabelText("Search nodes and fields");
     await user.type(field, "alp");
     expect(screen.getByText("1/2")).toBeInTheDocument();
 

@@ -9,6 +9,10 @@ dist/
 packages/*/README.md
 packages/*/LICENSE
 
+# Folder-format trees the example app imports (drop an export in to try it)
+templates/folders/*
+!templates/folders/README.md
+
 # Playwright output
 test-results/
 playwright-report/

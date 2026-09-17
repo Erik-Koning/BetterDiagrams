@@ -1,0 +1,150 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-01T00:00:00Z",
+  "$source": "https://example.my.salesforce.com",
+  "folder": "ops/task",
+  "object": {
+    "apiName": "Task",
+    "label": "Task",
+    "labelPlural": "Tasks",
+    "keyPrefix": "00T",
+    "kind": "standard",
+    "custom": false,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 0
+  },
+  "curated": {
+    "diagramName": "Task",
+    "diagramType": "standard",
+    "businessLine": null,
+    "source": "describe",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 4,
+    "visibleToIntegrationUser": 4,
+    "hiddenFromIntegrationUser": 0
+  },
+  "fields": [
+    {
+      "name": "Id",
+      "label": "Id",
+      "type": "id",
+      "nillable": false,
+      "visibleToIntegrationUser": true
+    },
+    {
+      "name": "Subject",
+      "label": "Subject",
+      "type": "string",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "nameField": true
+    },
+    {
+      "name": "WhoId",
+      "label": "WhoId",
+      "type": "reference",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "polymorphic",
+        "referenceTo": [
+          "Contact",
+          "Lead"
+        ],
+        "relationshipName": "Tasks"
+      }
+    },
+    {
+      "name": "WhatId",
+      "label": "WhatId",
+      "type": "reference",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "polymorphic",
+        "referenceTo": [
+          "Account",
+          "Case",
+          "Opportunity",
+          "Campaign",
+          "Contract",
+          "Order",
+          "Product2",
+          "Asset",
+          "Solution",
+          "Lead",
+          "Quote",
+          "Invoice__c",
+          "Project__c",
+          "Ticket__c"
+        ],
+        "relationshipName": "Tasks"
+      }
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "WhoId",
+      "label": "WhoId",
+      "kind": "polymorphic",
+      "referenceTo": [
+        "Contact",
+        "Lead"
+      ],
+      "relationshipName": "Tasks",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": [
+        "core/contact"
+      ]
+    },
+    {
+      "field": "WhatId",
+      "label": "WhatId",
+      "kind": "polymorphic",
+      "referenceTo": [
+        "Account",
+        "Case",
+        "Opportunity",
+        "Campaign",
+        "Contract",
+        "Order",
+        "Product2",
+        "Asset",
+        "Solution",
+        "Lead",
+        "Quote",
+        "Invoice__c",
+        "Project__c",
+        "Ticket__c"
+      ],
+      "relationshipName": "Tasks",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": [
+        "core/account",
+        "ops/support/case"
+      ]
+    }
+  ],
+  "referencedBy": [],
+  "validationRules": [],
+  "routes": {
+    "lightningList": "/lightning/o/Task/list",
+    "describe": "/services/data/v60.0/sobjects/Task/describe"
+  },
+  "notes": []
+}

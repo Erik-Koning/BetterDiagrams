@@ -97,7 +97,7 @@ test.describe("editing an architecture", () => {
     await studio.focusEditor();
 
     await page.keyboard.press("ControlOrMeta+k");
-    const search = studio.root.getByLabel("Search nodes", { exact: true });
+    const search = studio.root.getByLabel("Search nodes and fields", { exact: true });
     await expect(search).toBeFocused();
     await search.fill("Worker");
     await expect(studio.root.locator(".as-search__count")).toHaveText("1/1");

@@ -1,0 +1,6 @@
+type: record-type
+displayName: Person
+developerName: PersonAccount
+recordTypeId: 012000000000001AAA
+diagramType: record-type
+diagramName: Person

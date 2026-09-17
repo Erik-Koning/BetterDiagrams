@@ -47,6 +47,12 @@ export interface Theme {
   hazardInk?: string;
   /** The dark-status hazard ring's light half. */
   hazardTape?: string;
+  /**
+   * The colour a single found route is drawn in when the reader singles it
+   * out — deliberately outside the edge palette, so it reads as a
+   * highlighter rather than as one more path.
+   */
+  routeColor?: string;
   /** Per-edge-colour overrides, e.g. { sky: "#0284c7" } for light themes. */
   edgeColors?: Partial<Record<string, string>>;
   /** Per-participant-kind accent overrides for the sequence editor. */
@@ -108,6 +114,7 @@ const TOKEN: Record<keyof Theme, string> = {
   overdue: "--as-overdue",
   hazardInk: "--as-hazard-ink",
   hazardTape: "--as-hazard-tape",
+  routeColor: "--as-route",
   edgeColors: "",
   seqAccents: "",
   nodeAccents: "",
@@ -140,6 +147,7 @@ export const DARK_THEME: Theme = {
   shadowInk: "rgb(0 0 0 / 45%)",
   glowAlpha: "0.65",
   glowBlur: "18px",
+  routeColor: "#ff2d95",
   colorScheme: "dark",
 };
 
@@ -188,6 +196,8 @@ export const LIGHT_THEME: Theme = {
   // one — the darker light-theme edge hues carry the rest.
   glowAlpha: "0.85",
   glowBlur: "12px",
+  // A highlighter that still clears 3:1 on white.
+  routeColor: "#c2007a",
   colorScheme: "light",
   // Darker warning/comparison hues — the dark-canvas values sit near 2:1
   // contrast on a light page.

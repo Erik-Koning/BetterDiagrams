@@ -92,6 +92,10 @@ shadow.
 | `removedFiles` / `onFileRestore` | `StudioFile[]`, `(id) => void` | Deleted documents the host still holds. The menu grows a **Recently removed…** entry opening a recovery modal. |
 | `onNavigateFile` | `(ref) => void` | Fired when a node url with the `file:` prefix (e.g. `file:Order flow`) has its ↗ clicked — resolve by id, then name, and switch documents. |
 | `onSelectionChange` | `(sel) => void` | The canvas selection in **document terms** — ids bucketed by template section (`{ nodes, edges, zones }` here; `{ participants, messages, activations, fragments, notes }` on the sequence editor), so a host can mirror it, e.g. highlight the matching entries of a live JSON view (the example app does exactly this). Fires on mount too, so a host that remounts per file never keeps a stale selection. |
+| `onPinsChange` | `(pins: Pin[]) => void` | The **pins** — a field (`{ nodeId, fieldId }`) or a whole table (`{ nodeId }`) — mirrored like the two above: fires on mount (empty) and on every change. View state — never in the document; a pin is dropped when its node leaves the document. See **Fields beyond the rows** below. |
+| `onCoverageChange` | `(keys: FieldRef[]) => void` | The keys the **Key coverage** panel is scoring, mirrored like the pins. View state; pruned when a key's table leaves the document. |
+| `onFocusChange` / `onActivePathsChange` | `(ids: string[]) => void` | The two pieces of **view state** the editor keeps outside the document, mirrored to the host: the drill-in stack (root first, `[]` at the top) and the ids of the lit paths. Both fire on mount and on every change, keyed by content, so a host can render its own breadcrumbs or path list. Neither is content — a drill never enters undo or `onChange`. |
+| `ref` | `Ref<StudioHandle>` | Imperative access to the same view state: `getFocus()`, `drillTo(stack)`, `navigateTo(nodeId)`, `getActivePaths()`, `setActivePaths(ids)`. `drillTo` fits the view to the new level; the deepest id the document knows names the level and its real ancestry becomes the stack; `navigateTo` drills to whichever level shows a node, then selects and centres it. Fields: `getPins()`, `setPins(refs)` (a pin is `{ nodeId, fieldId? }` — a whole table when `fieldId` is absent), `navigateToField(ref)` (drill, select, mark the row), `openFieldGrid(nodeId, fieldId?)`, and for the coverage panel `getCoverageKeys()`, `setCoverageKeys(refs)`, `openCoverage()`. The slot context (`toolbarExtras` / `inspectorExtras`) carries the same reads and writes as `focus`, `drillTo`, `activePaths`, `setActivePaths`, `pins`, `setPins`. |
 | `toolbarExtras` / `inspectorExtras` | `ReactNode \| (ctx) => ReactNode` | Slots for your own controls. |
 
 ### Marketing mode
@@ -267,6 +271,15 @@ A note's `description` renders as a dim sub-line under its sentence (canvas and 
 alike), sized against the note's own `fontSize`; the sentence itself is the `label`, edited by
 double-clicking the note.
 
+Every node and edge may carry a **`data` bag** — `data?: Record<string, unknown>` — for whatever
+the host knows that the diagram doesn't: the record a node was generated from, an external id,
+a foreign key's delete rule, the metadata a custom inspector shows. It is the one lenient field
+on an otherwise strict element: any plain object is kept as-is (a shallow copy) and round-trips
+untouched through validation, the canvas, the clipboard and every exporter, the way `meta` does
+for the document; an array, a string or an empty object is dropped so the key is present exactly
+when it carries something. Nothing in the editor reads it. `DiagramNodeData.data` /
+`DiagramEdgeData.data` carry it on the React Flow side, so a custom node component can show it.
+
 ### Paths: named flows the reader can light up
 
 A document may name **paths** — ordered walks through the diagram, each with a title — and the
@@ -299,6 +312,73 @@ dark default, because a glow on white has nothing to bloom into, and the hue its
 theme's `edgeColors`. Under `prefers-reduced-motion` the halo stays and nothing travels. The
 **Interactive HTML** export carries the paths too: its ⋯ menu lists them, lighting one adds the
 same glow and dash flow to the exported SVG, with a key over the stage.
+
+### Finding paths: graph search
+
+`paths.ts` resolves a walk someone has written down; `contract/graph.ts` **finds** one. Every
+search reads the structural slice a `DiagramTemplate` already satisfies (`{ nodes, edges }`), so a
+scoped view document serves too, and returns `GraphWalk`s — `{ nodes, edges }` interleaved, so
+`nodes[i]` is joined to `nodes[i + 1]` by `edges[i]`.
+
+```ts
+import {
+  shortestPath, shortestPaths, allSimplePaths, neighbourhood, walkToPath,
+} from "@mosphere/better-diagrams/contract";
+
+shortestPath(doc, "cdn", "db");                       // fewest hops (BFS), or null
+shortestPaths(doc, "cdn", "db", 3);                   // the 3 best simple routes (Yen's), shortest first
+allSimplePaths(doc, "cdn", "db", { maxDepth: 5, limit: 50 });
+neighbourhood(doc, "orders", 2);                      // { nodes: Map<id, hops>, edges } within two hops
+neighbourhood(doc, ["orders", "users"], 1, { undirected: true });
+
+// Light a found route: make it a document path, then tick it.
+const walk = shortestPath(doc, "cdn", "db")!;
+const path = walkToPath(doc, walk, { id: "cdn-to-db", title: "CDN → DB", color: "rose" });
+setTemplate({ ...doc, paths: [...(doc.paths ?? []), path] });
+studioRef.current?.setActivePaths([path.id]);
+```
+
+Direction is honoured by default — an edge is walked source → target, except one whose
+`direction` is `both` or `none`, which reads as a two-way link; `{ undirected: true }` ignores
+arrows. `edgeFilter` and `nodeFilter` narrow the graph (the endpoints of a search are always
+allowed). Parallel edges are distinct routes; self-loops are never walked. Ties break by document
+order, so a result is stable across runs. `walkToPath` writes the shortest `steps` that
+`resolvePath` expands back to exactly that walk — an edge id only where the pair is joined by
+more than one.
+
+#### Between fields
+
+The same searches run **field to field**: a route leaves the first table through an edge anchored
+at the pinned field (`startField`/`endField`, or the dialect's own record of the field when the
+row isn't drawn — `edgeFieldIds` in `contract/fields.ts` is the one definition of "anchored") and
+arrives on an edge anchored at the other.
+
+```ts
+import { fieldPaths, between, reachableFrom } from "@mosphere/better-diagrams/contract";
+
+fieldPaths(doc, { nodeId: "contact", fieldId: "AccountId" }, { nodeId: "account", fieldId: "Id" }, { undirected: true });
+// → { walks, constrained: { from, to }, truncated }     k = 10 routes, maxDepth = 10
+between(doc, a, b, { undirected: true });
+// → { onRoutes, corridor, routes, truncated }           two tiers, see below
+reachableFrom(doc, [a, b, c]);
+// → { nodes: Map<id, hops>, edges, constrained }        linear, no bound needed
+```
+
+`keyFrequency(doc, a, b)` shares one bounded enumeration with `between` and says, per key (a
+referencing field, see `keyFields`), how many of the routes travel it — the "keys most routes use"
+list. `keyCoverage(doc, keys, { scope })`, `marginalGains(doc, chosen)` and
+`minimalKeyCover(doc, { scope, budgetMs, exactUpTo })` in `contract/coverage.ts` are what the
+coverage panel draws: what a set of keys reaches, what each other key would add, and the fewest
+keys that reach everything (`optimal` only when the exact pass finished).
+
+Every result says when it was **cut short** (`truncated`) and whether an end was **held to its
+field** (`constrained`) or fell back to the table because the field anchors nothing on this
+document. `between` answers "which tables sit between these two fields" in two tiers, because
+enumerating simple routes is exponential: `onRoutes` is exact under the bounds (on at least one
+enumerated simple route — `maxDepth` 8, 20 000 expansions, 300 ms, an injectable clock), and
+`corridor` is the cheap superset (within `maxDepth` of both ends by shortest distance, two
+breadth-first searches) the panel can always show. A field that is two tables away in both
+directions but a dead end sits in the corridor and on no route; the panel labels the two.
 
 ### Settings: how the whole document is shown
 
@@ -450,6 +530,79 @@ const level = scopedView(template, "payments");   // an ordinary DiagramTemplate
 drillableIds(template);                            // every node with internal detail
 focusPath(template, "retry-worker");               // ["payments", "workers"] — the stack that shows it
 ```
+
+A host drives the drill the same way the reader does, through the component's `ref`
+(`StudioHandle`): `drillTo(["payments", "workers"])` lands on a level and fits to it,
+`navigateTo("retry-worker")` goes to whichever level shows a node and selects it, and
+`onFocusChange` reports every move — so an explorer can put its own tree or breadcrumbs beside
+the canvas and keep the two in step.
+
+## Folder format: a directory tree in, a document out
+
+A diagram can also live as a **folder tree** — one folder per node, nesting to any depth, with
+per-folder files carrying the node's content. `contract/folder` converts both ways, with a
+pluggable **dialect** deciding what the files mean:
+
+- **`generic`** — `node.json` / `edges.json` per folder plus a `.better-diagrams/manifest.json`.
+  What the **Folder (.zip)** export writes, and what any bare directory tree reads as (a folder
+  with children is a group, a leaf is a box, named after the folder).
+- **`salesforce-datamodel`** — the tree a Salesforce org exporter writes: bands and groups as
+  folders, an object per folder with `schema.json` (fields, foreign keys), `object.yaml` (a flat
+  summary, read only as a fallback), optional `forensics.json`; views aliasing an object; record
+  types beneath it; a root `relationships.json` naming the business edges.
+
+```ts
+import { importFolder, exportFolder, salesforceRegistry } from "@mosphere/better-diagrams/contract";
+import { readFolderToFileMap, writeFileMap } from "@mosphere/better-diagrams/contract/folder/node";
+
+const files = await readFolderToFileMap("./data-model");        // path → text; a browser builds one from a dropped directory
+const { template, dialect, warnings, stats, registry } = importFolder(files, {
+  fields: "keys",          // "keys" (id, name, references, external ids) | "visible" | "all" | predicate
+  edges: "business",       // hide audit FKs (OwnerId, CreatedById…) | "all"
+  polymorphic: "collapse", // one point node per polymorphic FK | "in-model" (fan out, capped) | "none"
+});
+<ArchitectureStudio defaultValue={template} registry={salesforceRegistry} />
+
+// Later — positions, curated labels, notes and drawn paths back beside the source, nothing else:
+const out = exportFolder(edited, { tree: buildFolderTree(files) });   // sidecar mode
+await writeFileMap("./data-model", out.files, out.deletions);        // writes .better-diagrams/ only
+```
+
+Import is dialect-detected (or named with `dialect`), never throws on a recoverable tree, and returns
+typed `warnings` — `unknown-shape`, `folder-mismatch`, `edge-target-missing`, `poly-capped`,
+`too-many-fields`, `sidecar-orphan`, `yaml-fallback-used`, … A dropped directory whose own name
+prefixes every path is re-rooted automatically. Node ids are folder paths (`core/account`), edge
+ids are `${from}::${field}::${to}`, so both stay stable across regenerations and addressable
+from a host. Every node and edge carries the source's metadata in `data` (`data.folder`, and for
+Salesforce `data.sf` — api name, key prefix, record count, FK delete rules, business/audit flag,
+per-row FLS and external-id marks). Objects nested under objects become drill-in detail; views
+draw a single dashed `alias` link to their object and no FK lines; references that leave the model
+get a stub under an **Outside the model** group so path search never dead-ends.
+
+Export is **partial and additive by contract**. Sidecar mode (the default for an imported
+Salesforce tree) writes only `.better-diagrams/layout.json` — the presentation half of the
+[split document](#content-and-layout-the-split-document) — and `.better-diagrams/overrides.json`,
+the labels, descriptions, tags, notes and `paths` a curator changed, diffed against a fresh import
+when the source tree is at hand. It never rewrites `schema.json`, `relationships.json` or the
+metadata folder; the org exporter stays the sole writer of org-derived content. `writeObjectYaml`
+opts into patching the two curated keys (`diagramName`, `diagramType`) of existing `object.yaml`
+files, byte-identical elsewhere. Full mode (`mode: "full"`, the generic writer) round-trips
+`importFolder(exportFolder(t).files) ≡ t` for any document, order included.
+
+In the editor: **Import folder** beside Import picks a directory; the Export menu offers
+**Folder (.zip)** built in, and **Folder sidecar (.zip)** once a host registers the opt-in preset
+(`registry={{ exporters: FOLDER_EXPORTERS }}`) — it only means something for a document that came
+from a folder tree. A node added on the canvas has no source folder, so a sidecar export reports it
+(`no-source-folder`) rather than writing it anywhere. The `bd-folder` CLI does the same from a shell —
+`bd-folder import <dir> --out t.json`, `bd-folder export t.json <dir>`, and `bd-folder check <dir>`
+(exit 1 when the sidecar on disk is out of date). The example app lists any tree dropped into
+`templates/folders/` under Settings ▾ → Templates.
+
+Every object node also carries its **full field list** in `data.sf.fields` — compact
+(name, label, type, nillable, external-id/unique marks, formula, FLS visibility, reference targets;
+no picklist values or lengths), whatever the `fields:` row mode drew on the canvas, capped at
+`MAX_NODE_FIELDS` (500) with a `fields-truncated` warning past that. `fieldRecords(node, doc)`
+merges it with the rows; the field grid, the search and the row menu read that, never the bag.
 
 ## Content and layout: the split document
 
@@ -604,6 +757,48 @@ The Mermaid export follows the document: when every visible box carries rows it 
 through the *same parser* the canvas draws its symbols from, so the two can't disagree. A mixed
 document stays a `flowchart`, because half the entities having no columns would make an ER
 diagram claim something false about them.
+
+### Fields beyond the rows
+
+A record node draws its `fields[]` rows; everything else a field *is* — its label, the tables a
+reference points at, FLS visibility, external-id and unique marks, a formula, and the fields an
+import left off the canvas — lives in the node's `data` bag (`data.sf.fields` after a Salesforce
+import; a host may put the same shape under `data.fields`). `fieldRecords(node, doc)` merges the
+two into one `FieldRecord` per field, `searchFields(doc, query)` finds them, and the editor builds
+on that:
+
+- **Rows are clickable.** A click (or right-click) opens the field menu: *Pin for search*, *View
+  all fields*, *Follow reference* (one per table the field points at), *Edit…* (hand-authored
+  documents only — a folder-imported document's fields belong to the source), *Copy name*. Rows
+  stay 19px; the states are inset-only.
+- **The field grid** — *View all fields* on a row, the node's menu, or the inspector — lists every
+  field record of a node: sort by any column, filter, drag columns, walk with the keyboard (Enter
+  follows a reference, `p` pins, `/` filters), copy as TSV, download as CSV. Read-only. Also
+  exported as `FieldGridModal` for a host's own chrome.
+- **Search matches fields.** The toolbar search lists `Table · field` hits after node hits; Enter
+  marks the row, or opens the grid on a field the node doesn't draw.
+- **Pins.** A pinned field wears a mark and sits in the strip above the canvas; pins survive
+  drilling and navigating (view state, never in the document; pruned when the node goes away).
+  `getPins`/`setPins`/`navigateToField` on the ref, `onPinsChange` on the props.
+- **Show paths** (two pins — a field each, or a whole table via *Pin table for search* on the
+  node's menu): the routes between them, shortest first, each with its **hop strip** — the key
+  carrying every hop (`order_id ▸ user_id`). All routes light in palette colours; hover or click
+  one and it is singled out in the theme's **route colour** (`routeColor`, `--as-route`, a
+  highlighter outside the edge palette) with a **key badge** on every lit hop. Below the routes,
+  **Keys most routes use** ranks the keys the routes share (`Contact.AccountId — 7 of 9`); hover
+  one to light every route through it, click to pin it. Then the tables between and the wider
+  corridor, every table a click away. Three or more pins: what lies between every pair and
+  everything the pins reach, with the canvas dimmed to one or the other. "Ignore arrow direction"
+  is on by default. The panel says when a search stopped at its limits or a pin's field anchors
+  nothing. See **Between fields** under *Finding paths* for the contract calls.
+- **Key coverage** (View → *Key coverage*, or `openCoverage()` on the ref): a right-hand panel that
+  scores a chosen set of keys — **`73%` · 100 of 137 tables** — with a bar per key: the chosen ones
+  stacked with the running percentage, then every candidate ranked by what it would add. Click a
+  bar to add or drop a key; hover one and the canvas dims to what it reaches. **Find smallest set**
+  fills the chosen set with the fewest keys that reach everything any key can (greedy, then an
+  exact pass over up to 12 candidates within 300 ms — the panel says "proven" only when that pass
+  finished). Scope is *All tables* (a table counts when a chosen key's edge touches it) or *From
+  ‹the selected table›* (a breadth-first search over the chosen keys' edges).
 
 ## Infrastructure zones
 

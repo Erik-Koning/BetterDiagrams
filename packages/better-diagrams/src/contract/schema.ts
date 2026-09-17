@@ -482,6 +482,16 @@ export interface DiagramNode {
   color?: string;
   /** Tint strength 0..1. Absent = DEFAULT_CONTAINER_OPACITY. */
   opacity?: number;
+
+  /**
+   * A free-form bag for whatever the HOST knows about this node that the
+   * diagram doesn't: the record it was generated from, an external id, the
+   * metadata a custom inspector shows. Nothing here is rendered, validated
+   * beyond "a plain object", or interpreted — it round-trips untouched
+   * through validation, the canvas, the clipboard and every exporter, the way
+   * `meta` does for the document. Omitted when empty.
+   */
+  data?: Record<string, unknown>;
 }
 
 export interface DiagramEdge {
@@ -559,6 +569,12 @@ export interface DiagramEdge {
    * for a link that arrives after both ends already exist.
    */
   date?: DiagramDate;
+  /**
+   * The host's own metadata for this connection — see `DiagramNode.data`.
+   * A foreign key's delete rule, a relationship name, an API's SLA: things
+   * the host wants to keep beside the line without the diagram drawing them.
+   */
+  data?: Record<string, unknown>;
 }
 
 /**
@@ -678,6 +694,7 @@ const NODE_KEY_MAP: Record<keyof DiagramNode, true> = {
   locked: true,
   plain: true,
   collapsed: true,
+  data: true,
 };
 export const NODE_KEYS: readonly string[] = Object.keys(NODE_KEY_MAP);
 
@@ -704,6 +721,7 @@ const EDGE_KEY_MAP: Record<keyof DiagramEdge, true> = {
   endField: true,
   points: true,
   date: true,
+  data: true,
 };
 export const EDGE_KEYS: readonly string[] = Object.keys(EDGE_KEY_MAP);
 
@@ -983,6 +1001,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
       const outline = NODE_OUTLINES.includes(n.outline as NodeOutline)
         ? (n.outline as NodeOutline)
         : "dashed";
+      const data = validateDataBag(n.data);
 
       return {
         id,
@@ -1029,6 +1048,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
               ),
             }
           : {}),
+        ...(data ? { data } : {}),
         // x/y may legitimately be 0; w/h/fontSize may not, so they fall back
         // to the kind default rather than collapsing the node to a sliver.
         x: num(n.x, 0),
@@ -1099,6 +1119,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
       // governs every other reference in this document.
       const startField = fieldIdOn(byId.get(String(e.source)), e.startField);
       const endField = fieldIdOn(byId.get(String(e.target)), e.endField);
+      const data = validateDataBag(e.data);
       return {
         id: e.id ? String(e.id) : `e${i}`,
         source: String(e.source),
@@ -1130,6 +1151,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         ...(startField ? { startField } : {}),
         ...(endField ? { endField } : {}),
         ...(points ? { points } : {}),
+        ...(data ? { data } : {}),
       };
     });
 
@@ -1175,6 +1197,22 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
   const settings = validateSettings(r.settings);
   if (settings) out.settings = settings;
   return out;
+}
+
+/**
+ * Coerce a node's or edge's `data` bag. The one lenient field on an otherwise
+ * strict element: any plain object is kept as-is (a shallow copy, so a later
+ * edit never reaches back into the caller's object), and anything else — an
+ * array, a string, an empty object — is dropped so the key is present exactly
+ * when it carries something.
+ */
+function validateDataBag(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /**
@@ -2389,6 +2427,8 @@ export type DiagramNodeData = {
   outline?: NodeOutline;
   color?: string;
   opacity?: number;
+  /** The host's free-form bag — see `DiagramNode.data`. Carried, never read. */
+  data?: Record<string, unknown>;
   /**
    * Rendered only because ghost mode is on — this node is hidden by the active
    * provider selection. Purely presentational; never persisted, because it
@@ -2449,6 +2489,8 @@ export type DiagramEdgeData = {
   endField?: string;
   /** Absolute-canvas waypoints the line routes through. */
   points?: Array<[number, number]>;
+  /** The host's free-form bag — see `DiagramEdge.data`. Carried, never read. */
+  data?: Record<string, unknown>;
   /**
    * Set only by the read-only DiffCanvas overlay — recolours the edge by its
    * comparison state. View-only, like a node's `ghost`; never persisted
@@ -2470,6 +2512,12 @@ export type DiagramEdgeData = {
    * thing that knows the line's geometry. Never persisted.
    */
   pathGlow?: PathGlow[];
+  /**
+   * Set only by the path view pass on a BRIGHT lit route: the key (the
+   * referencing field) carrying this hop, drawn as a badge on the line.
+   * View-only, like `pathGlow`; never persisted.
+   */
+  routeKey?: string;
 };
 
 export type RFNode = {
@@ -2813,6 +2861,7 @@ export function toReactFlow(
           ...(n.textAlign ? { textAlign: n.textAlign } : {}),
           ...(n.textVAlign ? { textVAlign: n.textVAlign } : {}),
           ...(n.wrap ? { wrap: true } : {}),
+          ...(n.data ? { data: n.data } : {}),
           ...(n.fill === false ? { fill: false } : {}),
           ...(n.outline ? { outline: n.outline } : {}),
           ...(n.color ? { color: n.color } : {}),
@@ -2930,6 +2979,9 @@ export function toReactFlow(
             ...(!rerouted && e.startField ? { startField: e.startField } : {}),
             ...(!rerouted && e.endField ? { endField: e.endField } : {}),
             ...(!rerouted && e.points ? { points: e.points } : {}),
+            // A stand-in for several originals is none of them; a lone
+            // re-route is still the original edge and keeps its bag.
+            ...(!summarising && e.data ? { data: e.data } : {}),
             routingResolved: e.routing ?? defaultRouting,
           },
           style: {
@@ -3051,6 +3103,7 @@ export function fromReactFlow(
       outline: n.data?.outline,
       color: n.data?.color,
       opacity: n.data?.opacity,
+      data: n.data?.data,
       x: n.position.x,
       y: n.position.y,
       // Size can live in any of three places: `width`/`height` after a
@@ -3093,6 +3146,7 @@ export function fromReactFlow(
       startField: e.data?.startField,
       endField: e.data?.endField,
       points: e.data?.points,
+      data: e.data?.data,
     }));
 
   // Carry through whatever was hidden, and only that.

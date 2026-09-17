@@ -10,9 +10,9 @@
  */
 import { StrictMode, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ArchitectureStudio } from "./ArchitectureStudio";
+import { ArchitectureStudio, type StudioHandle } from "./ArchitectureStudio";
 import { clearWelcomeSuppression } from "./WelcomeModal";
 
 // The welcome modal's CodeMirror editor is stubbed with a textarea — typing
@@ -1238,7 +1238,7 @@ describe("ArchitectureStudio", () => {
     const user = userEvent.setup();
     const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
 
-    await user.type(screen.getByLabelText("Search nodes"), "Postgres{Enter}");
+    await user.type(screen.getByLabelText("Search nodes and fields"), "Postgres{Enter}");
 
     const wrapper = container.querySelector('[data-id="db"]');
     expect(wrapper?.classList.contains("selected")).toBe(true);
@@ -3087,6 +3087,22 @@ describe("content/presentation split", () => {
     expect(screen.getByText(/Applied layout to 9 elements/)).toBeInTheDocument();
   });
 
+  it("asks before a template replaces a non-empty canvas; a layout file never asks", async () => {
+    const onChange = vi.fn();
+    const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const small = { version: 1, nodes: [{ id: "solo", label: "Solo", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76 }], edges: [] };
+    fireEvent.change(input, {
+      target: { files: [new File([JSON.stringify(small)], "small.json", { type: "application/json" })] },
+    });
+    const dialog = await screen.findByRole("dialog", { name: "Replace this diagram with “small.json”?" });
+    expect(dialog).toHaveTextContent(/9 elements on the canvas are replaced/);
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Replace" }));
+    await waitFor(() => expect(screen.getByText("Solo")).toBeInTheDocument());
+    expect(screen.queryByText("Redis")).not.toBeInTheDocument();
+  });
+
   it("counts unmatched records so a wrong-diagram layout can't read as success", async () => {
     const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
     const layout = {
@@ -3438,6 +3454,164 @@ describe("drill-down (C4 levels)", () => {
     fireEvent.doubleClick(screen.getByText("Storefront"));
     await new Promise((resolve) => setTimeout(resolve, 350));
     expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument();
+  });
+});
+
+describe("host access to view state (ref + callbacks)", () => {
+  const HOST_DOC: DiagramTemplate = validateTemplate({
+    version: 1,
+    meta: { title: "Shop" },
+    nodes: [
+      { id: "web", label: "Storefront", kind: "service", icon: "globe", description: "", parentId: null, x: 100, y: 100, w: 170, h: 76 },
+      { id: "pay", label: "Payments Core", kind: "service", icon: "box", description: "", parentId: null, x: 500, y: 100, w: 170, h: 76 },
+      { id: "api", label: "Pay API", kind: "service", icon: "box", description: "", parentId: "pay", x: 28, y: 52, w: 170, h: 76 },
+      { id: "jobs", label: "Job Workers", kind: "group", icon: "none", description: "", parentId: "pay", x: 260, y: 52, w: 300, h: 200 },
+      { id: "retry", label: "Retry Worker", kind: "worker", icon: "gear", description: "", parentId: "jobs", x: 20, y: 60, w: 170, h: 76 },
+    ],
+    edges: [
+      { id: "buys", source: "web", target: "api", label: "buys", style: "solid", color: "sky" },
+      { id: "queues", source: "api", target: "retry", label: "queues", style: "solid", color: "slate" },
+    ],
+    paths: [
+      { id: "checkout", title: "Checkout", steps: ["web", "api", "retry"] },
+      { id: "other", title: "Other", steps: ["web", "api"] },
+    ],
+  });
+
+  it("ref.drillTo lands on a level, fits, and reports through onFocusChange", async () => {
+    const ref = { current: null as StudioHandle | null };
+    const onFocusChange = vi.fn();
+    mount(<ArchitectureStudio ref={ref} defaultValue={HOST_DOC} onFocusChange={onFocusChange} />);
+    // Reported once on mount, empty — the selection callback's precedent.
+    expect(onFocusChange).toHaveBeenCalledWith([]);
+    expect(ref.current!.getFocus()).toEqual([]);
+
+    act(() => ref.current!.drillTo(["pay", "jobs"]));
+    await waitFor(() =>
+      expect(screen.getByRole("navigation", { name: "Diagram level" })).toBeInTheDocument(),
+    );
+    const bar = screen.getByRole("navigation", { name: "Diagram level" });
+    expect(within(bar).getByText("Payments Core")).toBeInTheDocument();
+    expect(within(bar).getByText("Job Workers")).toBeInTheDocument();
+    expect(screen.getByText("Retry Worker")).toBeInTheDocument();
+    expect(ref.current!.getFocus()).toEqual(["pay", "jobs"]);
+    expect(onFocusChange).toHaveBeenLastCalledWith(["pay", "jobs"]);
+
+    // A stack that isn't a real ancestry is canonicalised, not trusted: the
+    // deepest known id names the level and its true ancestors are the stack.
+    act(() => ref.current!.drillTo(["nope", "jobs"]));
+    await waitFor(() => expect(ref.current!.getFocus()).toEqual(["pay", "jobs"]));
+    act(() => ref.current!.drillTo(["pay"]));
+    await waitFor(() => expect(ref.current!.getFocus()).toEqual(["pay"]));
+    expect(onFocusChange).toHaveBeenLastCalledWith(["pay"]);
+
+    act(() => ref.current!.drillTo([]));
+    await waitFor(() =>
+      expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument(),
+    );
+    expect(onFocusChange).toHaveBeenLastCalledWith([]);
+    // Distinct reports only: mount, ["pay","jobs"], ["pay"], and the exit.
+    expect(onFocusChange).toHaveBeenCalledTimes(4);
+  });
+
+  it("Import folder reads a picked directory through the folder format, and refuses an empty one", async () => {
+    const onChange = vi.fn();
+    const { container } = mount(<ArchitectureStudio defaultValue={HOST_DOC} onChange={onChange} />);
+    const input = container.querySelector("input[webkitdirectory]") as HTMLInputElement;
+    expect(input).toBeTruthy();
+    const pick = (entries: Array<[string, string]>) =>
+      entries.map(([path, text]) => {
+        const file = new File([text], path.slice(path.lastIndexOf("/") + 1), { type: "application/json" });
+        Object.defineProperty(file, "webkitRelativePath", { value: path });
+        return file;
+      });
+    /** Pick a directory, then accept the "Replace this diagram?" the non-empty canvas earns. */
+    const pickAndReplace = async (entries: Array<[string, string]>) => {
+      fireEvent.change(input, { target: { files: pick(entries) } });
+      const dialog = await screen.findByRole("dialog", { name: /^Replace this diagram with “shots\/|model\/|shop\/”/ });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Replace" }));
+    };
+
+    // Nothing readable at all, and a tree a dialect claims but that holds no
+    // nodes (a Salesforce root manifest with no band folders): both leave
+    // the canvas alone and say why.
+    await pickAndReplace([["shots/photo.png", "…"]]);
+    await waitFor(() => expect(screen.getByText(/no JSON, YAML or Markdown files/)).toBeInTheDocument());
+    await pickAndReplace([["model/schema.json", JSON.stringify({ title: "Empty", bands: [] })]]);
+    await waitFor(() => expect(screen.getByText(/Nothing in that folder reads as a diagram/)).toBeInTheDocument());
+    expect(screen.getByText("Payments Core")).toBeInTheDocument();
+
+    // Cancelling the question leaves everything alone.
+    fireEvent.change(input, { target: { files: pick([["shop/platform/db/node.json", "{}"]]) } });
+    fireEvent.click(within(await screen.findByRole("dialog", { name: /^Replace this diagram/ })).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: /^Replace this diagram/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Payments Core")).toBeInTheDocument();
+
+    await pickAndReplace([
+      ["shop/platform/db/node.json", JSON.stringify({ label: "Postgres", kind: "database", icon: "database" })],
+      ["shop/platform/api/node.json", JSON.stringify({ label: "REST API" })],
+      ["shop/platform/edges.json", JSON.stringify([{ id: "e1", source: "platform/api", target: "platform/db", label: "reads" }])],
+    ]);
+    await waitFor(() => expect(screen.getByText("Postgres")).toBeInTheDocument());
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+    expect(screen.queryByText("Payments Core")).not.toBeInTheDocument();
+    const doc = onChange.mock.calls.at(-1)![0];
+    expect(doc.nodes.map((n: { id: string }) => n.id)).toEqual(["platform", "platform/api", "platform/db"]);
+    expect(doc.edges).toHaveLength(1);
+    expect(doc.meta.folderFormat.dialect).toBe("generic");
+  });
+
+  it("ref.navigateTo drills to the level a node lives on and selects it", async () => {
+    const ref = { current: null as StudioHandle | null };
+    const onSelectionChange = vi.fn();
+    mount(<ArchitectureStudio ref={ref} defaultValue={HOST_DOC} onSelectionChange={onSelectionChange} />);
+    act(() => ref.current!.navigateTo("retry"));
+    await waitFor(() => expect(ref.current!.getFocus()).toEqual(["pay", "jobs"]));
+    await waitFor(() =>
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ nodes: ["retry"], edges: [], zones: [] }),
+    );
+  });
+
+  it("ref.setActivePaths lights paths, ticks the menu, and reports through onActivePathsChange", async () => {
+    const ref = { current: null as StudioHandle | null };
+    const onActivePathsChange = vi.fn();
+    const user = userEvent.setup();
+    mount(
+      <ArchitectureStudio ref={ref} defaultValue={HOST_DOC} onActivePathsChange={onActivePathsChange} />,
+    );
+    expect(onActivePathsChange).toHaveBeenCalledWith([]);
+
+    act(() => ref.current!.setActivePaths(["checkout", "checkout"]));
+    expect(ref.current!.getActivePaths()).toEqual(["checkout"]);
+    expect(onActivePathsChange).toHaveBeenLastCalledWith(["checkout"]);
+    expect(screen.getByRole("button", { name: "Paths (1)" })).toBeInTheDocument();
+
+    // Lighting one from the menu reaches the host the same way.
+    await user.click(screen.getByRole("button", { name: "Paths (1)" }));
+    await user.click(screen.getByRole("checkbox", { name: "Other" }));
+    expect(onActivePathsChange).toHaveBeenLastCalledWith(["checkout", "other"]);
+    expect(ref.current!.getActivePaths()).toEqual(["checkout", "other"]);
+  });
+
+  it("the slot context carries the same reads and writes", async () => {
+    const seen: Array<{ focus: string[]; activePaths: string[] }> = [];
+    mount(
+      <ArchitectureStudio
+        defaultValue={HOST_DOC}
+        toolbarExtras={(ctx) => {
+          seen.push({ focus: ctx.focus, activePaths: ctx.activePaths });
+          return (
+            <>
+              <button type="button" onClick={() => ctx.drillTo(["pay"])}>host-drill</button>
+              <button type="button" onClick={() => ctx.setActivePaths(["other"])}>host-light</button>
+            </>
+          );
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByText("host-drill"));
+    fireEvent.click(screen.getByText("host-light"));
+    await waitFor(() => expect(seen.at(-1)).toEqual({ focus: ["pay"], activePaths: ["other"] }));
   });
 });
 

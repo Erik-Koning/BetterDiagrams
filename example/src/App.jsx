@@ -33,6 +33,7 @@ import {
   sequenceFromTemplate,
   templatePromptContext,
   themeToStyle,
+  importFolder,
   validateSequence,
   validateTemplate,
 } from "@mosphere/better-diagrams";
@@ -41,6 +42,7 @@ import { registry } from "./extensions.js";
 import {
   listTemplates,
   probeTemplates,
+  readFolderTree,
   readTemplate,
   removeTemplate,
   templateFile,
@@ -205,6 +207,10 @@ export default function App() {
   // What's selected on the canvas, in document terms. The editors fire this
   // on mount too, so a file switch (which remounts them) clears it for free.
   const [selection, setSelection] = useState(null);
+  /** The fields pinned in the architecture editor — mirrored here like the selection. */
+  const [pins, setPins] = useState([]);
+  /** The keys the coverage panel is scoring — mirrored the same way. */
+  const [coverageKeys, setCoverageKeys] = useState([]);
 
   const { files, removed } = workspace;
   const active = files.find((f) => f.id === workspace.activeId) ?? files[0];
@@ -565,6 +571,25 @@ export default function App() {
   /** Load one back into the active file, the way the examples do. */
   const openTemplate = useCallback(
     async (entry) => {
+      if (entry.folder === "folders") {
+        // A folder-format tree: fetched whole, converted on the client, so
+        // the same code path a dropped directory takes is what runs here.
+        const tree = await readFolderTree(entry.file);
+        if (!tree) return;
+        const result = importFolder(new Map(Object.entries(tree.files)), {
+          validate: { knownKinds: Object.keys(registry.nodeKinds) },
+        });
+        setActiveDoc(result.template);
+        setSettingsOpen(false);
+        const { nodes, edges } = result.stats;
+        toast.success(`Imported ${entry.name}`, {
+          description: `${result.dialect} · ${nodes} nodes · ${edges} edges${
+            result.warnings.length ? ` · ${result.warnings.length} warnings (see console)` : ""
+          }`,
+        });
+        if (result.warnings.length) console.warn(`importFolder(${entry.file}):`, result.warnings);
+        return;
+      }
       const doc = await readTemplate(entry.folder, entry.file);
       if (!doc) return;
       setActiveDoc(entry.kind === "sequence" ? validateSequence(doc) : validateTemplate(doc));
@@ -771,6 +796,7 @@ export default function App() {
                     [
                       ["examples", "Templates / examples", "Curated and tracked — read-only to the app"],
                       ["scratch", "Templates / scratch", "Auto-saved as you work; git-ignored"],
+                      ["folders", "Templates / folders", "Folder-format trees — imported on open; git-ignored"],
                     ].map(([folder, caption, note]) => {
                       const entries = savedTemplates.filter((entry) => entry.folder === folder);
                       return (
@@ -794,7 +820,9 @@ export default function App() {
                               <span className="app__dropdown-desc">
                                 {entry.kind === "unreadable"
                                   ? `${entry.file} — not readable as JSON`
-                                  : `${entry.file} · ${entry.nodes} ${entry.kind === "sequence" ? "participants" : "nodes"}`}
+                                  : entry.folder === "folders"
+                                    ? `${entry.file}/ · folder format`
+                                    : `${entry.file} · ${entry.nodes} ${entry.kind === "sequence" ? "participants" : "nodes"}`}
                               </span>
                             </button>
                           ))}
@@ -890,6 +918,8 @@ export default function App() {
               filename={active.name}
               onNavigateFile={navigateFile}
               onSelectionChange={setSelection}
+              onPinsChange={setPins}
+              onCoverageChange={setCoverageKeys}
               {...fileProps}
             />
           )}
@@ -901,6 +931,8 @@ export default function App() {
               <h2>{active.name}</h2>
               <span className="app__meta">
                 {counts}
+                {pins.length ? ` · ${pins.length} pinned` : ""}
+                {coverageKeys.length ? ` · ${coverageKeys.length} coverage key${coverageKeys.length === 1 ? "" : "s"}` : ""}
                 {savedAt ? ` · saved ${savedAt.toLocaleTimeString()}` : ""}
               </span>
             </div>

@@ -79,6 +79,9 @@ const studioContext = (): StudioContextValue => ({
   renamingId: null,
   setRenamingId: () => {},
   showToast: () => {},
+    pinnedFields: new Set<string>(),
+    highlightField: null,
+    dimmedIds: null,
 });
 
 function mountEdge(
@@ -647,6 +650,9 @@ describe("compare overlay", () => {
       renamingId: null,
       setRenamingId: () => {},
       showToast: () => {},
+    pinnedFields: new Set<string>(),
+    highlightField: null,
+    dimmedIds: null,
     };
     const { container } = render(
       <StudioContext.Provider value={ctx}>

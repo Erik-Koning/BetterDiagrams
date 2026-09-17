@@ -1,0 +1,156 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-01T00:00:00Z",
+  "$source": "https://example.my.salesforce.com",
+  "folder": "core/contact",
+  "object": {
+    "apiName": "Contact",
+    "label": "Contact",
+    "labelPlural": "Contacts",
+    "keyPrefix": "003",
+    "kind": "standard",
+    "custom": false,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 0
+  },
+  "curated": {
+    "diagramName": "Contact",
+    "diagramType": "standard",
+    "businessLine": null,
+    "source": "describe",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 6,
+    "visibleToIntegrationUser": 6,
+    "hiddenFromIntegrationUser": 0
+  },
+  "fields": [
+    {
+      "name": "Id",
+      "label": "Id",
+      "type": "id",
+      "nillable": false,
+      "visibleToIntegrationUser": true
+    },
+    {
+      "name": "Name",
+      "label": "Name",
+      "type": "string",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "nameField": true
+    },
+    {
+      "name": "AccountId",
+      "label": "AccountId",
+      "type": "reference",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "lookup",
+        "referenceTo": [
+          "Account"
+        ],
+        "relationshipName": "Contacts"
+      }
+    },
+    {
+      "name": "Email",
+      "label": "Email",
+      "type": "email",
+      "nillable": true,
+      "visibleToIntegrationUser": true
+    },
+    {
+      "name": "Region__c",
+      "label": "Region__c",
+      "type": "reference",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "lookup",
+        "referenceTo": [
+          "Region__c"
+        ],
+        "relationshipName": "Contacts_Region"
+      }
+    },
+    {
+      "name": "OwnerId",
+      "label": "OwnerId",
+      "type": "reference",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "lookup",
+        "referenceTo": [
+          "User"
+        ],
+        "relationshipName": null
+      }
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "AccountId",
+      "label": "AccountId",
+      "kind": "lookup",
+      "referenceTo": [
+        "Account"
+      ],
+      "relationshipName": "Contacts",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": [
+        "core/account",
+        "core/account/person-account"
+      ]
+    },
+    {
+      "field": "Region__c",
+      "label": "Region__c",
+      "kind": "lookup",
+      "referenceTo": [
+        "Region__c"
+      ],
+      "relationshipName": "Contacts_Region",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": []
+    },
+    {
+      "field": "OwnerId",
+      "label": "OwnerId",
+      "kind": "lookup",
+      "referenceTo": [
+        "User"
+      ],
+      "relationshipName": null,
+      "required": true,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": []
+    }
+  ],
+  "referencedBy": [],
+  "validationRules": [],
+  "routes": {
+    "lightningList": "/lightning/o/Contact/list",
+    "describe": "/services/data/v60.0/sobjects/Contact/describe"
+  },
+  "notes": []
+}

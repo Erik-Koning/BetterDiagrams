@@ -99,6 +99,11 @@ export interface PathGlow {
   /** How many hops the walk has, so the pulse cycle spans the whole path. */
   steps: number;
   reversed?: boolean;
+  /**
+   * Drawn in the dedicated route colour (`--as-route`) rather than the
+   * palette: a single transient route the reader has singled out.
+   */
+  bright?: boolean;
 }
 
 /** The slice of a document `resolvePath` reads — structural, so a view doc serves too. */

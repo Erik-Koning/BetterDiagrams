@@ -187,6 +187,52 @@ export class Studio {
     return this.page.locator(".react-flow__edge");
   }
 
+  /**
+   * Import a template through the toolbar's Import button, accepting the
+   * "Replace this diagram?" question the editor asks whenever the canvas
+   * already holds something (an empty canvas, or a layout file, never asks).
+   */
+  async importFile(path: string): Promise<void> {
+    const chooser = this.page.waitForEvent("filechooser");
+    await this.root.getByRole("button", { name: "Import", exact: true }).click();
+    await (await chooser).setFiles(path);
+    const replace = this.page
+      .getByRole("dialog", { name: /^Replace this diagram/ })
+      .getByRole("button", { name: "Replace" });
+    await replace.waitFor({ state: "visible", timeout: 1500 }).then(
+      () => replace.click(),
+      () => undefined,
+    );
+  }
+
+  /** A field row on a record node's card. */
+  fieldRow(nodeId: string, fieldId: string): Locator {
+    return this.node(nodeId).locator(`.as-node__field[data-field-id="${fieldId}"]`);
+  }
+
+  /** Click a row and wait for the field menu. */
+  async openFieldMenu(nodeId: string, fieldId: string): Promise<Locator> {
+    await this.fieldRow(nodeId, fieldId).click();
+    const menu = this.page.getByRole("menu", { name: "Actions" });
+    await expect(menu).toBeVisible();
+    return menu;
+  }
+
+  /** The strip of pinned fields above the canvas. */
+  get pinStrip(): Locator {
+    return this.page.getByRole("toolbar", { name: "Pinned fields" });
+  }
+
+  /** The paths panel between pinned fields. */
+  get pathPanel(): Locator {
+    return this.page.getByRole("region", { name: "Paths between pinned fields" });
+  }
+
+  /** A node's field grid dialog. */
+  fieldGrid(nodeLabel: string): Locator {
+    return this.page.getByRole("dialog", { name: `${nodeLabel} — fields` });
+  }
+
   /** An architecture node by the label painted on its card. */
   nodeTitled(label: string): Locator {
     return this.page.locator(".as-node__title").filter({ hasText: exact(label) });

@@ -1,0 +1,8 @@
+type: standard
+displayName: Account
+apiName: Account
+keyPrefix: 001
+recordCount: 120
+diagramType: standard
+diagramName: Account
+lightningRoute: /lightning/o/Account/list

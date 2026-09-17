@@ -27,6 +27,8 @@ import {
 import { cardinalityMarker, type CardinalityMarker } from "../contract/geometry";
 import { formatDiagramDate, templateTimeline } from "../contract/timeline";
 import { splitTemplate } from "../contract/presentation";
+import { exportFolder } from "../contract/folder";
+import { buildZip, type ZipEntry } from "./zip";
 import { drillableIds, focusPath, scopedView } from "../contract/scope";
 import { CLOUD_NODE_KINDS } from "./cloud-kinds";
 // Imports `./registry-types`, not `./registry` — registry.ts imports
@@ -513,6 +515,12 @@ export function renderTemplateToMermaid(rawTemplate: DiagramTemplate): string {
 
 const json = (value: unknown) => new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
 
+/** A folder export's file map as archive entries, paths intact. */
+function zipEntries(files: ReadonlyMap<string, string>): ZipEntry[] {
+  const encoder = new TextEncoder();
+  return [...files].map(([name, text]) => ({ name, data: encoder.encode(text) }));
+}
+
 /**
  * Validation options mirroring the registry, for `splitTemplate`'s internal
  * re-validate — without them a custom kind or provider would be "repaired"
@@ -725,6 +733,33 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
         blob: new Blob([renderTemplateToC4Puml(template)], { type: "text/plain" }),
         filename: `${filename}.puml`,
       };
+    },
+  },
+  "folder-full": {
+    label: "Folder (.zip)",
+    hint: "One folder per node — node.json, edges.json, and the layout sidecar",
+    fullDocument: true,
+    run({ template, filename }: ExportContext) {
+      const out = exportFolder(template, { mode: "full" });
+      return { blob: buildZip(zipEntries(out.files)), filename: `${filename}-folder.zip` };
+    },
+  },
+};
+
+/**
+ * Exporters that only mean something for a document that CAME from a folder
+ * tree — opt-in, so a host that never imports one doesn't grow a menu entry
+ * whose output is an empty overrides file. Register with
+ * `registry={{ exporters: FOLDER_EXPORTERS }}`.
+ */
+export const FOLDER_EXPORTERS: Record<string, ExporterDef> = {
+  "folder-sidecar": {
+    label: "Folder sidecar (.zip)",
+    hint: "Only .better-diagrams/ — layout & overrides beside the imported source tree",
+    fullDocument: true,
+    run({ template, filename }: ExportContext) {
+      const out = exportFolder(template, { mode: "sidecar" });
+      return { blob: buildZip(zipEntries(out.files)), filename: `${filename}-sidecar.zip` };
     },
   },
 };

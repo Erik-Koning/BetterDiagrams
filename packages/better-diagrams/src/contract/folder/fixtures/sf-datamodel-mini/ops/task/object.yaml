@@ -1,0 +1,7 @@
+type: standard
+displayName: Task
+apiName: Task
+keyPrefix: 00T
+recordCount: 0
+diagramType: standard
+diagramName: Task

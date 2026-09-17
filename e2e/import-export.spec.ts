@@ -8,14 +8,12 @@ async function downloadedText(download: Awaited<ReturnType<import("./fixtures").
 }
 
 test.describe("import and export", () => {
-  test("imports a template file from disk, replacing the document", async ({ page, studio }, testInfo) => {
+  test("imports a template file from disk, replacing the document", async ({ studio }, testInfo) => {
     await studio.goto();
     const file = testInfo.outputPath("import.json");
     await writeFile(file, JSON.stringify(SMALL_TEMPLATE));
 
-    const chooser = page.waitForEvent("filechooser");
-    await studio.root.getByRole("button", { name: "Import", exact: true }).click();
-    await (await chooser).setFiles(file);
+    await studio.importFile(file);
 
     await expect(studio.nodeTitled("Auth Service")).toBeVisible();
     await expect(studio.nodeTitled("Users DB")).toBeVisible();

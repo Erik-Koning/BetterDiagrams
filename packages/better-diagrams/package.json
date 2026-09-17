@@ -50,6 +50,16 @@
         "default": "./dist/contract.cjs"
       }
     },
+    "./contract/folder/node": {
+      "import": {
+        "types": "./dist/contract-folder-node.d.ts",
+        "default": "./dist/contract-folder-node.js"
+      },
+      "require": {
+        "types": "./dist/contract-folder-node.d.cts",
+        "default": "./dist/contract-folder-node.cjs"
+      }
+    },
     "./styles.css": "./dist/better-diagrams.css",
     "./package.json": "./package.json"
   },
@@ -57,11 +67,15 @@
     "*": {
       "contract": [
         "./dist/contract.d.ts"
+      ],
+      "contract/folder/node": [
+        "./dist/contract-folder-node.d.ts"
       ]
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "bin"
   ],
   "sideEffects": [
     "**/*.css"
@@ -74,7 +88,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && vite build && npm run build:dts-cts",
-    "build:dts-cts": "node -e \"for (const f of ['better-diagrams','contract']) require('fs').copyFileSync('dist/'+f+'.d.ts','dist/'+f+'.d.cts')\"",
+    "build:dts-cts": "node -e \"for (const f of ['better-diagrams','contract','contract-folder-node']) require('fs').copyFileSync('dist/'+f+'.d.ts','dist/'+f+'.d.cts')\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build",
@@ -111,5 +125,8 @@
     "vite": "^7.3.6",
     "vite-plugin-dts": "^4.5.4",
     "vitest": "^3.2.7"
+  },
+  "bin": {
+    "bd-folder": "./bin/bd-folder.mjs"
   }
 }

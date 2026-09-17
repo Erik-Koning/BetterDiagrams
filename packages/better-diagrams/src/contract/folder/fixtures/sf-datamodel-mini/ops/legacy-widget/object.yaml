@@ -1,0 +1,7 @@
+type: custom
+displayName: Legacy Widget
+apiName: Legacy_Widget__c
+keyPrefix: a01
+recordCount: 3
+diagramType: custom
+diagramName: Legacy Widget

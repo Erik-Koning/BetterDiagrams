@@ -125,9 +125,120 @@ export type {
 export { ZONE_SHAPES, ZONE_OUTLINES } from "./zones";
 export type { DiagramZone, ZoneOutline, ZoneShape, ZonePoint } from "./zones";
 
+// ── Fields (rows plus what the data bag knows about them) ───────────────────
+export {
+  fieldKey,
+  sameFieldRef,
+  edgeFieldIds,
+  dataFields,
+  apiNameIndex,
+  fieldRecords,
+  fieldOutEdges,
+  fieldInEdges,
+  hasField,
+  buildFieldIndex,
+  searchFields,
+  keyFields,
+  edgeKeyOf,
+} from "./fields";
+export type {
+  FieldRef,
+  Pin,
+  KeyInfo,
+  FieldTarget,
+  FieldRecord,
+  FieldDocument,
+  DataField,
+  FieldIndex,
+  FieldIndexEntry,
+  FieldHit,
+} from "./fields";
+
+// ── Key coverage (how much of a model a set of keys reaches) ────────────────
+export { keyCoverage, marginalGains, minimalKeyCover } from "./coverage";
+export type {
+  CoverageScope,
+  CoverageOptions,
+  CoverageResult,
+  KeyGain,
+  MinimalCoverOptions,
+  MinimalCoverResult,
+} from "./coverage";
+
 // ── Paths (named flows the reader can light up) ──────────────────────────────
 export { PATH_COLOR_CYCLE, pathColor, resolvePath } from "./paths";
 export type { DiagramPath, PathGlow, ResolvedPath, ResolvedPathStep } from "./paths";
+// Finding walks rather than resolving written ones: BFS, k-shortest, all
+// simple routes, neighbourhoods — and the bridge back to a lit path.
+export {
+  shortestPath,
+  shortestPaths,
+  allSimplePaths,
+  neighbourhood,
+  walkToPath,
+  walkLength,
+  sameWalk,
+  fieldPaths,
+  between,
+  enumerateRoutes,
+  keyFrequency,
+  reachableFrom,
+} from "./graph";
+export type {
+  GraphDocument,
+  GraphOptions,
+  GraphWalk,
+  FieldEndpoint,
+  FieldPathOptions,
+  FieldPathResult,
+  BetweenOptions,
+  BetweenResult,
+  KeyUse,
+  KeyFrequencyResult,
+  ReachableResult,
+} from "./graph";
+
+// ── Folder format (directory tree ⇄ document) ───────────────────────────────
+export {
+  importFolder,
+  exportFolder,
+  detectDialect,
+  buildFolderTree,
+  treeFiles,
+  genericDialect,
+  salesforceDialect,
+  createSalesforceDialect,
+  SALESFORCE_KINDS,
+  salesforceRegistry,
+  SIDECAR_DIR,
+  LAYOUT_FILE,
+  OVERRIDES_FILE,
+  MANIFEST_FILE,
+  OVERRIDES_FORMAT,
+  FOLDER_FORMAT,
+  parseFlatYaml,
+  patchFlatYaml,
+} from "./folder";
+export type {
+  Dialect,
+  DialectRegistry,
+  FolderExportOptions,
+  FolderExportResult,
+  FileMap,
+  FolderEntry,
+  FolderNode,
+  FolderOverrides,
+  FolderTree,
+  FolderManifest,
+  FolderImportOptions,
+  FolderImportResult,
+  ImportStats,
+  ImportWarning,
+  ImportWarningCode,
+  NodeBaseline,
+  NodeOverride,
+  SalesforceDialectOptions,
+} from "./folder";
 
 // ── Auto-layout ──────────────────────────────────────────────────────────────
 export { autoLayout, hasOverlaps, placeUnpositioned } from "./layout";

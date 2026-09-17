@@ -22,9 +22,7 @@ test.describe("folding every group", () => {
 
     const file = testInfo.outputPath("folded.json");
     await writeFile(file, JSON.stringify(FOLDED));
-    const chooser = page.waitForEvent("filechooser");
-    await studio.root.getByRole("button", { name: "Import", exact: true }).click();
-    await (await chooser).setFiles(file);
+    await studio.importFile(file);
 
     // Folded: the chip stands in for the group, its contents are off the
     // canvas, and the edge into them lands on the chip.
@@ -60,7 +58,6 @@ test.describe("folding every group", () => {
   });
 
   test("an empty frame stays open under the fold, and a drop into it lifts the fold rather than vanishing", async ({
-    page,
     studio,
   }, testInfo) => {
     await studio.goto();
@@ -76,9 +73,7 @@ test.describe("folding every group", () => {
         ],
       }),
     );
-    const chooser = page.waitForEvent("filechooser");
-    await studio.root.getByRole("button", { name: "Import", exact: true }).click();
-    await (await chooser).setFiles(file);
+    await studio.importFile(file);
     await expect(studio.nodeTitled("Postgres")).toBeVisible();
     // Nothing inside, nothing to fold: the frame renders open, at its size.
     await expect(studio.node("spare")).toHaveClass(/react-flow__node-group/);

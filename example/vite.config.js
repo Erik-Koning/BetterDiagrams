@@ -8,11 +8,16 @@ import { templatesPlugin } from "./vite-plugin-templates.js";
  *   templates/examples/ — curated and tracked; the app reads, never writes
  *   templates/scratch/  — auto-save's own folder; git-ignored, rewritten as
  *                         you work
- * Both show up under Settings ▾ → Templates.
+ *   templates/folders/  — FOLDER-FORMAT trees (one subdirectory each), read
+ *                         only; imported through `importFolder` on the client.
+ *                         Git-ignored: drop a Salesforce data-model export in
+ *                         to try it.
+ * All show up under Settings ▾ → Templates.
  */
 const TEMPLATE_DIRS = {
   examples: fileURLToPath(new URL("../templates/examples", import.meta.url)),
   scratch: fileURLToPath(new URL("../templates/scratch", import.meta.url)),
+  folders: fileURLToPath(new URL("../templates/folders", import.meta.url)),
 };
 
 export default defineConfig({

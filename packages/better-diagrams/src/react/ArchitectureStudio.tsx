@@ -10,14 +10,17 @@
  *   - No network calls unless the host supplies `generate`.
  */
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
   type DragEvent,
   type ReactNode,
+  type Ref,
 } from "react";
 import {
   Background,
@@ -114,7 +117,10 @@ import {
   type ZoneNodeData,
 } from "../contract/schema";
 import { pathColor, type DiagramPath } from "../contract/paths";
-import { applyPathView, buildPathGlowIndex } from "./path-view";
+import { applyOutsideView, applyPathView, buildPathGlowIndex, transientPathColors } from "./path-view";
+import { FieldPathPanel } from "./FieldPathPanel";
+import { computeRouteView, structureSignature, type RouteView } from "./field-routes";
+import { walkToPath } from "../contract/graph";
 import {
   DEFAULT_POLYGON_POINTS,
   ZONE_OUTLINES,
@@ -146,6 +152,7 @@ import { isMac, isTypingTarget } from "./keys";
 import {
   FileMenu,
   Breadcrumbs,
+  Modal,
   ShortcutsModal,
   InspectorSection,
   TimelineScrubber,
@@ -169,6 +176,13 @@ import { buildArchitectureLint } from "./schema-lint";
 import { fanOutResize } from "./resize";
 import { NestingModal } from "./NestingModal";
 import { inlineContents, nestContents } from "../contract/nesting";
+import { importFolder } from "../contract/folder";
+import { buildFieldIndex, fieldKey, fieldRecords, hasField, keyFields, sameFieldRef, searchFields, type FieldRef, type Pin } from "../contract/fields";
+import { keyCoverage, marginalGains, minimalKeyCover, type CoverageScope } from "../contract/coverage";
+import { CoveragePanel } from "./CoveragePanel";
+import { FieldGridModal } from "./FieldGridModal";
+import { copyText } from "./copy-text";
+import { PinStrip } from "./FieldPins";
 import { KindSelect } from "./KindSelect";
 import { CLOUD_PROVIDER_IDS } from "../contract/cloud";
 import {
@@ -252,6 +266,71 @@ export interface StudioSlotContext {
   registry: ResolvedRegistry;
   /** Replace the whole document (adds an undo point). */
   setTemplate: (next: DiagramTemplate) => void;
+  /** The drill-in stack, root first — empty at the top level. */
+  focus: string[];
+  /** Drill to a level; see {@link StudioHandle.drillTo}. */
+  drillTo: (stack: readonly string[]) => void;
+  /** Ids of the document paths currently lit. */
+  activePaths: string[];
+  /** Light exactly these document paths; see {@link StudioHandle.setActivePaths}. */
+  setActivePaths: (ids: readonly string[]) => void;
+  /** The pinned fields and tables; see {@link StudioHandle.getPins}. */
+  pins: Pin[];
+  setPins: (refs: readonly Pin[]) => void;
+  /** The keys the coverage panel is scoring; see {@link StudioHandle.getCoverageKeys}. */
+  coverageKeys: FieldRef[];
+  setCoverageKeys: (refs: readonly FieldRef[]) => void;
+}
+
+/**
+ * What a host reaches through the component's `ref`: the two pieces of VIEW
+ * state the editor keeps outside the document — where the reader is drilled
+ * in, and which paths are lit — as reads and writes. Neither is content: a
+ * drill never enters undo or `onChange`, and lighting a path stores nothing.
+ * Mirror them with `onFocusChange` / `onActivePathsChange` when the host
+ * wants to render its own breadcrumbs or path list.
+ */
+export interface StudioHandle {
+  /** The drill-in stack, root first — empty at the top level. */
+  getFocus: () => string[];
+  /**
+   * Drill to a level, given as the stack of node ids from the root down
+   * (`[]` for the top). The deepest id the document knows names the level
+   * and its real ancestry becomes the stack, so the breadcrumbs never show
+   * a chain that isn't one. Fits the view to the new level. Ignored while
+   * compare mode owns the canvas.
+   */
+  drillTo: (stack: readonly string[]) => void;
+  /** Drill to the level that shows a node, then select and centre it. */
+  navigateTo: (id: string) => void;
+  /** Ids of the document paths currently lit. */
+  getActivePaths: () => string[];
+  /**
+   * Light exactly these paths (by id, from `template.paths`). Ids the
+   * document doesn't name are kept but light nothing until it does — so a
+   * host may set them before the path lands in the document.
+   */
+  setActivePaths: (ids: readonly string[]) => void;
+  /**
+   * The pinned fields and tables (a pin without `fieldId` is a whole table),
+   * in pin order. View state like the drill stack: never in the document,
+   * pruned when a pin's node leaves it.
+   */
+  getPins: () => Pin[];
+  /** Replace the pins (deduplicated; unknown fields are dropped on the next document change). */
+  setPins: (refs: readonly Pin[]) => void;
+  /** Go to the level that shows a field's node, select it, and mark the row. */
+  navigateToField: (ref: FieldRef) => void;
+  /** Open the field grid for a node, scrolled to a field when given. */
+  openFieldGrid: (nodeId: string, fieldId?: string) => void;
+  /**
+   * The keys the coverage panel scores — view state like pins, mirrored by
+   * `onCoverageChange`, pruned when a key's node leaves the document.
+   */
+  getCoverageKeys: () => FieldRef[];
+  setCoverageKeys: (refs: readonly FieldRef[]) => void;
+  /** Open (or close) the key-coverage panel. */
+  openCoverage: (open?: boolean) => void;
 }
 
 /**
@@ -343,6 +422,17 @@ export interface ArchitectureStudioProps {
    * selection from the previous document.
    */
   onSelectionChange?: (selection: StudioSelection) => void;
+  /**
+   * Fires with the drill-in stack on mount (empty) and whenever the reader
+   * drills in or out — by double-click, breadcrumb, Escape, or the `ref`.
+   */
+  onFocusChange?: (focus: string[]) => void;
+  /** Fires with the lit path ids on mount (empty) and whenever they change. */
+  onActivePathsChange?: (ids: string[]) => void;
+  /** Fires with the pinned fields and tables on mount (empty) and whenever they change. */
+  onPinsChange?: (pins: Pin[]) => void;
+  /** Fires with the coverage panel's chosen keys on mount (empty) and whenever they change. */
+  onCoverageChange?: (keys: FieldRef[]) => void;
   /** Extra toolbar content, rendered after the built-in buttons. */
   toolbarExtras?: ReactNode | ((ctx: StudioSlotContext) => ReactNode);
   /** Extra inspector content, rendered when something is selected. */
@@ -359,6 +449,17 @@ export interface ArchitectureStudioProps {
  * inspector — and a union repeated three times drifts.
  */
 export type AlignMode = "left" | "centerX" | "right" | "top" | "centerY" | "bottom";
+
+/** One search hit: a node, or a field on one (`id` is always the node). */
+type SearchMatch =
+  | { kind: "node"; id: string; w: number; h: number }
+  | {
+      kind: "field";
+      id: string;
+      w: number;
+      h: number;
+      field: { fieldId: string; name: string; row: boolean; nodeLabel: string };
+    };
 
 /** First usable number among React Flow's three places a size can live. */
 function firstNumber(...values: unknown[]): number | undefined {
@@ -557,17 +658,20 @@ function typingRunKey(scope: string, id: string, patch: object): string | undefi
 }
 
 
-export function ArchitectureStudio(props: ArchitectureStudioProps) {
-  // React Flow hooks require the provider to be an ancestor, so the real
-  // implementation lives one level down.
-  return (
-    <ReactFlowProvider>
-      <StudioInner {...props} />
-    </ReactFlowProvider>
-  );
-}
+export const ArchitectureStudio = forwardRef<StudioHandle, ArchitectureStudioProps>(
+  function ArchitectureStudio(props, ref) {
+    // React Flow hooks require the provider to be an ancestor, so the real
+    // implementation lives one level down.
+    return (
+      <ReactFlowProvider>
+        <StudioInner {...props} handleRef={ref} />
+      </ReactFlowProvider>
+    );
+  },
+);
 
 function StudioInner({
+  handleRef,
   value,
   defaultValue,
   onChange,
@@ -593,11 +697,15 @@ function StudioInner({
   onFileRestore,
   onNavigateFile,
   onSelectionChange: onHostSelectionChange,
+  onFocusChange,
+  onActivePathsChange,
+  onPinsChange,
+  onCoverageChange,
   toolbarExtras,
   inspectorExtras,
   className,
   style,
-}: ArchitectureStudioProps) {
+}: ArchitectureStudioProps & { handleRef: Ref<StudioHandle> }) {
   const registry = useMemo(() => createRegistry(registryExtensions), [registryExtensions]);
   const flow = useReactFlow();
   const studioMode = resolveStudioMode(mode);
@@ -761,6 +869,40 @@ function StudioInner({
    * was edited away in JSON) are simply never matched, so no pruning.
    */
   const [activePathIds, setActivePathIds] = useState<string[]>([]);
+  /**
+   * Pinned fields — view state like the lit paths, never in the document.
+   * Unlike lit path ids they ARE pruned when a node vanishes (see
+   * `materializeTemplate`): a chip for a field that no longer exists would
+   * be a dead control and a bad path endpoint. The ref is the FACT the
+   * imperative reads answer from.
+   */
+  const [pins, setPinsState] = useState<Pin[]>([]);
+  const pinsRef = useRef<Pin[]>([]);
+  /** The row the search or a pin chip just jumped to — `fieldKey`, or null. */
+  const [highlightField, setHighlightField] = useState<string | null>(null);
+  /** The node whose field grid is open, and the row to scroll to. */
+  const [fieldGrid, setFieldGrid] = useState<{ nodeId: string; fieldId?: string } | null>(null);
+  /** The row the inspector should put its cursor in — the field menu's Edit…. */
+  const [editField, setEditField] = useState<FieldRef | null>(null);
+  /** The paths panel: routes between the pins. Opens from the pin strip. */
+  const [pathPanelOpen, setPathPanelOpen] = useState(false);
+  /** Ignore arrow direction — the default a "how do these connect" question wants. */
+  const [routeUndirected, setRouteUndirected] = useState(true);
+  /** With three or more pins: dim the canvas to what lies between, or to what they reach. */
+  const [routeMode, setRouteMode] = useState<"between" | "reachable">("between");
+  /** The route under the pointer (lit alone) and the one clicked (kept lit alone). */
+  const [hoverRoute, setHoverRoute] = useState<number | null>(null);
+  const [stickyRoute, setStickyRoute] = useState<number | null>(null);
+  /** The key under the pointer in "Keys most routes use": every route through it lights. */
+  const [hoverKey, setHoverKey] = useState<string | null>(null);
+  /** The key-coverage panel: which keys are chosen, how coverage is scoped, what is hovered. */
+  const [coverageOpen, setCoverageOpen] = useState(false);
+  const [coverageKeys, setCoverageKeysState] = useState<FieldRef[]>([]);
+  const coverageKeysRef = useRef<FieldRef[]>([]);
+  const [coverageScope, setCoverageScope] = useState<CoverageScope>({ kind: "all" });
+  const [coverageHover, setCoverageHover] = useState<FieldRef | null>(null);
+  /** What the last "Find smallest set" said about its answer; cleared when the keys change by hand. */
+  const [smallest, setSmallest] = useState<{ optimal: boolean; truncated: boolean } | null>(null);
   const [showTeams, setShowTeams] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -789,7 +931,9 @@ function StudioInner({
   /** Narrow picture exports to the selection. See `runDirectExport`. */
   const [exportSelectionOnly, setExportSelectionOnly] = useState(false);
   const [contextMenu, setContextMenu] = useState<
-    { x: number; y: number; kind: "node" | "edge" | "zone" | "pane" } | null
+    | { x: number; y: number; kind: "node" | "edge" | "zone" | "pane" }
+    | { x: number; y: number; kind: "field"; ref: FieldRef }
+    | null
   >(null);
   /**
    * The element whose name is open for editing on the canvas.
@@ -811,6 +955,15 @@ function StudioInner({
   const [pendingExport, setPendingExport] = useState<StateExportFormat | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  /** What the last folder import had to say — warnings and registry advice, dismissable. */
+  const [importNotes, setImportNotes] = useState<string[]>([]);
+  /**
+   * An import waiting on "Replace this diagram?". One question for the three
+   * ways a document can arrive — the Import button, Import folder, and a
+   * drop — asked only when the canvas holds something to lose.
+   */
+  const [pendingReplace, setPendingReplace] = useState<{ name: string; run: () => void } | null>(null);
   const compareInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -1040,6 +1193,21 @@ function StudioInner({
         focusStackRef.current = stack;
         setFocusStack(stack);
       }
+      const keptPins = prunePins(doc, pinsRef.current);
+      if (keptPins.length !== pinsRef.current.length) {
+        pinsRef.current = keptPins;
+        setPinsState(keptPins);
+      }
+      const keptKeys = coverageKeysRef.current.filter((k) => hasField(doc, k));
+      if (keptKeys.length !== coverageKeysRef.current.length) {
+        coverageKeysRef.current = keptKeys;
+        setCoverageKeysState(keptKeys);
+      }
+      // A coverage scope whose root has gone would score every key at zero
+      // and label a button with a missing id — fall back to the whole model.
+      setCoverageScope((current) =>
+        current.kind === "from" && !doc.nodes.some((n) => n.id === current.nodeId) ? { kind: "all" } : current,
+      );
       meta.current = doc.meta;
       baseRef.current = doc; // materialization point
       templateRef.current = doc;
@@ -1453,18 +1621,37 @@ function StudioInner({
    * drilled in, most of the architecture lives on other levels; a search that
    * couldn't see them would read as data loss.
    */
-  const searchMatches = useMemo(() => {
+  // The field index exists only while a query is typed: a drag with an
+  // empty search box rebuilds nothing, and a keystroke scans it with one
+  // `includes` per field.
+  const searching = searchQuery.trim().length > 0;
+  const fieldIndex = useMemo(() => (searching ? buildFieldIndex(template) : null), [template, searching]);
+  const searchMatches = useMemo((): SearchMatch[] => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return [];
-    return template.nodes.filter(
-      (n) =>
-        n.id.toLowerCase().includes(q) ||
-        n.label?.toLowerCase().includes(q) ||
-        n.description?.toLowerCase().includes(q) ||
-        String(n.kind).toLowerCase().includes(q) ||
-        n.tags?.some((t) => t.toLowerCase().includes(q)),
-    );
-  }, [template, searchQuery]);
+    const nodes: SearchMatch[] = template.nodes
+      .filter(
+        (n) =>
+          n.id.toLowerCase().includes(q) ||
+          n.label?.toLowerCase().includes(q) ||
+          n.description?.toLowerCase().includes(q) ||
+          String(n.kind).toLowerCase().includes(q) ||
+          n.tags?.some((t) => t.toLowerCase().includes(q)),
+      )
+      .map((n) => ({ kind: "node", id: n.id, w: n.w, h: n.h }));
+    if (!fieldIndex) return nodes;
+    const byId = new Map(template.nodes.map((n) => [n.id, n]));
+    const fields: SearchMatch[] = searchFields(fieldIndex, q, { limit: 200 }).flatMap((hit) => {
+      const n = byId.get(hit.nodeId);
+      return n
+        ? [{ kind: "field", id: n.id, w: n.w, h: n.h, field: { fieldId: hit.fieldId, name: hit.name, row: hit.row, nodeLabel: hit.nodeLabel } }]
+        : [];
+    });
+    return [...nodes, ...fields];
+  }, [template, searchQuery, fieldIndex]);
+  const currentMatch = searchMatches.length
+    ? searchMatches[(searchIndex < 0 ? 0 : searchIndex) % searchMatches.length]
+    : undefined;
 
   /** Declared later (needs the drill machinery); the search jumps through it. */
   const navigateToNodeRef = useRef<(id: string) => void>(() => {});
@@ -1474,10 +1661,20 @@ function StudioInner({
     (index: number) => {
       const match = searchMatches[((index % searchMatches.length) + searchMatches.length) % searchMatches.length];
       if (!match) return;
+      // A field hit marks its row; one the node doesn't draw opens the grid
+      // on it instead (after the level has had its moment to materialise).
+      const land = () => {
+        if (match.kind !== "field") return;
+        setHighlightField(fieldKey({ nodeId: match.id, fieldId: match.field.fieldId }));
+        if (!match.field.row) {
+          window.setTimeout(() => setFieldGrid({ nodeId: match.id, fieldId: match.field.fieldId }), 80);
+        }
+      };
       const internal = flow.getInternalNode(match.id);
       if (!internal) {
         // The match lives on another level (or is hidden) — drill to it.
         navigateToNodeRef.current(match.id);
+        land();
         return;
       }
       const abs = internal.internals.positionAbsolute;
@@ -1488,6 +1685,7 @@ function StudioInner({
         zoom: Math.max(flow.getViewport().zoom, 0.9),
         duration: 300,
       });
+      land();
     },
     [searchMatches, flow, setNodes],
   );
@@ -1608,10 +1806,87 @@ function StudioInner({
         .filter((p) => activePathIds.includes(p.id)),
     [paths, activePathIds],
   );
-  const pathGlowIndex = useMemo(
-    () => buildPathGlowIndex(template, activePathIds),
-    [template, activePathIds],
+  // Routes between the pins. Memoised on the document's STRUCTURE — ids,
+  // endpoints, anchors, direction — so a drag never re-runs a search that
+  // may take its whole 300 ms budget; and only while the panel is open.
+  const structureSig = useMemo(() => structureSignature(template), [template]);
+  const routeColors = useMemo(
+    () => transientPathColors(10, activePaths.map((p) => p.color), paths.length),
+    [activePaths, paths.length],
   );
+  const routeView = useMemo<RouteView | null>(() => {
+    if (!pathPanelOpen || pins.length < 2) return null;
+    return computeRouteView(templateRef.current, { pins, undirected: routeUndirected, mode: routeMode }, routeColors);
+    // `structureSig` stands in for the template on purpose (see above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structureSig, pins, routeUndirected, routeMode, pathPanelOpen, routeColors]);
+  /** The found routes as transient paths — all of them, or the hovered/kept one alone. */
+  const transientPaths = useMemo(() => {
+    if (!routeView || routeView.kind !== "pair") return [];
+    const only = hoverRoute ?? stickyRoute;
+    const throughKey = hoverKey
+      ? new Set(routeView.keyUse?.keys.find((k) => fieldKey(k.ref) === hoverKey)?.edges ?? [])
+      : null;
+    return routeView.routes
+      .map((route, i) => ({ route, i }))
+      .filter(({ route, i }) =>
+        throughKey
+          ? route.walk.edges.some((e) => throughKey.has(e))
+          : only === null || only >= routeView.routes.length || only === i,
+      )
+      .map(({ route, i }) =>
+        walkToPath(templateRef.current, route.walk, { id: `~route:${i}`, title: route.title, color: route.color }),
+      );
+  }, [routeView, hoverRoute, stickyRoute, hoverKey]);
+  // Several routes lit at once keep their palette colours so they stay
+  // distinguishable; one route singled out (hovered or kept) goes bright.
+  const pathGlowIndex = useMemo(
+    () => buildPathGlowIndex(template, activePathIds, transientPaths, { bright: transientPaths.length === 1 }),
+    [template, activePathIds, transientPaths],
+  );
+  // Key coverage — memoised on structure like the routes, and only while open.
+  const coverageResult = useMemo(
+    () => (coverageOpen ? keyCoverage(templateRef.current, coverageKeys, { scope: coverageScope }) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [structureSig, coverageKeys, coverageScope, coverageOpen],
+  );
+  const coverageGains = useMemo(
+    () => (coverageOpen ? marginalGains(templateRef.current, coverageKeys, { scope: coverageScope }) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [structureSig, coverageKeys, coverageScope, coverageOpen],
+  );
+  /** With keys chosen (or a candidate hovered) the canvas dims to what they reach. */
+  const coverageMask = useMemo(() => {
+    if (!coverageOpen || !coverageResult || (!coverageKeys.length && !coverageHover)) return null;
+    const keep = new Set(coverageResult.reached);
+    if (coverageHover) {
+      const gain = coverageGains.find((g) => sameFieldRef(g.ref, coverageHover));
+      for (const id of gain?.adds ?? []) keep.add(id);
+      // A chosen key hovered: what it contributes is already in `reached`.
+    }
+    if (coverageScope.kind === "from") keep.add(coverageScope.nodeId);
+    return keep;
+  }, [coverageOpen, coverageResult, coverageKeys, coverageHover, coverageGains, coverageScope]);
+  const coverageKeepEdges = useMemo(() => {
+    if (!coverageMask) return null;
+    const chosen = new Set([...coverageKeys, ...(coverageHover ? [coverageHover] : [])].map(fieldKey));
+    const doc = templateRef.current;
+    const carried = new Set(
+      keyFields(doc)
+        .filter((k) => chosen.has(fieldKey(k.ref)))
+        .flatMap((k) => k.edges),
+    );
+    // Both ends have to be in the lit set: a chosen key's line that leads out
+    // of a "from" scope is not part of what the reader can reach.
+    return new Set(doc.edges.filter((e) => carried.has(e.id) && coverageMask.has(e.source) && coverageMask.has(e.target)).map((e) => e.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coverageMask, coverageKeys, coverageHover, structureSig]);
+  /**
+   * One dim mask for the canvas: the coverage panel's while it is showing
+   * something, else the paths panel's reachable set, else nothing.
+   */
+  const dimmedIds = coverageMask ?? routeView?.keep ?? null;
+  const routeKeepEdges = coverageMask ? coverageKeepEdges : (routeView?.keepEdges ?? null);
 
   const allTags = useMemo(() => {
     const out: string[] = [];
@@ -1794,7 +2069,10 @@ function StudioInner({
     const scrubbed = applyTimelineView(nodes, edges, timelineFutureIds, timelineFuture);
     // Lit paths glow. After the timeline pass (a hidden node stays hidden),
     // before the lifts below, which append their classes rather than replace.
-    const view = applyPathView(scrubbed.nodes, scrubbed.edges, pathGlowIndex);
+    const lit = applyPathView(scrubbed.nodes, scrubbed.edges, pathGlowIndex);
+    // Everything outside the pins' reach recedes (nodes take the same
+    // treatment through the studio context, where the renderer dims).
+    const view = { nodes: lit.nodes, edges: applyOutsideView(lit.edges, routeKeepEdges) };
     // Manual z-index mode (see the <ReactFlow> props) drops React Flow's
     // built-in elevate-on-select, so restore it here as a display pass: a
     // selected node floats above whatever it is dragged across. Containers
@@ -1826,7 +2104,7 @@ function StudioInner({
         e.selected ? { ...e, zIndex: (e.zIndex ?? 0) + SELECTED_EDGE_ELEVATION } : e,
       ),
     };
-  }, [nodes, edges, timelineFutureIds, timelineFuture, dropTargetId, pathGlowIndex]);
+  }, [nodes, edges, timelineFutureIds, timelineFuture, dropTargetId, pathGlowIndex, routeKeepEdges]);
 
   useEffect(() => {
     timelineAtRef.current = timelineAt;
@@ -2999,6 +3277,207 @@ function StudioInner({
     navigateToNodeRef.current = navigateToNode;
   }, [navigateToNode]);
 
+  /**
+   * The host's way in: drill to a whole level and fit to it. The focus stack
+   * is an ancestry chain by construction (every drill pushes a child of the
+   * current level), so a host-supplied stack is canonicalised rather than
+   * trusted: the deepest id the document knows names the level, and
+   * `focusPath` supplies its real ancestors — a stale or mis-ordered stack
+   * lands on a level that exists instead of drawing breadcrumbs that lie.
+   */
+  const drillToLevel = useCallback(
+    (stack: readonly string[]) => {
+      if (activeDiffBase) return; // compare mode owns the canvas
+      const doc = templateRef.current;
+      const known = new Set(doc.nodes.map((n) => n.id));
+      const top = [...stack].reverse().find((id) => known.has(id));
+      const next = top ? [...focusPath(doc, top), top] : [];
+      const same =
+        next.length === focusStackRef.current.length &&
+        next.every((id, i) => id === focusStackRef.current[i]);
+      if (same) return;
+      drillTo(next);
+      canvasRef.current?.classList.add("as-canvas--refocus");
+      window.setTimeout(() => {
+        canvasRef.current?.classList.remove("as-canvas--refocus");
+        void flow.fitView({ padding: 0.15, duration: 250 });
+      }, 60);
+    },
+    [activeDiffBase, drillTo, flow],
+  );
+
+  const setActivePaths = useCallback((ids: readonly string[]) => {
+    setActivePathIds([...new Set(ids)]);
+  }, []);
+
+  const setPins = useCallback((refs: readonly Pin[]) => {
+    const next: Pin[] = [];
+    for (const ref of refs) {
+      if (next.some((p) => sameFieldRef(p, ref))) continue;
+      next.push(ref.fieldId ? { nodeId: ref.nodeId, fieldId: ref.fieldId } : { nodeId: ref.nodeId });
+    }
+    pinsRef.current = next;
+    setPinsState(next);
+  }, []);
+  const togglePin = useCallback(
+    (ref: Pin) => {
+      const current = pinsRef.current;
+      setPins(current.some((p) => sameFieldRef(p, ref)) ? current.filter((p) => !sameFieldRef(p, ref)) : [...current, ref]);
+    },
+    [setPins],
+  );
+  const setCoverageKeys = useCallback((refs: readonly FieldRef[]) => {
+    const next: FieldRef[] = [];
+    for (const ref of refs) if (!next.some((k) => sameFieldRef(k, ref))) next.push({ nodeId: ref.nodeId, fieldId: ref.fieldId });
+    coverageKeysRef.current = next;
+    setCoverageKeysState(next);
+    setSmallest(null);
+  }, []);
+  const toggleCoverageKey = useCallback(
+    (ref: FieldRef) => {
+      const current = coverageKeysRef.current;
+      setCoverageKeys(current.some((k) => sameFieldRef(k, ref)) ? current.filter((k) => !sameFieldRef(k, ref)) : [...current, ref]);
+    },
+    [setCoverageKeys],
+  );
+  /** The fewest keys that reach everything any key can, in the current scope. */
+  const findSmallestCover = useCallback(() => {
+    const result = minimalKeyCover(templateRef.current, { scope: coverageScope });
+    coverageKeysRef.current = result.keys;
+    setCoverageKeysState(result.keys);
+    setSmallest({ optimal: result.optimal, truncated: result.truncated });
+  }, [coverageScope]);
+  useEffect(() => {
+    if (!coverageOpen) setCoverageHover(null);
+  }, [coverageOpen]);
+
+  /** Go to a field: its node's level, selected and centred, with the row marked. */
+  const navigateToField = useCallback(
+    (ref: FieldRef) => {
+      navigateToNode(ref.nodeId);
+      setHighlightField(fieldKey(ref));
+    },
+    [navigateToNode],
+  );
+  const pinnedFields = useMemo(() => new Set(pins.map(fieldKey)), [pins]);
+  /** "Account · AccountId" — what a chip and a menu caption call a field; a table pin is the label alone. */
+  const fieldLabel = useCallback((ref: Pin) => {
+    const label = templateRef.current.nodes.find((n) => n.id === ref.nodeId)?.label ?? ref.nodeId;
+    return ref.fieldId ? `${label} · ${ref.fieldId}` : label;
+  }, []);
+  // The row mark is transient: it goes when the reader selects something
+  // else (a click elsewhere, not the jump's own selection — a drill clears
+  // the selection on the way, which must not take the mark with it) or
+  // starts a new search.
+  const highlightFieldRef = useRef<string | null>(null);
+  highlightFieldRef.current = highlightField;
+  useEffect(() => {
+    const mark = highlightFieldRef.current;
+    if (!mark || !selectedNodeIds.length) return;
+    const nodeId = mark.slice(0, mark.indexOf("\u0000"));
+    if (!selectedNodeIds.includes(nodeId)) setHighlightField(null);
+  }, [selectedNodeIds]);
+  useEffect(() => {
+    setHighlightField(null);
+  }, [searchQuery]);
+  const togglePathPanel = useCallback(() => {
+    setPathPanelOpen((open) => !open);
+    setPanelOpen(false); // the two panels share a slot
+  }, []);
+  // Fewer than two pins, nothing to search: the panel closes; a changed set
+  // of pins forgets which route was kept.
+  useEffect(() => {
+    if (pins.length < 2) setPathPanelOpen(false);
+    setStickyRoute(null);
+    setHoverRoute(null);
+    setHoverKey(null);
+  }, [pins]);
+  /** Keep a route lit alone and frame it — or, when it crosses levels, go to it. */
+  const pickRoute = useCallback(
+    (index: number) => {
+      setStickyRoute((current) => (current === index ? null : index));
+      const route = routeView?.routes[index];
+      if (!route) return;
+      const boxes = route.walk.nodes.map((id) => flow.getInternalNode(id));
+      if (boxes.every((b) => b)) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const b of boxes) {
+          const abs = b!.internals.positionAbsolute;
+          const w = (b!.measured?.width as number) ?? 170;
+          const h = (b!.measured?.height as number) ?? 76;
+          minX = Math.min(minX, abs.x);
+          minY = Math.min(minY, abs.y);
+          maxX = Math.max(maxX, abs.x + w);
+          maxY = Math.max(maxY, abs.y + h);
+        }
+        void flow.fitBounds({ x: minX, y: minY, width: maxX - minX, height: maxY - minY }, { padding: 0.3, duration: 300 });
+      } else {
+        navigateToNode(route.walk.nodes[1] ?? route.walk.nodes[0]);
+      }
+    },
+    [routeView, flow, navigateToNode],
+  );
+
+  // The FACT refs the imperative reads answer from — a handle method runs
+  // outside render, where the state variable may already be a step behind.
+  const activePathIdsRef = useRef<string[]>(activePathIds);
+  activePathIdsRef.current = activePathIds;
+
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      getFocus: () => focusStackRef.current,
+      drillTo: drillToLevel,
+      navigateTo: navigateToNode,
+      getActivePaths: () => activePathIdsRef.current,
+      setActivePaths,
+      getPins: () => pinsRef.current,
+      setPins,
+      navigateToField,
+      openFieldGrid: (nodeId: string, fieldId?: string) => setFieldGrid({ nodeId, ...(fieldId ? { fieldId } : {}) }),
+      getCoverageKeys: () => coverageKeysRef.current,
+      setCoverageKeys,
+      openCoverage: (open = true) => setCoverageOpen(open),
+    }),
+    [drillToLevel, navigateToNode, setActivePaths, setPins, navigateToField, setCoverageKeys],
+  );
+
+  // Mirrors for a host rendering its own breadcrumbs or path list. Keyed by
+  // content like the selection report, so a host passing a fresh callback
+  // each render isn't told about a change that didn't happen.
+  const lastFocusReported = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onFocusChange) return;
+    const key = focusStack.join("\u0000");
+    if (key === lastFocusReported.current) return;
+    lastFocusReported.current = key;
+    onFocusChange(focusStack);
+  }, [focusStack, onFocusChange]);
+  const lastPathsReported = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onActivePathsChange) return;
+    const key = activePathIds.join("\u0000");
+    if (key === lastPathsReported.current) return;
+    lastPathsReported.current = key;
+    onActivePathsChange(activePathIds);
+  }, [activePathIds, onActivePathsChange]);
+  const lastPinsReported = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onPinsChange) return;
+    const key = pins.map(fieldKey).join("\u0001");
+    if (key === lastPinsReported.current) return;
+    lastPinsReported.current = key;
+    onPinsChange(pins.map((p) => ({ ...p })));
+  }, [pins, onPinsChange]);
+  const lastCoverageReported = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onCoverageChange) return;
+    const key = coverageKeys.map(fieldKey).join("\u0001");
+    if (key === lastCoverageReported.current) return;
+    lastCoverageReported.current = key;
+    onCoverageChange(coverageKeys.map((k) => ({ ...k })));
+  }, [coverageKeys, onCoverageChange]);
+
   // Compare mode owns the whole canvas — entering it exits any drill.
   useEffect(() => {
     if (activeDiffBase && focusStackRef.current.length) drillTo([]);
@@ -3051,9 +3530,28 @@ function StudioInner({
         setNodes((current) => current.map((n) => ({ ...n, selected: false })));
       }
       const kind = edgeId ? "edge" : nodeId ? (isZoneNodeId(nodeId) ? "zone" : "node") : "pane";
-      setContextMenu({ x: event.clientX, y: event.clientY, kind });
+      setContextMenu({ ...clampMenu(event.clientX, event.clientY), kind });
     },
     [readOnly, activeDiffBase, setNodes, setEdges],
+  );
+
+  /**
+   * The field menu: a row was clicked. Not guarded on `readOnly` — pinning
+   * and the grid are reading tools — only on compare mode, which owns the
+   * canvas. Selects the row's node the way the node menu does, so the
+   * inspector shows the node the items act on.
+   */
+  const openFieldMenu = useCallback(
+    (ref: FieldRef, at: { clientX: number; clientY: number }) => {
+      if (activeDiffBase) return;
+      setOpenMenu(null);
+      if (!selectionRef.current.nodes.includes(ref.nodeId)) {
+        setNodes((current) => current.map((n) => ({ ...n, selected: n.id === ref.nodeId })));
+        setEdges((current) => current.map((e) => ({ ...e, selected: false })));
+      }
+      setContextMenu({ ...clampMenu(at.clientX, at.clientY), kind: "field", ref });
+    },
+    [activeDiffBase, setNodes, setEdges],
   );
 
   // Any click or Escape dismisses it, like every other menu here.
@@ -3330,6 +3828,86 @@ function StudioInner({
     [registry, applyTemplate, showToast],
   );
 
+  /**
+   * A whole directory, picked with `webkitdirectory`: every JSON, YAML and
+   * Markdown file becomes one entry of a file map keyed by its path inside
+   * the picked folder, and the folder format's importer takes it from there
+   * — dialect detection, the tree walk, layout, the sidecar.
+   */
+  const loadFolder = useCallback(
+    async (list: readonly File[]) => {
+      const picked = list.filter(
+        (f) => /\.(json|ya?ml|md)$/i.test(f.name) && f.size <= 5 * 1024 * 1024,
+      );
+      // `webkitRelativePath` always begins with the picked directory's own
+      // name; that segment is the root, not a folder inside it.
+      const inside = (f: File) => {
+        const rel = f.webkitRelativePath || f.name;
+        return rel.includes("/") ? rel.slice(rel.indexOf("/") + 1) : rel;
+      };
+      const files = new Map<string, string>();
+      await Promise.all(
+        picked.map(async (f) => {
+          files.set(inside(f), await f.text());
+        }),
+      );
+      if (!files.size) {
+        setError("That folder has no JSON, YAML or Markdown files to import");
+        setPanelOpen(true);
+        return;
+      }
+      try {
+        const result = importFolder(files, { validate: registryOpts(registry) });
+        // An empty result is a wrong folder, not an empty diagram: replacing
+        // the canvas with nothing would be the loudest possible answer to
+        // the quietest mistake.
+        if (!result.stats.nodes) {
+          setError("Nothing in that folder reads as a diagram — pick the tree's root folder");
+          setPanelOpen(true);
+          return;
+        }
+        applyTemplate(result.template);
+        setError("");
+        const notes = result.warnings.map(
+          (w) => `${w.code}${w.path ? ` · ${w.path}` : ""}: ${w.message}`,
+        );
+        // Kinds the dialect draws with that this editor was not told about
+        // render as plain services — say so, since the fix is one prop.
+        const unregistered = Object.keys(result.registry.nodeKinds ?? {}).filter(
+          (kind) => !registry.nodeKinds[kind],
+        );
+        if (unregistered.length) {
+          notes.unshift(
+            `${unregistered.length} node kind${unregistered.length === 1 ? "" : "s"} from the ${result.dialect} dialect (${unregistered.join(", ")}) are not in this editor's registry — pass the dialect's registry preset to the \`registry\` prop so they render as their own kinds.`,
+          );
+        }
+        setImportNotes(notes);
+        const top = list[0]?.webkitRelativePath?.split("/")[0] || "folder";
+        showToast(
+          `Imported ${result.stats.nodes} node${result.stats.nodes === 1 ? "" : "s"} · ${result.stats.edges} edge${result.stats.edges === 1 ? "" : "s"} from ${top}` +
+            (notes.length ? ` · ${notes.length} note${notes.length === 1 ? "" : "s"}` : ""),
+        );
+      } catch (err) {
+        setError(`Could not import that folder: ${(err as Error).message}`);
+        setPanelOpen(true);
+      }
+    },
+    [registry, applyTemplate, showToast],
+  );
+
+  /**
+   * Run an import, asking first when it would replace a diagram. A template
+   * REPLACES the whole canvas: undoable, but a mis-aimed drag or click over
+   * unsaved work is a shock worth one question. A LAYOUT file only
+   * re-dresses what is here, so it never needs asking — and neither does an
+   * empty canvas.
+   */
+  const confirmReplace = useCallback((name: string, run: () => void) => {
+    const replaces = templateRef.current.nodes.length > 0 && !/\.layout\.json$/i.test(name);
+    if (replaces) setPendingReplace({ name, run });
+    else run();
+  }, []);
+
   const onDrop = useCallback(
     (event: DragEvent) => {
       event.preventDefault();
@@ -3337,27 +3915,9 @@ function StudioInner({
       if (readOnly) return;
       const file = event.dataTransfer?.files?.[0];
       if (!file) return;
-      // A template REPLACES the whole diagram. It is undoable, but a
-      // mis-aimed drag onto a canvas full of unsaved work is a shock worth
-      // one question — and a LAYOUT file only re-dresses what is here, so it
-      // never needs asking.
-      const replaces =
-        templateRef.current.nodes.length > 0 && !/\.layout\.json$/i.test(file.name);
-      if (
-        replaces &&
-        typeof window !== "undefined" &&
-        typeof window.confirm === "function" &&
-        !window.confirm(
-          `Replace this diagram with “${file.name}”?\n\n` +
-            `The ${templateRef.current.nodes.length} elements on the canvas are replaced. ` +
-            `${modKeyRef.current}Z undoes it.`,
-        )
-      ) {
-        return;
-      }
-      void loadFile(file);
+      confirmReplace(file.name, () => void loadFile(file));
     },
-    [readOnly, loadFile],
+    [readOnly, loadFile, confirmReplace],
   );
 
   const onDragOver = useCallback(
@@ -4319,7 +4879,7 @@ function StudioInner({
   // they could not, and why, are commented at the point of divergence.
 
   /** Any dialog is up, so the canvas is not what the keyboard is aimed at. */
-  const modalOpen = welcomeOpen || !!pendingExport || !!pendingNest;
+  const modalOpen = welcomeOpen || !!pendingExport || !!pendingNest || !!fieldGrid;
 
   /**
    * Whether a keystroke on `window` was meant for THIS editor.
@@ -4620,6 +5180,14 @@ function StudioInner({
           setOpenMenu(null);
           return;
         }
+        if (coverageOpen) {
+          setCoverageOpen(false);
+          return;
+        }
+        if (pathPanelOpen) {
+          setPathPanelOpen(false);
+          return;
+        }
         if (panelOpen) {
           setPanelOpen(false);
           return;
@@ -4645,7 +5213,7 @@ function StudioInner({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
+  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, pathPanelOpen, coverageOpen, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
 
   // ── Zone resize gesture ───────────────────────────────────────────────────
   //
@@ -4696,9 +5264,28 @@ function StudioInner({
 
   // ── Slots ─────────────────────────────────────────────────────────────────
 
+  /** How many field records the single selected node has — the grid's openers show it. */
+  const selectedFieldCount = useMemo(() => {
+    if (selectedNodeIds.length !== 1) return 0;
+    const node = template.nodes.find((n) => n.id === selectedNodeIds[0]);
+    return node ? fieldRecords(node, template).length : 0;
+  }, [selectedNodeIds, template]);
+
   const slotContext: StudioSlotContext = useMemo(
-    () => ({ template, registry, setTemplate: (next) => applyTemplate(next, { fit: false }) }),
-    [template, registry, applyTemplate],
+    () => ({
+      template,
+      registry,
+      setTemplate: (next) => applyTemplate(next, { fit: false }),
+      focus: focusStack,
+      drillTo: drillToLevel,
+      activePaths: activePathIds,
+      setActivePaths,
+      pins,
+      setPins,
+      coverageKeys,
+      setCoverageKeys,
+    }),
+    [template, registry, applyTemplate, focusStack, drillToLevel, activePathIds, setActivePaths, pins, setPins, coverageKeys, setCoverageKeys],
   );
   const renderSlot = (slot: ArchitectureStudioProps["toolbarExtras"]) =>
     typeof slot === "function" ? slot(slotContext) : slot;
@@ -4763,8 +5350,12 @@ function StudioInner({
       renamingId,
       setRenamingId,
       showToast,
+      onFieldClick: openFieldMenu,
+      pinnedFields,
+      highlightField,
+      dimmedIds,
     }),
-    [registry, readOnly, studioMode, tagFilter, showTeams, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast],
+    [registry, readOnly, studioMode, tagFilter, showTeams, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast, openFieldMenu, pinnedFields, highlightField, dimmedIds],
   );
   const rootStyle = { ...themeToStyle(theme), ...style };
   const modeClass = modeClassName(studioMode);
@@ -5242,6 +5833,19 @@ function StudioInner({
                     ) : null}
                   </>
                 ) : null}
+                <div className="as-menu__caption">Keys</div>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  onClick={() => {
+                    setCoverageOpen((open) => !open);
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">{coverageOpen ? "Hide key coverage" : "Key coverage"}</div>
+                  <div className="as-menu__hint">How much of the model a set of keys reaches</div>
+                </button>
               </ToolbarMenu>
             </div>
           ) : null}
@@ -5434,7 +6038,7 @@ function StudioInner({
               className="as-input as-search"
               value={searchQuery}
               placeholder={`Search… (${modKey}K)`}
-              aria-label="Search nodes"
+              aria-label="Search nodes and fields"
               onChange={(event) => {
                 setSearchQuery(event.target.value);
                 setSearchIndex(-1);
@@ -5472,6 +6076,15 @@ function StudioInner({
                 {searchMatches.length
                   ? `${(searchIndex < 0 ? 0 : searchIndex % searchMatches.length) + 1}/${searchMatches.length}`
                   : "0 matches"}
+              </span>
+            ) : null}
+            {searchQuery && currentMatch?.kind === "field" ? (
+              <span
+                className="as-search__hit"
+                title={`${currentMatch.field.nodeLabel} · ${currentMatch.field.name}${currentMatch.field.row ? "" : " — not drawn on the node; Enter opens the field grid"}`}
+              >
+                {currentMatch.field.nodeLabel} · {currentMatch.field.name}
+                {currentMatch.field.row ? "" : " (not a row)"}
               </span>
             ) : null}
             {/* A readout you can act on: click resets to 100%, which is the
@@ -5534,7 +6147,34 @@ function StudioInner({
                   className="as-sr-only"
                   onChange={(event) => {
                     const file = event.target.files?.[0];
-                    if (file) void loadFile(file);
+                    if (file) confirmReplace(file.name, () => void loadFile(file));
+                    event.target.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  className="as-btn"
+                  title="Import a folder-format tree — a Salesforce data-model export, or a Folder (.zip) export unzipped"
+                  onClick={() => folderInputRef.current?.click()}
+                >
+                  Import folder
+                </button>
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  className="as-sr-only"
+                  // Not in React's typings, but every engine that can pick a
+                  // directory honours it; the input degrades to a file picker
+                  // elsewhere, and a lone JSON file still imports.
+                  {...({ webkitdirectory: "", directory: "", multiple: true } as Record<string, unknown>)}
+                  onChange={(event) => {
+                    // Copied out before the input is reset: the FileList is
+                    // the input's, and it is emptied along with the value.
+                    const list = [...(event.target.files ?? [])];
+                    if (list.length) {
+                      const top = list[0]?.webkitRelativePath?.split("/")[0] || "folder";
+                      confirmReplace(`${top}/`, () => void loadFolder(list));
+                    }
                     event.target.value = "";
                   }}
                 />
@@ -5635,6 +6275,18 @@ function StudioInner({
           />
         ) : null}
 
+        {pins.length > 0 && !activeDiffBase ? (
+          <PinStrip
+            pins={pins}
+            labelOf={fieldLabel}
+            onJump={(pin) => (pin.fieldId ? navigateToField({ nodeId: pin.nodeId, fieldId: pin.fieldId }) : navigateToNode(pin.nodeId))}
+            onRemove={togglePin}
+            onClear={() => setPins([])}
+            pathsOpen={pathPanelOpen}
+            onTogglePaths={togglePathPanel}
+          />
+        ) : null}
+
         {focusStack.length > 0 && !activeDiffBase ? (
           <Breadcrumbs
             path={[
@@ -5662,7 +6314,27 @@ function StudioInner({
             mergeBase.current = null;
           }}
         >
-          {aiPanelVisible ? (
+          {pathPanelOpen && routeView && !activeDiffBase ? (
+            <FieldPathPanel
+              view={routeView}
+              pins={pins}
+              labelOf={fieldLabel}
+              nodeLabel={(id) => template.nodes.find((n) => n.id === id)?.label ?? id}
+              undirected={routeUndirected}
+              onUndirectedChange={setRouteUndirected}
+              mode={routeMode}
+              onModeChange={setRouteMode}
+              hoverRoute={hoverRoute}
+              onHoverRoute={setHoverRoute}
+              stickyRoute={stickyRoute}
+              onPickRoute={pickRoute}
+              hoverKey={hoverKey}
+              onHoverKey={setHoverKey}
+              onPinKey={togglePin}
+              onNavigate={navigateToNode}
+              onClose={() => setPathPanelOpen(false)}
+            />
+          ) : aiPanelVisible ? (
             <div className="as-panel">
               <div className="as-panel__head">
                 <h2 className="as-panel__title">Generate architecture</h2>
@@ -5887,7 +6559,7 @@ function StudioInner({
                 both — React Flow stacks nothing, so a second top-right panel
                 would sit on top of the first. Corner-anchored so it reads as
                 a map key. */}
-            {legend && (legendRows.length || activePaths.length) ? (
+            {legend && (legendRows.length || activePaths.length || transientPaths.length) ? (
               <Panel position="top-right" className="as-legend">
                 {legendRows.length ? (
                   <>
@@ -5923,6 +6595,20 @@ function StudioInner({
                           style={{ "--as-legend-color": `var(--as-edge-${path.color})` } as CSSProperties}
                         />
                         {path.title}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {transientPaths.length ? (
+                  <div className={legendRows.length || activePaths.length ? "as-legend__section" : undefined}>
+                    <p className="as-legend__title">Routes</p>
+                    {transientPaths.map((path) => (
+                      <div key={path.id} className="as-legend__row">
+                        <span
+                          className="as-legend__swatch"
+                          style={{ "--as-legend-color": `var(--as-edge-${path.color})` } as CSSProperties}
+                        />
+                        <span className="as-legend__label">{path.title}</span>
                       </div>
                     ))}
                   </div>
@@ -6011,6 +6697,10 @@ function StudioInner({
                   zoneIdOf={zoneIdOf}
                   relevantProviders={referencedProviderSet}
                   onPatch={patchNodes}
+                  editFieldId={editField?.nodeId === selectedNode.id ? editField.fieldId : undefined}
+                  onEditFieldFocused={() => setEditField(null)}
+                  viewFieldsCount={selectedFieldCount}
+                  onViewFields={(nodeId) => setFieldGrid({ nodeId })}
                 />
               ) : null}
               {selectedEdge && isGhostEdgeId(selectedEdge.id) ? (
@@ -6114,6 +6804,51 @@ function StudioInner({
               The panel is the only other home for `error`, and it only renders
               when the host passed `generate` — so without one, a rejected save
               flipped the button back to "Save" and said nothing at all. */}
+          {coverageOpen && coverageResult && !activeDiffBase ? (
+            <CoveragePanel
+              coverage={coverageResult}
+              gains={coverageGains}
+              keys={coverageKeys}
+              scope={coverageScope}
+              root={
+                selectedNode
+                  ? { id: selectedNode.id, label: template.nodes.find((n) => n.id === selectedNode.id)?.label ?? selectedNode.id }
+                  : null
+              }
+              labelOf={fieldLabel}
+              nodeLabel={(id) => template.nodes.find((n) => n.id === id)?.label ?? id}
+              smallest={smallest}
+              onToggleKey={toggleCoverageKey}
+              onScopeChange={setCoverageScope}
+              onFindSmallest={findSmallestCover}
+              onHoverKey={setCoverageHover}
+              onClear={() => setCoverageKeys([])}
+              onClose={() => setCoverageOpen(false)}
+            />
+          ) : null}
+          {importNotes.length ? (
+            <div className="as-errorbar as-errorbar--notes" role="status">
+              <div className="as-errorbar__text">
+                <strong>
+                  {importNotes.length} import note{importNotes.length === 1 ? "" : "s"}
+                </strong>
+                <ul className="as-errorbar__list">
+                  {importNotes.map((note, i) => (
+                    <li key={i}>{note}</li>
+                  ))}
+                </ul>
+              </div>
+              <button
+                type="button"
+                className="as-btn as-btn--icon"
+                onClick={() => setImportNotes([])}
+                aria-label="Dismiss import notes"
+                title="Dismiss"
+              >
+                <UiIcon name="close" size={13} />
+              </button>
+            </div>
+          ) : null}
           {error && !aiPanelVisible ? (
             <div className="as-errorbar" role="alert">
               <span className="as-errorbar__text">{error}</span>
@@ -6182,6 +6917,28 @@ function StudioInner({
           />
         ) : null}
 
+        {fieldGrid
+          ? (() => {
+              const node = template.nodes.find((n) => n.id === fieldGrid.nodeId);
+              return node ? (
+                <FieldGridModal
+                  node={node}
+                  doc={template}
+                  initialFieldId={fieldGrid.fieldId}
+                  filename={filename}
+                  pins={pins.filter((p): p is FieldRef => !!p.fieldId)}
+                  onTogglePin={togglePin}
+                  onNavigate={(id) => {
+                    setFieldGrid(null);
+                    navigateToNode(id);
+                  }}
+                  onDownload={download}
+                  onClose={() => setFieldGrid(null)}
+                />
+              ) : null;
+            })()
+          : null}
+
         {pendingNest ? (
           <NestingModal
             subject={pendingNest}
@@ -6200,7 +6957,41 @@ function StudioInner({
             style={{ left: contextMenu.x, top: contextMenu.y }}
             onPointerDown={(event) => event.stopPropagation()}
           >
-            {contextMenu.kind === "pane" ? (
+            {contextMenu.kind === "field" ? (
+              (() => {
+                const { ref } = contextMenu;
+                const node = template.nodes.find((n) => n.id === ref.nodeId);
+                const record = node ? fieldRecords(node, template).find((f) => f.id === ref.fieldId) : undefined;
+                const pinned = pins.some((p) => sameFieldRef(p, ref));
+                // Rows are the source folder's when the document came from one.
+                const editable = !readOnly && !template.meta?.folderFormat && !!record?.row;
+                const targets = (record?.fk ?? []).filter((t) => t.nodeId);
+                return (
+                  <>
+                    <div className="as-context__caption">{fieldLabel(ref)}</div>
+                    <ContextItem
+                      label={pinned ? "Unpin" : "Pin for search"}
+                      hint={pinned ? undefined : "Paths between pins"}
+                      onPick={() => togglePin(ref)}
+                      close={closeContext}
+                    />
+                    <ContextItem label="View all fields" onPick={() => setFieldGrid({ nodeId: ref.nodeId, fieldId: ref.fieldId })} close={closeContext} />
+                    {targets.map((t) => (
+                      <ContextItem
+                        key={t.nodeId}
+                        label={targets.length > 1 ? `Follow reference → ${t.label}` : "Follow reference"}
+                        hint={targets.length > 1 ? undefined : t.label}
+                        onPick={() => navigateToNode(t.nodeId!)}
+                        close={closeContext}
+                      />
+                    ))}
+                    {editable ? <ContextItem label="Edit…" onPick={() => setEditField(ref)} close={closeContext} /> : null}
+                    <hr className="as-context__rule" />
+                    <ContextItem label="Copy name" onPick={() => void copyText(record?.name ?? ref.fieldId)} close={closeContext} />
+                  </>
+                );
+              })()
+            ) : contextMenu.kind === "pane" ? (
               <>
                 <ContextItem label="Node" hint="N" onPick={() => addNode("service")} close={closeContext} />
                 <ContextItem label="Group" hint="G" onPick={() => addNode("group")} close={closeContext} />
@@ -6230,6 +7021,22 @@ function StudioInner({
                   onPick={() => void duplicateSelection()}
                   close={closeContext}
                 />
+                {contextMenu.kind === "node" && selectedNodeIds.length === 1 ? (
+                  <ContextItem
+                    label={pins.some((p) => !p.fieldId && p.nodeId === selectedNodeIds[0]) ? "Unpin table" : "Pin table for search"}
+                    hint="Paths to and from it"
+                    onPick={() => togglePin({ nodeId: selectedNodeIds[0]! })}
+                    close={closeContext}
+                  />
+                ) : null}
+                {contextMenu.kind === "node" && selectedFieldCount ? (
+                  <ContextItem
+                    label="View all fields"
+                    hint={String(selectedFieldCount)}
+                    onPick={() => setFieldGrid({ nodeId: selectedNodeIds[0]! })}
+                    close={closeContext}
+                  />
+                ) : null}
                 {contextMenu.kind !== "edge" ? (
                   <>
                     <ContextItem
@@ -6273,6 +7080,40 @@ function StudioInner({
           </div>
         ) : null}
         {shortcutsOpen ? <ShortcutsModal onClose={() => setShortcutsOpen(false)} /> : null}
+        {pendingReplace ? (
+          <Modal
+            title={`Replace this diagram with “${pendingReplace.name}”?`}
+            onClose={() => setPendingReplace(null)}
+          >
+            <p className="as-modal__body">
+              The {templateRef.current.nodes.length} element
+              {templateRef.current.nodes.length === 1 ? "" : "s"} on the canvas{" "}
+              {templateRef.current.nodes.length === 1 ? "is" : "are"} replaced. {modKeyRef.current}Z
+              undoes it.
+            </p>
+            <div className="as-modal__actions">
+              <button
+                type="button"
+                className="as-btn as-btn--outline"
+                onClick={() => setPendingReplace(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="as-btn as-btn--danger"
+                autoFocus
+                onClick={() => {
+                  const { run } = pendingReplace;
+                  setPendingReplace(null);
+                  run();
+                }}
+              >
+                Replace
+              </button>
+            </div>
+          </Modal>
+        ) : null}
       </div>
     </StudioContext.Provider>
   );
@@ -7001,9 +7842,19 @@ function NodeInspector({
   relevantProviders,
   lock = true,
   onPatch,
+  editFieldId,
+  onEditFieldFocused,
+  viewFieldsCount = 0,
+  onViewFields,
 }: {
   /** The selection — at least one. */
   nodes: readonly Node[];
+  /** The row whose name input should take the cursor — the field menu's Edit…. */
+  editFieldId?: string;
+  onEditFieldFocused?: () => void;
+  /** Field records on the single selected node; > 0 offers the grid. */
+  viewFieldsCount?: number;
+  onViewFields?: (nodeId: string) => void;
   /** So ⌘⇧K can put the cursor straight in the Link field. */
   linkRef?: React.RefObject<HTMLInputElement>;
   registry: ResolvedRegistry;
@@ -7348,11 +8199,22 @@ function NodeInspector({
         </span>
       ) : null}
 
+      {single && onViewFields && viewFieldsCount > 0 ? (
+        <button type="button" className="as-btn as-inspector__viewfields" onClick={() => onViewFields(ids[0]!)}>
+          View all fields ({viewFieldsCount})
+        </button>
+      ) : null}
+
       {/* Rows, for the kinds whose substance is rows — plus any node that
           already has some, so a document that arrived with fields on a
           "service" can still be edited rather than only viewed. */}
       {single && (def.record || data.fields?.length) ? (
-        <FieldsEditor fields={data.fields ?? []} onChange={(fields) => patch({ fields })} />
+        <FieldsEditor
+          fields={data.fields ?? []}
+          onChange={(fields) => patch({ fields })}
+          focusFieldId={editFieldId}
+          onFocused={onEditFieldFocused}
+        />
       ) : null}
 
       {noAnnotations ? (
@@ -7452,10 +8314,25 @@ function NodeInspector({
 function FieldsEditor({
   fields,
   onChange,
+  focusFieldId,
+  onFocused,
 }: {
   fields: readonly NodeField[];
   onChange: (fields: NodeField[] | undefined) => void;
+  /** Put the cursor in this row's name input once, then report it done. */
+  focusFieldId?: string;
+  onFocused?: () => void;
 }) {
+  const rootRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!focusFieldId) return;
+    const input = rootRef.current?.querySelector<HTMLInputElement>(
+      `input[data-field-id="${focusFieldId.replace(/["\\]/g, "\\$&")}"]`,
+    );
+    input?.focus();
+    input?.select();
+    onFocused?.();
+  }, [focusFieldId, onFocused]);
   /** An id nothing else in this node uses — edges reference rows by id. */
   const freshId = () => {
     const taken = new Set(fields.map((f) => f.id));
@@ -7469,7 +8346,7 @@ function FieldsEditor({
     replace(fields.map((f, i) => (i === index ? { ...f, ...part } : f)));
 
   return (
-    <span className="as-inspector__section as-fields" role="group" aria-label="Fields">
+    <span ref={rootRef} className="as-inspector__section as-fields" role="group" aria-label="Fields">
       <span className="as-inspector__caption">Fields</span>
       <span className="as-fields__list">
         {fields.map((field, index) => (
@@ -7492,6 +8369,7 @@ function FieldsEditor({
             </select>
             <input
               className="as-input as-fieldrow__name"
+              data-field-id={field.id}
               value={field.name}
               placeholder="column"
               onChange={(event) => patch(index, { name: event.target.value })}
@@ -8044,6 +8922,24 @@ function viewSignatureOf(
 }
 
 /** The longest prefix of the focus stack whose nodes still exist in `doc`. */
+/** Pins whose field (or table) still exists. */
+function prunePins(doc: DiagramTemplate, pins: readonly Pin[]): Pin[] {
+  return pins.filter((p) => hasField(doc, p));
+}
+
+/**
+ * Where a context menu may open so it stays on screen: `.as-context` is
+ * `position: fixed` with a 260×320 ceiling, and a row near the bottom edge
+ * would otherwise hang its items below the viewport.
+ */
+function clampMenu(x: number, y: number): { x: number; y: number } {
+  if (typeof window === "undefined") return { x, y };
+  return {
+    x: Math.max(0, Math.min(x, window.innerWidth - 270)),
+    y: Math.max(0, Math.min(y, window.innerHeight - 330)),
+  };
+}
+
 function pruneFocusStack(doc: DiagramTemplate, stack: readonly string[]): string[] {
   const ids = new Set(doc.nodes.map((n) => n.id));
   const out: string[] = [];

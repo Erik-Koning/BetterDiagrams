@@ -18,9 +18,7 @@ const PAIR = {
 
 async function importPair(studio: Studio, path: string) {
   await writeFile(path, JSON.stringify(PAIR));
-  const chooser = studio.page.waitForEvent("filechooser");
-  await studio.root.getByRole("button", { name: "Import", exact: true }).click();
-  await (await chooser).setFiles(path);
+  await studio.importFile(path);
   await expect(studio.nodeTitled("Alpha")).toBeVisible();
   // The import fits the view with a short tween (50ms after the load, 300ms
   // long); measure nothing until the cards have stopped moving, or a band

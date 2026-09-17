@@ -1,0 +1,26 @@
+{
+  "folder": "core/account/person-account/record-types/person",
+  "kind": "record-type",
+  "parentObject": {
+    "apiName": "Account",
+    "label": "Account",
+    "folder": "core/account",
+    "schema": "../../../schema.json"
+  },
+  "recordType": {
+    "developerName": "PersonAccount",
+    "name": "Person",
+    "recordTypeId": "012000000000001AAA",
+    "isPersonType": true,
+    "isActive": true,
+    "availableToIntegrationUser": true,
+    "description": "Individual customers",
+    "metadataFullName": "Account.PersonAccount"
+  },
+  "curated": {
+    "diagramName": "Person",
+    "diagramType": "record-type"
+  },
+  "routes": {},
+  "notes": []
+}

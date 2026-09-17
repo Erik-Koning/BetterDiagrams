@@ -60,6 +60,10 @@ import { topDropTarget } from "./dangling";
 import { formatDiagramDate } from "../contract/timeline";
 import { useStudio } from "./context";
 import { seqBadgeOffset } from "./shapes";
+import { glowInk } from "./path-view";
+
+/** The bright route colour's fallback hex — the class re-resolves it per theme. */
+const ROUTE_HEX = "#ff2d95";
 
 export type LabeledEdgeType = Edge<DiagramEdgeData, "labeled">;
 
@@ -526,8 +530,14 @@ export const LabeledEdge = memo(function LabeledEdge({
   // what the arrowhead's drop-shadow reads.
   const glows = data?.pathGlow ?? [];
   const glowStyle = glows.length
-    ? ({ "--as-path-ink": `var(--as-edge-${glows[0].color})` } as CSSProperties)
+    ? ({ "--as-path-ink": glowInk(glows[0]) } as CSSProperties)
     : undefined;
+  // A bright route's key badge: the referencing field that carries this hop,
+  // above the label position, on its own background so it never sits on the glow.
+  const routeKey = data?.routeKey;
+  const routeKeyWidth = routeKey ? routeKey.length * 5.6 + 12 : 0;
+  // Clear of the seq badge (a circle of r=8 at label.y - 9) when both show.
+  const routeKeyTop = (data?.seq ? -36 : -24) as number;
   // Stacked under whatever else the label group is showing, so a connection
   // that lands later says so without displacing its own name.
   const dateY = (data?.label ? 8 : -5) + (data?.tech ? 11 : 0);
@@ -755,21 +765,36 @@ export const LabeledEdge = memo(function LabeledEdge({
           style={{ "--as-path-step": glow.step, "--as-path-steps": glow.steps } as CSSProperties}
         >
           <path
-            className={`as-edge__glow as-edge--c-${glow.color}`}
+            className={`as-edge__glow as-edge--c-${glow.bright ? "route" : glow.color}`}
             d={geo.path}
             fill="none"
-            stroke={EDGE_COLOR_HEX[glow.color]}
+            stroke={glow.bright ? ROUTE_HEX : EDGE_COLOR_HEX[glow.color]}
             style={{ pointerEvents: "none" }}
           />
           <path
-            className={`as-edge__flow as-edge--c-${glow.color}${glow.reversed ? " as-edge__flow--reverse" : ""}`}
+            className={`as-edge__flow as-edge--c-${glow.bright ? "route" : glow.color}${glow.reversed ? " as-edge__flow--reverse" : ""}`}
             d={geo.path}
             fill="none"
-            stroke={EDGE_COLOR_HEX[glow.color]}
+            stroke={glow.bright ? ROUTE_HEX : EDGE_COLOR_HEX[glow.color]}
             style={{ pointerEvents: "none" }}
           />
         </g>
       ))}
+      {routeKey ? (
+        <g className="as-edge__routekey" style={{ pointerEvents: "none" }}>
+          <rect
+            className="as-edge__routekeybg"
+            x={geo.label.x - routeKeyWidth / 2}
+            y={geo.label.y + routeKeyTop}
+            width={routeKeyWidth}
+            height={14}
+            rx={4}
+          />
+          <text className="as-edge__routekeytext" x={geo.label.x} y={geo.label.y + routeKeyTop + 10} textAnchor="middle">
+            {routeKey}
+          </text>
+        </g>
+      ) : null}
       <path
         className={[
           "as-edge__stroke",

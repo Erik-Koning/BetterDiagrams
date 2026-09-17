@@ -17,7 +17,8 @@ import {
   type Node,
   type NodeProps,
 } from "@xyflow/react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, SyntheticEvent } from "react";
+import { fieldKey } from "../contract/fields";
 import { SvgIcon } from "./icons";
 import { useStudio } from "./context";
 import { DateChip } from "./chrome";
@@ -99,11 +100,55 @@ export function ConnectHandles({ hidden }: { hidden: boolean }) {
  * so a row that renders taller here would leave foreign-key lines pointing
  * between columns on screen while landing correctly in the export.
  */
-function FieldList({ fields }: { fields: readonly NodeField[] }) {
+function FieldList({ nodeId, fields }: { nodeId: string; fields: readonly NodeField[] }) {
+  const { onFieldClick, pinnedFields, highlightField } = useStudio();
+  // Rows are inert unless the editor offers a field menu. When it does, a
+  // row owns its own press: `nodrag` keeps React Flow and the marquee off it
+  // (see marquee.ts PASSTHROUGH), the stops keep the wrapper's click-select
+  // and double-click-drill from firing on top. The row stays an <li> — one
+  // <button> per row would be a tab stop per field, and a nested box a risk
+  // to the 19px the anchors and the PNG export are computed from.
+  const interactive = !!onFieldClick;
+  const stop = (event: SyntheticEvent) => event.stopPropagation();
   return (
     <ul className="as-node__fields">
-      {fields.map((field) => (
-        <li key={field.id} className="as-node__field" data-field-id={field.id}>
+      {fields.map((field) => {
+        const key = fieldKey({ nodeId, fieldId: field.id });
+        const className = [
+          "as-node__field",
+          interactive ? "nodrag" : "",
+          pinnedFields.has(key) ? "as-node__field--pinned" : "",
+          highlightField === key ? "as-node__field--match" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return (
+        <li
+          key={field.id}
+          className={className}
+          data-field-id={field.id}
+          role={interactive ? "button" : undefined}
+          aria-label={interactive ? `${field.name} — field actions` : undefined}
+          onPointerDown={interactive ? stop : undefined}
+          onDoubleClick={interactive ? stop : undefined}
+          onClick={
+            interactive
+              ? (event) => {
+                  event.stopPropagation();
+                  onFieldClick({ nodeId, fieldId: field.id }, { clientX: event.clientX, clientY: event.clientY });
+                }
+              : undefined
+          }
+          onContextMenu={
+            interactive
+              ? (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onFieldClick({ nodeId, fieldId: field.id }, { clientX: event.clientX, clientY: event.clientY });
+                }
+              : undefined
+          }
+        >
           {field.key ? (
             <span className={`as-node__fieldkey as-node__fieldkey--${field.key}`}>{field.key}</span>
           ) : null}
@@ -121,7 +166,8 @@ function FieldList({ fields }: { fields: readonly NodeField[] }) {
             </span>
           ) : null}
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 }
@@ -220,7 +266,7 @@ export const ShapeNode = memo(function ShapeNode({
   width,
   height,
 }: NodeProps<ShapeNodeType>) {
-  const { registry, readOnly, mode, tagFilter, showTeams, requestCommit, navigateFile, drillInto, navigateToNode, childCounts } = useStudio();
+  const { registry, readOnly, mode, tagFilter, showTeams, requestCommit, navigateFile, drillInto, navigateToNode, childCounts, dimmedIds, pinnedFields } = useStudio();
   const { updateNodeData } = useReactFlow();
   const def = kindDef(registry, data.kind);
   const paths = iconPaths(registry, data.icon);
@@ -258,10 +304,15 @@ export const ShapeNode = memo(function ShapeNode({
   // person's head and the pipe's ends stay circular at any aspect ratio.
   const sil = shape !== "card" ? silhouettePath(shape, 0.75, 0.75, w - 1.5, h - 1.5) : null;
 
-  // Tag filter: dim, never hide. Purely presentational, so it cannot interact
-  // with the visibility machinery that decides what persists.
+  // The document node this card stands for — a ghost's rows and its place
+  // in a reachable set belong to the real thing.
+  const docId = scopeGhost ? ghostSourceId(id) : id;
+  // Tag filter and the path panel's reachable set: dim, never hide. Purely
+  // presentational, so neither can interact with the visibility machinery
+  // that decides what persists.
   const dimmed =
-    tagFilter.length > 0 && !data.tags?.some((tag) => tagFilter.includes(tag));
+    (tagFilter.length > 0 && !data.tags?.some((tag) => tagFilter.includes(tag))) ||
+    (dimmedIds !== null && !dimmedIds.has(docId));
 
   const style = {
     // A colour stored on the node wins over the kind's registry accent: it is
@@ -288,6 +339,7 @@ export const ShapeNode = memo(function ShapeNode({
     data.ghost || scopeGhost ? "as-ghost" : "",
     scopeGhost ? "as-node--scope-ghost" : "",
     dimmed ? "as-node--dimmed" : "",
+    pinnedFields.has(fieldKey({ nodeId: docId })) ? "as-node--pinned" : "",
     data.status ? `as-node--status-${data.status}` : "",
     // Text layout. Absent data means the pre-existing look, so no class.
     data.textAlign ? `as-node--align-${data.textAlign}` : "",
@@ -391,7 +443,7 @@ export const ShapeNode = memo(function ShapeNode({
             }}
           />
           {data.description ? <div className="as-node__desc">{data.description}</div> : null}
-          {data.fields?.length ? <FieldList fields={data.fields} /> : null}
+          {data.fields?.length ? <FieldList nodeId={docId} fields={data.fields} /> : null}
           <DateChip date={data.date} prefix="Lands" overdue={isOverdue(data.date, data.status)} />
         </div>
         {data.url?.startsWith("file:") ? (

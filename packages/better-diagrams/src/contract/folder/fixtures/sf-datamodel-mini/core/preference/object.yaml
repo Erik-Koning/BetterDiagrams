@@ -1,0 +1,7 @@
+type: custom
+displayName: Preference
+apiName: Preference__c
+keyPrefix: a00
+recordCount: 7
+diagramType: custom
+diagramName: Preference

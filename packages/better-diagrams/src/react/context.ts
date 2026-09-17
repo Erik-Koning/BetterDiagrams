@@ -8,6 +8,7 @@
 import { createContext, useContext } from "react";
 import { createRegistry } from "./create-registry";
 import type { ZoneBox } from "../contract/schema";
+import type { FieldRef } from "../contract/fields";
 import type { ResolvedRegistry } from "./registry-types";
 import type { StudioMode } from "./theme";
 
@@ -89,6 +90,22 @@ export interface StudioContextValue {
    * broken, which is worse than the limit it is enforcing.
    */
   showToast: (message: string) => void;
+  /**
+   * A field row was clicked or right-clicked. Present when the editor offers
+   * a field menu; absent, rows stay inert. Renderers report where the press
+   * landed so the menu can open there.
+   */
+  onFieldClick?: (ref: FieldRef, at: { clientX: number; clientY: number }) => void;
+  /** `fieldKey`s of the pinned fields — a pinned row wears a mark; a pinned TABLE (no field) marks the card. */
+  pinnedFields: ReadonlySet<string>;
+  /** `fieldKey` of the row the search or a pin chip just jumped to, or null. */
+  highlightField: string | null;
+  /**
+   * When set, every node NOT in it renders dimmed — the path panel's
+   * "outside the reachable set" view. Presentational like the tag filter
+   * (dimmed, never hidden), and combined with it.
+   */
+  dimmedIds: ReadonlySet<string> | null;
 }
 
 const FALLBACK: StudioContextValue = {
@@ -107,6 +124,9 @@ const FALLBACK: StudioContextValue = {
   renamingId: null,
   setRenamingId: () => {},
   showToast: () => {},
+  pinnedFields: new Set(),
+  highlightField: null,
+  dimmedIds: null,
 };
 
 export const StudioContext = createContext<StudioContextValue>(FALLBACK);
