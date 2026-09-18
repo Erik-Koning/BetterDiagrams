@@ -1,0 +1,213 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": "https://bakery.my.salesforce.com",
+  "folder": "people",
+  "object": {
+    "apiName": "Person__c",
+    "label": "Person",
+    "labelPlural": "Persons",
+    "keyPrefix": "a02",
+    "kind": "custom",
+    "custom": true,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 37
+  },
+  "curated": {
+    "diagramName": "Person",
+    "diagramType": "custom",
+    "businessLine": "Bakery",
+    "source": "describe",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 8,
+    "visibleToIntegrationUser": 7,
+    "hiddenFromIntegrationUser": 1
+  },
+  "fields": [
+    {
+      "name": "Id",
+      "label": "Record ID",
+      "type": "id",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Name",
+      "label": "Full name",
+      "type": "string",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "nameField": true,
+      "length": 255
+    },
+    {
+      "name": "Email__c",
+      "label": "Email",
+      "type": "email",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Phone__c",
+      "label": "Phone",
+      "type": "phone",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Role__c",
+      "label": "Role",
+      "type": "picklist",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "picklistValues": [
+        {
+          "value": "Chef",
+          "label": "Chef",
+          "active": true
+        },
+        {
+          "value": "Manager",
+          "label": "Manager",
+          "active": true
+        },
+        {
+          "value": "Server",
+          "label": "Server",
+          "active": true
+        },
+        {
+          "value": "Baker",
+          "label": "Baker",
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "Building__c",
+      "label": "Home building",
+      "type": "reference",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "lookup",
+        "referenceTo": [
+          "Building__c"
+        ],
+        "relationshipName": "People"
+      }
+    },
+    {
+      "name": "Notes__c",
+      "label": "Notes",
+      "type": "textarea",
+      "nillable": true,
+      "visibleToIntegrationUser": false,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "OwnerId",
+      "label": "Owner ID",
+      "type": "reference",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "lookup",
+        "referenceTo": [
+          "User"
+        ],
+        "relationshipName": null
+      }
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "Building__c",
+      "label": "Home building",
+      "kind": "lookup",
+      "referenceTo": [
+        "Building__c"
+      ],
+      "relationshipName": "People",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": [
+        "buildings"
+      ]
+    },
+    {
+      "field": "OwnerId",
+      "label": "Owner ID",
+      "kind": "lookup",
+      "referenceTo": [
+        "User"
+      ],
+      "relationshipName": null,
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": []
+    }
+  ],
+  "referencedBy": [],
+  "validationRules": [],
+  "routes": {
+    "lightningList": "/lightning/o/Person__c/list",
+    "describe": "/services/data/v60.0/sobjects/Person__c/describe"
+  },
+  "notes": [
+    "Everyone who works for or buys from the bakery.",
+    "Record types split chefs from account holders."
+  ]
+}

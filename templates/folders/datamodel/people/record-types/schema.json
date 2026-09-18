@@ -1,0 +1,23 @@
+{
+  "folder": "people/record-types",
+  "kind": "group",
+  "description": "How a person is classified",
+  "childCount": 3,
+  "children": [
+    {
+      "folder": "people/record-types/chef-individual",
+      "kind": "record-type",
+      "label": "Chef (individual)"
+    },
+    {
+      "folder": "people/record-types/manager-account",
+      "kind": "record-type",
+      "label": "Manager account"
+    },
+    {
+      "folder": "people/record-types/person-account",
+      "kind": "record-type",
+      "label": "Person account"
+    }
+  ]
+}

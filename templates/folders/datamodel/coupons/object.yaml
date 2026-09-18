@@ -1,0 +1,10 @@
+type: custom
+displayName: Coupon
+apiName: Coupon__c
+keyPrefix: a08
+recordCount: 256
+fieldsTotal: 7
+fieldsVisibleToIntegrationUser: 7
+diagramType: custom
+diagramName: Coupon
+lightningRoute: /lightning/o/Coupon__c/list

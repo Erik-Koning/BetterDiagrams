@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { readFolderToFileMap } from "./node";
 import { buildFolderTree } from "./tree";
-import { importFolder, detectDialect } from "./import";
+import { importFolder, detectDialect, AUTO_FOLD_NODES } from "./import";
 import { exportFolder, treeFiles } from "./export";
 import { LAYOUT_FILE, OVERRIDES_FILE } from "./sidecar";
 import { OVERRIDES_FORMAT } from "./types";
@@ -331,6 +331,70 @@ describe("validation and determinism", () => {
 
   it("produces no paths of its own", async () => {
     expect((await imported()).template.paths).toBeUndefined();
+  });
+});
+
+describe("a big tree opens folded", () => {
+  /** The fixture with `count` extra objects bolted onto one band. */
+  const grown = async (count: number) => {
+    const files = new Map(await fixture());
+    const band = JSON.parse(files.get("core/schema.json")!);
+    for (let i = 0; i < count; i++) {
+      const folder = `core/filler-${i}`;
+      band.objects.push({ folder, band: "core", apiName: `Filler${i}__c`, label: `Filler ${i}`, kind: "custom" });
+      files.set(
+        `${folder}/schema.json`,
+        JSON.stringify({ folder, object: { apiName: `Filler${i}__c`, label: `Filler ${i}`, kind: "custom" }, fields: [{ name: "Id", type: "id", nillable: false }], foreignKeys: [] }),
+      );
+    }
+    files.set("core/schema.json", JSON.stringify(band));
+    return files;
+  };
+
+  const collapsedIds = (t: DiagramTemplate) => t.nodes.filter((n) => n.collapsed).map((n) => n.id).sort();
+
+  it("collapses its top-level bands past the threshold, and leaves a small tree open", async () => {
+    const small = importFolder(await fixture());
+    expect(small.template.nodes.length).toBeLessThan(AUTO_FOLD_NODES);
+    expect(collapsedIds(small.template)).toEqual([]);
+
+    const big = importFolder(await grown(AUTO_FOLD_NODES));
+    expect(big.template.nodes.length).toBeGreaterThan(AUTO_FOLD_NODES);
+    // The bands, and the stub group that holds out-of-model references.
+    expect(collapsedIds(big.template)).toEqual(["_external", "core", "ops"]);
+    // Only the top level: a group inside a band stays open once drilled into.
+    expect(big.template.nodes.find((n) => n.id === "ops/support")!.collapsed).toBeUndefined();
+    // And they are SPACED as chips: the stored size stays the expanded one
+    // (expanding must restore the layout), but the canvas is compact.
+    const spread = (t: DiagramTemplate) => {
+      const tops = t.nodes.filter((n) => !n.parentId).map((n) => n.y);
+      return Math.max(...tops) - Math.min(...tops);
+    };
+    const open = importFolder(await grown(AUTO_FOLD_NODES), { foldGroups: false }).template;
+    expect(spread(big.template)).toBeLessThan(spread(open) / 4);
+    expect(big.template.nodes.find((n) => n.id === "core")!.h).toBe(open.nodes.find((n) => n.id === "core")!.h);
+  });
+
+  it("the caller has the last word either way", async () => {
+    expect(collapsedIds(importFolder(await grown(AUTO_FOLD_NODES), { foldGroups: false }).template)).toEqual([]);
+    expect(collapsedIds(importFolder(await fixture(), { foldGroups: true }).template)).toEqual(["_external", "core", "ops"]);
+  });
+
+  it("a generic tree is never collapsed on its own — it round-trips a document", () => {
+    const nodes = Array.from({ length: AUTO_FOLD_NODES + 2 }, (_, i) => ({
+      id: i ? `g/n${i}` : "g",
+      label: `N${i}`,
+      kind: i ? "service" : "group",
+      icon: "none",
+      description: "",
+      parentId: i ? "g" : null,
+      x: 0, y: 0, w: 170, h: 76,
+    }));
+    const doc = validateTemplate({ version: 1, nodes, edges: [] });
+    const out = exportFolder(doc, { mode: "full" });
+    const back = importFolder(out.files);
+    expect(back.template.nodes.length).toBeGreaterThan(AUTO_FOLD_NODES);
+    expect(collapsedIds(back.template)).toEqual([]);
   });
 });
 

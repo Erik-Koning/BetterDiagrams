@@ -1,0 +1,10 @@
+type: custom
+displayName: Recipe
+apiName: Recipe__c
+keyPrefix: a05
+recordCount: 28
+fieldsTotal: 6
+fieldsVisibleToIntegrationUser: 6
+diagramType: custom
+diagramName: Recipe
+lightningRoute: /lightning/o/Recipe__c/list

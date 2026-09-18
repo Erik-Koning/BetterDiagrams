@@ -1,0 +1,11 @@
+{
+  "automation": {
+    "flows": 2,
+    "triggers": 1,
+    "processBuilders": 0
+  },
+  "dataProfile": {
+    "lastModified": "2026-09-17T00:00:00Z",
+    "growthPerMonth": 12
+  }
+}

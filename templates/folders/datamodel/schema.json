@@ -1,0 +1,12 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": {
+    "instanceUrl": "https://bakery.my.salesforce.com",
+    "apiVersion": "60.0",
+    "organizationId": "00D000000000BAKAAA"
+  },
+  "title": "Bakery data model",
+  "bands": [],
+  "crossCutting": "metadata"
+}

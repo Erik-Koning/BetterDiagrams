@@ -1,0 +1,148 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": "https://bakery.my.salesforce.com",
+  "folder": "ingredients",
+  "object": {
+    "apiName": "Ingredient__c",
+    "label": "Ingredient",
+    "labelPlural": "Ingredients",
+    "keyPrefix": "a04",
+    "kind": "custom",
+    "custom": true,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 64
+  },
+  "curated": {
+    "diagramName": "Ingredient",
+    "diagramType": "custom",
+    "businessLine": "Bakery",
+    "source": "describe",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 6,
+    "visibleToIntegrationUser": 6,
+    "hiddenFromIntegrationUser": 0
+  },
+  "fields": [
+    {
+      "name": "Id",
+      "label": "Record ID",
+      "type": "id",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Name",
+      "label": "Ingredient name",
+      "type": "string",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "nameField": true,
+      "length": 255
+    },
+    {
+      "name": "Unit__c",
+      "label": "Unit",
+      "type": "picklist",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "picklistValues": [
+        {
+          "value": "g",
+          "label": "g",
+          "active": true
+        },
+        {
+          "value": "kg",
+          "label": "kg",
+          "active": true
+        },
+        {
+          "value": "ml",
+          "label": "ml",
+          "active": true
+        },
+        {
+          "value": "l",
+          "label": "l",
+          "active": true
+        },
+        {
+          "value": "each",
+          "label": "each",
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "Unit_Cost__c",
+      "label": "Unit Cost",
+      "type": "currency",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "precision": 8,
+      "scale": 2
+    },
+    {
+      "name": "Allergen__c",
+      "label": "Allergen",
+      "type": "boolean",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Supplier__c",
+      "label": "Supplier",
+      "type": "string",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    }
+  ],
+  "foreignKeys": [],
+  "referencedBy": [],
+  "validationRules": [],
+  "routes": {
+    "lightningList": "/lightning/o/Ingredient__c/list",
+    "describe": "/services/data/v60.0/sobjects/Ingredient__c/describe"
+  },
+  "notes": [
+    "Raw materials. Costed per unit for recipe pricing."
+  ]
+}

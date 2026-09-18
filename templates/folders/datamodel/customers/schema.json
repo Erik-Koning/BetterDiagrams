@@ -1,0 +1,159 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": "https://bakery.my.salesforce.com",
+  "folder": "customers",
+  "object": {
+    "apiName": "Customer__c",
+    "label": "Customer",
+    "labelPlural": "Customers",
+    "keyPrefix": "a03",
+    "kind": "custom",
+    "custom": true,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 812
+  },
+  "curated": {
+    "diagramName": "Customer",
+    "diagramType": "custom",
+    "businessLine": "Bakery",
+    "source": "describe",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 7,
+    "visibleToIntegrationUser": 7,
+    "hiddenFromIntegrationUser": 0
+  },
+  "fields": [
+    {
+      "name": "Id",
+      "label": "Record ID",
+      "type": "id",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Name",
+      "label": "Customer name",
+      "type": "string",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "nameField": true,
+      "length": 255
+    },
+    {
+      "name": "Person__c",
+      "label": "Person",
+      "type": "reference",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "lookup",
+        "referenceTo": [
+          "Person__c"
+        ],
+        "relationshipName": "Customers"
+      }
+    },
+    {
+      "name": "Email__c",
+      "label": "Email",
+      "type": "email",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Loyalty_Points__c",
+      "label": "Loyalty Points",
+      "type": "int",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Joined__c",
+      "label": "Joined",
+      "type": "date",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "External_Key__c",
+      "label": "External key",
+      "type": "string",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "externalId": true,
+      "unique": true,
+      "idLookup": true
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "Person__c",
+      "label": "Person",
+      "kind": "lookup",
+      "referenceTo": [
+        "Person__c"
+      ],
+      "relationshipName": "Customers",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": [
+        "people"
+      ]
+    }
+  ],
+  "referencedBy": [],
+  "validationRules": [],
+  "routes": {
+    "lightningList": "/lightning/o/Customer__c/list",
+    "describe": "/services/data/v60.0/sobjects/Customer__c/describe"
+  },
+  "notes": [
+    "A person who buys. The loyalty view filters this object."
+  ]
+}

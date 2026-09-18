@@ -1,0 +1,176 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": "https://bakery.my.salesforce.com",
+  "folder": "buildings",
+  "object": {
+    "apiName": "Building__c",
+    "label": "Building",
+    "labelPlural": "Buildings",
+    "keyPrefix": "a01",
+    "kind": "custom",
+    "custom": true,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 4
+  },
+  "curated": {
+    "diagramName": "Building",
+    "diagramType": "custom",
+    "businessLine": "Bakery",
+    "source": "describe",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 7,
+    "visibleToIntegrationUser": 7,
+    "hiddenFromIntegrationUser": 0
+  },
+  "fields": [
+    {
+      "name": "Id",
+      "label": "Record ID",
+      "type": "id",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Name",
+      "label": "Building name",
+      "type": "string",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "nameField": true,
+      "length": 255
+    },
+    {
+      "name": "Address__c",
+      "label": "Address",
+      "type": "textarea",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "City__c",
+      "label": "City",
+      "type": "string",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Capacity__c",
+      "label": "Capacity",
+      "type": "int",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Opened__c",
+      "label": "Opened",
+      "type": "date",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "OwnerId",
+      "label": "Owner ID",
+      "type": "reference",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "lookup",
+        "referenceTo": [
+          "User"
+        ],
+        "relationshipName": null
+      }
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "OwnerId",
+      "label": "Owner ID",
+      "kind": "lookup",
+      "referenceTo": [
+        "User"
+      ],
+      "relationshipName": null,
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": []
+    }
+  ],
+  "referencedBy": [
+    {
+      "object": "Person__c",
+      "field": "Building__c",
+      "kind": "lookup",
+      "inModel": true,
+      "folders": [
+        "people"
+      ],
+      "label": "Person"
+    },
+    {
+      "object": "Cutlery__c",
+      "field": "Building__c",
+      "kind": "lookup",
+      "inModel": true,
+      "folders": [
+        "cutlery"
+      ],
+      "label": "Cutlery"
+    }
+  ],
+  "validationRules": [],
+  "routes": {
+    "lightningList": "/lightning/o/Building__c/list",
+    "describe": "/services/data/v60.0/sobjects/Building__c/describe"
+  },
+  "notes": [
+    "Every bakery and its kitchen.",
+    "Capacity is covers, not staff."
+  ]
+}

@@ -6296,8 +6296,12 @@ function StudioInner({
                 label: template.nodes.find((n) => n.id === id)?.label ?? id,
               })),
             ]}
-            onNavigate={(index) => drillTo(focusStack.slice(0, index))}
-            onExit={() => drillTo([])}
+            // Through `drillToLevel`, not the raw setter: every other way of
+            // changing level fits the view to it, and on a big model a
+            // breadcrumb that kept the previous zoom left you staring at a
+            // handful of chips the size of a full stop.
+            onNavigate={(index) => drillToLevel(focusStack.slice(0, index))}
+            onExit={() => drillToLevel([])}
           />
         ) : null}
 

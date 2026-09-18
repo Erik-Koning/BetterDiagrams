@@ -1,0 +1,114 @@
+{
+  "edgeCount": 9,
+  "masterDetailEdges": 1,
+  "edges": [
+    {
+      "from": "Person__c",
+      "field": "Building__c",
+      "kind": "lookup",
+      "to": "Building__c",
+      "fromFolders": [
+        "people"
+      ],
+      "toFolders": [
+        "buildings"
+      ]
+    },
+    {
+      "from": "Customer__c",
+      "field": "Person__c",
+      "kind": "lookup",
+      "to": "Person__c",
+      "fromFolders": [
+        "customers"
+      ],
+      "toFolders": [
+        "people"
+      ]
+    },
+    {
+      "from": "Recipe__c",
+      "field": "Chef__c",
+      "kind": "lookup",
+      "to": "Person__c",
+      "fromFolders": [
+        "recipes"
+      ],
+      "toFolders": [
+        "people"
+      ]
+    },
+    {
+      "from": "Bread__c",
+      "field": "Recipe__c",
+      "kind": "masterDetail",
+      "to": "Recipe__c",
+      "fromFolders": [
+        "bread"
+      ],
+      "toFolders": [
+        "recipes"
+      ]
+    },
+    {
+      "from": "Bread__c",
+      "field": "Main_Ingredient__c",
+      "kind": "lookup",
+      "to": "Ingredient__c",
+      "fromFolders": [
+        "bread"
+      ],
+      "toFolders": [
+        "ingredients"
+      ]
+    },
+    {
+      "from": "Product__c",
+      "field": "Bread__c",
+      "kind": "lookup",
+      "to": "Bread__c",
+      "fromFolders": [
+        "products"
+      ],
+      "toFolders": [
+        "bread"
+      ]
+    },
+    {
+      "from": "Coupon__c",
+      "field": "Product__c",
+      "kind": "lookup",
+      "to": "Product__c",
+      "fromFolders": [
+        "coupons"
+      ],
+      "toFolders": [
+        "products"
+      ]
+    },
+    {
+      "from": "Coupon__c",
+      "field": "Customer__c",
+      "kind": "lookup",
+      "to": "Customer__c",
+      "fromFolders": [
+        "coupons"
+      ],
+      "toFolders": [
+        "customers"
+      ]
+    },
+    {
+      "from": "Cutlery__c",
+      "field": "Building__c",
+      "kind": "lookup",
+      "to": "Building__c",
+      "fromFolders": [
+        "cutlery"
+      ],
+      "toFolders": [
+        "buildings"
+      ]
+    }
+  ]
+}

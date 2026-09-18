@@ -3,9 +3,13 @@
  * add, and the fewest keys that reach everything.
  */
 import { describe, expect, it } from "vitest";
-import { keyCoverage, marginalGains, minimalKeyCover } from "./coverage";
+import { keyCoverage, marginalGains, minimalKeyCover, storesFields } from "./coverage";
+import { keyFields } from "./fields";
 
-const node = (id: string) => ({ id, label: id });
+/** A table: a node that stores field data, which is the whole of what coverage counts. */
+const node = (id: string) => ({ id, label: id, fields: [{ id: "Id", name: "Id" }] });
+/** Structure a key can never stand for: a band, a stand-in, a facet. */
+const structural = (id: string) => ({ id, label: id });
 const fk = (id: string, source: string, target: string, field: string) => ({
   id, source, target, startField: field, endField: "Id",
 });
@@ -16,8 +20,14 @@ const fk = (id: string, source: string, target: string, field: string) => ({
  *   task.WhoId        → contact   (t-c)      island: no keys
  */
 const DOC = {
-  nodes: ["contact", "account", "user", "case", "comment", "task", "island"].map(node),
+  nodes: [
+    ...["contact", "account", "user", "case", "comment", "task", "island"].map(node),
+    // Never counted: a band holding the others, and a stand-in an edge points at.
+    structural("crm-band"),
+    structural("_external/stub"),
+  ],
   edges: [
+    fk("c-x", "contact", "_external/stub", "StubRef__c"),
     fk("c-a", "contact", "account", "AccountId"),
     fk("c-u", "contact", "user", "OwnerId"),
     fk("k-a", "case", "account", "AccountId"),
@@ -28,6 +38,28 @@ const DOC = {
   ],
 };
 const K = (nodeId: string, fieldId: string) => ({ nodeId, fieldId });
+
+describe("what counts as a table", () => {
+  it("only nodes that store field data — structure and stand-ins are never counted or aimed at", () => {
+    const all = keyCoverage(DOC, keyFields(DOC).map((k) => k.ref));
+    expect(all.total).toBe(7); // the seven tables; the band and the stub are not
+    expect(all.reached.has("_external/stub")).toBe(false);
+    expect(all.reached.has("crm-band")).toBe(false);
+    // The key that only reaches the stand-in adds nothing anyone asked for.
+    const stubKey = { nodeId: "contact", fieldId: "StubRef__c" };
+    expect(keyCoverage(DOC, [stubKey]).reached).toEqual(new Set(["contact"]));
+    expect(marginalGains(DOC, []).find((g) => g.ref.fieldId === "StubRef__c")!.adds).toEqual(["contact"]);
+    expect(minimalKeyCover(DOC).keys.some((k) => k.fieldId === "StubRef__c")).toBe(false);
+  });
+
+  it("a host can say what a table is", () => {
+    const onlyAccount = keyCoverage(DOC, keyFields(DOC).map((k) => k.ref), { isTable: (n) => n.id === "account" });
+    expect(onlyAccount.total).toBe(1);
+    expect(onlyAccount.fraction).toBe(1);
+    expect(storesFields({ id: "x" })).toBe(false);
+    expect(storesFields({ id: "x", data: { sf: { fields: [{ name: "A" }] } } })).toBe(true);
+  });
+});
 
 describe("keyCoverage", () => {
   it("all tables: a key covers the two tables it joins; the island is the ceiling", () => {
@@ -66,6 +98,8 @@ describe("marginalGains", () => {
       ["ContactId", 1],
       ["WhatId", 1],
       ["WhoId", 1],
+      // Reaches only the stand-in, and contact is already covered: nothing.
+      ["StubRef__c", 0],
     ]);
     expect(gains.find((g) => g.ref.fieldId === "AccountId" && g.ref.nodeId === "contact")).toBeUndefined();
     expect(gains[0].fraction).toBeCloseTo(2 / 7);

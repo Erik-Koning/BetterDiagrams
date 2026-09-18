@@ -1,0 +1,24 @@
+{
+  "folder": "customers/loyalty-members",
+  "kind": "view",
+  "object": {
+    "apiName": "Customer__c",
+    "label": "Customer",
+    "keyPrefix": "a03"
+  },
+  "aliasOf": {
+    "folder": "customers",
+    "apiName": "Customer__c",
+    "schema": "../schema.json"
+  },
+  "view": "Customer__c WHERE Loyalty_Points__c > 100",
+  "soqlFilter": "Loyalty_Points__c > 100",
+  "curated": {
+    "diagramName": "Loyalty members",
+    "diagramType": "custom"
+  },
+  "routes": {},
+  "measured": {
+    "recordCount": 174
+  }
+}

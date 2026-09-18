@@ -87,7 +87,11 @@ export function CoveragePanel({
             <span className="as-coverage__meterceil" style={{ left: pct(total ? reachable / total : 0) }} title="The most any key can reach" />
           ) : null}
         </span>
-        {unreachable ? (
+        {total === 0 ? (
+          <span className="as-coverage__note">
+            Nothing here to score: coverage counts nodes that store fields, and this document has none.
+          </span>
+        ) : unreachable ? (
           <span className="as-coverage__note">
             {unreachable} table{unreachable === 1 ? "" : "s"} no key reaches{scope.kind === "from" ? ` from ${nodeLabel(scope.nodeId)}` : ""}.
           </span>

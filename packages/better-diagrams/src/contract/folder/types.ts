@@ -106,6 +106,14 @@ export interface FolderImportOptions {
   polymorphic?: "collapse" | "in-model" | "none";
   /** Stand-in nodes for references that leave the model. Default true. */
   externalStubs?: boolean;
+   /**
+   * Open with the top-level containers COLLAPSED — a map of chips to drill
+   * into rather than a wall of cards. Unset means AUTO: a dialect-generated
+   * tree past {@link AUTO_FOLD_NODES} nodes collapses; a generic tree never
+   * does on its own, because it round-trips a document that already said
+   * what it wanted. Setting it either way always wins.
+   */
+  foldGroups?: boolean;
   /** A previously exported layout sidecar, merged over the fresh import. */
   layoutSidecar?: DiagramPresentation | null;
   /** A previously exported overrides sidecar, applied last. */

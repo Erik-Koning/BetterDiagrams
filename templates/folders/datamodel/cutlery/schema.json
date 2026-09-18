@@ -1,0 +1,149 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": "https://bakery.my.salesforce.com",
+  "folder": "cutlery",
+  "object": {
+    "apiName": "Cutlery__c",
+    "label": "Cutlery",
+    "labelPlural": "Cutlerys",
+    "keyPrefix": "a09",
+    "kind": "custom",
+    "custom": true,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 310
+  },
+  "curated": {
+    "diagramName": "Cutlery",
+    "diagramType": "custom",
+    "businessLine": "Bakery",
+    "source": "describe",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 5,
+    "visibleToIntegrationUser": 5,
+    "hiddenFromIntegrationUser": 0
+  },
+  "fields": [
+    {
+      "name": "Id",
+      "label": "Record ID",
+      "type": "id",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Name",
+      "label": "Item name",
+      "type": "string",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "nameField": true,
+      "length": 255
+    },
+    {
+      "name": "Material__c",
+      "label": "Material",
+      "type": "picklist",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "picklistValues": [
+        {
+          "value": "Steel",
+          "label": "Steel",
+          "active": true
+        },
+        {
+          "value": "Wood",
+          "label": "Wood",
+          "active": true
+        },
+        {
+          "value": "Bamboo",
+          "label": "Bamboo",
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "Building__c",
+      "label": "Building",
+      "type": "reference",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "lookup",
+        "referenceTo": [
+          "Building__c"
+        ],
+        "relationshipName": "Cutlery"
+      }
+    },
+    {
+      "name": "Quantity__c",
+      "label": "Quantity",
+      "type": "int",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "Building__c",
+      "label": "Building",
+      "kind": "lookup",
+      "referenceTo": [
+        "Building__c"
+      ],
+      "relationshipName": "Cutlery",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": [
+        "buildings"
+      ]
+    }
+  ],
+  "referencedBy": [],
+  "validationRules": [],
+  "routes": {
+    "lightningList": "/lightning/o/Cutlery__c/list",
+    "describe": "/services/data/v60.0/sobjects/Cutlery__c/describe"
+  },
+  "notes": [
+    "Knives and boards, counted per building."
+  ]
+}

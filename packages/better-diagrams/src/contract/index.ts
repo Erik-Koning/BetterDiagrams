@@ -155,7 +155,7 @@ export type {
 } from "./fields";
 
 // ── Key coverage (how much of a model a set of keys reaches) ────────────────
-export { keyCoverage, marginalGains, minimalKeyCover } from "./coverage";
+export { keyCoverage, marginalGains, minimalKeyCover, storesFields } from "./coverage";
 export type {
   CoverageScope,
   CoverageOptions,
@@ -216,6 +216,7 @@ export {
   MANIFEST_FILE,
   OVERRIDES_FORMAT,
   FOLDER_FORMAT,
+  AUTO_FOLD_NODES,
   parseFlatYaml,
   patchFlatYaml,
 } from "./folder";

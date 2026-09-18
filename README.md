@@ -568,6 +568,12 @@ const out = exportFolder(edited, { tree: buildFolderTree(files) });   // sidecar
 await writeFileMap("./data-model", out.files, out.deletions);        // writes .better-diagrams/ only
 ```
 
+A tree past `AUTO_FOLD_NODES` (40) nodes opens with its groups **folded into chips**
+(`settings.groupContents: "hide"`), so a real org model is a map of bands to drill into rather
+than a wall of cards at fit-zoom; `foldGroups` forces it either way, and a tree whose own
+manifest states a preference always wins. `templates/folders/datamodel/` is a small worked
+example of the format — nine objects, a view, a group of record types, cross-cutting metadata.
+
 Import is dialect-detected (or named with `dialect`), never throws on a recoverable tree, and returns
 typed `warnings` — `unknown-shape`, `folder-mismatch`, `edge-target-missing`, `poly-capped`,
 `too-many-fields`, `sidecar-orphan`, `yaml-fallback-used`, … A dropped directory whose own name
@@ -799,6 +805,14 @@ on that:
   exact pass over up to 12 candidates within 300 ms — the panel says "proven" only when that pass
   finished). Scope is *All tables* (a table counts when a chosen key's edge touches it) or *From
   ‹the selected table›* (a breadth-first search over the chosen keys' edges).
+
+  A **table** is a node that stores field data — rows it draws, or fields in its `data` bag. That
+  is the whole of the test, and it leaves out by construction everything a key can never stand
+  for: bands and groups, views and record types, external stubs and polymorphic collapse points.
+  An object with no foreign key at all still counts, because "this table is an island" is exactly
+  what the score should tell you. Pass `isTable` to `keyCoverage` / `marginalGains` /
+  `minimalKeyCover` (or `storesFields`, the default, directly) when your documents say it
+  differently.
 
 ## Infrastructure zones
 

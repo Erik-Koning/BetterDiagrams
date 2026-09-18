@@ -1,0 +1,187 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": "https://bakery.my.salesforce.com",
+  "folder": "bread",
+  "object": {
+    "apiName": "Bread__c",
+    "label": "Bread",
+    "labelPlural": "Breads",
+    "keyPrefix": "a06",
+    "kind": "custom",
+    "custom": true,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 19
+  },
+  "curated": {
+    "diagramName": "Bread",
+    "diagramType": "custom",
+    "businessLine": "Bakery",
+    "source": "describe",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 6,
+    "visibleToIntegrationUser": 6,
+    "hiddenFromIntegrationUser": 0
+  },
+  "fields": [
+    {
+      "name": "Id",
+      "label": "Record ID",
+      "type": "id",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Name",
+      "label": "Bread name",
+      "type": "string",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "nameField": true,
+      "length": 255
+    },
+    {
+      "name": "Recipe__c",
+      "label": "Recipe",
+      "type": "reference",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "toolingType": "MasterDetail",
+      "relationship": {
+        "kind": "masterDetail",
+        "referenceTo": [
+          "Recipe__c"
+        ],
+        "relationshipName": "Breads",
+        "cascadeDelete": true,
+        "deleteConstraint": "Cascade"
+      }
+    },
+    {
+      "name": "Main_Ingredient__c",
+      "label": "Main ingredient",
+      "type": "reference",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "lookup",
+        "referenceTo": [
+          "Ingredient__c"
+        ],
+        "relationshipName": "Breads"
+      }
+    },
+    {
+      "name": "Crust__c",
+      "label": "Crust",
+      "type": "picklist",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "picklistValues": [
+        {
+          "value": "Soft",
+          "label": "Soft",
+          "active": true
+        },
+        {
+          "value": "Crisp",
+          "label": "Crisp",
+          "active": true
+        },
+        {
+          "value": "Sourdough",
+          "label": "Sourdough",
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "Weight_Grams__c",
+      "label": "Weight Grams",
+      "type": "int",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "Recipe__c",
+      "label": "Recipe",
+      "kind": "masterDetail",
+      "referenceTo": [
+        "Recipe__c"
+      ],
+      "relationshipName": "Breads",
+      "required": true,
+      "cascadeDelete": true,
+      "deleteConstraint": "Cascade",
+      "visibleToIntegrationUser": true,
+      "targetFolders": [
+        "recipes"
+      ]
+    },
+    {
+      "field": "Main_Ingredient__c",
+      "label": "Main ingredient",
+      "kind": "lookup",
+      "referenceTo": [
+        "Ingredient__c"
+      ],
+      "relationshipName": "Breads",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": [
+        "ingredients"
+      ]
+    }
+  ],
+  "referencedBy": [],
+  "validationRules": [],
+  "routes": {
+    "lightningList": "/lightning/o/Bread__c/list",
+    "describe": "/services/data/v60.0/sobjects/Bread__c/describe"
+  },
+  "notes": [
+    "A baked loaf. Master-detail: deleting a recipe deletes its breads."
+  ]
+}

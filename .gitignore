@@ -12,6 +12,8 @@ packages/*/LICENSE
 # Folder-format trees the example app imports (drop an export in to try it)
 templates/folders/*
 !templates/folders/README.md
+# A small, synthetic example of the folder format — tracked as documentation.
+!templates/folders/datamodel/
 
 # Playwright output
 test-results/

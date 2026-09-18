@@ -13,7 +13,21 @@
  *
  * Zero dependencies, like every contract module.
  */
-import { fieldKey, keyFields, type FieldDocument, type FieldRef } from "./fields";
+import { dataFields, fieldKey, keyFields, type FieldDocument, type FieldRef } from "./fields";
+
+type CoverageNode = FieldDocument["nodes"][number];
+
+/**
+ * What counts as a TABLE by default: a node that stores field data — rows it
+ * draws, or fields in its `data` bag. That is the whole of the question a
+ * coverage score asks, and it excludes by construction everything a key can
+ * never stand for: bands and groups (structure), views and record types
+ * (facets of a table), external stubs and polymorphic collapse points
+ * (stand-ins). An object with no foreign key at all still counts — an island
+ * table is exactly what the score should report as unreached.
+ */
+export const storesFields = (node: CoverageNode): boolean =>
+  !!node.fields?.length || dataFields(node).length > 0;
 
 export type CoverageScope = { kind: "all" } | { kind: "from"; nodeId: string };
 
@@ -22,6 +36,12 @@ export interface CoverageOptions {
   scope?: CoverageScope;
   /** Walk key edges both ways. Default true — a key joins two tables either way round. */
   undirected?: boolean;
+  /**
+   * Which nodes the score is ABOUT. Defaults to {@link storesFields}. Routes
+   * may still travel through anything — a stand-in node is a real hop — but
+   * only tables are counted, reported, and aimed at.
+   */
+  isTable?: (node: CoverageNode) => boolean;
 }
 
 export interface CoverageResult {
@@ -74,8 +94,9 @@ interface Arc {
  * plus the tables each key TOUCHES — which is the whole of "all" scope, and
  * is what lets the greedy search score a candidate without a fresh search.
  */
-function keyGraph(doc: FieldDocument, undirected: boolean) {
+function keyGraph(doc: FieldDocument, undirected: boolean, isTable: (n: CoverageNode) => boolean) {
   const keys = keyFields(doc);
+  const tables = new Set(doc.nodes.filter(isTable).map((n) => n.id));
   const keyOfEdge = new Map<string, string>();
   for (const k of keys) for (const e of k.edges) keyOfEdge.set(e, fieldKey(k.ref));
   const adj = new Map<string, Arc[]>();
@@ -94,8 +115,11 @@ function keyGraph(doc: FieldDocument, undirected: boolean) {
     adj.get(e.source)!.push({ to: e.target, edge: e.id });
     if (undirected || e.direction === "both" || e.direction === "none") adj.get(e.target)!.push({ to: e.source, edge: e.id });
   }
-  return { keys, keyOfEdge, adj, touched };
+  return { keys, keyOfEdge, adj, touched, tables };
 }
+
+/** The tables in a reached set — the only thing a coverage number counts. */
+const tablesIn = (graph: Graph, ids: Iterable<string>): string[] => [...ids].filter((id) => graph.tables.has(id));
 
 type Graph = ReturnType<typeof keyGraph>;
 
@@ -121,6 +145,7 @@ function reach(graph: Graph, chosen: ReadonlySet<string>, scope: CoverageScope):
 }
 
 const scopeOf = (opts: CoverageOptions): CoverageScope => opts.scope ?? { kind: "all" };
+const tableOf = (opts: CoverageOptions) => opts.isTable ?? storesFields;
 
 /**
  * The tables adding one key brings in, given what the chosen keys already
@@ -143,9 +168,9 @@ function grow(
 }
 
 export function keyCoverage(doc: FieldDocument, chosen: readonly FieldRef[], opts: CoverageOptions = {}): CoverageResult {
-  const graph = keyGraph(doc, opts.undirected !== false);
+  const graph = keyGraph(doc, opts.undirected !== false, tableOf(opts));
   const scope = scopeOf(opts);
-  const total = doc.nodes.length;
+  const total = graph.tables.size;
   const everything = reach(graph, new Set(graph.keys.map((k) => fieldKey(k.ref))), scope);
   const byKey = new Map<string, string[]>();
   const running = new Set<string>();
@@ -155,15 +180,16 @@ export function keyCoverage(doc: FieldDocument, chosen: readonly FieldRef[], opt
     if (running.has(key)) continue;
     const next = grow(graph, scope, running, reached, key);
     running.add(key);
-    byKey.set(key, [...next].filter((id) => !reached.has(id)));
+    byKey.set(key, tablesIn(graph, next).filter((id) => !reached.has(id)));
     reached = next;
   }
+  const reachedTables = new Set(tablesIn(graph, reached));
   return {
-    reached,
+    reached: reachedTables,
     total,
-    fraction: total ? reached.size / total : 0,
+    fraction: total ? reachedTables.size / total : 0,
     byKey,
-    unreachable: total - everything.size,
+    unreachable: total - tablesIn(graph, everything).length,
   };
 }
 
@@ -172,9 +198,9 @@ export function keyCoverage(doc: FieldDocument, chosen: readonly FieldRef[], opt
  * Most gain first; ties by document order of the key's first edge.
  */
 export function marginalGains(doc: FieldDocument, chosen: readonly FieldRef[], opts: CoverageOptions = {}): KeyGain[] {
-  const graph = keyGraph(doc, opts.undirected !== false);
+  const graph = keyGraph(doc, opts.undirected !== false, tableOf(opts));
   const scope = scopeOf(opts);
-  const total = doc.nodes.length;
+  const total = graph.tables.size;
   const running = new Set(chosen.map(fieldKey));
   const base = reach(graph, running, scope);
   const out: KeyGain[] = [];
@@ -182,7 +208,7 @@ export function marginalGains(doc: FieldDocument, chosen: readonly FieldRef[], o
     const key = fieldKey(k.ref);
     if (running.has(key)) continue;
     const next = grow(graph, scope, running, base, key);
-    const adds = [...next].filter((id) => !base.has(id));
+    const adds = tablesIn(graph, next).filter((id) => !base.has(id));
     out.push({ ref: k.ref, adds, fraction: total ? adds.length / total : 0 });
   }
   return out.sort((a, b) => b.adds.length - a.adds.length);
@@ -198,23 +224,29 @@ const clock = (): number =>
  * answer, by increasing size, which proves the first hit optimal.
  */
 export function minimalKeyCover(doc: FieldDocument, opts: MinimalCoverOptions = {}): MinimalCoverResult {
-  const graph = keyGraph(doc, opts.undirected !== false);
+  const graph = keyGraph(doc, opts.undirected !== false, tableOf(opts));
   const scope = scopeOf(opts);
-  const total = doc.nodes.length;
+  const total = graph.tables.size;
   const budgetMs = opts.budgetMs ?? 300;
   const exactUpTo = opts.exactUpTo ?? 12;
   const now = opts.now ?? clock;
   const started = now();
   const allKeys = graph.keys.map((k) => fieldKey(k.ref));
   const refOf = new Map(graph.keys.map((k) => [fieldKey(k.ref), k.ref]));
-  const target = reach(graph, new Set(allKeys), scope);
-  const done = (keys: string[], reached: Set<string>, optimal: boolean, truncated: boolean): MinimalCoverResult => ({
-    keys: keys.map((k) => refOf.get(k)!),
-    reached,
-    fraction: total ? reached.size / total : 0,
-    optimal,
-    truncated,
-  });
+  // The goal is TABLES, not nodes: a key that only reaches a stand-in adds
+  // nothing anyone asked for, and greedy must never spend a round on one.
+  const target = new Set(tablesIn(graph, reach(graph, new Set(allKeys), scope)));
+  const score = (ids: Iterable<string>) => tablesIn(graph, ids).length;
+  const done = (keys: string[], reached: Set<string>, optimal: boolean, truncated: boolean): MinimalCoverResult => {
+    const tables = new Set(tablesIn(graph, reached));
+    return {
+      keys: keys.map((k) => refOf.get(k)!),
+      reached: tables,
+      fraction: total ? tables.size / total : 0,
+      optimal,
+      truncated,
+    };
+  };
   if (!target.size) return done([], new Set(), true, false);
 
   // Greedy. Budgeted like the exact pass below: a model with hundreds of
@@ -224,13 +256,14 @@ export function minimalKeyCover(doc: FieldDocument, opts: MinimalCoverOptions = 
   const chosen: string[] = [];
   const chosenSet = new Set<string>();
   let reached = reach(graph, chosenSet, scope);
+  let reachedScore = score(reached);
   let greedyStopped = false;
-  while (reached.size < target.size) {
+  while (reachedScore < target.size) {
     if (chosen.length && now() - started > budgetMs) {
       greedyStopped = true;
       break;
     }
-    let best: { key: string; next: Set<string> } | null = null;
+    let best: { key: string; next: Set<string>; score: number } | null = null;
     let looked = 0;
     for (const key of allKeys) {
       if (chosenSet.has(key)) continue;
@@ -241,23 +274,25 @@ export function minimalKeyCover(doc: FieldDocument, opts: MinimalCoverOptions = 
         break;
       }
       const next = grow(graph, scope, chosenSet, reached, key);
-      if (next.size > reached.size && (!best || next.size > best.next.size)) best = { key, next };
+      const gained = score(next);
+      if (gained > reachedScore && (!best || gained > best.score)) best = { key, next, score: gained };
     }
     if (greedyStopped) break;
     if (!best) break;
     chosen.push(best.key);
     chosenSet.add(best.key);
     reached = best.next;
+    reachedScore = best.score;
   }
   if (greedyStopped) return done(chosen, reached, false, true);
   if (chosen.length <= 1) return done(chosen, reached, true, false);
 
   // Exact: candidates are the keys that reach anything on their own. Too many
   // of them is a CAP (not a timeout); no time left is a timeout.
-  const candidates = allKeys.filter((key) => reach(graph, new Set([key]), scope).size > 0);
+  const candidates = allKeys.filter((key) => score(reach(graph, new Set([key]), scope)) > 0);
   if (candidates.length > exactUpTo) return done(chosen, reached, false, false);
   if (now() - started > budgetMs) return done(chosen, reached, false, true);
-  const wanted = reached.size;
+  const wanted = reachedScore;
   let checked = 0;
   for (let size = 1; size < chosen.length; size++) {
     const pick: number[] = [];
@@ -265,7 +300,7 @@ export function minimalKeyCover(doc: FieldDocument, opts: MinimalCoverOptions = 
       if (pick.length === size) {
         if (++checked % 8 === 0 && now() - started > budgetMs) return "stop";
         const keys = pick.map((i) => candidates[i]);
-        return reach(graph, new Set(keys), scope).size >= wanted ? keys : null;
+        return score(reach(graph, new Set(keys), scope)) >= wanted ? keys : null;
       }
       for (let i = start; i <= candidates.length - (size - pick.length); i++) {
         pick.push(i);

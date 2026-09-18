@@ -21,6 +21,8 @@
 import type { DiagramEdge, DiagramTemplate, ValidateOptions } from "../schema";
 import { CONTAINER_KINDS } from "../schema";
 import { mergeTemplate, type DiagramContent } from "../presentation";
+import { autoLayout } from "../layout";
+import { validateTemplate } from "../schema";
 import { buildFolderTree, rerootTree } from "./tree";
 import { applyOverrides, readSidecar, sidecarOrphans } from "./sidecar";
 import { genericDialect, applyManifestOrder, type GenericCtx } from "./dialects/generic";
@@ -35,6 +37,13 @@ import type {
   FolderImportResult,
   ImportWarning,
 } from "./types";
+
+/**
+ * A tree bigger than this opens folded (see `FolderImportOptions.foldGroups`).
+ * Forty is about where a root canvas stops being readable at fit-zoom: the
+ * example models are far under it, a real org model far over.
+ */
+export const AUTO_FOLD_NODES = 40;
 
 /** Every dialect this build knows, most specific first. */
 export const DIALECTS: readonly Dialect<unknown>[] = [
@@ -212,6 +221,31 @@ export function importFolder(files: FileMap, opts: FolderImportOptions = {}): Fo
       : {}),
   });
   let template = mergeTemplate(content, layout, validate);
+
+  // A big tree laid out flat is unreadable — 137 objects fit-zoom to about 3%.
+  // Collapse its TOP-LEVEL containers so it opens as a map of chips to drill
+  // into, and lay it out again: `collapsed` is the flag the layout sizes a
+  // chip by (`settings.groupContents` is a render-time fold the layout never
+  // sees, so folding without re-laying-out leaves chips scattered across a
+  // canvas measured for expanded bands).
+  //
+  // Never automatic for the generic dialect: its trees round-trip a document
+  // that already said what it wanted. An explicit `foldGroups` always wins.
+  const containers = new Set(validate.containerKinds ?? []);
+  const parents = new Set(template.nodes.map((n) => n.parentId).filter((p): p is string => !!p));
+  const foldable = template.nodes.filter((n) => !n.parentId && containers.has(n.kind) && parents.has(n.id));
+  const folds =
+    opts.foldGroups ?? (dialect.id !== genericDialect.id && template.nodes.length > AUTO_FOLD_NODES);
+  if (folds && foldable.length) {
+    const ids = new Set(foldable.map((n) => n.id));
+    template = autoLayout(
+      validateTemplate(
+        { ...template, nodes: template.nodes.map((n) => (ids.has(n.id) ? { ...n, collapsed: true } : n)) },
+        validate,
+      ),
+      { containerKinds: validate.containerKinds, frames: "all" },
+    );
+  }
 
   // 7. Orphans are reported, never fatal — the layout simply has stale rows.
   for (const id of sidecarOrphans(template, layout)) {

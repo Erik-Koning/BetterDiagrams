@@ -5,7 +5,7 @@
  * Pure: no `fs`, no React. `node.ts` is the Node adapter, on its own subpath
  * so a browser bundle never sees it.
  */
-export { importFolder, detectDialect, dialectById, DIALECTS, validateOptionsFor } from "./import";
+export { importFolder, detectDialect, dialectById, DIALECTS, validateOptionsFor, AUTO_FOLD_NODES } from "./import";
 export { exportFolder, treeFiles } from "./export";
 export { buildFolderTree, rerootTree, walkTree, normalizePath } from "./tree";
 export {

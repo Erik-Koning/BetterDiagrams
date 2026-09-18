@@ -365,11 +365,18 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
 
   const positions = new Map<string, { x: number; y: number }>();
   const sizes = new Map<string, { w: number; h: number }>();
+  /**
+   * Containers drawn as a chip. Like a card, such a group renders its
+   * contents somewhere else — behind the chip — so it is SPACED as a chip,
+   * never grown to fit what it is hiding, and its stored size is left alone
+   * (that size is the expanded one, and expanding must restore the layout
+   * exactly). Its contents are still arranged, so expanding finds them tidy.
+   */
+  const chipped = new Set(
+    template.nodes.filter((n) => n.collapsed && containerKindSet.has(n.kind as string)).map((n) => n.id),
+  );
   for (const n of template.nodes) {
-    // A collapsed container draws a chip. Spacing its rank-mates against the
-    // expanded frame it is NOT drawing leaves a hole the size of the group.
-    const chip = n.collapsed && containerKindSet.has(n.kind as string);
-    sizes.set(n.id, chip ? { ...COLLAPSED_SIZE } : { w: n.w, h: n.h });
+    sizes.set(n.id, chipped.has(n.id) ? { ...COLLAPSED_SIZE } : { w: n.w, h: n.h });
   }
 
   /** The members one layout pass should actually rank, in document order. */
@@ -412,7 +419,7 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
     // contents render on their own level, so its rank-mates must keep
     // spacing against the card's REAL footprint.
     const groupId = key.slice(6);
-    if (!cardParents.has(groupId)) {
+    if (!cardParents.has(groupId) && !chipped.has(groupId)) {
       sizes.set(groupId, {
         w: Math.max(160, result.width + opts.padding * 2),
         h: Math.max(120, result.height + opts.headerGap + opts.padding),
@@ -478,7 +485,9 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
       ...(position ? { x: position.x, y: position.y } : {}),
       // Only containers were resized; leaves keep their authored size. A
       // locked container is not resized either — the lock covers both.
-      ...(containerIds.has(node.id) && !locked.has(node.id) ? { w: size.w, h: size.h } : {}),
+      ...(containerIds.has(node.id) && !locked.has(node.id) && !chipped.has(node.id)
+        ? { w: size.w, h: size.h }
+        : {}),
     };
   });
 

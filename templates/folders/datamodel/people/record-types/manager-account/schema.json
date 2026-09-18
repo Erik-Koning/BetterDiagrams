@@ -1,0 +1,26 @@
+{
+  "folder": "people/record-types/manager-account",
+  "kind": "record-type",
+  "parentObject": {
+    "apiName": "Person__c",
+    "label": "Person",
+    "folder": "people",
+    "schema": "../../schema.json"
+  },
+  "recordType": {
+    "developerName": "Manager_Account",
+    "name": "Manager account",
+    "recordTypeId": "012000000000102AAA",
+    "isPersonType": false,
+    "isActive": true,
+    "availableToIntegrationUser": true,
+    "description": "Runs a building and its staff.",
+    "metadataFullName": "Person__c.Manager_Account"
+  },
+  "curated": {
+    "diagramName": "Manager account",
+    "diagramType": "record-type"
+  },
+  "routes": {},
+  "notes": []
+}

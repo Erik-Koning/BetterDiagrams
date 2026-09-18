@@ -1,0 +1,6 @@
+type: view
+displayName: Loyalty members
+aliasOf: customers
+soqlFilter: Loyalty_Points__c > 100
+diagramType: custom
+diagramName: Loyalty members

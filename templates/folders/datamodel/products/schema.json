@@ -1,0 +1,182 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": "https://bakery.my.salesforce.com",
+  "folder": "products",
+  "object": {
+    "apiName": "Product__c",
+    "label": "Product",
+    "labelPlural": "Products",
+    "keyPrefix": "a07",
+    "kind": "custom",
+    "custom": true,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 41
+  },
+  "curated": {
+    "diagramName": "Product",
+    "diagramType": "custom",
+    "businessLine": "Bakery",
+    "source": "describe",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 7,
+    "visibleToIntegrationUser": 7,
+    "hiddenFromIntegrationUser": 0
+  },
+  "fields": [
+    {
+      "name": "Id",
+      "label": "Record ID",
+      "type": "id",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Name",
+      "label": "Product name",
+      "type": "string",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "nameField": true,
+      "length": 255
+    },
+    {
+      "name": "Bread__c",
+      "label": "Bread",
+      "type": "reference",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "lookup",
+        "referenceTo": [
+          "Bread__c"
+        ],
+        "relationshipName": "Products"
+      }
+    },
+    {
+      "name": "Price__c",
+      "label": "Price",
+      "type": "currency",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "precision": 8,
+      "scale": 2
+    },
+    {
+      "name": "Active__c",
+      "label": "Active",
+      "type": "boolean",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "SKU__c",
+      "label": "SKU",
+      "type": "string",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "externalId": true,
+      "unique": true
+    },
+    {
+      "name": "OwnerId",
+      "label": "Owner ID",
+      "type": "reference",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "lookup",
+        "referenceTo": [
+          "User"
+        ],
+        "relationshipName": null
+      }
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "Bread__c",
+      "label": "Bread",
+      "kind": "lookup",
+      "referenceTo": [
+        "Bread__c"
+      ],
+      "relationshipName": "Products",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": [
+        "bread"
+      ]
+    },
+    {
+      "field": "OwnerId",
+      "label": "Owner ID",
+      "kind": "lookup",
+      "referenceTo": [
+        "User"
+      ],
+      "relationshipName": null,
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": []
+    }
+  ],
+  "referencedBy": [],
+  "validationRules": [],
+  "routes": {
+    "lightningList": "/lightning/o/Product__c/list",
+    "describe": "/services/data/v60.0/sobjects/Product__c/describe"
+  },
+  "notes": [
+    "What is actually sold, at a price."
+  ]
+}

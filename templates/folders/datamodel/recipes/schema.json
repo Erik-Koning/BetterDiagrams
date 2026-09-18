@@ -1,0 +1,153 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": "https://bakery.my.salesforce.com",
+  "folder": "recipes",
+  "object": {
+    "apiName": "Recipe__c",
+    "label": "Recipe",
+    "labelPlural": "Recipes",
+    "keyPrefix": "a05",
+    "kind": "custom",
+    "custom": true,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 28
+  },
+  "curated": {
+    "diagramName": "Recipe",
+    "diagramType": "custom",
+    "businessLine": "Bakery",
+    "source": "describe",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 6,
+    "visibleToIntegrationUser": 6,
+    "hiddenFromIntegrationUser": 0
+  },
+  "fields": [
+    {
+      "name": "Id",
+      "label": "Record ID",
+      "type": "id",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Name",
+      "label": "Recipe name",
+      "type": "string",
+      "nillable": false,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "nameField": true,
+      "length": 255
+    },
+    {
+      "name": "Chef__c",
+      "label": "Chef",
+      "type": "reference",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "toolingType": "Lookup",
+      "relationship": {
+        "kind": "lookup",
+        "referenceTo": [
+          "Person__c"
+        ],
+        "relationshipName": "Recipes"
+      }
+    },
+    {
+      "name": "Prep_Minutes__c",
+      "label": "Prep Minutes",
+      "type": "int",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Instructions__c",
+      "label": "Instructions",
+      "type": "textarea",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe"
+    },
+    {
+      "name": "Yield__c",
+      "label": "Yield (loaves)",
+      "type": "double",
+      "nillable": true,
+      "visibleToIntegrationUser": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "source": "describe",
+      "precision": 6,
+      "scale": 1
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "Chef__c",
+      "label": "Chef",
+      "kind": "lookup",
+      "referenceTo": [
+        "Person__c"
+      ],
+      "relationshipName": "Recipes",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visibleToIntegrationUser": true,
+      "targetFolders": [
+        "people"
+      ]
+    }
+  ],
+  "referencedBy": [],
+  "validationRules": [
+    {
+      "name": "Prep_time_positive",
+      "active": true,
+      "errorMessage": "Prep time must be greater than zero.",
+      "errorConditionFormula": "Prep_Minutes__c <= 0"
+    }
+  ],
+  "routes": {
+    "lightningList": "/lightning/o/Recipe__c/list",
+    "describe": "/services/data/v60.0/sobjects/Recipe__c/describe"
+  },
+  "notes": [
+    "What a bread is made from and by whom."
+  ]
+}

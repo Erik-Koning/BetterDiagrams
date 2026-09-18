@@ -99,6 +99,7 @@ const CONTRACT_EXPORTS = [
   "keyCoverage",
   "marginalGains",
   "minimalKeyCover",
+  "storesFields",
   // paths
   "PATH_COLOR_CYCLE",
   "pathColor",
@@ -133,6 +134,7 @@ const CONTRACT_EXPORTS = [
   "MANIFEST_FILE",
   "OVERRIDES_FORMAT",
   "FOLDER_FORMAT",
+  "AUTO_FOLD_NODES",
   "parseFlatYaml",
   "patchFlatYaml",
   // layout

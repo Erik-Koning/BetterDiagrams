@@ -1,0 +1,10 @@
+type: custom
+displayName: Cutlery
+apiName: Cutlery__c
+keyPrefix: a09
+recordCount: 310
+fieldsTotal: 5
+fieldsVisibleToIntegrationUser: 5
+diagramType: custom
+diagramName: Cutlery
+lightningRoute: /lightning/o/Cutlery__c/list

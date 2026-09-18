@@ -5,5 +5,6 @@ put here shows up under **Settings ▾ → Templates / folders** and is imported
 with `importFolder` when opened — a Salesforce data-model export, or a tree
 written by the **Folder (.zip)** exporter, unzipped.
 
-Git-ignored apart from this file: these trees are usually generated from a
-live system and belong to whoever generated them.
+Git-ignored apart from this file and `datamodel/` — a small synthetic bakery
+model kept as a tracked example of the format. Everything else here is usually
+generated from a live system and belongs to whoever generated it.

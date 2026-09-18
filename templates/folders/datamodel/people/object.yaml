@@ -1,0 +1,10 @@
+type: custom
+displayName: Person
+apiName: Person__c
+keyPrefix: a02
+recordCount: 37
+fieldsTotal: 8
+fieldsVisibleToIntegrationUser: 7
+diagramType: custom
+diagramName: Person
+lightningRoute: /lightning/o/Person__c/list

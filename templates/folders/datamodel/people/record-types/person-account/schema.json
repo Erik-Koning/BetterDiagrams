@@ -1,0 +1,26 @@
+{
+  "folder": "people/record-types/person-account",
+  "kind": "record-type",
+  "parentObject": {
+    "apiName": "Person__c",
+    "label": "Person",
+    "folder": "people",
+    "schema": "../../schema.json"
+  },
+  "recordType": {
+    "developerName": "Person_Account",
+    "name": "Person account",
+    "recordTypeId": "012000000000103AAA",
+    "isPersonType": true,
+    "isActive": true,
+    "availableToIntegrationUser": true,
+    "description": "A retail customer held as a person.",
+    "metadataFullName": "Person__c.Person_Account"
+  },
+  "curated": {
+    "diagramName": "Person account",
+    "diagramType": "record-type"
+  },
+  "routes": {},
+  "notes": []
+}
