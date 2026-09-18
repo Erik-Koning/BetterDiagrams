@@ -13,6 +13,9 @@ import { OVERRIDES_FORMAT } from "./types";
 import { classifySalesforceShape, SALESFORCE_DIALECT_ID } from "./dialects/salesforce";
 import { isForensics } from "./dialects/salesforce/shapes";
 import { validateTemplate, type DiagramTemplate } from "../schema";
+import { splitTemplate } from "../presentation";
+import { autoLayout } from "../layout";
+import { keyCoverage, minimalKeyCover } from "../coverage";
 import { drillableIds } from "../scope";
 import { validatePresentation } from "../presentation";
 import type { FileMap, FolderImportOptions } from "./types";
@@ -574,5 +577,82 @@ describe("budget", () => {
     expect(stats.edges).toBeLessThanOrEqual(600);
     expect(stats.fields).toBeLessThanOrEqual(2500);
     expect(elapsed).toBeLessThan(2000);
+  });
+});
+
+describe("a collapsed container keeps a box that holds what it hides", () => {
+  const node = (id: string, parentId: string | null, over: Record<string, unknown> = {}) => ({
+    id, label: id, kind: "service", icon: "none", description: "", parentId, x: 0, y: 0, w: 170, h: 76, ...over,
+  });
+
+  it("is spaced as a chip, but stores a frame its children fit inside", () => {
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        node("g", null, { kind: "group", w: 300, h: 200, collapsed: true }),
+        node("open", null, { kind: "group", w: 300, h: 200 }),
+        ...["a", "b", "c", "d", "e", "f"].map((id) => node(id, "g")),
+        ...["p", "q"].map((id) => node(id, "open")),
+      ],
+      edges: [],
+    });
+    const out = autoLayout(doc, { frames: "all" });
+    const g = out.nodes.find((n) => n.id === "g")!;
+    const kids = out.nodes.filter((n) => n.parentId === "g");
+    // Expanding it must not spill its children outside their own frame.
+    expect(Math.max(...kids.map((k) => k.x + k.w))).toBeLessThanOrEqual(g.w);
+    expect(Math.max(...kids.map((k) => k.y + k.h))).toBeLessThanOrEqual(g.h);
+    // …while its rank-mate is spaced against the CHIP, not that tall frame.
+    const open = out.nodes.find((n) => n.id === "open")!;
+    expect(Math.abs(open.y - g.y)).toBeLessThan(g.h);
+  });
+});
+
+describe("a saved layout outranks the auto-fold", () => {
+  it("collapses as asked but never re-lays-out over the reader's own arrangement", async () => {
+    const files = new Map(await fixture());
+    const band = JSON.parse(files.get("core/schema.json")!);
+    for (let i = 0; i < AUTO_FOLD_NODES; i++) {
+      const folder = `core/filler-${i}`;
+      band.objects.push({ folder, band: "core", apiName: `F${i}__c`, label: `F${i}`, kind: "custom" });
+      files.set(`${folder}/schema.json`, JSON.stringify({ folder, object: { apiName: `F${i}__c`, label: `F${i}`, kind: "custom" }, fields: [{ name: "Id", type: "id", nillable: false }], foreignKeys: [] }));
+    }
+    files.set("core/schema.json", JSON.stringify(band));
+
+    const first = importFolder(files).template;
+    const moved = { ...first, nodes: first.nodes.map((n) => (n.id === "core/contact" ? { ...n, x: 4321, y: 8765 } : n)) };
+    const { presentation } = splitTemplate(moved);
+    const back = importFolder(files, { layoutSidecar: presentation }).template;
+    const contact = back.nodes.find((n) => n.id === "core/contact")!;
+    expect([contact.x, contact.y]).toEqual([4321, 8765]);
+    // Still collapsed — the fold is a view the tree asked for, not a layout.
+    expect(back.nodes.filter((n) => n.collapsed).map((n) => n.id).sort()).toEqual(["_external", "core", "ops"]);
+  });
+});
+
+describe("the shipped datamodel example", () => {
+  it("imports clean — it is tracked in git, so it can rot silently", async () => {
+    const dir = fileURLToPath(new URL("../../../../../templates/folders/datamodel", import.meta.url));
+    const { template, stats, warnings, dialect } = importFolder(await readFolderToFileMap(dir));
+    expect(dialect).toBe(SALESFORCE_DIALECT_ID);
+    expect(warnings).toEqual([]);
+    expect(stats.nodes).toBe(14); // 9 objects + a view + a group + 3 record types
+    // Small enough to open expanded; the README says so.
+    expect(template.nodes.filter((n) => n.collapsed)).toEqual([]);
+    const kinds = new Set(template.nodes.map((n) => n.kind));
+    expect([...kinds].sort()).toEqual(["group", "sf-object", "sf-record-type", "sf-view"]);
+    // Master-detail against lookups, and the view's alias.
+    const md = template.edges.find((e) => e.tech === "masterDetail")!;
+    expect(md.id).toBe("bread::Recipe__c::recipes");
+    expect(template.edges.find((e) => e.label === "alias")!.target).toBe("customers");
+    // Audit keys are hidden by default and stubbed when asked for.
+    expect(template.edges.some((e) => e.id.includes("OwnerId"))).toBe(false);
+    const all = importFolder(await readFolderToFileMap(dir), { edges: "all" });
+    expect(all.template.nodes.some((n) => n.id === "_external/user")).toBe(true);
+    // Nine tables, all reachable, and a provably smallest key set.
+    const cover = minimalKeyCover(template);
+    expect(cover.fraction).toBe(1);
+    expect(cover.optimal).toBe(true);
+    expect(keyCoverage(template, cover.keys).total).toBe(9);
   });
 });

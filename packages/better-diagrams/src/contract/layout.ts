@@ -365,12 +365,14 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
 
   const positions = new Map<string, { x: number; y: number }>();
   const sizes = new Map<string, { w: number; h: number }>();
+  /** What a container should STORE, which for a chip is not what it is spaced by. */
+  const fitted = new Map<string, { w: number; h: number }>();
   /**
-   * Containers drawn as a chip. Like a card, such a group renders its
-   * contents somewhere else — behind the chip — so it is SPACED as a chip,
-   * never grown to fit what it is hiding, and its stored size is left alone
-   * (that size is the expanded one, and expanding must restore the layout
-   * exactly). Its contents are still arranged, so expanding finds them tidy.
+   * Containers drawn as a chip. Such a group is SPACED as a chip — its
+   * rank-mates must not leave a hole the size of the frame it is not
+   * drawing — while its STORED size still has to hold what it is hiding,
+   * or expanding it would spill its children outside their own frame.
+   * Two different sizes, so they are kept in two different maps.
    */
   const chipped = new Set(
     template.nodes.filter((n) => n.collapsed && containerKindSet.has(n.kind as string)).map((n) => n.id),
@@ -419,11 +421,15 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
     // contents render on their own level, so its rank-mates must keep
     // spacing against the card's REAL footprint.
     const groupId = key.slice(6);
-    if (!cardParents.has(groupId) && !chipped.has(groupId)) {
-      sizes.set(groupId, {
+    if (!cardParents.has(groupId)) {
+      const fit = {
         w: Math.max(160, result.width + opts.padding * 2),
         h: Math.max(120, result.height + opts.headerGap + opts.padding),
-      });
+      };
+      fitted.set(groupId, fit);
+      // A chip keeps its chip footprint for spacing; everything else is
+      // spaced by the box it actually draws.
+      if (!chipped.has(groupId)) sizes.set(groupId, fit);
     }
   }
 
@@ -485,8 +491,8 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
       ...(position ? { x: position.x, y: position.y } : {}),
       // Only containers were resized; leaves keep their authored size. A
       // locked container is not resized either — the lock covers both.
-      ...(containerIds.has(node.id) && !locked.has(node.id) && !chipped.has(node.id)
-        ? { w: size.w, h: size.h }
+      ...(containerIds.has(node.id) && !locked.has(node.id)
+        ? (fitted.get(node.id) ?? size)
         : {}),
     };
   });

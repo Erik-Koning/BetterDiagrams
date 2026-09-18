@@ -238,13 +238,16 @@ export function importFolder(files: FileMap, opts: FolderImportOptions = {}): Fo
     opts.foldGroups ?? (dialect.id !== genericDialect.id && template.nodes.length > AUTO_FOLD_NODES);
   if (folds && foldable.length) {
     const ids = new Set(foldable.map((n) => n.id));
-    template = autoLayout(
-      validateTemplate(
-        { ...template, nodes: template.nodes.map((n) => (ids.has(n.id) ? { ...n, collapsed: true } : n)) },
-        validate,
-      ),
-      { containerKinds: validate.containerKinds, frames: "all" },
+    const collapsed = validateTemplate(
+      { ...template, nodes: template.nodes.map((n) => (ids.has(n.id) ? { ...n, collapsed: true } : n)) },
+      validate,
     );
+    // Collapsing is a view the tree asked for; re-laying-out is only ours to
+    // do when we placed everything ourselves. A sidecar is the reader's own
+    // arrangement — running the layout over it would throw their work away.
+    template = layout
+      ? collapsed
+      : autoLayout(collapsed, { containerKinds: validate.containerKinds, frames: "all" });
   }
 
   // 7. Orphans are reported, never fatal — the layout simply has stale rows.

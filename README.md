@@ -568,11 +568,14 @@ const out = exportFolder(edited, { tree: buildFolderTree(files) });   // sidecar
 await writeFileMap("./data-model", out.files, out.deletions);        // writes .better-diagrams/ only
 ```
 
-A tree past `AUTO_FOLD_NODES` (40) nodes opens with its groups **folded into chips**
-(`settings.groupContents: "hide"`), so a real org model is a map of bands to drill into rather
-than a wall of cards at fit-zoom; `foldGroups` forces it either way, and a tree whose own
-manifest states a preference always wins. `templates/folders/datamodel/` is a small worked
-example of the format — nine objects, a view, a group of record types, cross-cutting metadata.
+A dialect-generated tree past `AUTO_FOLD_NODES` (40) nodes opens with its **top-level containers
+collapsed** and laid out again, so a real org model is a map of chips to drill into rather than a
+wall of cards at fit-zoom — 137 objects arrive as eight chips at 107% rather than 180 cards at
+15%. `foldGroups` forces it either way; a generic tree never folds on its own, because it
+round-trips a document that already said what it wanted, and a **layout sidecar always wins** —
+the fold is applied but the reader's own arrangement is never re-laid-out over.
+`templates/folders/datamodel/` is a small worked example of the format — nine objects, a view, a
+group of record types, cross-cutting metadata.
 
 Import is dialect-detected (or named with `dialect`), never throws on a recoverable tree, and returns
 typed `warnings` — `unknown-shape`, `folder-mismatch`, `edge-target-missing`, `poly-capped`,
