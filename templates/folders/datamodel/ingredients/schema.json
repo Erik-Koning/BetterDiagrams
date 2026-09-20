@@ -1,0 +1,138 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": "https://bakery.example",
+  "folder": "ingredients",
+  "entity": {
+    "name": "ingredient",
+    "label": "Ingredient",
+    "labelPlural": "Ingredients",
+    "kind": "custom",
+    "custom": true,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 64
+  },
+  "curated": {
+    "diagramName": "Ingredient",
+    "diagramType": "custom",
+    "businessLine": "Bakery",
+    "source": "export",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 6,
+    "visible": 6,
+    "hidden": 0
+  },
+  "fields": [
+    {
+      "name": "id",
+      "label": "Record ID",
+      "type": "id",
+      "nullable": false,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "name",
+      "label": "Ingredient name",
+      "type": "string",
+      "nullable": false,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "nameField": true,
+      "length": 255
+    },
+    {
+      "name": "unit",
+      "label": "Unit",
+      "type": "enum",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "enumValues": [
+        {
+          "value": "g",
+          "label": "g",
+          "active": true
+        },
+        {
+          "value": "kg",
+          "label": "kg",
+          "active": true
+        },
+        {
+          "value": "ml",
+          "label": "ml",
+          "active": true
+        },
+        {
+          "value": "l",
+          "label": "l",
+          "active": true
+        },
+        {
+          "value": "each",
+          "label": "each",
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "unit_cost",
+      "label": "Unit Cost",
+      "type": "currency",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "precision": 8,
+      "scale": 2
+    },
+    {
+      "name": "allergen",
+      "label": "Allergen",
+      "type": "boolean",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "supplier",
+      "label": "Supplier",
+      "type": "string",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    }
+  ],
+  "foreignKeys": [],
+  "referencedBy": [],
+  "validationRules": [],
+  "url": "/entities/ingredient",
+  "notes": [
+    "Raw materials. Costed per unit for recipe pricing."
+  ]
+}

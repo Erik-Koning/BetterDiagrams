@@ -17,7 +17,8 @@ import {
   type Node,
   type NodeProps,
 } from "@xyflow/react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, SyntheticEvent } from "react";
+import { fieldKey } from "../contract/fields";
 import { SvgIcon } from "./icons";
 import { useStudio } from "./context";
 import { DateChip } from "./chrome";
@@ -25,12 +26,11 @@ import { isOverdue } from "../contract/timeline";
 import { kindDef, iconPaths } from "./registry-types";
 import { ZoneNode } from "./ZoneNode";
 import { silhouettePath, teamColor } from "./shapes";
+import { groupContentBox, shapeMinHeight } from "./resize";
 import {
   DEFAULT_CONTAINER_OPACITY,
   DEFAULT_FONT_SIZE,
   NODE_MIN_SIZE,
-  fieldsBoxHeight,
-  wrappedTitleHeight,
   ghostSourceId,
   isBoundaryNodeId,
   isGhostNodeId,
@@ -39,7 +39,6 @@ import {
 } from "../contract/schema";
 
 /** Breathing room kept between a frame's edge and the last thing inside it. */
-const GROUP_CONTENT_PAD = 12;
 
 /** The icon glyph's pixel size per presentation mode; the chip around it is CSS. */
 export const ICON_SIZE = { technical: 17, marketing: 22 } as const;
@@ -101,15 +100,81 @@ export function ConnectHandles({ hidden }: { hidden: boolean }) {
  * so a row that renders taller here would leave foreign-key lines pointing
  * between columns on screen while landing correctly in the export.
  */
-function FieldList({ fields }: { fields: readonly NodeField[] }) {
+/** Whether any mark is a whole table's — the sign a reference is being shown. */
+function marksTables(marks: ReadonlySet<string>): boolean {
+  for (const key of marks) if (key.endsWith("\u0000")) return true;
+  return false;
+}
+
+/** Whether the card, or any row on it, carries a mark. */
+function nodeMarked(marks: ReadonlySet<string>, nodeId: string): boolean {
+  const prefix = `${nodeId}\u0000`;
+  for (const key of marks) if (key.startsWith(prefix)) return true;
+  return false;
+}
+
+function FieldList({ nodeId, fields }: { nodeId: string; fields: readonly NodeField[] }) {
+  const { onFieldClick, pinnedFields, highlightFields } = useStudio();
+  // Rows are inert unless the editor offers a field menu. When it does, a
+  // row owns its own press: `nodrag` keeps React Flow and the marquee off it
+  // (see marquee.ts PASSTHROUGH), the stops keep the wrapper's click-select
+  // and double-click-drill from firing on top. The row stays an <li> — one
+  // <button> per row would be a tab stop per field, and a nested box a risk
+  // to the 19px the anchors and the PNG export are computed from.
+  const interactive = !!onFieldClick;
+  const stop = (event: SyntheticEvent) => event.stopPropagation();
   return (
     <ul className="as-node__fields">
-      {fields.map((field) => (
-        <li key={field.id} className="as-node__field" data-field-id={field.id}>
+      {fields.map((field) => {
+        const key = fieldKey({ nodeId, fieldId: field.id });
+        const className = [
+          "as-node__field",
+          interactive ? "nodrag" : "",
+          pinnedFields.has(key) ? "as-node__field--pinned" : "",
+          highlightFields.has(key) ? "as-node__field--match" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return (
+        <li
+          key={field.id}
+          className={className}
+          data-field-id={field.id}
+          role={interactive ? "button" : undefined}
+          aria-label={interactive ? `${field.name} — field actions` : undefined}
+          onPointerDown={interactive ? stop : undefined}
+          onDoubleClick={interactive ? stop : undefined}
+          onClick={
+            interactive
+              ? (event) => {
+                  event.stopPropagation();
+                  onFieldClick({ nodeId, fieldId: field.id }, { clientX: event.clientX, clientY: event.clientY });
+                }
+              : undefined
+          }
+          onContextMenu={
+            interactive
+              ? (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onFieldClick({ nodeId, fieldId: field.id }, { clientX: event.clientX, clientY: event.clientY });
+                }
+              : undefined
+          }
+        >
           {field.key ? (
             <span className={`as-node__fieldkey as-node__fieldkey--${field.key}`}>{field.key}</span>
           ) : null}
-          <span className="as-node__fieldname" title={field.name}>
+          <span
+            className="as-node__fieldname"
+            title={field.derived ? `${field.name} — derived: computed, not stored` : field.name}
+          >
+            {/* UML's leading slash for a derived attribute. */}
+            {field.derived ? (
+              <span className="as-node__fieldderived" aria-hidden="true">
+                /
+              </span>
+            ) : null}
             {field.name}
             {field.required ? (
               <span className="as-node__fieldreq" title="Required">
@@ -117,13 +182,19 @@ function FieldList({ fields }: { fields: readonly NodeField[] }) {
               </span>
             ) : null}
           </span>
+          {field.unique ? (
+            <span className="as-node__fieldflag" title="Unique">
+              UQ
+            </span>
+          ) : null}
           {field.type ? (
             <span className="as-node__fieldtype" title={field.type}>
               {field.type}
             </span>
           ) : null}
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 }
@@ -222,7 +293,7 @@ export const ShapeNode = memo(function ShapeNode({
   width,
   height,
 }: NodeProps<ShapeNodeType>) {
-  const { registry, readOnly, mode, tagFilter, showTeams, requestCommit, navigateFile, drillInto, navigateToNode, childCounts } = useStudio();
+  const { registry, readOnly, mode, tagFilter, showTeams, showLinks, requestCommit, navigateFile, drillInto, navigateToNode, childCounts, dimmedIds, pinnedFields, highlightFields } = useStudio();
   const { updateNodeData } = useReactFlow();
   const def = kindDef(registry, data.kind);
   const paths = iconPaths(registry, data.icon);
@@ -253,27 +324,22 @@ export const ShapeNode = memo(function ShapeNode({
   const h = height ?? 76;
 
   // The same measurement `validateTemplate` uses, so the canvas and the
-  // document can never disagree about how tall this box has to be.
-  const minHeight = Math.max(
-    NODE_MIN_SIZE.shape.h,
-    data.fields?.length ? fieldsBoxHeight(data.fields.length, !!data.description) : 0,
-    data.wrap
-      ? wrappedTitleHeight(
-          data.label,
-          data.fontSize ?? DEFAULT_FONT_SIZE,
-          w,
-          !!data.icon && data.icon !== "none",
-        )
-      : 0,
-  );
+  // document can never disagree about how tall this box has to be — and the
+  // same floor a multi-selection resize holds this box to (see resize.ts).
+  const minHeight = shapeMinHeight(data, w);
   // Absolute-coordinate silhouette in a 1:1 viewBox — no stretch, so the
   // person's head and the pipe's ends stay circular at any aspect ratio.
   const sil = shape !== "card" ? silhouettePath(shape, 0.75, 0.75, w - 1.5, h - 1.5) : null;
 
-  // Tag filter: dim, never hide. Purely presentational, so it cannot interact
-  // with the visibility machinery that decides what persists.
+  // The document node this card stands for — a ghost's rows and its place
+  // in a reachable set belong to the real thing.
+  const docId = scopeGhost ? ghostSourceId(id) : id;
+  // Tag filter and the path panel's reachable set: dim, never hide. Purely
+  // presentational, so neither can interact with the visibility machinery
+  // that decides what persists.
   const dimmed =
-    tagFilter.length > 0 && !data.tags?.some((tag) => tagFilter.includes(tag));
+    (tagFilter.length > 0 && !data.tags?.some((tag) => tagFilter.includes(tag))) ||
+    (dimmedIds !== null && !dimmedIds.has(docId));
 
   const style = {
     // A colour stored on the node wins over the kind's registry accent: it is
@@ -300,6 +366,13 @@ export const ShapeNode = memo(function ShapeNode({
     data.ghost || scopeGhost ? "as-ghost" : "",
     scopeGhost ? "as-node--scope-ghost" : "",
     dimmed ? "as-node--dimmed" : "",
+    pinnedFields.has(fieldKey({ nodeId: docId })) ? "as-node--pinned" : "",
+    highlightFields.has(fieldKey({ nodeId: docId })) ? "as-node--match" : "",
+    // A shown reference marks TABLES (keys ending in an empty field). While
+    // one is up, every card it did not touch steps back, so the marked ones
+    // read as the picture rather than as a few bars in a crowd. A followed
+    // reference or a search hit marks rows only and fades nothing.
+    marksTables(highlightFields) && !nodeMarked(highlightFields, docId) ? "as-node--unmarked" : "",
     data.status ? `as-node--status-${data.status}` : "",
     // Text layout. Absent data means the pre-existing look, so no class.
     data.textAlign ? `as-node--align-${data.textAlign}` : "",
@@ -403,10 +476,10 @@ export const ShapeNode = memo(function ShapeNode({
             }}
           />
           {data.description ? <div className="as-node__desc">{data.description}</div> : null}
-          {data.fields?.length ? <FieldList fields={data.fields} /> : null}
+          {data.fields?.length ? <FieldList nodeId={docId} fields={data.fields} /> : null}
           <DateChip date={data.date} prefix="Lands" overdue={isOverdue(data.date, data.status)} />
         </div>
-        {data.url?.startsWith("file:") ? (
+        {!showLinks ? null : data.url?.startsWith("file:") ? (
           navigateFile ? (
             <button
               type="button"
@@ -491,16 +564,7 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
   );
 
   /** How much room the children need, in the frame's own coordinates. */
-  const contentBox = (() => {
-    let w = 0;
-    let h = 0;
-    for (const child of getNodes()) {
-      if (child.parentId !== id) continue;
-      w = Math.max(w, child.position.x + (child.width ?? child.measured?.width ?? 0) + GROUP_CONTENT_PAD);
-      h = Math.max(h, child.position.y + (child.height ?? child.measured?.height ?? 0) + GROUP_CONTENT_PAD);
-    }
-    return { w, h };
-  })();
+  const contentBox = groupContentBox(id, getNodes());
 
   // In a scoped view every group child renders as a chip BY FORCE — expanding
   // one there would write the chip's 180×44 over the stored size. The toggle
@@ -586,9 +650,15 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
     </button>
   );
 
-  if (data.collapsed) {
+  if (data.collapsed || data.folded) {
     // The chip: a solid mini-card standing in for the whole group. Edges from
     // the hidden contents attach here (see toReactFlow's re-routing).
+    //
+    // A FOLDED chip is the document's doing (`settings.groupContents`), not
+    // this group's, so it shows no expand toggle: flipping the group's own
+    // flag underneath a fold would change nothing on screen and leave a
+    // stray `collapsed` behind for when the fold lifts. The toolbar's
+    // "Fold groups" toggle is where the fold is undone.
     return (
       <>
         <ConnectHandles hidden={readOnly} />
@@ -599,10 +669,12 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
           title={
             scopeGhost
               ? "External to this view — double-click to visit"
-              : `${data.label} — collapsed · double-click to open`
+              : data.folded
+                ? `${data.label} — contents folded by the diagram's group setting · double-click to open`
+                : `${data.label} — collapsed · double-click to open`
           }
         >
-          {!readOnly && !inScopedView && !scopeGhost ? (
+          {!readOnly && !inScopedView && !scopeGhost && !data.folded ? (
             toggle
           ) : (
             <span className="as-group__collapse">▸</span>

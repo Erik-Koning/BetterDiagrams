@@ -1,0 +1,23 @@
+{
+  "folder": "people/record-types/customer",
+  "kind": "record-type",
+  "parentEntity": {
+    "name": "person",
+    "label": "Person",
+    "folder": "people",
+    "schema": "../../schema.json"
+  },
+  "recordType": {
+    "key": "customer",
+    "name": "Customer",
+    "id": "rt-customer",
+    "active": true,
+    "visible": true,
+    "description": "A retail customer held as a person."
+  },
+  "curated": {
+    "diagramName": "Customer",
+    "diagramType": "record-type"
+  },
+  "notes": []
+}

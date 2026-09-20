@@ -182,6 +182,27 @@ describe("ArchitectureStudio mode", () => {
     const root = container.querySelector(".as-root")!;
     expect(root.className).toBe("as-root as-root--marketing host");
   });
+
+  it("gradients={false} flags the root, and changes nothing else about marketing", () => {
+    const onChange = vi.fn();
+    const { container } = mount(
+      <ArchitectureStudio value={doc} onChange={onChange} mode="marketing" gradients={false} className="host" welcome={false} />,
+    );
+    const root = container.querySelector(".as-root")!;
+    expect(root.className).toBe("as-root as-root--marketing as-root--no-gradients host");
+    expect(root.getAttribute("data-mode")).toBe("marketing");
+    // The bigger glyph and the silhouette def are still there — the
+    // stylesheet paints the def flat by colouring both stops the same.
+    const icon = container.querySelector(".as-node__iconbox svg")!;
+    expect(icon.getAttribute("width")).toBe(String(ICON_SIZE.marketing));
+    expect(container.querySelector(".as-node__gradstop--from")).not.toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("gradients={false} adds nothing to technical", () => {
+    const { container } = mount(<ArchitectureStudio value={doc} gradients={false} welcome={false} />);
+    expect(container.querySelector(".as-root")!.className).toBe("as-root");
+  });
 });
 
 describe("SequenceStudio mode", () => {
@@ -203,5 +224,10 @@ describe("SequenceStudio mode", () => {
     const root = container.querySelector(".as-root")!;
     expect(root.classList.contains("as-root--marketing")).toBe(false);
     expect(root.getAttribute("data-mode")).toBe("technical");
+  });
+
+  it("takes gradients={false} the same way", () => {
+    const { container } = mount(<SequenceStudio value={seq} mode="marketing" gradients={false} welcome={false} />);
+    expect(container.querySelector(".as-root")!.className).toBe("as-root as-root--marketing as-root--no-gradients");
   });
 });

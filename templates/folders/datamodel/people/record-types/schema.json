@@ -1,0 +1,23 @@
+{
+  "folder": "people/record-types",
+  "kind": "group",
+  "description": "How a person is classified",
+  "childCount": 3,
+  "children": [
+    {
+      "folder": "people/record-types/chef",
+      "kind": "record-type",
+      "label": "Chef"
+    },
+    {
+      "folder": "people/record-types/manager",
+      "kind": "record-type",
+      "label": "Manager"
+    },
+    {
+      "folder": "people/record-types/customer",
+      "kind": "record-type",
+      "label": "Customer"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "band": "core",
+  "folder": "core",
+  "description": "Customer master",
+  "entityCount": 3,
+  "entities": [
+    {
+      "folder": "core/account",
+      "band": "core",
+      "name": "account",
+      "label": "Account",
+      "kind": "standard"
+    },
+    {
+      "folder": "core/contact",
+      "band": "core",
+      "name": "contact",
+      "label": "Contact",
+      "kind": "standard"
+    },
+    {
+      "folder": "core/preference",
+      "band": "core",
+      "name": "preference",
+      "label": "Preference",
+      "kind": "custom"
+    }
+  ]
+}

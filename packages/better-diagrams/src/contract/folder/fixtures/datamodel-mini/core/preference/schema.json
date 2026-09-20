@@ -1,0 +1,95 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-01T00:00:00Z",
+  "$source": "https://example.test",
+  "folder": "core/preference",
+  "entity": {
+    "name": "preference",
+    "label": "Preference",
+    "labelPlural": "Preferences",
+    "kind": "custom",
+    "custom": true,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 7
+  },
+  "curated": {
+    "diagramName": "Preference",
+    "diagramType": "custom",
+    "businessLine": "Retail",
+    "source": "export",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 4,
+    "visible": 4,
+    "hidden": 0
+  },
+  "fields": [
+    {
+      "name": "id",
+      "label": "ID",
+      "type": "id",
+      "nullable": false,
+      "visible": true
+    },
+    {
+      "name": "name",
+      "label": "Name",
+      "type": "string",
+      "nullable": false,
+      "visible": true,
+      "nameField": true
+    },
+    {
+      "name": "account_id",
+      "label": "Account ID",
+      "type": "reference",
+      "displayType": "Composition",
+      "nullable": false,
+      "visible": true,
+      "relationship": {
+        "kind": "composition",
+        "referenceTo": [
+          "account"
+        ],
+        "relationshipName": "preferences",
+        "cascadeDelete": true
+      }
+    },
+    {
+      "name": "channel",
+      "label": "Channel",
+      "type": "enum",
+      "nullable": true,
+      "visible": true
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "account_id",
+      "label": "Account ID",
+      "kind": "composition",
+      "referenceTo": [
+        "account"
+      ],
+      "relationshipName": "preferences",
+      "required": true,
+      "cascadeDelete": true,
+      "deleteConstraint": "Cascade",
+      "visible": true,
+      "targetFolders": [
+        "core/account",
+        "core/account/individuals"
+      ]
+    }
+  ],
+  "referencedBy": [],
+  "validationRules": [],
+  "url": "/entities/preference",
+  "notes": []
+}

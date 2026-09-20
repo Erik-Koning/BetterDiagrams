@@ -1,0 +1,113 @@
+{
+  "edgeCount": 9,
+  "edges": [
+    {
+      "from": "person",
+      "field": "building_id",
+      "kind": "reference",
+      "to": "building",
+      "fromFolders": [
+        "people"
+      ],
+      "toFolders": [
+        "buildings"
+      ]
+    },
+    {
+      "from": "customer",
+      "field": "person_id",
+      "kind": "reference",
+      "to": "person",
+      "fromFolders": [
+        "customers"
+      ],
+      "toFolders": [
+        "people"
+      ]
+    },
+    {
+      "from": "recipe",
+      "field": "chef_id",
+      "kind": "reference",
+      "to": "person",
+      "fromFolders": [
+        "recipes"
+      ],
+      "toFolders": [
+        "people"
+      ]
+    },
+    {
+      "from": "bread",
+      "field": "recipe_id",
+      "kind": "composition",
+      "to": "recipe",
+      "fromFolders": [
+        "bread"
+      ],
+      "toFolders": [
+        "recipes"
+      ]
+    },
+    {
+      "from": "bread",
+      "field": "main_ingredient_id",
+      "kind": "reference",
+      "to": "ingredient",
+      "fromFolders": [
+        "bread"
+      ],
+      "toFolders": [
+        "ingredients"
+      ]
+    },
+    {
+      "from": "product",
+      "field": "bread_id",
+      "kind": "reference",
+      "to": "bread",
+      "fromFolders": [
+        "products"
+      ],
+      "toFolders": [
+        "bread"
+      ]
+    },
+    {
+      "from": "coupon",
+      "field": "product_id",
+      "kind": "reference",
+      "to": "product",
+      "fromFolders": [
+        "coupons"
+      ],
+      "toFolders": [
+        "products"
+      ]
+    },
+    {
+      "from": "coupon",
+      "field": "customer_id",
+      "kind": "reference",
+      "to": "customer",
+      "fromFolders": [
+        "coupons"
+      ],
+      "toFolders": [
+        "customers"
+      ]
+    },
+    {
+      "from": "cutlery",
+      "field": "building_id",
+      "kind": "reference",
+      "to": "building",
+      "fromFolders": [
+        "cutlery"
+      ],
+      "toFolders": [
+        "buildings"
+      ]
+    }
+  ]
+}

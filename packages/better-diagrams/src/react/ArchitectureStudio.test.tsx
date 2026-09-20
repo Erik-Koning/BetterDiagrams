@@ -10,9 +10,9 @@
  */
 import { StrictMode, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ArchitectureStudio } from "./ArchitectureStudio";
+import { ArchitectureStudio, type StudioHandle } from "./ArchitectureStudio";
 import { clearWelcomeSuppression } from "./WelcomeModal";
 
 // The welcome modal's CodeMirror editor is stubbed with a textarea — typing
@@ -151,6 +151,26 @@ describe("ArchitectureStudio", () => {
     expect(saved.version).toBe(1);
     expect(saved.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length);
     expect(saved.meta).toEqual(EXAMPLE_TEMPLATE.meta);
+  });
+
+  it("flags an edit as unsaved before the session's first save, and clears it on Save", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onSave={onSave} />);
+    const save = screen.getByRole("button", { name: /^Save/ });
+    expect(save).toHaveTextContent(/^Save$/);
+
+    // Recolour a line straight after mount — the case a reload used to lose:
+    // the baseline started empty, so nothing counted as unsaved until the
+    // first save had happened.
+    await waitFor(() => expect(container.querySelector(".as-edge__hit")).toBeTruthy());
+    fireEvent.click(container.querySelector(".as-edge__hit")!);
+    await user.click(await screen.findByRole("button", { name: "Edge colour rose" }));
+    await waitFor(() => expect(save).toHaveTextContent("Save •"));
+
+    await user.click(save);
+    await waitFor(() => expect(save).toHaveTextContent(/^Save$/));
+    expect((onSave.mock.calls.at(-1)![0] as DiagramTemplate).edges.some((e) => e.color === "rose")).toBe(true);
   });
 
   it("emits onChange when a node is added", async () => {
@@ -1050,6 +1070,141 @@ describe("ArchitectureStudio", () => {
     expect(expanded.edges).toHaveLength(EXAMPLE_TEMPLATE.edges.length);
   });
 
+  it("folds every group from settings.groupContents and offers the toolbar toggle", async () => {
+    const user = userEvent.setup();
+    const seen: DiagramTemplate[] = [];
+    const folded: DiagramTemplate = { ...EXAMPLE_TEMPLATE, settings: { groupContents: "hide" } };
+    mount(
+      <StrictMode>
+        <ControlledHost spy={(t) => seen.push(t)} initial={folded} />
+      </StrictMode>,
+    );
+    // The group is a chip: contents off the canvas, no per-group expand
+    // toggle (the fold is the document's, not the group's).
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+    expect(screen.getByText("Application VPC")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Expand Application VPC" })).not.toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "Fold groups" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(toggle);
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+    expect(screen.getByText("Worker Service")).toBeInTheDocument();
+    const shown = seen.at(-1)!;
+    expect(shown.settings).toEqual({ groupContents: "show" });
+    // Unfolding hands back the frame, never a row of 180×44 chips — and the
+    // group's own flag was never written.
+    expect(shown.nodes.find((n) => n.id === "vpc")).toMatchObject({ w: 440, h: 380 });
+    expect("collapsed" in shown.nodes.find((n) => n.id === "vpc")!).toBe(false);
+    expect(shown.nodes).toHaveLength(EXAMPLE_TEMPLATE.nodes.length);
+    expect(shown.edges).toHaveLength(EXAMPLE_TEMPLATE.edges.length);
+    // The toggle stays, unpressed, so there is a way back.
+    expect(screen.getByRole("button", { name: "Fold groups" })).toHaveAttribute("aria-pressed", "false");
+    // …and the per-group toggle is back too.
+    expect(screen.getByRole("button", { name: "Collapse Application VPC" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Fold groups" }));
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+    expect(seen.at(-1)!.settings).toEqual({ groupContents: "hide" });
+
+    // The fold is a document edit, so it undoes like one.
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+    expect(seen.at(-1)!.settings).toEqual({ groupContents: "show" });
+  });
+
+  it("lifts the fold when a group is filled by an edit, in the same undo entry", async () => {
+    const seen: DiagramTemplate[] = [];
+    const folded: DiagramTemplate = {
+      ...EXAMPLE_TEMPLATE,
+      settings: { groupContents: "hide" },
+      // A group already folded, so the fold has visibly taken hold.
+      nodes: EXAMPLE_TEMPLATE.nodes,
+    };
+    mount(<ControlledHost spy={(t) => seen.push(t)} initial={folded} />);
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+
+    // Wrap two loose cards in a new group: ⌘G. Under the fold the new frame
+    // would close over them at once — instead the document flips to "show".
+    // Select all, then wrap: the folded VPC chip and the loose cards go
+    // into one new frame together.
+    fireEvent.keyDown(window, { key: "a", metaKey: true });
+    await waitFor(() => expect(screen.getByText(/6 nodes/)).toBeInTheDocument());
+    fireEvent.keyDown(window, { key: "g", metaKey: true });
+
+    await waitFor(() => expect(screen.getByText("New Group")).toBeInTheDocument());
+    expect(screen.getByText("Postgres")).toBeInTheDocument();
+    expect(screen.getByText("REST API")).toBeInTheDocument(); // every group opened
+    const grouped = seen.at(-1)!;
+    expect(grouped.settings).toEqual({ groupContents: "show" });
+    const group = grouped.nodes.find((n) => n.label === "New Group")!;
+    expect(grouped.nodes.filter((n) => n.parentId === group.id).map((n) => n.id)).toContain("db");
+
+    // One ⌘Z undoes the grouping AND restores the fold.
+    fireEvent.keyDown(window, { key: "z", metaKey: true });
+    await waitFor(() => expect(screen.queryByText("New Group")).not.toBeInTheDocument());
+    expect(seen.at(-1)!.settings).toEqual({ groupContents: "hide" });
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+  });
+
+  it("offers the fold toggle only when the document sets it and can fold something", () => {
+    // Never set: the toolbar it always had.
+    const { unmount } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    expect(screen.queryByRole("button", { name: "Fold groups" })).not.toBeInTheDocument();
+    unmount();
+
+    // Set, but every group is empty: nothing to fold, so no switch.
+    const emptyGroups: DiagramTemplate = {
+      ...EXAMPLE_TEMPLATE,
+      settings: { groupContents: "hide" },
+      nodes: EXAMPLE_TEMPLATE.nodes.map((n) => ({ ...n, parentId: null })),
+    };
+    const second = mount(<ArchitectureStudio defaultValue={emptyGroups} />);
+    expect(screen.queryByRole("button", { name: "Fold groups" })).not.toBeInTheDocument();
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+    second.unmount();
+
+  });
+
+  it("lets a read-only viewer unfold as a view override that never touches the document", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const folded: DiagramTemplate = { ...EXAMPLE_TEMPLATE, settings: { groupContents: "hide" } };
+    function Host() {
+      const [readOnly, setReadOnly] = useState(true);
+      return (
+        <>
+          <button type="button" onClick={() => setReadOnly((r) => !r)}>
+            host: toggle read-only
+          </button>
+          <ArchitectureStudio defaultValue={folded} readOnly={readOnly} onChange={onChange} />
+        </>
+      );
+    }
+    mount(<Host />);
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+
+    // The viewer's toggle reveals the contents…
+    const toggle = screen.getByRole("button", { name: "Fold groups" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await user.click(toggle);
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    // …without a document edit: nothing is emitted, nothing to undo.
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Undo" })).not.toBeInTheDocument();
+    // And it folds again on request.
+    await user.click(toggle);
+    expect(screen.queryByText("REST API")).not.toBeInTheDocument();
+    await user.click(toggle);
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+
+    // Re-enabling editing drops the override: an editor sees the document's own fold.
+    await user.click(screen.getByRole("button", { name: "host: toggle read-only" }));
+    await waitFor(() => expect(screen.queryByText("REST API")).not.toBeInTheDocument());
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("reports the canvas selection to the host in template terms", async () => {
     const onSelectionChange = vi.fn();
     mount(
@@ -1083,7 +1238,7 @@ describe("ArchitectureStudio", () => {
     const user = userEvent.setup();
     const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
 
-    await user.type(screen.getByLabelText("Search nodes"), "Postgres{Enter}");
+    await user.type(screen.getByLabelText("Search nodes and fields"), "Postgres{Enter}");
 
     const wrapper = container.querySelector('[data-id="db"]');
     expect(wrapper?.classList.contains("selected")).toBe(true);
@@ -1651,6 +1806,32 @@ describe("ArchitectureStudio", () => {
 
     // Purely presentational: hiding badges is not an edit, nothing to undo.
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  });
+
+  it("hides the ↗ link buttons via the View menu, without touching the document", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const doc: DiagramTemplate = {
+      version: 1,
+      nodes: [
+        { id: "a", label: "Orders", kind: "service", icon: "box", description: "", parentId: null, url: "https://example.com/orders", x: 0, y: 0, w: 170, h: 76 },
+        { id: "b", label: "Plain", kind: "service", icon: "box", description: "", parentId: null, x: 300, y: 0, w: 170, h: 76 },
+      ],
+      edges: [],
+    };
+    const { container } = mount(<ArchitectureStudio defaultValue={doc} onChange={onChange} />);
+    expect(container.querySelectorAll(".as-node__link")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: /^View/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Show link buttons" }));
+    expect(container.querySelectorAll(".as-node__link")).toHaveLength(0);
+    // A view preference: the url is still in the document, and there is nothing to undo.
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+
+    // The toggle stays offered while it is off, so it can be turned back on.
+    await user.click(screen.getByRole("checkbox", { name: "Show link buttons" }));
+    expect(container.querySelectorAll(".as-node__link")).toHaveLength(1);
   });
 
   it("sets a node's owning team from the inspector", async () => {
@@ -2932,6 +3113,22 @@ describe("content/presentation split", () => {
     expect(screen.getByText(/Applied layout to 9 elements/)).toBeInTheDocument();
   });
 
+  it("asks before a template replaces a non-empty canvas; a layout file never asks", async () => {
+    const onChange = vi.fn();
+    const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const small = { version: 1, nodes: [{ id: "solo", label: "Solo", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76 }], edges: [] };
+    fireEvent.change(input, {
+      target: { files: [new File([JSON.stringify(small)], "small.json", { type: "application/json" })] },
+    });
+    const dialog = await screen.findByRole("dialog", { name: "Replace this diagram with “small.json”?" });
+    expect(dialog).toHaveTextContent(/9 elements on the canvas are replaced/);
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Replace" }));
+    await waitFor(() => expect(screen.getByText("Solo")).toBeInTheDocument());
+    expect(screen.queryByText("Redis")).not.toBeInTheDocument();
+  });
+
   it("counts unmatched records so a wrong-diagram layout can't read as success", async () => {
     const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
     const layout = {
@@ -3270,6 +3467,22 @@ describe("drill-down (C4 levels)", () => {
     );
   });
 
+  it("a double-click on the drill badge lands on the level once, not three times", async () => {
+    const ref = { current: null as StudioHandle | null };
+    mount(<ArchitectureStudio ref={ref} defaultValue={DRILL_DOC} />);
+    const badge = screen.getByRole("button", { name: "Open Payments Core — 3 inside" });
+    // What a browser sends for a double-click on the badge.
+    fireEvent.click(badge);
+    fireEvent.click(badge);
+    fireEvent.doubleClick(badge);
+    await waitFor(() => expect(ref.current!.getFocus()).toEqual(["pay"]), { timeout: 2000 });
+    // Give any queued swap its turn, then the stack must still be one deep.
+    await new Promise((r) => setTimeout(r, 400));
+    expect(ref.current!.getFocus()).toEqual(["pay"]);
+    const bar = screen.getByRole("navigation", { name: "Diagram level" });
+    expect(within(bar).getAllByText("Payments Core")).toHaveLength(1);
+  });
+
   it("readOnly can drill into detail but not into empty leaves", async () => {
     mount(<ArchitectureStudio defaultValue={DRILL_DOC} readOnly />);
     await drillIntoLabel("Payments Core");
@@ -3283,6 +3496,164 @@ describe("drill-down (C4 levels)", () => {
     fireEvent.doubleClick(screen.getByText("Storefront"));
     await new Promise((resolve) => setTimeout(resolve, 350));
     expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument();
+  });
+});
+
+describe("host access to view state (ref + callbacks)", () => {
+  const HOST_DOC: DiagramTemplate = validateTemplate({
+    version: 1,
+    meta: { title: "Shop" },
+    nodes: [
+      { id: "web", label: "Storefront", kind: "service", icon: "globe", description: "", parentId: null, x: 100, y: 100, w: 170, h: 76 },
+      { id: "pay", label: "Payments Core", kind: "service", icon: "box", description: "", parentId: null, x: 500, y: 100, w: 170, h: 76 },
+      { id: "api", label: "Pay API", kind: "service", icon: "box", description: "", parentId: "pay", x: 28, y: 52, w: 170, h: 76 },
+      { id: "jobs", label: "Job Workers", kind: "group", icon: "none", description: "", parentId: "pay", x: 260, y: 52, w: 300, h: 200 },
+      { id: "retry", label: "Retry Worker", kind: "worker", icon: "gear", description: "", parentId: "jobs", x: 20, y: 60, w: 170, h: 76 },
+    ],
+    edges: [
+      { id: "buys", source: "web", target: "api", label: "buys", style: "solid", color: "sky" },
+      { id: "queues", source: "api", target: "retry", label: "queues", style: "solid", color: "slate" },
+    ],
+    paths: [
+      { id: "checkout", title: "Checkout", steps: ["web", "api", "retry"] },
+      { id: "other", title: "Other", steps: ["web", "api"] },
+    ],
+  });
+
+  it("ref.drillTo lands on a level, fits, and reports through onFocusChange", async () => {
+    const ref = { current: null as StudioHandle | null };
+    const onFocusChange = vi.fn();
+    mount(<ArchitectureStudio ref={ref} defaultValue={HOST_DOC} onFocusChange={onFocusChange} />);
+    // Reported once on mount, empty — the selection callback's precedent.
+    expect(onFocusChange).toHaveBeenCalledWith([]);
+    expect(ref.current!.getFocus()).toEqual([]);
+
+    act(() => ref.current!.drillTo(["pay", "jobs"]));
+    await waitFor(() =>
+      expect(screen.getByRole("navigation", { name: "Diagram level" })).toBeInTheDocument(),
+    );
+    const bar = screen.getByRole("navigation", { name: "Diagram level" });
+    expect(within(bar).getByText("Payments Core")).toBeInTheDocument();
+    expect(within(bar).getByText("Job Workers")).toBeInTheDocument();
+    expect(screen.getByText("Retry Worker")).toBeInTheDocument();
+    expect(ref.current!.getFocus()).toEqual(["pay", "jobs"]);
+    expect(onFocusChange).toHaveBeenLastCalledWith(["pay", "jobs"]);
+
+    // A stack that isn't a real ancestry is canonicalised, not trusted: the
+    // deepest known id names the level and its true ancestors are the stack.
+    act(() => ref.current!.drillTo(["nope", "jobs"]));
+    await waitFor(() => expect(ref.current!.getFocus()).toEqual(["pay", "jobs"]));
+    act(() => ref.current!.drillTo(["pay"]));
+    await waitFor(() => expect(ref.current!.getFocus()).toEqual(["pay"]));
+    expect(onFocusChange).toHaveBeenLastCalledWith(["pay"]);
+
+    act(() => ref.current!.drillTo([]));
+    await waitFor(() =>
+      expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument(),
+    );
+    expect(onFocusChange).toHaveBeenLastCalledWith([]);
+    // Distinct reports only: mount, ["pay","jobs"], ["pay"], and the exit.
+    expect(onFocusChange).toHaveBeenCalledTimes(4);
+  });
+
+  it("Import folder reads a picked directory through the folder format, and refuses an empty one", async () => {
+    const onChange = vi.fn();
+    const { container } = mount(<ArchitectureStudio defaultValue={HOST_DOC} onChange={onChange} />);
+    const input = container.querySelector("input[webkitdirectory]") as HTMLInputElement;
+    expect(input).toBeTruthy();
+    const pick = (entries: Array<[string, string]>) =>
+      entries.map(([path, text]) => {
+        const file = new File([text], path.slice(path.lastIndexOf("/") + 1), { type: "application/json" });
+        Object.defineProperty(file, "webkitRelativePath", { value: path });
+        return file;
+      });
+    /** Pick a directory, then accept the "Replace this diagram?" the non-empty canvas earns. */
+    const pickAndReplace = async (entries: Array<[string, string]>) => {
+      fireEvent.change(input, { target: { files: pick(entries) } });
+      const dialog = await screen.findByRole("dialog", { name: /^Replace this diagram with “shots\/|model\/|shop\/”/ });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Replace" }));
+    };
+
+    // Nothing readable at all, and a tree a dialect claims but that holds no
+    // nodes (a data-model root manifest with no band folders): both leave
+    // the canvas alone and say why.
+    await pickAndReplace([["shots/photo.png", "…"]]);
+    await waitFor(() => expect(screen.getByText(/no JSON, YAML or Markdown files/)).toBeInTheDocument());
+    await pickAndReplace([["model/schema.json", JSON.stringify({ title: "Empty", bands: [] })]]);
+    await waitFor(() => expect(screen.getByText(/Nothing in that folder reads as a diagram/)).toBeInTheDocument());
+    expect(screen.getByText("Payments Core")).toBeInTheDocument();
+
+    // Cancelling the question leaves everything alone.
+    fireEvent.change(input, { target: { files: pick([["shop/platform/db/node.json", "{}"]]) } });
+    fireEvent.click(within(await screen.findByRole("dialog", { name: /^Replace this diagram/ })).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: /^Replace this diagram/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Payments Core")).toBeInTheDocument();
+
+    await pickAndReplace([
+      ["shop/platform/db/node.json", JSON.stringify({ label: "Postgres", kind: "database", icon: "database" })],
+      ["shop/platform/api/node.json", JSON.stringify({ label: "REST API" })],
+      ["shop/platform/edges.json", JSON.stringify([{ id: "e1", source: "platform/api", target: "platform/db", label: "reads" }])],
+    ]);
+    await waitFor(() => expect(screen.getByText("Postgres")).toBeInTheDocument());
+    expect(screen.getByText("REST API")).toBeInTheDocument();
+    expect(screen.queryByText("Payments Core")).not.toBeInTheDocument();
+    const doc = onChange.mock.calls.at(-1)![0];
+    expect(doc.nodes.map((n: { id: string }) => n.id)).toEqual(["platform", "platform/api", "platform/db"]);
+    expect(doc.edges).toHaveLength(1);
+    expect(doc.meta.folderFormat.dialect).toBe("generic");
+  });
+
+  it("ref.navigateTo drills to the level a node lives on and selects it", async () => {
+    const ref = { current: null as StudioHandle | null };
+    const onSelectionChange = vi.fn();
+    mount(<ArchitectureStudio ref={ref} defaultValue={HOST_DOC} onSelectionChange={onSelectionChange} />);
+    act(() => ref.current!.navigateTo("retry"));
+    await waitFor(() => expect(ref.current!.getFocus()).toEqual(["pay", "jobs"]));
+    await waitFor(() =>
+      expect(onSelectionChange).toHaveBeenLastCalledWith({ nodes: ["retry"], edges: [], zones: [] }),
+    );
+  });
+
+  it("ref.setActivePaths lights paths, ticks the menu, and reports through onActivePathsChange", async () => {
+    const ref = { current: null as StudioHandle | null };
+    const onActivePathsChange = vi.fn();
+    const user = userEvent.setup();
+    mount(
+      <ArchitectureStudio ref={ref} defaultValue={HOST_DOC} onActivePathsChange={onActivePathsChange} />,
+    );
+    expect(onActivePathsChange).toHaveBeenCalledWith([]);
+
+    act(() => ref.current!.setActivePaths(["checkout", "checkout"]));
+    expect(ref.current!.getActivePaths()).toEqual(["checkout"]);
+    expect(onActivePathsChange).toHaveBeenLastCalledWith(["checkout"]);
+    expect(screen.getByRole("button", { name: "Paths (1)" })).toBeInTheDocument();
+
+    // Lighting one from the menu reaches the host the same way.
+    await user.click(screen.getByRole("button", { name: "Paths (1)" }));
+    await user.click(screen.getByRole("checkbox", { name: "Other" }));
+    expect(onActivePathsChange).toHaveBeenLastCalledWith(["checkout", "other"]);
+    expect(ref.current!.getActivePaths()).toEqual(["checkout", "other"]);
+  });
+
+  it("the slot context carries the same reads and writes", async () => {
+    const seen: Array<{ focus: string[]; activePaths: string[] }> = [];
+    mount(
+      <ArchitectureStudio
+        defaultValue={HOST_DOC}
+        toolbarExtras={(ctx) => {
+          seen.push({ focus: ctx.focus, activePaths: ctx.activePaths });
+          return (
+            <>
+              <button type="button" onClick={() => ctx.drillTo(["pay"])}>host-drill</button>
+              <button type="button" onClick={() => ctx.setActivePaths(["other"])}>host-light</button>
+            </>
+          );
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByText("host-drill"));
+    fireEvent.click(screen.getByText("host-light"));
+    await waitFor(() => expect(seen.at(-1)).toEqual({ focus: ["pay"], activePaths: ["other"] }));
   });
 });
 
@@ -3439,5 +3810,153 @@ describe("Tidy respects the level you are looking at", () => {
     });
     // …and nothing on the visible canvas moved.
     expect(emitted.nodes.find((n) => n.id === "web")).toMatchObject({ x: 100, y: 100 });
+  });
+});
+
+describe("Arrange modes", () => {
+  // a→b→c plus a→c: left to right puts all three on one spine, so the long
+  // line runs through b; untangling gives it a lane of its own.
+  const DOC: DiagramTemplate = validateTemplate({
+    version: 1,
+    meta: { title: "Chain" },
+    nodes: [
+      { id: "a", label: "Alpha", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76 },
+      { id: "b", label: "Bravo", kind: "service", icon: "box", description: "", parentId: null, x: 260, y: 0, w: 170, h: 76 },
+      { id: "c", label: "Charlie", kind: "service", icon: "box", description: "", parentId: null, x: 520, y: 0, w: 170, h: 76 },
+    ],
+    edges: [
+      { id: "ab", source: "a", target: "b", label: "", style: "solid", color: "slate" },
+      { id: "bc", source: "b", target: "c", label: "", style: "solid", color: "slate" },
+      { id: "ac", source: "a", target: "c", label: "", style: "solid", color: "slate" },
+    ],
+  });
+
+  it("picking a mode re-arranges and stores the choice, and one undo takes both back", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={DOC} onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    expect(screen.getByRole("radio", { name: "Left to right" })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: "Untangle lines" }));
+    await screen.findByText(/Untangled the lines/);
+
+    const untangled = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(untangled.settings).toEqual({ arrange: "untangle" });
+    // Bravo left the spine the long line runs along.
+    const b = untangled.nodes.find((n) => n.id === "b")!;
+    const a = untangled.nodes.find((n) => n.id === "a")!;
+    expect(b.y).not.toBe(a.y);
+
+    // The menu closed on the pick, and re-opening it shows the stored mode.
+    expect(screen.queryByRole("radio", { name: "Untangle lines" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    expect(screen.getByRole("radio", { name: "Untangle lines" })).toBeChecked();
+    await user.keyboard("{Escape}");
+
+    // One undo: the boxes are back where they were AND the mode is forgotten.
+    const before = onChange.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(onChange.mock.calls.length).toBeGreaterThan(before));
+    const restored = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(restored.settings).toBeUndefined();
+    expect(restored.nodes.map((n) => [n.id, n.x, n.y])).toEqual(DOC.nodes.map((n) => [n.id, n.x, n.y]));
+    // …and redo brings both back.
+    await user.click(screen.getByRole("button", { name: "Redo" }));
+    await waitFor(() =>
+      expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toEqual({ arrange: "untangle" }),
+    );
+  });
+
+  it("a later Tidy keeps arranging the way the document says", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(
+      <ArchitectureStudio
+        defaultValue={{ ...DOC, settings: { arrange: "untangle" } }}
+        onChange={onChange}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    expect(screen.getByRole("radio", { name: "Untangle lines" })).toBeChecked();
+    expect(screen.getByRole("menuitem", { name: /^Tidy/ })).toHaveTextContent("untangling the lines");
+    await user.click(screen.getByRole("menuitem", { name: /^Tidy/ }));
+    await screen.findByText("Tidied");
+    const tidied = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(tidied.settings).toEqual({ arrange: "untangle" });
+    const b = tidied.nodes.find((n) => n.id === "b")!;
+    const a = tidied.nodes.find((n) => n.id === "a")!;
+    expect(b.y).not.toBe(a.y);
+  });
+});
+
+describe("UML notation and structure", () => {
+  const table = (id: string, x: number, fields: unknown[]) => ({
+    id, label: id, kind: "table", icon: "none", description: "", parentId: null, x, y: 0, w: 230, h: 96, fields,
+  });
+  const MODEL: DiagramTemplate = validateTemplate({
+    version: 1,
+    meta: { title: "Shop" },
+    nodes: [
+      table("users", 0, [{ id: "id", name: "id", type: "uuid", key: "pk" }]),
+      table("products", 600, [{ id: "id", name: "id", type: "uuid", key: "pk" }]),
+      table("order_items", 300, [
+        { id: "user_id", name: "user_id", type: "uuid", key: "pfk" },
+        { id: "product_id", name: "product_id", type: "uuid", key: "pfk" },
+      ]),
+    ],
+    edges: [
+      { id: "j1", source: "order_items", target: "users", label: "", style: "dashed", color: "slate", startField: "user_id", endField: "id", relation: "reference", startLabel: "*", endLabel: "1" },
+      { id: "j2", source: "order_items", target: "products", label: "", style: "dashed", color: "slate", startField: "product_id", endField: "id", relation: "reference", startLabel: "*", endLabel: "1" },
+    ],
+  });
+
+  it("the notation is a document setting picked in the View menu, and one undo forgets it", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={MODEL} onChange={onChange} />);
+    await user.click(screen.getByRole("button", { name: "View" }));
+    expect(screen.getByRole("radio", { name: "Symbols and numbers" })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: "UML numbers" }));
+    await screen.findByText(/UML notation/);
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toEqual({ notation: "uml" });
+    expect(screen.getByRole("radio", { name: "UML numbers" })).toBeChecked();
+    await user.keyboard("{Escape}");
+    const before = onChange.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(onChange.mock.calls.length).toBeGreaterThan(before));
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toBeUndefined();
+  });
+
+  it("Insert offers an enumeration — a record whose rows are its values", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={MODEL} onChange={onChange} />);
+    await fromMenu(user, "Insert", /^Enumeration/);
+    await waitFor(() =>
+      expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).nodes.some((n) => n.kind === "enum")).toBe(true),
+    );
+  });
+
+  it("Arrange folds a junction table into one many-to-many line, and undo brings the table back", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={MODEL} onChange={onChange} />);
+    await fromMenu(user, "Arrange", /^Collapse junction tables \(1\)/);
+    await screen.findByText(/1 junction table folded/);
+    const folded = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(folded.nodes.map((n) => n.id).sort()).toEqual(["products", "users"]);
+    expect(folded.edges).toHaveLength(1);
+    expect(folded.edges[0]).toMatchObject({ source: "users", target: "products", label: "order_items", startLabel: "*", endLabel: "*" });
+    // Nothing left to fold: the item disables itself.
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    expect(screen.getByRole("menuitem", { name: /^Collapse junction tables/ })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    const before = onChange.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(onChange.mock.calls.length).toBeGreaterThan(before));
+    const restored = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(restored.nodes.map((n) => n.id).sort()).toEqual(["order_items", "products", "users"]);
+    expect(restored.edges.map((e) => e.id).sort()).toEqual(["j1", "j2"]);
   });
 });

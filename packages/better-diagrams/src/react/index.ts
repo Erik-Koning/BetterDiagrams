@@ -7,8 +7,16 @@
  */
 
 export { ArchitectureStudio } from "./ArchitectureStudio";
-export type { ArchitectureStudioProps, StudioSelection, StudioSlotContext } from "./ArchitectureStudio";
+export type {
+  ArchitectureStudioProps,
+  StudioHandle,
+  StudioSelection,
+  StudioSlotContext,
+} from "./ArchitectureStudio";
 export { DiffCanvas } from "./DiffCanvas";
+// The field grid on its own, for a host that opens it from chrome of its own.
+export { FieldGridModal } from "./FieldGridModal";
+export type { FieldGridModalProps } from "./FieldGridModal";
 
 export { SequenceStudio } from "./sequence/SequenceStudio";
 export type { SequenceSelection, SequenceStudioProps } from "./sequence/SequenceStudio";
@@ -29,6 +37,7 @@ export {
   kindDef,
   iconPaths,
   providerDef,
+  relationDef,
   zoneInk,
   zoneFill,
   FALLBACK_KIND,
@@ -55,6 +64,7 @@ export type { UiIconName, UiIconProps } from "./ui-icons";
 
 export {
   BUILTIN_EXPORTERS,
+  FOLDER_EXPORTERS,
   renderTemplateToCanvas,
   renderTemplateToSvg,
   renderTemplateToMermaid,
@@ -65,6 +75,8 @@ export {
 } from "./exporters";
 export type { ExportPalette, DrawCmd, DrawTag, Emitted } from "./draw";
 export { buildTimelineHtml, buildMultiViewHtml } from "./html-export";
+// Transient route colours, for a host lighting its own found paths.
+export { transientPathColors } from "./path-view";
 export type { ViewEntry, MultiViewHtmlOptions } from "./html-export";
 export {
   buildTemplateSystemPrompt,

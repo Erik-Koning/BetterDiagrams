@@ -55,6 +55,29 @@ test.describe("editing an architecture", () => {
     await expect(studio.saveButton).toHaveText("Save");
   });
 
+  test("an edit made before the session's first save is flagged, and survives save + reload", async ({ page, studio }) => {
+    await studio.goto();
+    await expect(studio.saveButton).toHaveText("Save");
+
+    // Recolour a line on a freshly loaded diagram. The button used to keep
+    // reading "Save — everything is saved" until the first save of the
+    // session had happened, so a reload here silently lost the change.
+    await page.locator(".as-edge__hit").first().click({ force: true });
+    const rose = studio.inspector.getByRole("button", { name: "Edge colour rose" });
+    await rose.click();
+    await expect(rose).toHaveAttribute("aria-pressed", "true");
+    await expect(studio.saveButton).toHaveText("Save •");
+
+    await studio.save();
+    await page.reload();
+    await expect(studio.saveButton).toHaveText("Save");
+    await page.locator(".as-edge__hit").first().click({ force: true });
+    await expect(studio.inspector.getByRole("button", { name: "Edge colour rose" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
   test("the live template panel mirrors the document and highlights the selection", async ({ page, studio }) => {
     await studio.goto();
     const json = await studio.showJson();
@@ -74,7 +97,7 @@ test.describe("editing an architecture", () => {
     await studio.focusEditor();
 
     await page.keyboard.press("ControlOrMeta+k");
-    const search = studio.root.getByLabel("Search nodes", { exact: true });
+    const search = studio.root.getByLabel("Search nodes and fields", { exact: true });
     await expect(search).toBeFocused();
     await search.fill("Worker");
     await expect(studio.root.locator(".as-search__count")).toHaveText("1/1");
@@ -93,5 +116,44 @@ test.describe("editing an architecture", () => {
     await page.keyboard.press("ControlOrMeta+s");
     await expect(studio.toast).toHaveText("Saved");
     await expect(studio.saveButton).toHaveText("Save");
+  });
+
+  test.describe("copy, paste, duplicate", () => {
+    test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
+    // Asserted on the lines as DRAWN, not as stored. The reported bug left
+    // the document intact — every jsdom test of the paste passed — while the
+    // canvas lost every edge: a rebuild plus a deferred re-select stripped
+    // React Flow of the node geometry it draws edges from. Only a real
+    // browser, with a real ResizeObserver, sees that.
+    test("pasting a node keeps every line on the canvas and selects the copy", async ({ page, studio }) => {
+      await studio.goto();
+      const before = await studio.drawnEdges.count();
+      expect(before).toBeGreaterThan(0);
+
+      await studio.node("api").click();
+      await page.keyboard.press("ControlOrMeta+c");
+      await expect(studio.toast).toHaveText("Copied 1 node");
+      await page.keyboard.press("ControlOrMeta+v");
+      await expect(studio.toast).toHaveText("Pasted 1 node");
+
+      // A single-node fragment carries no lines, so the count must hold —
+      // and stay held once React Flow has re-measured the new node.
+      await expect(studio.selectedNodes).toHaveCount(1);
+      await expect(studio.selectedNodes).not.toHaveAttribute("data-id", "api");
+      await page.waitForTimeout(250);
+      await expect(studio.drawnEdges).toHaveCount(before);
+
+      // …and the copy's lines come with a duplicate, then leave with undo.
+      await studio.node("api").click();
+      await page.keyboard.press("ControlOrMeta+d");
+      await expect(studio.toast).toContainText("Duplicated");
+      await page.waitForTimeout(250);
+      expect(await studio.drawnEdges.count()).toBeGreaterThan(before);
+
+      await studio.undoButton.click();
+      await page.waitForTimeout(250);
+      await expect(studio.drawnEdges).toHaveCount(before);
+    });
   });
 });

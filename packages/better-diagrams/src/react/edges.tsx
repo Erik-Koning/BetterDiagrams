@@ -29,15 +29,17 @@ import {
   ViewportPortal,
   useInternalNode,
   useReactFlow,
+  useStore,
   type Edge,
   type EdgeProps,
+  type ReactFlowState,
 } from "@xyflow/react";
 import {
   anchorFromPoint,
-  cardinalityMarker,
   crowsFootPath,
   edgeGeometryFor,
   edgeHeadPath,
+  endNotation,
   endLabelInset,
   nearestTOnCurve,
   startAngle,
@@ -53,13 +55,20 @@ import {
   isCollapsedEdgeId,
   isGhostEdgeId,
   MAX_EDGE_POINTS,
+  uncrossFieldAnchors,
+  withEndSlots,
   type DiagramEdgeData,
   type DiagramNodeData,
+  type EndSlots,
 } from "../contract/schema";
 import { topDropTarget } from "./dangling";
 import { formatDiagramDate } from "../contract/timeline";
 import { useStudio } from "./context";
 import { seqBadgeOffset } from "./shapes";
+import { glowInk } from "./path-view";
+
+/** The bright route colour's fallback hex — the class re-resolves it per theme. */
+const ROUTE_HEX = "#ff2d95";
 
 export type LabeledEdgeType = Edge<DiagramEdgeData, "labeled">;
 
@@ -128,6 +137,58 @@ const LABEL_LAYER_STYLE: CSSProperties = {
   pointerEvents: "none",
 };
 
+/**
+ * The un-crossing pass over the whole canvas (`uncrossFieldAnchors`): which
+ * row-anchored ends trade rows so lines leaving one side of a table don't
+ * cross. An edge knows only its own two boxes, and this needs every edge on
+ * every side — so it runs over React Flow's store, once per change of the
+ * node or edge arrays (a drag frame, a measure, an edit), and every edge
+ * reads its own two numbers from the shared result. Keyed on the arrays'
+ * identity: nothing an edge draws with changes without one of them changing.
+ *
+ * The boxes are the same ones the edge component draws with — the store's
+ * absolute positions and measured sizes — so the trade and the line it moves
+ * can never disagree about where a row is.
+ */
+const endSlotsCache = new WeakMap<ReactFlowState["nodes"], { edges: ReactFlowState["edges"]; slots: Map<string, EndSlots> }>();
+function endSlotsOf(state: ReactFlowState): Map<string, EndSlots> {
+  const hit = endSlotsCache.get(state.nodes);
+  if (hit && hit.edges === state.edges) return hit.slots;
+  const nodeOf = (id: string) => {
+    const node = state.nodeLookup.get(id);
+    if (!node || node.hidden) return undefined;
+    const data = node.data as DiagramNodeData | undefined;
+    const { x, y } = node.internals.positionAbsolute;
+    return {
+      fields: data?.fields,
+      description: data?.description,
+      box: { x, y, width: node.measured?.width ?? 0, height: node.measured?.height ?? 0 },
+    };
+  };
+  const slots = uncrossFieldAnchors(
+    state.edges.flatMap((e) => {
+      const data = e.data as DiagramEdgeData | undefined;
+      return e.hidden
+        ? []
+        : [
+            {
+              id: e.id,
+              source: e.source,
+              target: e.target,
+              start: data?.start,
+              end: data?.end,
+              startField: data?.startField,
+              endField: data?.endField,
+              points: data?.points,
+            },
+          ];
+    }),
+    nodeOf,
+  );
+  endSlotsCache.set(state.nodes, { edges: state.edges, slots });
+  return slots;
+}
+
 /** The nearest reference within snapping distance, or nothing. */
 function snapAxis(v: number, refs: readonly number[]): number | null {
   let best: number | null = null;
@@ -146,11 +207,16 @@ export const LabeledEdge = memo(function LabeledEdge({
   data,
   selected,
 }: EdgeProps<LabeledEdgeType>) {
-  const { readOnly, requestCommit, registry, showToast } = useStudio();
+  const { readOnly, requestCommit, registry, showToast, notation } = useStudio();
   const { screenToFlowPosition, setEdges, setNodes, getEdges, getNodes, getInternalNode } =
     useReactFlow();
   const sourceNode = useInternalNode(source);
   const targetNode = useInternalNode(target);
+  // The rows this edge's ends trade to, if the un-crossing pass moved them.
+  // Selected as two numbers rather than the pair: a primitive compares by
+  // value, so an edge the pass left alone never re-renders for it.
+  const startSlot = useStore((state) => endSlotsOf(state).get(id)?.start);
+  const endSlot = useStore((state) => endSlotsOf(state).get(id)?.end);
   const draggingRef = useRef(false);
   /**
    * An endpoint mid-drag: its end of the line follows the pointer instead of
@@ -163,7 +229,16 @@ export const LabeledEdge = memo(function LabeledEdge({
     drop: string | null;
   } | null>(null);
   /** Inline label editor open (double-click on the line or its label). */
-  const [editingLabel, setEditingLabel] = useState(false);
+  const [labelEditOpen, setLabelEditOpen] = useState(false);
+  /**
+   * The same edit as every gate below sees it. Read-only has no inline editor,
+   * so a host that flips it mid-edit ends that edit in ONE place rather than
+   * three: keyed to the raw state, the field unmounted while the gates went on
+   * hiding the static text it stands in for — and read-only also refuses the
+   * double-click that would re-open it, so the label stayed gone. The state
+   * itself is left alone, so regaining write access reopens the field.
+   */
+  const editingLabel = labelEditOpen && !readOnly;
   /**
    * Alignment guides while a waypoint drags: the reference lines the dragged
    * point is currently snapped to, drawn as dashed hints.
@@ -192,9 +267,10 @@ export const LabeledEdge = memo(function LabeledEdge({
 
   /**
    * The stored route with field references resolved: a foreign key lands on
-   * the row it names rather than on the middle of the table. Recomputed from
-   * the live boxes each time, because which face the line leaves through
-   * follows the nodes as they are dragged.
+   * the row it names rather than on the middle of the table — or on the row
+   * the un-crossing pass traded it to. Recomputed from the live boxes each
+   * time, because which face the line leaves through follows the nodes as
+   * they are dragged.
    */
   const specOf = (sBox: Box, tBox: Box): EdgePathSpec => {
     const side = (node: typeof sourceNode, b: Box) => {
@@ -207,15 +283,18 @@ export const LabeledEdge = memo(function LabeledEdge({
       };
     };
     return {
-      ...fieldAnchors(
-        {
-          start: data?.start,
-          end: data?.end,
-          startField: data?.startField,
-          endField: data?.endField,
-        },
-        side(sourceNode, sBox),
-        side(targetNode, tBox),
+      ...withEndSlots(
+        fieldAnchors(
+          {
+            start: data?.start,
+            end: data?.end,
+            startField: data?.startField,
+            endField: data?.endField,
+          },
+          side(sourceNode, sBox),
+          side(targetNode, tBox),
+        ),
+        { start: startSlot, end: endSlot },
       ),
       points: data?.points,
     };
@@ -517,22 +596,31 @@ export const LabeledEdge = memo(function LabeledEdge({
   // what the arrowhead's drop-shadow reads.
   const glows = data?.pathGlow ?? [];
   const glowStyle = glows.length
-    ? ({ "--as-path-ink": `var(--as-edge-${glows[0].color})` } as CSSProperties)
+    ? ({ "--as-path-ink": glowInk(glows[0]) } as CSSProperties)
     : undefined;
+  // A bright route's key badge: the referencing field that carries this hop,
+  // above the label position, on its own background so it never sits on the glow.
+  const routeKey = data?.routeKey;
+  const routeKeyWidth = routeKey ? routeKey.length * 5.6 + 12 : 0;
+  // Clear of the seq badge (a circle of r=8 at label.y - 9) when both show.
+  const routeKeyTop = (data?.seq ? -36 : -24) as number;
   // Stacked under whatever else the label group is showing, so a connection
   // that lands later says so without displacing its own name.
   const dateY = (data?.label ? 8 : -5) + (data?.tech ? 11 : 0);
   const origin = geo.at(0);
-  // A recognisable cardinality draws its crow's-foot symbol at the box; the
-  // text still renders further in, for readers who don't speak the notation.
-  const startMarker = cardinalityMarker(data?.startLabel);
-  const endMarker = cardinalityMarker(data?.endLabel);
+  // A recognisable cardinality draws its crow's-foot symbol at the box and
+  // the text further in — or one of the two, as the document's notation
+  // says (see `endNotation`): UML keeps the numbers, crow's foot the symbol.
+  const startEnd = endNotation(data?.startLabel, notation);
+  const endEnd = endNotation(data?.endLabel, notation);
+  const startMarker = startEnd.marker;
+  const endMarker = endEnd.marker;
   // Cardinality sits a fixed distance in from each box — near the end it
   // describes, wherever the middle label happens to be.
-  const startLabelAt = data?.startLabel
+  const startLabelAt = startEnd.text
     ? geo.at(tAtDistance(geo, endLabelInset(startMarker)))
     : null;
-  const endLabelAt = data?.endLabel
+  const endLabelAt = endEnd.text
     ? geo.at(tAtDistance(geo, endLabelInset(endMarker), true))
     : null;
 
@@ -543,7 +631,7 @@ export const LabeledEdge = memo(function LabeledEdge({
     if (readOnly || synthetic) return;
     event.stopPropagation();
     event.preventDefault();
-    setEditingLabel(true);
+    setLabelEditOpen(true);
   };
 
   // Drag anywhere on the line to bend it there: past a small threshold the
@@ -742,25 +830,42 @@ export const LabeledEdge = memo(function LabeledEdge({
       {glows.map((glow) => (
         <g
           key={glow.pathId}
-          className="as-edge__pathglow"
+          // Only the path that moves (see PathGlow.animate) pulses and flows;
+          // the rest keep a still halo and a still dash pattern.
+          className={`as-edge__pathglow${glow.animate ? " as-edge__pathglow--animate" : ""}`}
           style={{ "--as-path-step": glow.step, "--as-path-steps": glow.steps } as CSSProperties}
         >
           <path
-            className={`as-edge__glow as-edge--c-${glow.color}`}
+            className={`as-edge__glow as-edge--c-${glow.bright ? "route" : glow.color}`}
             d={geo.path}
             fill="none"
-            stroke={EDGE_COLOR_HEX[glow.color]}
+            stroke={glow.bright ? ROUTE_HEX : EDGE_COLOR_HEX[glow.color]}
             style={{ pointerEvents: "none" }}
           />
           <path
-            className={`as-edge__flow as-edge--c-${glow.color}${glow.reversed ? " as-edge__flow--reverse" : ""}`}
+            className={`as-edge__flow as-edge--c-${glow.bright ? "route" : glow.color}${glow.reversed ? " as-edge__flow--reverse" : ""}`}
             d={geo.path}
             fill="none"
-            stroke={EDGE_COLOR_HEX[glow.color]}
+            stroke={glow.bright ? ROUTE_HEX : EDGE_COLOR_HEX[glow.color]}
             style={{ pointerEvents: "none" }}
           />
         </g>
       ))}
+      {routeKey ? (
+        <g className="as-edge__routekey" style={{ pointerEvents: "none" }}>
+          <rect
+            className="as-edge__routekeybg"
+            x={geo.label.x - routeKeyWidth / 2}
+            y={geo.label.y + routeKeyTop}
+            width={routeKeyWidth}
+            height={14}
+            rx={4}
+          />
+          <text className="as-edge__routekeytext" x={geo.label.x} y={geo.label.y + routeKeyTop + 10} textAnchor="middle">
+            {routeKey}
+          </text>
+        </g>
+      ) : null}
       <path
         className={[
           "as-edge__stroke",
@@ -911,7 +1016,7 @@ export const LabeledEdge = memo(function LabeledEdge({
             );
           })()
         : null}
-      {editingLabel && !readOnly ? (
+      {editingLabel ? (
         <EdgeLabelRenderer>
           {/* HTML, not SVG text: a real caret, selection, and IME. Positioned
               on the label point in FLOW coordinates — the renderer's layer
@@ -935,7 +1040,7 @@ export const LabeledEdge = memo(function LabeledEdge({
               );
             }}
             onBlur={() => {
-              setEditingLabel(false);
+              setLabelEditOpen(false);
               // Live edits went through setEdges only — record them so the
               // label is undoable and reaches a controlled host.
               requestCommit();
@@ -953,7 +1058,7 @@ export const LabeledEdge = memo(function LabeledEdge({
           />
         </EdgeLabelRenderer>
       ) : null}
-      {startLabelAt || endLabelAt || (hasLabel && !editingLabel) ? (
+      {startLabelAt || endLabelAt || hasLabel || editingLabel ? (
         // Every word an edge carries goes through the viewport portal, which
         // React Flow renders AFTER the node layer: a connection's name is the
         // one thing that must never be covered, and an edge whose line
@@ -961,6 +1066,14 @@ export const LabeledEdge = memo(function LabeledEdge({
         // with it. The portal carries the same pan/zoom transform, so these
         // stay plain flow coordinates — the 0×0 `overflow: visible` svg is
         // just the SVG context they need to live in.
+        //
+        // `editingLabel` holds this layer OPEN for the length of an edit, even
+        // while the text it carries is momentarily nothing. Portal children
+        // stack in the order they were inserted and each sibling portal is its
+        // own React tree, so a layer that leaves the container comes back at
+        // the END of it — unmounting for the edit silently re-stacked the
+        // edited label over every other one, permanently. What the edit hides
+        // is the static text, one gate further in.
         <ViewportPortal>
           {/* `as-future` rides the layer itself: the timeline's dimming is a
               class on the edge WRAPPER, which this text no longer lives in. */}
@@ -976,7 +1089,7 @@ export const LabeledEdge = memo(function LabeledEdge({
                 textAnchor="middle"
                 style={{ pointerEvents: "none" }}
               >
-                {data!.startLabel}
+                {startEnd.text}
               </text>
             ) : null}
             {endLabelAt ? (
@@ -987,7 +1100,7 @@ export const LabeledEdge = memo(function LabeledEdge({
                 textAnchor="middle"
                 style={{ pointerEvents: "none" }}
               >
-                {data!.endLabel}
+                {endEnd.text}
               </text>
             ) : null}
             {hasLabel && !editingLabel ? (

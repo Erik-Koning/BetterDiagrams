@@ -32,6 +32,9 @@ export {
   FIELD_KEYS,
   NODE_STATUSES,
   VERSION_TAG_POSITIONS,
+  GROUP_CONTENTS,
+  ARRANGE_MODES,
+  NOTATIONS,
   EDGE_COLOR_HEX,
   EDGE_DASH,
   KIND_DEFAULT_SIZE,
@@ -60,14 +63,17 @@ export {
   FILE_LINK_PREFIX,
   toReactFlow,
   fromReactFlow,
-  // Data-model rows: the metrics, the row→anchor maths, and the resolver both
-  // the canvas and the exporters route field-anchored edges through.
+  // Data-model rows: the metrics, the row→anchor maths, and the resolvers
+  // both the canvas and the exporters route field-anchored edges through —
+  // one edge's rows, and the document-wide pass that un-crosses them.
   FIELD_ROW_H,
   MAX_NODE_FIELDS,
   fieldListTop,
   fieldsBoxHeight,
   fieldRowT,
   fieldAnchors,
+  uncrossFieldAnchors,
+  withEndSlots,
   // Node text layout and container frame styling — the vocabularies a host
   // building its own inspector needs, plus the height a wrapped label demands.
   NODE_TEXT_ALIGNS,
@@ -95,14 +101,20 @@ export type {
   NodeField,
   FieldKey,
   FieldAnchorNode,
+  UncrossNode,
+  EndSlots,
   NodeStatus,
   NodeTextAlign,
   NodeTextVAlign,
   NodeOutline,
   VersionTagPosition,
+  GroupContents,
+  ArrangeMode,
+  Notation,
   DiagramNode,
   DiagramEdge,
   DiagramTemplate,
+  DiagramSettings,
   ZoneBox,
   ScaleZoneOptions,
   Migration,
@@ -122,9 +134,138 @@ export type {
 export { ZONE_SHAPES, ZONE_OUTLINES } from "./zones";
 export type { DiagramZone, ZoneOutline, ZoneShape, ZonePoint } from "./zones";
 
+// ── Relationship kinds (what a data model's lines mean, and how they dress) ─
+export {
+  RELATION_KINDS,
+  RELATION_KIND_ORDER,
+  FALLBACK_RELATION,
+  relationDressing,
+  resolveRelationKinds,
+} from "./relations";
+export type { RelationKindDef } from "./relations";
+export { junctionTables, collapseJunctions } from "./junctions";
+export type { JunctionTable } from "./junctions";
+
+// ── Fields (rows plus what the data bag knows about them) ───────────────────
+export {
+  fieldKey,
+  sameFieldRef,
+  edgeFieldIds,
+  dataFields,
+  nameIndex,
+  fieldRecords,
+  fieldOutEdges,
+  fieldInEdges,
+  referencedKey,
+  hasField,
+  buildFieldIndex,
+  searchFields,
+  keyFields,
+  edgeKeyOf,
+} from "./fields";
+export type {
+  FieldRef,
+  Pin,
+  KeyInfo,
+  FieldTarget,
+  FieldRecord,
+  FieldDocument,
+  DataField,
+  FieldIndex,
+  FieldIndexEntry,
+  FieldHit,
+} from "./fields";
+
+// ── Key coverage (how much of a model a set of keys reaches) ────────────────
+export { keyCoverage, marginalGains, minimalKeyCover, storesFields } from "./coverage";
+export type {
+  CoverageScope,
+  CoverageOptions,
+  CoverageResult,
+  KeyGain,
+  MinimalCoverOptions,
+  MinimalCoverResult,
+} from "./coverage";
+
 // ── Paths (named flows the reader can light up) ──────────────────────────────
 export { PATH_COLOR_CYCLE, pathColor, resolvePath } from "./paths";
 export type { DiagramPath, PathGlow, ResolvedPath, ResolvedPathStep } from "./paths";
+// Finding walks rather than resolving written ones: BFS, k-shortest, all
+// simple routes, neighbourhoods — and the bridge back to a lit path.
+export {
+  shortestPath,
+  shortestPaths,
+  allSimplePaths,
+  neighbourhood,
+  walkToPath,
+  walkLength,
+  sameWalk,
+  fieldPaths,
+  between,
+  enumerateRoutes,
+  keyFrequency,
+  reachableFrom,
+} from "./graph";
+export type {
+  GraphDocument,
+  GraphOptions,
+  GraphWalk,
+  FieldEndpoint,
+  FieldPathOptions,
+  FieldPathResult,
+  BetweenOptions,
+  BetweenResult,
+  KeyUse,
+  KeyFrequencyResult,
+  ReachableResult,
+} from "./graph";
+
+// ── Folder format (directory tree ⇄ document) ───────────────────────────────
+export {
+  importFolder,
+  exportFolder,
+  detectDialect,
+  buildFolderTree,
+  treeFiles,
+  genericDialect,
+  dataModelDialect,
+  createDataModelDialect,
+  DATAMODEL_KINDS,
+  dataModelRegistry,
+  SIDECAR_DIR,
+  LAYOUT_FILE,
+  OVERRIDES_FILE,
+  MANIFEST_FILE,
+  OVERRIDES_FORMAT,
+  FOLDER_FORMAT,
+  AUTO_FOLD_NODES,
+  parseFlatYaml,
+  patchFlatYaml,
+} from "./folder";
+export type {
+  Dialect,
+  DialectRegistry,
+  FolderExportOptions,
+  FolderExportResult,
+  FileMap,
+  FolderEntry,
+  FolderNode,
+  FolderOverrides,
+  FolderTree,
+  FolderManifest,
+  FolderImportOptions,
+  FolderImportResult,
+  ImportStats,
+  ImportWarning,
+  ImportWarningCode,
+  NodeBaseline,
+  NodeOverride,
+  DataModelDialectOptions,
+  EntitySchema,
+  EntityField,
+  ForeignKey,
+  RelationshipKind,
+} from "./folder";
 
 // ── Auto-layout ──────────────────────────────────────────────────────────────
 export { autoLayout, hasOverlaps, placeUnpositioned } from "./layout";

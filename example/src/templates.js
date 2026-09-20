@@ -45,6 +45,18 @@ export async function readTemplate(folder, file) {
   }
 }
 
+/** A folder-format tree, as `{ name, files }` — `files` is path → text, ready for `importFolder`. */
+export async function readFolderTree(name) {
+  try {
+    const res = await fetch(`${ROUTE}/folders/${encodeURIComponent(name)}`);
+    if (!res.ok) return null;
+    const body = await res.json();
+    return body && typeof body.files === "object" ? body : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Auto-save's write. Scratch only — the route refuses anything else. */
 export async function writeTemplate(file, doc) {
   try {

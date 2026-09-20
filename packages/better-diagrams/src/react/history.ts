@@ -83,11 +83,21 @@ function clone(snapshot: Snapshot): Snapshot {
 }
 
 /**
- * Compare only the fields the document actually persists. React Flow mutates
+ * Compare only what the document actually persists. React Flow mutates
  * transient fields (`measured`, `dragging`, `selected`) constantly; keying off
  * those would record an undo entry every time the user clicks a node.
+ *
+ * When the snapshot carries the document, the document IS the signature: it
+ * is what undo restores (see the editor's applySnapshot), so two commits of
+ * the same document are one entry however the canvas happened to represent
+ * it. That case is real — a rebuild commits its freshly materialized nodes,
+ * and a deferred commit queued before it then commits the store's not-yet-
+ * rebuilt ones; one document, two React Flow shapes — and it used to cost
+ * the user a ⌘Z press that visibly changed nothing. The field-by-field
+ * comparison below serves snapshots that carry no document.
  */
 function signature(snapshot: Snapshot): string {
+  if (snapshot.template) return JSON.stringify(snapshot.template);
   const nodes = snapshot.nodes.map((n) => [
     n.id,
     n.type,
@@ -99,11 +109,7 @@ function signature(snapshot: Snapshot): string {
     JSON.stringify(n.data ?? {}),
   ]);
   const edges = snapshot.edges.map((e) => [e.id, e.source, e.target, JSON.stringify(e.data ?? {})]);
-  // Paths have no canvas representation, so they are read off the document
-  // the snapshot carries. Without this a paths-only edit collapsed into the
-  // entry before it, and undoing a later edit silently reverted the paths.
-  const paths = (snapshot.template as { paths?: unknown } | undefined)?.paths ?? null;
-  return JSON.stringify({ nodes, edges, meta: snapshot.meta ?? null, paths });
+  return JSON.stringify({ nodes, edges, meta: snapshot.meta ?? null });
 }
 
 export function useHistory(initial?: Snapshot): History {

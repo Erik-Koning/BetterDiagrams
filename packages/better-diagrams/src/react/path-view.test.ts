@@ -41,8 +41,8 @@ describe("buildPathGlowIndex", () => {
   it("resolves each lit path into per-element entries with the path's stable colour", () => {
     const index = buildPathGlowIndex(DOC, ["p2"])!;
     // p2 is the second path: its own colour wins over the cycle's "emerald".
-    expect(index.nodes.get("c")).toEqual([{ pathId: "p2", color: "rose", step: 0, steps: 3 }]);
-    expect(index.edges.get("bc")).toEqual([{ pathId: "p2", color: "rose", step: 1, steps: 3, reversed: true }]);
+    expect(index.nodes.get("c")).toEqual([{ pathId: "p2", color: "rose", step: 0, steps: 3, animate: true }]);
+    expect(index.edges.get("bc")).toEqual([{ pathId: "p2", color: "rose", step: 1, steps: 3, reversed: true, animate: true }]);
     expect(index.nodes.get("a")).toBeUndefined();
   });
 
@@ -51,6 +51,18 @@ describe("buildPathGlowIndex", () => {
     expect(index.nodes.get("b")!.map((g) => g.pathId)).toEqual(["p1", "p2"]);
     // p1 is the first path and has no colour of its own: sky, the cycle's first.
     expect(index.nodes.get("b")![0].color).toBe("sky");
+  });
+
+  it("moves only the shortest lit path — or the route singled out", () => {
+    // p1 has five steps, p2 three: p2 moves, p1 keeps a still halo.
+    const both = buildPathGlowIndex(DOC, ["p1", "p2"])!;
+    expect(both.nodes.get("b")!.map((g) => [g.pathId, g.animate ?? false])).toEqual([["p1", false], ["p2", true]]);
+    expect(both.edges.get("ab")![0].animate).toBeUndefined();
+    // A singled-out route moves whatever its length.
+    const long = { id: "r", title: "Long", steps: ["a", "b", "c", "d", "e"] };
+    const bright = buildPathGlowIndex(DOC, ["p2"], [long], { bright: true })!;
+    expect(bright.nodes.get("a")!.find((g) => g.pathId === "r")!.animate).toBe(true);
+    expect(bright.nodes.get("c")!.find((g) => g.pathId === "p2")!.animate).toBeUndefined();
   });
 });
 
@@ -77,7 +89,7 @@ describe("applyPathView", () => {
 
     const ab = out.edges.find((e) => e.id === "ab")!;
     expect(ab.className).toBe("as-path-edge");
-    expect(ab.data!.pathGlow).toEqual([{ pathId: "p1", color: "sky", step: 1, steps: 5 }]);
+    expect(ab.data!.pathGlow).toEqual([{ pathId: "p1", color: "sky", step: 1, steps: 5, animate: true }]);
 
     const inner = nodes.find((n) => n.id === "inner")!;
     expect(out.nodes.find((n) => n.id === "inner")).toBe(inner);

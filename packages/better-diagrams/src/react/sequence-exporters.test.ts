@@ -4,9 +4,11 @@
  */
 import { describe, expect, it } from "vitest";
 import { EXAMPLE_SEQUENCE, validateSequence } from "../contract/sequence";
+import { createRegistry } from "./create-registry";
 import { emitSequence } from "./sequence-draw";
 import { LIGHT_EXPORT_PALETTE } from "./draw";
 import {
+  BUILTIN_SEQUENCE_EXPORTERS,
   renderSequenceToMermaid,
   renderSequenceToPlantUml,
   renderSequenceToSvg,
@@ -261,5 +263,33 @@ describe("sequence colour theming", () => {
     });
     const svg = renderSequenceToSvg(doc);
     expect(svg).toContain('fill="#f59e0b"');
+  });
+});
+
+describe("marketing without gradients", () => {
+  const isGradient = (c: { op: string; gradient?: unknown }) => c.op === "path" && !!c.gradient;
+
+  it("paints participant headers flat, and everything else the same", () => {
+    const glossy = emitSequence(t, {}, { mode: "marketing" });
+    const flat = emitSequence(t, {}, { mode: "marketing", gradients: false });
+    expect(glossy.cmds.some(isGradient)).toBe(true);
+    expect(flat.cmds.some(isGradient)).toBe(false);
+    const strip = (cmds: typeof flat.cmds) =>
+      cmds.map((c) => (c.op === "path" ? { ...c, gradient: undefined, fill: undefined, fillAlpha: undefined } : c));
+    expect(strip(flat.cmds)).toEqual(strip(glossy.cmds));
+    // Technical never had one, so the setting is inert there.
+    expect(emitSequence(t, {}, { gradients: false })).toEqual(emitSequence(t));
+  });
+
+  it("reaches the SVG and the HTML page through the built-in exporters", async () => {
+    const ctx = { template: t, registry: createRegistry(), filename: "x", mode: "marketing", gradients: false };
+    const svg = await (BUILTIN_SEQUENCE_EXPORTERS.svg.run(ctx) as { blob: Blob }).blob.text();
+    expect(svg).not.toMatch(/<linearGradient/);
+    expect(svg).toMatch(/<feDropShadow /);
+    const html = await (BUILTIN_SEQUENCE_EXPORTERS.html.run(ctx) as { blob: Blob }).blob.text();
+    expect(html).not.toMatch(/<linearGradient/);
+    // And the default still has them.
+    const glossy = await (BUILTIN_SEQUENCE_EXPORTERS.svg.run({ ...ctx, gradients: undefined }) as { blob: Blob }).blob.text();
+    expect(glossy).toMatch(/<linearGradient/);
   });
 });

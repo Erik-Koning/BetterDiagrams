@@ -1,0 +1,92 @@
+{
+  "edgeCount": 7,
+  "edges": [
+    {
+      "from": "account",
+      "field": "parent_id",
+      "kind": "hierarchy",
+      "to": "account",
+      "fromFolders": [
+        "core/account",
+        "core/account/individuals"
+      ],
+      "toFolders": [
+        "core/account",
+        "core/account/individuals"
+      ]
+    },
+    {
+      "from": "contact",
+      "field": "account_id",
+      "kind": "reference",
+      "to": "account",
+      "fromFolders": [
+        "core/contact"
+      ],
+      "toFolders": [
+        "core/account",
+        "core/account/individuals"
+      ]
+    },
+    {
+      "from": "contact",
+      "field": "region_id",
+      "kind": "reference",
+      "to": "region",
+      "fromFolders": [
+        "core/contact"
+      ],
+      "toFolders": []
+    },
+    {
+      "from": "preference",
+      "field": "account_id",
+      "kind": "composition",
+      "to": "account",
+      "fromFolders": [
+        "core/preference"
+      ],
+      "toFolders": [
+        "core/account",
+        "core/account/individuals"
+      ]
+    },
+    {
+      "from": "case",
+      "field": "account_id",
+      "kind": "reference",
+      "to": "account",
+      "fromFolders": [
+        "ops/support/case"
+      ],
+      "toFolders": [
+        "core/account",
+        "core/account/individuals"
+      ]
+    },
+    {
+      "from": "case",
+      "field": "contact_id",
+      "kind": "reference",
+      "to": "contact",
+      "fromFolders": [
+        "ops/support/case"
+      ],
+      "toFolders": [
+        "core/contact"
+      ]
+    },
+    {
+      "from": "case_comment",
+      "field": "parent_id",
+      "kind": "composition",
+      "to": "case",
+      "fromFolders": [
+        "ops/support/case/case-comment"
+      ],
+      "toFolders": [
+        "ops/support/case"
+      ]
+    }
+  ]
+}

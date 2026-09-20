@@ -1,0 +1,9 @@
+kind: custom
+label: Customer
+name: customer
+recordCount: 812
+fieldsTotal: 7
+fieldsVisible: 7
+diagramType: custom
+diagramName: Customer
+url: /entities/customer

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  EDGE_KEYS,
   EXAMPLE_TEMPLATE,
+  NODE_KEYS,
   buildSystemPrompt,
   fromReactFlow,
   parseLlmTemplate,
@@ -558,5 +560,62 @@ describe("scaleZoneMembers", () => {
     const out = scaleZoneMembers(doc, "z", before, after);
     expect(out.zones![0]).toMatchObject(after);
     expect(out.zones![0].points).toBe(points);
+  });
+});
+
+describe("the `data` bag", () => {
+  const node = (id: string, over: Record<string, unknown> = {}) => ({
+    id, label: id, kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76, ...over,
+  });
+
+  it("is a known key on both nodes and edges", () => {
+    expect(NODE_KEYS).toContain("data");
+    expect(EDGE_KEYS).toContain("data");
+  });
+
+  it("round-trips a plain object untouched and drops anything else", () => {
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        node("a", { data: { sfObject: "Account", custom: false, fields: { Name: { type: "string" } } } }),
+        node("b", { data: [] }),
+        node("c", { data: "nope" }),
+        node("d", { data: {} }),
+        node("e", { data: { keep: 1, gone: undefined } }),
+      ],
+      edges: [
+        { id: "ab", source: "a", target: "b", label: "", style: "solid", color: "slate", data: { cascadeDelete: true, relationshipName: "Contacts" } },
+        { id: "bc", source: "b", target: "c", label: "", style: "solid", color: "slate", data: null },
+      ],
+    });
+    expect(doc.nodes[0].data).toEqual({ sfObject: "Account", custom: false, fields: { Name: { type: "string" } } });
+    expect("data" in doc.nodes[1]).toBe(false);
+    expect("data" in doc.nodes[2]).toBe(false);
+    expect("data" in doc.nodes[3]).toBe(false);
+    expect(doc.nodes[4].data).toEqual({ keep: 1 });
+    expect(doc.edges[0].data).toEqual({ cascadeDelete: true, relationshipName: "Contacts" });
+    expect("data" in doc.edges[1]).toBe(false);
+  });
+
+  it("is a copy, so a later edit never reaches the caller's object", () => {
+    const bag = { x: 1 };
+    const doc = validateTemplate({ version: 1, nodes: [node("a", { data: bag })], edges: [] });
+    expect(doc.nodes[0].data).not.toBe(bag);
+    expect(doc.nodes[0].data).toEqual(bag);
+  });
+
+  it("survives the React Flow round trip", () => {
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [node("a", { data: { k: "v" } }), node("b")],
+      edges: [{ id: "ab", source: "a", target: "b", label: "", style: "solid", color: "slate", data: { rule: "restrict" } }],
+    });
+    const rf = toReactFlow(doc);
+    expect(rf.nodes.find((n) => n.id === "a")!.data.data).toEqual({ k: "v" });
+    expect(rf.edges[0].data.data).toEqual({ rule: "restrict" });
+    const back = fromReactFlow(rf.nodes, rf.edges, { base: doc });
+    expect(back.nodes[0].data).toEqual({ k: "v" });
+    expect(back.edges[0].data).toEqual({ rule: "restrict" });
+    expect(back).toEqual(doc);
   });
 });

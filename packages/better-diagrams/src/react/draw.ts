@@ -18,6 +18,7 @@
 import {
   absolutePosition,
   depthOf,
+  closedContainers,
   hiddenByCollapse,
   templateBounds,
   visibleAnchor,
@@ -35,23 +36,25 @@ import {
   type DiagramEdge,
   onlyEdgeBetween,
   stackLevels,
+  uncrossFieldAnchors,
+  withEndSlots,
   type DiagramNode,
   type DiagramTemplate,
 } from "../contract/schema";
 import { zoneChipRadius, zoneCornerRadius, zoneOutline, type DiagramZone } from "../contract/zones";
 import { dateToDay, effectiveNodeDates, formatDiagramDate, isOverdue, laterDate, type DiagramDate } from "../contract/timeline";
 import {
-  cardinalityMarker,
   crowsFootPath,
   edgeGeometryFor,
   edgeHeadPath,
   endLabelInset,
+  endNotation,
   startAngle,
   tAtDistance,
   type Box,
 } from "../contract/geometry";
 import { seqBadgeOffset, silhouettePath, teamColor } from "./shapes";
-import { kindDef, iconPaths, providerDef, zoneInk, type ResolvedRegistry } from "./registry-types";
+import { kindDef, iconPaths, providerDef, relationDef, zoneInk, type ResolvedRegistry } from "./registry-types";
 import { resolveStudioMode, type StudioMode } from "./theme";
 
 export const PAD = 48;
@@ -82,6 +85,8 @@ const LEGEND_ROW_H = 18;
 const LEGEND_PAD = 12;
 const LEGEND_TITLE_H = 18;
 const LEGEND_INSET = 16;
+/** Between the infra key and the relationships key when the box shows both. */
+const LEGEND_SECTION_GAP = 8;
 const TITLE_BLOCK_H = 46;
 
 /**
@@ -248,6 +253,16 @@ function isLightPalette(palette: ExportPalette): boolean {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5;
 }
 
+/** A linear fade from `from` to `to`, its endpoints in the drawing's user space. */
+export interface Gradient {
+  from: string;
+  to: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
 /**
  * What a mode dresses the drawing in — the export's half of the stylesheet's
  * "Marketing mode" section, with the same numbers in the same order.
@@ -292,21 +307,26 @@ export interface Skin {
   /** Chip furniture — dates, team pills, group names, zone headers. */
   chipFont: "mono" | "sans";
   /**
-   * The card's own paints, for one accent over one box. A RECORD's gradient
-   * runs top-down over the header band instead of corner to corner: its
-   * content is a column of rows, and a band that fades below the title is
-   * what makes the header read as a header (`.as-root--marketing
-   * .as-node--record`).
+   * The card's own paints, for one accent over one box. Marketing names one
+   * of `gradient` or `fill` (the flat coat `gradients: false` paints
+   * instead); technical names neither, and each caller draws the accent wash
+   * it always drew — see `cardFill`.
+   *
+   * A RECORD's gradient runs top-down over the header band instead of corner
+   * to corner: its content is a column of rows, and a band that fades below
+   * the title is what makes the header read as a header
+   * (`.as-root--marketing .as-node--record`).
    */
   card(accent: string, box: Box, record?: boolean): {
-    gradient?: { from: string; to: string; x1: number; y1: number; x2: number; y2: number };
+    gradient?: Gradient;
+    fill?: string;
     stroke: string;
     strokeWidth: number;
     shadow?: { color: string; alpha: number; blur: number; dy: number };
   };
   /** The icon chip's fill, and the ink its glyph is stroked in. */
   iconChip(accent: string, x: number, y: number, size: number): {
-    gradient?: { from: string; to: string; x1: number; y1: number; x2: number; y2: number };
+    gradient?: Gradient;
     fill?: string;
     fillAlpha?: number;
     stroke?: string;
@@ -315,7 +335,30 @@ export interface Skin {
   iconInk(accent: string): string;
 }
 
-export function makeSkin(mode: StudioMode, palette: ExportPalette): Skin {
+/**
+ * The fill a card paint asks for, dimmed to `dim` for a lifecycle status.
+ * Technical's `card()` names no paint of its own: that branch is the per-site
+ * wash of the accent (`wash` × dim) every caller drew before the skin existed.
+ */
+export function cardFill(
+  paint: { gradient?: Gradient; fill?: string },
+  accent: string,
+  wash: number,
+  dim = 1,
+): Pick<Extract<DrawCmd, { op: "path" }>, "gradient" | "fill" | "fillAlpha"> {
+  if (paint.gradient) return { gradient: paint.gradient, ...(dim < 1 ? { fillAlpha: dim } : {}) };
+  if (paint.fill) return { fill: paint.fill, ...(dim < 1 ? { fillAlpha: dim } : {}) };
+  return { fill: accent, fillAlpha: wash * dim };
+}
+
+/**
+ * @param gradients Marketing's one setting: `false` paints every fade the
+ *   mode draws as a flat coat at the fade's midpoint (the stylesheet's
+ *   `--as-mk-flat`, the same 50/50 `color-mix()` of the same two ends), so a
+ *   flat card carries the same weight of its kind's hue as the gradient did
+ *   on average. Nothing else in the skin changes, and technical ignores it.
+ */
+export function makeSkin(mode: StudioMode, palette: ExportPalette, gradients = true): Skin {
   if (mode !== "marketing") {
     return {
       marketing: false,
@@ -349,6 +392,13 @@ export function makeSkin(mode: StudioMode, palette: ExportPalette): Skin {
   const gradFrom = (accent: string) => mix(accent, palette.surface, light ? 0.24 : 0.17);
   const gradTo = (accent: string) => mix(accent, palette.surface, light ? 0.07 : 0.04);
   const edge = (accent: string) => mix(accent, palette.border, light ? 0.48 : 0.34);
+  // One paint that fades `from` → `to` between two points — or, with
+  // gradients off, sits flat a quarter of the way from the pale end (the
+  // stylesheet's `--as-mk-flat`): a whole card at the fade's average reads
+  // heavier than the fade did. Every marketing fill goes through here, so
+  // the setting cannot miss one.
+  const fade = (from: string, to: string, x1: number, y1: number, x2: number, y2: number) =>
+    gradients ? { gradient: { from, to, x1, y1, x2, y2 } } : { fill: mix(from, to, 0.25) };
 
   return {
     marketing: true,
@@ -373,18 +423,18 @@ export function makeSkin(mode: StudioMode, palette: ExportPalette): Skin {
     fieldTypes: false,
     chipFont: "sans",
     card: (accent, box, record) => ({
-      gradient: {
-        from: gradFrom(accent),
-        to: gradTo(accent),
-        // 135deg: the CSS angle, which runs top-left to bottom-right. A
-        // record's runs straight down and finishes at the 46px header band —
-        // both backends pad past the last stop, so the rows below it sit on
-        // the flat end colour, which is what the CSS's third stop says too.
-        x1: box.x,
-        y1: box.y,
-        x2: record ? box.x : box.x + box.width,
-        y2: record ? box.y + 46 : box.y + box.height,
-      },
+      // 135deg: the CSS angle, which runs top-left to bottom-right. A
+      // record's runs straight down and finishes at the 46px header band —
+      // both backends pad past the last stop, so the rows below it sit on
+      // the flat end colour, which is what the CSS's third stop says too.
+      ...fade(
+        gradFrom(accent),
+        gradTo(accent),
+        box.x,
+        box.y,
+        record ? box.x : box.x + box.width,
+        record ? box.y + 46 : box.y + box.height,
+      ),
       stroke: edge(accent),
       strokeWidth: 1.2,
       // CSS spreads this one in (`-18px` on a 30px blur) and adds a second
@@ -398,26 +448,12 @@ export function makeSkin(mode: StudioMode, palette: ExportPalette): Skin {
             // On a light page the chip is the PALE tile — laying more of the
             // kind's hue over an already-tinted card just washes the card
             // twice. See the same inversion in styles.css.
-            gradient: {
-              from: palette.surface,
-              to: mix(accent, palette.surface, 0.12),
-              x1: x,
-              y1: y,
-              x2: x + size,
-              y2: y + size,
-            },
+            ...fade(palette.surface, mix(accent, palette.surface, 0.12), x, y, x + size, y + size),
             stroke: mix(accent, palette.surface, 0.3),
             strokeAlpha: 1,
           }
         : {
-            gradient: {
-              from: mix(accent, gradFrom(accent), 0.26),
-              to: mix(accent, gradTo(accent), 0.1),
-              x1: x,
-              y1: y,
-              x2: x + size,
-              y2: y + size,
-            },
+            ...fade(mix(accent, gradFrom(accent), 0.26), mix(accent, gradTo(accent), 0.1), x, y, x + size, y + size),
             stroke: accent,
             strokeAlpha: 0.22,
           },
@@ -453,9 +489,9 @@ type RawDrawCmd =
        * A linear gradient fill, its endpoints in the same user space as `d`.
        * Wins over `fill` when both are present, so a caller can pass the flat
        * colour as the fallback a reader without gradient support would want.
-       * Marketing mode is the only thing that emits one.
+       * Marketing mode with gradients on is the only thing that emits one.
        */
-      gradient?: { from: string; to: string; x1: number; y1: number; x2: number; y2: number };
+      gradient?: Gradient;
       /**
        * A soft drop shadow under the shape — `dy` down, no horizontal offset,
        * which is every shadow this editor draws. The colour is a hex and the
@@ -620,6 +656,8 @@ interface Placed {
   node: DiagramNode;
   box: Box;
   depth: number;
+  /** Drawn as a chip — the node's own `collapsed`, or the document folding it. */
+  chip: boolean;
 }
 
 interface Layout {
@@ -628,20 +666,26 @@ interface Layout {
   zones: DiagramZone[];
   edges: DiagramEdge[];
   legend: Array<{ provider: string; count: number }>;
+  /** The relationship kinds the drawn edges carry, in document order of first use. */
+  relations: Array<{ relation: string; count: number }>;
 }
 
 function layout(template: DiagramTemplate, containerKinds?: readonly string[]): Layout {
   const visible = visibleElements(template);
   const collapseHidden = hiddenByCollapse(template, { containerKinds });
+  // Chips for the same two reasons the canvas draws them: a group's own flag,
+  // or `settings.groupContents: "hide"` folding every group with contents.
+  const closed = closedContainers(template, { containerKinds });
   const nodeById = new Map(template.nodes.map((n) => [n.id, n]));
 
   const placed = template.nodes
     .filter((n) => visible.nodes.has(n.id) && !collapseHidden.has(n.id))
     .map((node) => {
       const { x, y } = absolutePosition(node, nodeById);
-      const width = node.collapsed ? COLLAPSED_SIZE.w : node.w;
-      const height = node.collapsed ? COLLAPSED_SIZE.h : node.h;
-      return { node, box: { x, y, width, height }, depth: depthOf(node, nodeById) };
+      const chip = closed.has(node.id);
+      const width = chip ? COLLAPSED_SIZE.w : node.w;
+      const height = chip ? COLLAPSED_SIZE.h : node.h;
+      return { node, box: { x, y, width, height }, depth: depthOf(node, nodeById), chip };
     });
   placed.sort((a, b) => a.depth - b.depth);
   const placedIds = new Set(placed.map((p) => p.node.id));
@@ -680,7 +724,11 @@ function layout(template: DiagramTemplate, containerKinds?: readonly string[]): 
             ...e,
             source,
             target,
-            ...(summarising ? { label: "", tech: undefined, seq: undefined } : {}),
+            // A stand-in for several originals is none of them: no words,
+            // no step, and no relationship KIND either — the same rule
+            // toReactFlow applies, so the picture's key counts what the
+            // canvas's does.
+            ...(summarising ? { label: "", tech: undefined, seq: undefined, relation: undefined } : {}),
             start: undefined,
             end: undefined,
             points: undefined,
@@ -690,12 +738,16 @@ function layout(template: DiagramTemplate, containerKinds?: readonly string[]): 
       return [e];
     });
 
+  const relationCounts = new Map<string, number>();
+  for (const e of edges) if (e.relation) relationCounts.set(e.relation, (relationCounts.get(e.relation) ?? 0) + 1);
+
   return {
     placed,
     byId: new Map(placed.map((p) => [p.node.id, p])),
     zones,
     edges,
     legend: [...counts.entries()].map(([provider, count]) => ({ provider, count })),
+    relations: [...relationCounts.entries()].map(([relation, count]) => ({ relation, count })),
   };
 }
 
@@ -740,6 +792,30 @@ export interface EmitOptions {
    * between screen and file this module exists to prevent.
    */
   mode?: StudioMode;
+  /**
+   * Whether marketing paints its gradients (the default) or the flat coat
+   * `gradients={false}` shows on screen. Off, no command carries a
+   * `gradient`, so an SVG has no `<linearGradient>` and a canvas no
+   * `createLinearGradient` — a file for a consumer that mangles either.
+   * Ignored in technical, which never had one.
+   */
+  gradients?: boolean;
+}
+
+/**
+ * What a HOST can say about a picture's dress — the same two settings, with
+ * `mode` a loose string rather than `StudioMode`, because the value a host
+ * has is the one it threaded in from a query string or a saved preference.
+ * `emitOptions` coerces it: anything unrecognised resolves to technical
+ * rather than half-applying a look, and gradients are on unless said not.
+ */
+export interface PictureOptions {
+  mode?: string;
+  gradients?: boolean;
+}
+
+export function emitOptions(opts: PictureOptions): EmitOptions {
+  return { mode: resolveStudioMode(opts.mode), gradients: opts.gradients !== false };
 }
 
 export function emitTemplate(
@@ -749,11 +825,17 @@ export function emitTemplate(
   opts: EmitOptions = {},
 ): Emitted {
   const palette: ExportPalette = { ...DARK_EXPORT_PALETTE, ...paletteOverride };
-  const skin = makeSkin(resolveStudioMode(opts.mode), palette);
+  const skin = makeSkin(resolveStudioMode(opts.mode), palette, opts.gradients !== false);
   // Fixed-hex palettes re-resolve per theme: a light export darkens the edge
   // colours the same way the canvas's CSS variables do.
   const edgeHex = { ...EDGE_COLOR_HEX, ...paletteRecord(palette.edgeColors) };
-  const { placed, byId, zones, edges, legend } = layout(template, registry.containerKinds);
+  const { placed, byId, zones, edges, legend, relations: relationsUsed } = layout(template, registry.containerKinds);
+  // The same order the canvas legend lists them in: the registry's, then
+  // whatever the document names that nobody registered.
+  const relations = [
+    ...registry.relationOrder.filter((id) => relationsUsed.some((r) => r.relation === id)),
+    ...relationsUsed.map((r) => r.relation).filter((id) => !registry.relationOrder.includes(id)),
+  ].map((id) => ({ relation: id, count: relationsUsed.find((r) => r.relation === id)!.count }));
   const b = templateBounds(template, { onlyVisible: true, containerKinds: registry.containerKinds });
 
   // The page's chrome — legend, title block, version tag — is drawn in
@@ -765,7 +847,15 @@ export function emitTemplate(
   const tag = template.meta?.versionTag ? String(template.meta.versionTag) : "";
   const tagPos = template.meta?.versionTagPosition ?? "top-left";
   const tagW = tag ? approxTextWidth(tag, 10, skin.chipFont) + 20 : 0;
-  const legendH = legend.length ? LEGEND_PAD * 2 + LEGEND_TITLE_H + legend.length * LEGEND_ROW_H : 0;
+  // One box for both keys — the infra providers, then the relationship kinds
+  // — with a title row per section it shows and a gap between two.
+  const legendSections = (legend.length ? 1 : 0) + (relations.length ? 1 : 0);
+  const legendH = legendSections
+    ? LEGEND_PAD * 2 +
+      legendSections * LEGEND_TITLE_H +
+      (legend.length + relations.length) * LEGEND_ROW_H +
+      (legendSections > 1 ? LEGEND_SECTION_GAP : 0)
+    : 0;
   // A top-right tag shares the corner with the legend, so it queues below it.
   const tagOffsetY =
     tagPos === "top-left" ? (template.meta?.title ? TITLE_BLOCK_H : 0) : legendH ? legendH + 8 : 0;
@@ -781,7 +871,7 @@ export function emitTemplate(
   );
   const padRight =
     Math.max(PAD, tag && tagPos.endsWith("right") ? tagW + 20 : 0) +
-    (legend.length ? LEGEND_W + LEGEND_INSET : 0);
+    (legendSections ? LEGEND_W + LEGEND_INSET : 0);
   const width = Math.max(1, b.maxX - b.minX + PAD + padRight);
   const height = Math.max(1, b.maxY - b.minY + padTop + PAD);
   const cmds: DrawCmd[] = [];
@@ -823,9 +913,9 @@ export function emitTemplate(
 
   const levels = stackLevels(
     placed
-      .filter(({ node }) => {
+      .filter(({ node, chip }) => {
         const def = kindDef(registry, node.kind);
-        return !def.container || node.collapsed;
+        return !def.container || chip;
       })
       .map(({ node, box }) => ({ id: node.id, box })),
   );
@@ -960,9 +1050,9 @@ export function emitTemplate(
 
   // Expanded container boundaries. Collapsed chips paint later, with the
   // leaves — they are solid cards, and edges travel under cards, not over.
-  for (const { node, box } of placed) {
+  for (const { node, box, chip } of placed) {
     const def = kindDef(registry, node.kind);
-    if (!def.container || node.collapsed) continue;
+    if (!def.container || chip) continue;
     const nodeStart = cmds.length;
     // Frame styling, resolved exactly as GroupNode resolves it for the canvas
     // — the ink is the stored colour (or the kind accent), the fill is derived
@@ -1051,22 +1141,27 @@ export function emitTemplate(
 
   // Edges.
   const defaultRouting = defaultRoutingOf(template);
+  // Field references resolve to row anchors here exactly as they do on the
+  // canvas — same functions, so a foreign-key line lands on the same column
+  // in the PNG as it does on screen, and the same pairs of lines trade rows
+  // to keep from crossing.
+  const anchorNode = ({ node, box }: Placed) => ({
+    fields: node.fields,
+    description: node.description,
+    h: box.height,
+    centerX: box.x + box.width / 2,
+  });
+  const endSlots = uncrossFieldAnchors(edges, (id) => {
+    const p = byId.get(id);
+    return p && { fields: p.node.fields, description: p.node.description, box: p.box };
+  });
   for (const edge of edges) {
     const edgeStart = cmds.length;
     const s = byId.get(edge.source);
     const t = byId.get(edge.target);
     if (!s || !t) continue;
-    // Field references resolve to row anchors here exactly as they do on the
-    // canvas — same function, so a foreign-key line lands on the same column
-    // in the PNG as it does on screen.
-    const anchorNode = ({ node, box }: Placed) => ({
-      fields: node.fields,
-      description: node.description,
-      h: box.height,
-      centerX: box.x + box.width / 2,
-    });
     const geo = edgeGeometryFor(edge.routing ?? defaultRouting, s.box, t.box, edge.labelT ?? 0.5, {
-      ...fieldAnchors(edge, anchorNode(s), anchorNode(t)),
+      ...withEndSlots(fieldAnchors(edge, anchorNode(s), anchorNode(t)), endSlots.get(edge.id)),
       points: edge.points,
     });
     const color = edgeHex[edge.color] ?? edgeHex.slate;
@@ -1077,8 +1172,10 @@ export function emitTemplate(
     // an end glyph — the same rule the canvas applies, from the same parser.
     // Otherwise, the same glyph resolution as the canvas: `direction` decides
     // which ends carry one by default, startHead/endHead choose which.
-    const startMarker = cardinalityMarker(edge.startLabel);
-    const endMarker = cardinalityMarker(edge.endLabel);
+    const startEnd = endNotation(edge.startLabel, template.settings?.notation);
+    const endEnd = endNotation(edge.endLabel, template.settings?.notation);
+    const startMarker = startEnd.marker;
+    const endMarker = endEnd.marker;
     const endHead = edge.endHead ?? (direction !== "none" ? "arrow" : undefined);
     const startHead = edge.startHead ?? (direction === "both" ? "arrow" : undefined);
     if (endHead && !endMarker) {
@@ -1147,8 +1244,8 @@ export function emitTemplate(
     // Cardinality, a fixed distance in from each box — near the end it
     // describes rather than wherever the middle label sits.
     for (const [text, fromEnd, marker] of [
-      [edge.startLabel, false, startMarker],
-      [edge.endLabel, true, endMarker],
+      [startEnd.text, false, startMarker],
+      [endEnd.text, true, endMarker],
     ] as const) {
       if (!text) continue;
       const at = geo.at(tAtDistance(geo, endLabelInset(marker), fromEnd));
@@ -1194,9 +1291,9 @@ export function emitTemplate(
 
   // Leaves, annotations, and collapsed-container chips — everything edges
   // must pass under.
-  for (const { node, box } of placed) {
+  for (const { node, box, chip } of placed) {
     const def = kindDef(registry, node.kind);
-    if (def.container && !node.collapsed) continue;
+    if (def.container && !chip) continue;
     const leafStart = cmds.length;
     const accent = accentOf(node, def.accent);
 
@@ -1225,7 +1322,7 @@ export function emitTemplate(
       cmds.push({
         op: "path",
         d,
-        ...(chipPaint.gradient ? { gradient: chipPaint.gradient } : { fill: accent, fillAlpha: 0.1 }),
+        ...cardFill(chipPaint, accent, 0.1),
         stroke: chipPaint.stroke,
         strokeAlpha: skin.marketing ? 1 : 0.45,
         strokeWidth: 1,
@@ -1336,10 +1433,9 @@ export function emitTemplate(
       op: "path",
       d: sil.body,
       // Technical washes the surface with 6% of the accent; marketing lays a
-      // full gradient over it (`.as-root--marketing .as-node`).
-      ...(paint.gradient
-        ? { gradient: paint.gradient, ...(dim < 1 ? { fillAlpha: dim } : {}) }
-        : { fill: accent, fillAlpha: 0.06 * dim }),
+      // full gradient — or its flat coat — over it (`.as-root--marketing
+      // .as-node`).
+      ...cardFill(paint, accent, 0.06, dim),
       stroke: paint.stroke,
       strokeAlpha: (skin.marketing ? 1 : 0.4) * dim,
       strokeWidth: paint.strokeWidth,
@@ -1573,18 +1669,40 @@ export function emitTemplate(
         // takes the whole row (`.as-node__fieldtype`, `.as-node__fieldreq`).
         const typeText = skin.fieldTypes ? (field.type ?? "") : "";
         const typeW = typeText ? approxTextWidth(typeText, 9.5, "mono") : 0;
-        const nameW = rightEdge - nameX - (typeW ? typeW + 8 : 0);
-        const nameText = `${field.name}${field.required && skin.fieldTypes ? "*" : ""}`;
+        // A unique column wears a small UQ badge after its name (the canvas's
+        // `.as-node__fieldflag`), a derived one UML's leading slash. Marketing
+        // drops the badge with the other marks.
+        const flagText = field.unique && skin.fieldTypes ? "UQ" : "";
+        const flagW = flagText ? approxTextWidth(flagText, 8, "mono") + 6 : 0;
+        const nameW = rightEdge - nameX - (typeW ? typeW + 8 : 0) - (flagW ? flagW + 4 : 0);
+        const nameText = `${field.derived ? "/" : ""}${field.name}${field.required && skin.fieldTypes ? "*" : ""}`;
+        const drawnName = ellipsise(nameText, skin.fieldSize, skin.fieldFont, nameW);
         cmds.push({
           op: "text",
           x: nameX,
           y: rowTop + 13,
-          text: ellipsise(nameText, skin.fieldSize, skin.fieldFont, nameW),
+          text: drawnName,
           size: skin.fieldSize,
           font: skin.fieldFont,
           color: palette.text,
           ...(dim < 1 ? { alpha: dim } : {}),
         });
+        if (flagText) {
+          const fx = nameX + approxTextWidth(drawnName, skin.fieldSize, skin.fieldFont) + 4;
+          const d = roundedRectPath(fx, rowTop + 3.5, flagW, 12, 3);
+          cmds.push({ op: "path", d, stroke: accent, strokeAlpha: 0.45 * dim, strokeWidth: 1 });
+          cmds.push({
+            op: "text",
+            x: fx + 3,
+            y: rowTop + 12.5,
+            text: flagText,
+            size: 8,
+            font: "mono",
+            weight: 700,
+            color: accent,
+            ...(dim < 1 ? { alpha: dim } : {}),
+          });
+        }
         if (typeText) {
           cmds.push({
             op: "text",
@@ -1640,7 +1758,7 @@ export function emitTemplate(
 
   // Legend — in the right-hand gutter reserved for it above, clear of the
   // drawing rather than on top of it.
-  if (legend.length) {
+  if (legendSections) {
     const rowH = LEGEND_ROW_H;
     const boxW = LEGEND_W;
     const boxH = legendH;
@@ -1657,18 +1775,51 @@ export function emitTemplate(
     });
     // The title's baseline sits one cap-height below the pad; the rows start a
     // title-row below that, and the last one ends a full pad above the floor.
-    cmds.push({ op: "text", x: lx + LEGEND_PAD, y: ly + LEGEND_PAD + 9, text: "INFRASTRUCTURE", size: 9, font: skin.chipFont, weight: 600, color: palette.textDim });
-    legend.forEach(({ provider, count }, i) => {
-      const def = providerDef(registry, provider);
-      const y = ly + LEGEND_PAD + LEGEND_TITLE_H + i * rowH;
-      cmds.push({ op: "path", d: roundedRectPath(lx + LEGEND_PAD, y + 3.5, 11, 11, skin.marketing ? 3 : 2), fill: def.color, fillAlpha: 0.3, stroke: def.color, strokeAlpha: 0.7, strokeWidth: 1 });
-      cmds.push({ op: "text", x: lx + LEGEND_PAD + 18, y: y + 13, text: def.label, size: 11, font: "sans", color: palette.text });
-      if (count > 1) {
-        // Anchored to the box's right pad, not placed at it: a three-digit
-        // count drawn from that x ran out through the border.
-        cmds.push({ op: "text", x: lx + boxW - LEGEND_PAD, y: y + 13, text: String(count), size: 10, font: skin.chipFont, color: palette.textFaint, anchor: "end" });
+    // Anchored to the box's right pad, not placed at it: a three-digit
+    // count drawn from that x ran out through the border.
+    const countAt = (y: number, count: number) =>
+      cmds.push({ op: "text", x: lx + boxW - LEGEND_PAD, y: y + 13, text: String(count), size: 10, font: skin.chipFont, color: palette.textFaint, anchor: "end" });
+    let cursor = ly + LEGEND_PAD;
+    if (legend.length) {
+      cmds.push({ op: "text", x: lx + LEGEND_PAD, y: cursor + 9, text: "INFRASTRUCTURE", size: 9, font: skin.chipFont, weight: 600, color: palette.textDim });
+      cursor += LEGEND_TITLE_H;
+      for (const { provider, count } of legend) {
+        const def = providerDef(registry, provider);
+        cmds.push({ op: "path", d: roundedRectPath(lx + LEGEND_PAD, cursor + 3.5, 11, 11, skin.marketing ? 3 : 2), fill: def.color, fillAlpha: 0.3, stroke: def.color, strokeAlpha: 0.7, strokeWidth: 1 });
+        cmds.push({ op: "text", x: lx + LEGEND_PAD + 18, y: cursor + 13, text: def.label, size: 11, font: "sans", color: palette.text });
+        if (count > 1) countAt(cursor, count);
+        cursor += rowH;
       }
-    });
+      if (relations.length) cursor += LEGEND_SECTION_GAP;
+    }
+    // The relationships key: each kind's line drawn as the sample — its dash,
+    // its colour, its end glyphs through the same head-path maths as the
+    // real lines — so the PNG's key is the canvas legend's.
+    if (relations.length) {
+      cmds.push({ op: "text", x: lx + LEGEND_PAD, y: cursor + 9, text: "RELATIONSHIPS", size: 9, font: skin.chipFont, weight: 600, color: palette.textDim });
+      cursor += LEGEND_TITLE_H;
+      for (const { relation, count } of relations) {
+        const def = relationDef(registry, relation);
+        const ink = edgeHex[def.color] ?? edgeHex.slate;
+        const x0 = lx + LEGEND_PAD;
+        const y = cursor + 9;
+        cmds.push({ op: "path", d: `M ${x0 + 1} ${y} H ${x0 + 31}`, stroke: ink, strokeWidth: skin.edgeWidth, dash: EDGE_DASH[def.style] });
+        for (const glyph of [
+          def.startHead ? edgeHeadPath(def.startHead, { x: x0 + 1, y }, Math.PI) : null,
+          def.endHead ? edgeHeadPath(def.endHead, { x: x0 + 31, y }, 0) : null,
+        ]) {
+          if (!glyph) continue;
+          cmds.push(
+            glyph.filled
+              ? { op: "path", d: glyph.d, fill: ink }
+              : { op: "path", d: glyph.d, fill: palette.surface, stroke: ink, strokeWidth: 1.5, round: true },
+          );
+        }
+        cmds.push({ op: "text", x: x0 + 38, y: cursor + 13, text: def.label, size: 11, font: "sans", color: palette.text });
+        if (relations.length > 1 || count > 1) countAt(cursor, count);
+        cursor += rowH;
+      }
+    }
   }
 
   // Title block — top-left, in the headroom reserved above the content.
@@ -1869,7 +2020,7 @@ export function drawToSvg(cmds: DrawCmd[], opts: { gridId?: string } = {}): stri
   // built from `gridId`, which is already per-view unique, plus a counter.
   const defs: string[] = [];
   const defId = () => `${gridId}-d${defs.length}`;
-  const gradientRef = (g: { from: string; to: string; x1: number; y1: number; x2: number; y2: number }) => {
+  const gradientRef = (g: Gradient) => {
     const id = defId();
     defs.push(
       `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${g.x1}" y1="${g.y1}" x2="${g.x2}" y2="${g.y2}">` +

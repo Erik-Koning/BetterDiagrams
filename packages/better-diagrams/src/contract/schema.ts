@@ -33,6 +33,9 @@ import { normalizeDate, type DiagramDate } from "./timeline";
 import { parseLlmJsonReport } from "./json-repair";
 import { wrappedLineCount } from "./text";
 import { validatePaths, type DiagramPath, type PathGlow } from "./paths";
+import { uncrossSideSlots, type Box, type EndSlots, type SideSlotEdge } from "./geometry";
+import { RELATION_KIND_ORDER } from "./relations";
+export type { EndSlots } from "./geometry";
 
 // ─── Vocabulary ──────────────────────────────────────────────────────────────
 
@@ -44,6 +47,7 @@ export const NODE_KINDS = [
   "client",
   "external",
   "table", // data-model entity — its columns live in `fields`
+  "enum", // enumeration / picklist — its allowed values live in `fields`
   "group", // container / boundary — other nodes nest inside via parentId
   "text", // free-floating annotation; the text lives in `label`
   "point", // bare arrow endpoint — a dot an edge can end on in empty space
@@ -150,13 +154,14 @@ export type EdgeDirection = (typeof EDGE_DIRECTIONS)[number];
 
 /**
  * End-glyph vocabulary: the classic solid arrow, an open chevron, a hollow
- * diamond (UML aggregation), a hollow circle, and a bar/tee. `direction`
+ * diamond (UML aggregation), a filled diamond (UML composition), a hollow
+ * triangle (UML generalization), a hollow circle, and a bar/tee. `direction`
  * decides WHICH ends get a glyph by default; `startHead`/`endHead` override
  * WHAT is drawn there — and a startHead set explicitly renders even on a
  * `forward` edge, which is how a diamond-at-source aggregation coexists with
  * its arrow-at-target. A recognisable cardinality still wins its end.
  */
-export const EDGE_HEADS = ["arrow", "open", "diamond", "circle", "bar"] as const;
+export const EDGE_HEADS = ["arrow", "open", "diamond", "diamond-filled", "triangle", "circle", "bar"] as const;
 export type EdgeHead = (typeof EDGE_HEADS)[number];
 
 /** How an edge is routed. Unset on an edge means "inherit `meta.routing`". */
@@ -216,6 +221,10 @@ export interface NodeField {
   key?: FieldKey;
   /** Required / NOT NULL — renders as a trailing marker. */
   required?: boolean;
+  /** Unique across rows (UML `{unique}`, ER's UK) — renders as a trailing badge. */
+  unique?: boolean;
+  /** Computed rather than stored — a formula field, a UML derived attribute. Renders with UML's leading slash. */
+  derived?: boolean;
 }
 
 /**
@@ -308,6 +317,43 @@ export type NodeStatus = (typeof NODE_STATUSES)[number];
 export const VERSION_TAG_POSITIONS = ["top-left", "top-right", "bottom-left", "bottom-right"] as const;
 export type VersionTagPosition = (typeof VERSION_TAG_POSITIONS)[number];
 
+/**
+ * How groups present what they contain, document-wide. "show" is the default
+ * and never stored: each group renders as an open frame with its children
+ * inside, or as a chip when its own `collapsed` flag says so. "hide" folds
+ * EVERY group that has contents into a chip, whatever its own flag says — a
+ * high-level overview of the same document. See `DiagramSettings`.
+ */
+export const GROUP_CONTENTS = ["show", "hide"] as const;
+export type GroupContents = (typeof GROUP_CONTENTS)[number];
+
+/**
+ * What Tidy optimises for, document-wide. "flow" is the default and never
+ * needs storing: a left-to-right layered layout where a node sits one rank
+ * past its deepest predecessor and rank-mates are ordered by proximity to
+ * what they connect to — compact, and the shape an LLM is asked to author.
+ * "untangle" spends more effort on the lines: crossings are minimised over
+ * repeated sweeps, a line that spans several ranks is given a channel of its
+ * own so it never runs through a box in between, and nodes are nudged level
+ * with what they connect to so lines run straight. See `DiagramSettings`.
+ */
+export const ARRANGE_MODES = ["flow", "untangle"] as const;
+export type ArrangeMode = (typeof ARRANGE_MODES)[number];
+
+/**
+ * How a relationship's cardinality is drawn at each end, document-wide.
+ * "both" is the default and never needs storing: the crow's-foot symbol at
+ * the box AND the multiplicity text further in. "crowsfoot" keeps only the
+ * symbol for an end whose text reads as a cardinality (role text still
+ * shows). "uml" draws no symbols — the text carries the multiplicity, as a
+ * class diagram does — which is also what lets the UML end glyphs show: a
+ * composition's filled diamond, a generalization's triangle. The rule that
+ * a symbol takes an end's glyph is unchanged; this only decides whether the
+ * symbol exists. See `DiagramSettings`.
+ */
+export const NOTATIONS = ["both", "uml", "crowsfoot"] as const;
+export type Notation = (typeof NOTATIONS)[number];
+
 /** Horizontal placement of a node's text. "left" is the default and never stored. */
 export const NODE_TEXT_ALIGNS = ["left", "center", "right"] as const;
 export type NodeTextAlign = (typeof NODE_TEXT_ALIGNS)[number];
@@ -363,6 +409,8 @@ export const KIND_DEFAULT_SIZE: Record<string, { w: number; h: number }> = {
   // Wider than a service box: a column line is "name  type", two words that
   // must not ellipsise. The height is a floor — a table with rows grows.
   table: { w: 230, h: 96 },
+  // Values are single words, so an enumeration needs less width than a table.
+  enum: { w: 180, h: 96 },
   default: { w: 170, h: 76 },
 };
 
@@ -472,6 +520,16 @@ export interface DiagramNode {
   color?: string;
   /** Tint strength 0..1. Absent = DEFAULT_CONTAINER_OPACITY. */
   opacity?: number;
+
+  /**
+   * A free-form bag for whatever the HOST knows about this node that the
+   * diagram doesn't: the record it was generated from, an external id, the
+   * metadata a custom inspector shows. Nothing here is rendered, validated
+   * beyond "a plain object", or interpreted — it round-trips untouched
+   * through validation, the canvas, the clipboard and every exporter, the way
+   * `meta` does for the document. Omitted when empty.
+   */
+  data?: Record<string, unknown>;
 }
 
 export interface DiagramEdge {
@@ -501,6 +559,16 @@ export interface DiagramEdge {
 
   /** Technology / protocol, C4-style: rendered as a smaller `[JSON/HTTPS]` line. */
   tech?: string;
+  /**
+   * What KIND of relationship this is, in the registry's relation vocabulary
+   * — `composition`, `reference`, `hierarchy`, `polymorphic` built in (see
+   * `contract/relations.ts`); a host or dialect adds and relabels its own.
+   * Semantic, like `startField`: the legend counts it and the inspector's
+   * picker dresses the line from it, but the line's own `style`, `color`,
+   * heads and cardinality stay stored here, so a document is self-contained
+   * and a hand-edited line keeps its edit. Free vocabulary, like `kind`.
+   */
+  relation?: string;
   /** Arrowheads: `forward` (default), `both`, or `none`. Stored only when non-default. */
   direction?: EdgeDirection;
   /**
@@ -549,6 +617,37 @@ export interface DiagramEdge {
    * for a link that arrives after both ends already exist.
    */
   date?: DiagramDate;
+  /**
+   * The host's own metadata for this connection — see `DiagramNode.data`.
+   * A foreign key's delete rule, a relationship name, an API's SLA: things
+   * the host wants to keep beside the line without the diagram drawing them.
+   */
+  data?: Record<string, unknown>;
+}
+
+/**
+ * Document-wide rendering preferences — how the diagram is SHOWN, never what
+ * it says. Unlike `meta`, whose index signature lets a host stash anything,
+ * this object is strict: only the keys below survive validation, so the JSON
+ * editor can lint it and every consumer can rely on its shape.
+ */
+export interface DiagramSettings {
+  /**
+   * Whether groups render their contents (the default, "show") or fold them
+   * away behind a chip ("hide"). Stored only when set; the editor's toolbar
+   * offers a toggle whenever the document says something here and some group
+   * has contents to fold.
+   */
+  groupContents?: GroupContents;
+  /**
+   * What Tidy optimises for — see `ARRANGE_MODES`. Absent means "flow".
+   * Picking a mode from the Arrange menu re-arranges the canvas and stores
+   * the choice here in the same edit, so one ⌘Z takes both back and the
+   * next Tidy keeps arranging the way the document says.
+   */
+  arrange?: ArrangeMode;
+  /** How cardinality is drawn — see `NOTATIONS`. Absent means "both". */
+  notation?: Notation;
 }
 
 export interface DiagramTemplate {
@@ -587,6 +686,12 @@ export interface DiagramTemplate {
    * this schema described before paths existed.
    */
   paths?: DiagramPath[];
+  /**
+   * Rendering preferences for the whole document — see `DiagramSettings`.
+   * Optional and omitted when empty, so a document that never set one
+   * round-trips byte-identical.
+   */
+  settings?: DiagramSettings;
 }
 
 export const EMPTY_TEMPLATE: DiagramTemplate = { version: 1, nodes: [], edges: [] };
@@ -607,8 +712,16 @@ const TEMPLATE_KEY_MAP: Record<keyof DiagramTemplate, true> = {
   nodes: true,
   edges: true,
   paths: true,
+  settings: true,
 };
 export const TEMPLATE_KEYS: readonly string[] = Object.keys(TEMPLATE_KEY_MAP);
+
+const SETTINGS_KEY_MAP: Record<keyof DiagramSettings, true> = {
+  groupContents: true,
+  arrange: true,
+  notation: true,
+};
+export const SETTINGS_KEYS: readonly string[] = Object.keys(SETTINGS_KEY_MAP);
 
 const NODE_KEY_MAP: Record<keyof DiagramNode, true> = {
   id: true,
@@ -640,6 +753,7 @@ const NODE_KEY_MAP: Record<keyof DiagramNode, true> = {
   locked: true,
   plain: true,
   collapsed: true,
+  data: true,
 };
 export const NODE_KEYS: readonly string[] = Object.keys(NODE_KEY_MAP);
 
@@ -653,6 +767,7 @@ const EDGE_KEY_MAP: Record<keyof DiagramEdge, true> = {
   color: true,
   providers: true,
   tech: true,
+  relation: true,
   direction: true,
   startHead: true,
   endHead: true,
@@ -666,6 +781,7 @@ const EDGE_KEY_MAP: Record<keyof DiagramEdge, true> = {
   endField: true,
   points: true,
   date: true,
+  data: true,
 };
 export const EDGE_KEYS: readonly string[] = Object.keys(EDGE_KEY_MAP);
 
@@ -676,6 +792,8 @@ const FIELD_KEY_MAP: Record<keyof NodeField, true> = {
   type: true,
   key: true,
   required: true,
+  unique: true,
+  derived: true,
 };
 export const NODE_FIELD_KEYS: readonly string[] = Object.keys(FIELD_KEY_MAP);
 
@@ -741,6 +859,8 @@ export interface PromptOptions {
   icons?: readonly string[];
   /** Provider ids contributed by a registry. */
   providers?: readonly string[];
+  /** Relationship kinds contributed by a registry, appended to the built-ins. */
+  relations?: readonly string[];
   /** Appended verbatim — domain rules like "always place the CDN left of the ALB". */
   extraRules?: string;
   /**
@@ -774,6 +894,7 @@ export function buildSystemPrompt(opts: PromptOptions = {}): string {
   const providers = [...new Set([...PROVIDER_IDS, ...(opts.providers ?? [])])].join("|");
   const styles = EDGE_STYLES.join("|");
   const colors = EDGE_COLORS.join("|");
+  const relations = [...new Set([...RELATION_KIND_ORDER, ...(opts.relations ?? [])])].join("|");
   const shapes = ZONE_SHAPES.join("|");
   const routings = EDGE_ROUTINGS.join("|");
   const geo = opts.geometry !== false;
@@ -788,25 +909,26 @@ export function buildSystemPrompt(opts: PromptOptions = {}): string {
       : `Use it to show provider-specific services: one node per provider's equivalent service, each carrying only its own provider id.`;
 
   return `You convert software requirements, source code, or natural-language descriptions into an architecture diagram template. Respond with ONLY compact valid JSON (no markdown fences, no commentary) matching:
-{"version":1,"meta":{"title":"Name","routing":"${routings}","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${zoneProvider}"],"provider":"${zoneProvider}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","providers":[],"direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":""${geo ? `,"routing":"${routings}"` : ""},"date":"YYYY-MM-DD"}],"paths":[{"id":"slug","title":"Name","steps":["nodeId","edgeId","nodeId"],"color":"${colors}","description":""}]}
+{"version":1,"meta":{"title":"Name","routing":"${routings}","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${zoneProvider}"],"provider":"${zoneProvider}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","providers":[],"direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":"","relation":"${relations}"${geo ? `,"routing":"${routings}"` : ""},"date":"YYYY-MM-DD"}],"paths":[{"id":"slug","title":"Name","steps":["nodeId","edgeId","nodeId"],"color":"${colors}","description":""}],"settings":{"groupContents":"${GROUP_CONTENTS.join("|")}"}}
 Rules:
 - "group" = boundary (VPC, cluster, tier, bounded context). Children set parentId${geo ? "; child x/y are RELATIVE to the group's top-left. Size groups to contain all children (+24px sides, +48px top). Children of a NON-group parent use small local coordinates starting near 0,0 (their own drilled canvas); never size the parent to contain them." : "."}
 - "text" = free annotation; put the sentence in label, fontSize 12-16${geo ? ", w~300 h~60" : ""}, no edges.
 - "point" = the bare endpoint of a dangling arrow: a tiny dot an edge can end on, for an arrow into empty space (a dependency on something that doesn't exist yet). label ""${geo ? ", w=h=12" : ""}; use ONLY as an edge's source/target, and only when the user asks for an open-ended/abstract arrow.
 - FLOW CHARTS: "terminator" (stadium) for start/end, "decision" (diamond) for branches — label its outgoing edges "yes"/"no" — "io" (parallelogram) for input/output, "service" for process steps. An edge may target its own source ("source"==="target") to draw a retry/self loop. Use these kinds only for flow charts, not architecture.
 - LANGUAGE MODELS: "lm-small" (on-device or a few B params), "lm-medium" (self-hosted mid-size), "llm" (frontier, typically hosted) — pick by the weight class the design depends on, and name the actual model in the description ("Phi-3 mini", "Llama 3 8B", "Claude Opus 5"). When the box is the cloud SERVICE hosting a model rather than the model itself, prefer that provider's own model kind where one is listed below.
-- Edge "startHead"/"endHead" (${EDGE_HEADS.join("|")}) override the glyph at each end when the user asks for UML-style notation (hollow "diamond" at the source = aggregation, "open" arrow = dependency); omit for normal arrows.
+- Edge "startHead"/"endHead" (${EDGE_HEADS.join("|")}) override the glyph at each end when the user asks for UML-style notation (hollow "diamond" at the source = aggregation, "diamond-filled" at the source = composition, hollow "triangle" at the target = generalization/inheritance, "open" arrow = dependency); omit for normal arrows.
 - ${geo ? "Regular nodes: w 160-200, h 64-84. Pick" : "Pick"} a fitting icon. description is an optional one-line tech detail (C4 style, e.g. "Node.js / Express").
 - Edge style semantics: dashed = async/event-driven, dotted = cache/optional/telemetry, solid = synchronous. Vary color by concern (e.g. amber = data, violet = messaging).${geo ? " labelT (0.15-0.85) slides the label along the arrow to avoid collisions." : ""}
 - Edge "tech" = protocol/format, C4 style ("JSON/HTTPS", "gRPC", "SQL"); omit when obvious. "direction":"both" for genuinely bidirectional links, "none" for plain association; omit for normal flow. When the user asks for a request flow or sequence, number the participating edges with "seq":1,2,3… in traversal order; omit seq otherwise.
 - PATHS: "paths" names end-to-end flows the reader can light up on the canvas. "steps" is the ORDERED list of node ids the flow visits, start to end; put an edge id between two nodes only when several edges join them (otherwise the connecting edge is inferred). Emit 1-4 paths of 3-8 steps when the user describes a request flow, a user journey, or asks to trace/highlight a sequence; omit the key otherwise. "color" is optional — unset paths each take their own colour.
 - meta.routing "orthogonal" gives right-angle connectors (formal/dense diagrams), "straight" direct point-to-point lines (classic flow charts); omit for curved. meta.title names the diagram. meta.versionTag labels the revision ("v2.1", "2026-Q3 draft") when the user gives one; omit otherwise.
+- "settings" holds document-wide rendering preferences. settings.groupContents "hide" folds every group with contents into a chip (a high-level overview the reader expands from the toolbar); set it ONLY when the user asks for collapsed/folded groups or a summary view, and omit the "settings" key otherwise.
 - Node "tags" = short lowercase labels for cross-cutting concerns the user mentions ("pci","gdpr","deprecated","planned"); omit when none. Node "url" = deep link to docs/repo if the user supplies one; omit otherwise. Node "team" = the owning or contact team when the user names one ("Payments", "Platform"); omit otherwise. Node "status" = lifecycle stage when stated: "planned" for future work, "stubbed" for scaffolding that exists but does nothing yet, "dark" for built-and-shipped but not yet enabled, "deprecated" for being sunset; omit for normal active components. Text notes draw a subtle box by default; set "plain":true only when the user wants bare text with no outline.
 - Node text layout, all optional and all rarely needed — omit unless the user asks: "textAlign":"center"/"right" (default left), "textVAlign":"top"/"bottom" (default middle), "wrap":true to break a long label across lines instead of ellipsising it on one (the editor grows the node's height to fit). "fontSize" sets the label size in px (default 13).
 - A "group" may also be styled as a purely visual grouping frame: "fill":false drops its background, "outline":"none" drops its border, "outline":"dotted"/"solid" changes it (default dashed), and "color" is an "#rrggbb" ink the background tint derives from. Use "fill":false with "outline":"none" only when the user explicitly wants an invisible/abstract grouping box.
 - Node/edge/zone "date" = when that piece lands or landed, as "YYYY-MM-DD". Set it ONLY when the user gives a roadmap, phases, quarters, or a migration order; omit it everywhere else. Undated elements are treated as always present, so a phased plan dates the new pieces and leaves today's system undated. A node inside a group is never shown before the group, so date the group with its earliest phase.
 - parentId may reference ANY existing node. A child of a "group" renders inside its frame. A child of any other node is that component's INTERNAL decomposition (the next C4 level) — shown only when the user drills into that component, never on the parent's own diagram. Do NOT decompose a component into children unless the user explicitly asks for its internal detail. Never create a parent cycle.
-- DATA MODELS: an entity/table is a node of kind "table" whose columns are "fields" — {id, name, type, key:"pk"/"fk"/"pfk", required}. Field ids are unique within their node.${geo ? " Give a table w 200-260; the editor grows its height to fit the rows, so h is only a hint." : ""} A relationship is an ordinary edge between the two tables: name the columns it joins with "startField"/"endField" (field ids on the source and target), and put cardinality in "startLabel"/"endLabel" ("1", "0..1", "0..*", "1..*") — these render as crow's-foot symbols, so write real cardinalities there rather than prose. Use "fields" ONLY for data modelling — an ordinary architecture node omits the key entirely. Subject areas are "group" parents, exactly as elsewhere.
+- DATA MODELS: an entity/table is a node of kind "table" whose columns are "fields" — {id, name, type, key:"pk"/"fk"/"pfk", required, unique, derived}; "unique" marks a unique column, "derived" a computed/formula one; omit both when false. An enumeration or picklist is a node of kind "enum" whose "fields" are its values (name only). Field ids are unique within their node.${geo ? " Give a table w 200-260; the editor grows its height to fit the rows, so h is only a hint." : ""} A relationship is an ordinary edge between the two tables: name the columns it joins with "startField"/"endField" (field ids on the source and target), and put cardinality in "startLabel"/"endLabel" ("1", "0..1", "0..*", "1..*") — these render as crow's-foot symbols, so write real cardinalities there rather than prose. Say what KIND of relationship it is with "relation": "composition" when the child cannot exist without the parent (owned, cascade delete), "reference" for an ordinary foreign key, "hierarchy" when a table points at itself, "polymorphic" when the target varies per row — "aggregation" for shared ownership (the part outlives the whole), "generalization" from a subtype to the type it extends (record types, table inheritance) — and dress the line to match (composition: solid rose with "startHead":"diamond-filled", "*" → "1"; aggregation: solid sky with "startHead":"diamond", "*" → "0..1"; reference: dashed slate, "*" → "0..1", or "*" → "1" when the foreign key is required; hierarchy: dashed violet; polymorphic: dotted amber; generalization: solid emerald with "endHead":"triangle" and no cardinality). Omit "relation" on an architecture edge. Use "fields" ONLY for data modelling — an ordinary architecture node omits the key entirely. Subject areas are "group" parents, exactly as elsewhere.
 - ZONES are infra backgrounds, drawn behind everything, in ABSOLUTE canvas coordinates (never relative). Provider ids: ${providers}. Omit the "zones" key entirely unless the request actually involves infrastructure or hosting.
 - Zone "color" (optional) is the OUTLINE hex; the background derives from it automatically. It may carry "/NN" percent alpha for fill strength ("#38bdf8/22"). Omit for the provider's default colour. Zone "outline" (optional): dashed for logical/planned boundaries, dotted for soft groupings, none for a pure background wash; omit for solid.
 - A zone's "providers" lists every provider it could run on; "provider" is the one shown. Use a higher "z" for a small zone that sits on top of a bigger one (e.g. a third-party SaaS island inside a cloud region).
@@ -944,6 +1066,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
       const outline = NODE_OUTLINES.includes(n.outline as NodeOutline)
         ? (n.outline as NodeOutline)
         : "dashed";
+      const data = validateDataBag(n.data);
 
       return {
         id,
@@ -990,6 +1113,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
               ),
             }
           : {}),
+        ...(data ? { data } : {}),
         // x/y may legitimately be 0; w/h/fontSize may not, so they fall back
         // to the kind default rather than collapsing the node to a sliver.
         x: num(n.x, 0),
@@ -1047,6 +1171,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         ? [...new Set(e.providers.filter((p): p is string => typeof p === "string" && !!p))]
         : undefined;
       const tech = typeof e.tech === "string" ? e.tech.trim() : "";
+      const relation = typeof e.relation === "string" ? e.relation.trim() : "";
       const seq = Math.floor(num(e.seq, 0));
       const date = normalizeDate(e.date);
       const start = validateAnchor(e.start);
@@ -1060,6 +1185,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
       // governs every other reference in this document.
       const startField = fieldIdOn(byId.get(String(e.source)), e.startField);
       const endField = fieldIdOn(byId.get(String(e.target)), e.endField);
+      const data = validateDataBag(e.data);
       return {
         id: e.id ? String(e.id) : `e${i}`,
         source: String(e.source),
@@ -1071,6 +1197,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         // An empty list would hide the edge everywhere, which is never meant.
         ...(providers && providers.length ? { providers } : {}),
         ...(tech ? { tech } : {}),
+        ...(relation ? { relation } : {}),
         ...(date ? { date } : {}),
         // Defaults are stripped so an old document round-trips byte-identical.
         ...(e.direction === "both" || e.direction === "none" ? { direction: e.direction } : {}),
@@ -1091,6 +1218,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         ...(startField ? { startField } : {}),
         ...(endField ? { endField } : {}),
         ...(points ? { points } : {}),
+        ...(data ? { data } : {}),
       };
     });
 
@@ -1133,7 +1261,47 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
     if (views) meta.views = views;
     out.meta = meta;
   }
+  const settings = validateSettings(r.settings);
+  if (settings) out.settings = settings;
   return out;
+}
+
+/**
+ * Coerce a node's or edge's `data` bag. The one lenient field on an otherwise
+ * strict element: any plain object is kept as-is (a shallow copy, so a later
+ * edit never reaches back into the caller's object), and anything else — an
+ * array, a string, an empty object — is dropped so the key is present exactly
+ * when it carries something.
+ */
+function validateDataBag(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * Coerce the settings object. Strict where `meta` is lenient: a key the
+ * schema doesn't define is dropped, a value outside its vocabulary is dropped,
+ * and an object left empty by that is omitted entirely — so `settings` is
+ * present exactly when it says something.
+ */
+function validateSettings(raw: unknown): DiagramSettings | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: DiagramSettings = {};
+  if (GROUP_CONTENTS.includes(r.groupContents as GroupContents)) {
+    out.groupContents = r.groupContents as GroupContents;
+  }
+  if (ARRANGE_MODES.includes(r.arrange as ArrangeMode)) {
+    out.arrange = r.arrange as ArrangeMode;
+  }
+  if (NOTATIONS.includes(r.notation as Notation)) {
+    out.notation = r.notation as Notation;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /**
@@ -1266,6 +1434,8 @@ function validateFields(raw: unknown): NodeField[] | undefined {
         ? { key: f.key as FieldKey }
         : {}),
       ...(f.required === true ? { required: true } : {}),
+      ...(f.unique === true ? { unique: true } : {}),
+      ...(f.derived === true ? { derived: true } : {}),
     });
     if (out.length === MAX_NODE_FIELDS) break;
   }
@@ -1328,22 +1498,98 @@ export function fieldAnchors(
   source: FieldAnchorNode,
   target: FieldAnchorNode,
 ): { start?: EdgeAnchor; end?: EdgeAnchor } {
-  const resolve = (
-    anchor: EdgeAnchor | undefined,
-    fieldId: string | undefined,
-    self: FieldAnchorNode,
-    other: FieldAnchorNode,
-  ): EdgeAnchor | undefined => {
-    if (!fieldId) return anchor;
-    if (anchor && (anchor.side === "top" || anchor.side === "bottom")) return anchor;
-    const t = fieldRowT({ fields: self.fields, description: self.description, h: self.h }, fieldId);
-    if (t === undefined) return anchor;
-    const side: EdgeAnchorSide = anchor?.side ?? (other.centerX >= self.centerX ? "right" : "left");
-    return { side, t };
-  };
-  const start = resolve(edge.start, edge.startField, source, target);
-  const end = resolve(edge.end, edge.endField, target, source);
+  const start = rowAnchor(edge.start, edge.startField, source, target).anchor;
+  const end = rowAnchor(edge.end, edge.endField, target, source).anchor;
   return { ...(start ? { start } : {}), ...(end ? { end } : {}) };
+}
+
+/**
+ * One end of `fieldAnchors`: the anchor, and whether a ROW placed it — the
+ * fact the un-crossing pass needs, because only a row-placed end may be
+ * traded (see `uncrossFieldAnchors`).
+ */
+function rowAnchor(
+  anchor: EdgeAnchor | undefined,
+  fieldId: string | undefined,
+  self: FieldAnchorNode,
+  other: FieldAnchorNode,
+): { anchor: EdgeAnchor | undefined; onRow: boolean } {
+  if (!fieldId) return { anchor, onRow: false };
+  if (anchor && (anchor.side === "top" || anchor.side === "bottom")) return { anchor, onRow: false };
+  const t = fieldRowT({ fields: self.fields, description: self.description, h: self.h }, fieldId);
+  if (t === undefined) return { anchor, onRow: false };
+  const side: EdgeAnchorSide = anchor?.side ?? (other.centerX >= self.centerX ? "right" : "left");
+  return { anchor: { side, t }, onRow: true };
+}
+
+/** A node as the un-crossing pass needs to see it: its rows and its absolute box. */
+export interface UncrossNode {
+  fields?: readonly NodeField[];
+  description?: string;
+  box: Box;
+}
+
+/**
+ * Which row-anchored ends should trade rows so lines leaving one side of a
+ * table don't cross — a document-wide pass, where `fieldAnchors` is one
+ * edge's.
+ *
+ * Two foreign keys on neighbouring rows whose targets lie the other way
+ * round cross each other the moment they leave the table. The pass hands
+ * the same rows out in destination order instead (`uncrossSideSlots` has
+ * the rule), so the lines fan out cleanly — at the price that a traded line
+ * leaves from its neighbour's row rather than its own. Only ends a ROW
+ * placed take part: a fraction the user dragged into place is theirs, a
+ * top/bottom pin has no row, and a floating end has no slot to trade.
+ *
+ * Returns the fraction each moved end now sits at, by edge id, for callers
+ * to lay over `fieldAnchors` with `withEndSlots`. Both the canvas and the
+ * exporters run this over the same edges, which is what keeps a PNG's lines
+ * leaving the same rows as the screen's.
+ */
+export function uncrossFieldAnchors(
+  edges: ReadonlyArray<
+    Pick<DiagramEdge, "id" | "source" | "target" | "start" | "end" | "startField" | "endField" | "points">
+  >,
+  nodeOf: (id: string) => UncrossNode | undefined,
+): Map<string, EndSlots> {
+  const anchorNode = (n: UncrossNode): FieldAnchorNode => ({
+    fields: n.fields,
+    description: n.description,
+    h: n.box.height,
+    centerX: n.box.x + n.box.width / 2,
+  });
+  const items: SideSlotEdge[] = [];
+  for (const e of edges) {
+    const s = nodeOf(e.source);
+    const t = nodeOf(e.target);
+    if (!s || !t) continue;
+    const start = rowAnchor(e.start, e.startField, anchorNode(s), anchorNode(t));
+    const end = rowAnchor(e.end, e.endField, anchorNode(t), anchorNode(s));
+    if (!start.onRow && !end.onRow) continue;
+    items.push({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      spec: { start: start.anchor, end: end.anchor, points: e.points },
+      autoStart: start.onRow,
+      autoEnd: end.onRow,
+    });
+  }
+  return uncrossSideSlots(items, (id) => nodeOf(id)?.box);
+}
+
+/** `fieldAnchors` with an un-crossing trade laid over it: the moved ends take their new fraction. */
+export function withEndSlots(
+  anchors: { start?: EdgeAnchor; end?: EdgeAnchor },
+  slots: EndSlots | undefined,
+): { start?: EdgeAnchor; end?: EdgeAnchor } {
+  if (!slots) return anchors;
+  return {
+    ...anchors,
+    ...(slots.start !== undefined && anchors.start ? { start: { ...anchors.start, t: slots.start } } : {}),
+    ...(slots.end !== undefined && anchors.end ? { end: { ...anchors.end, t: slots.end } } : {}),
+  };
 }
 
 /**
@@ -1500,9 +1746,49 @@ function cardParentIds(t: DiagramTemplate, containerKinds?: readonly string[]): 
 }
 
 /**
- * Every node hidden because an ancestor renders closed — a collapsed container
- * or a non-container parent (whose children are drill-in detail, its next C4
- * level, never shown inline).
+ * Containers the document folds: with `settings.groupContents` at "hide",
+ * every container that has something inside it. An empty frame hides nothing,
+ * so it stays open — the same rule a drill-in view applies when it chips the
+ * groups on a level (`scopedView`). Empty under any other setting.
+ *
+ * Distinct from a group's own `collapsed` flag, and never written into it: the
+ * setting is one switch over the whole document, and flipping it back to
+ * "show" must reopen exactly what was open before.
+ */
+export function foldedContainers(
+  t: DiagramTemplate,
+  opts: { containerKinds?: readonly string[] } = {},
+): Set<string> {
+  if (t.settings?.groupContents !== "hide") return new Set();
+  const containerSet = new Set(opts.containerKinds ?? CONTAINER_KINDS);
+  const parentIds = new Set(t.nodes.map((n) => n.parentId).filter((p): p is string => !!p));
+  return new Set(
+    t.nodes
+      .filter((n) => containerSet.has(n.kind as string) && parentIds.has(n.id))
+      .map((n) => n.id),
+  );
+}
+
+/**
+ * Every container rendering closed — as a chip, contents folded away — for
+ * either reason: its own `collapsed` flag, or the document folding it (see
+ * `foldedContainers`). The one set every renderer sizes chips from, so the
+ * canvas, the image exporters and the export crop cannot disagree about
+ * which frames are drawn.
+ */
+export function closedContainers(
+  t: DiagramTemplate,
+  opts: { containerKinds?: readonly string[] } = {},
+): Set<string> {
+  const closed = foldedContainers(t, opts);
+  for (const n of t.nodes) if (n.collapsed) closed.add(n.id);
+  return closed;
+}
+
+/**
+ * Every node hidden because an ancestor renders closed — a collapsed or
+ * folded container or a non-container parent (whose children are drill-in
+ * detail, its next C4 level, never shown inline).
  *
  * The closed node itself stays visible (chip or card); its descendants
  * disappear. Shared by `toReactFlow` and `fromReactFlow` so both sides agree
@@ -1514,7 +1800,7 @@ export function hiddenByCollapse(
   t: DiagramTemplate,
   opts: { containerKinds?: readonly string[] } = {},
 ): Set<string> {
-  const closed = new Set(t.nodes.filter((n) => n.collapsed).map((n) => n.id));
+  const closed = closedContainers(t, opts);
   for (const id of cardParentIds(t, opts.containerKinds)) closed.add(id);
   return hiddenBelow(t, closed);
 }
@@ -2201,11 +2487,12 @@ export function templateBounds(
   const byId = new Map(t.nodes.map((n) => [n.id, n]));
   const containerSet = new Set(opts.containerKinds ?? CONTAINER_KINDS);
 
-  // A collapsed container draws a chip, not its stored (expanded) frame, and
-  // its contents draw nothing at all. Measuring either would leave a large
-  // blank region in the crop where the frame used to be.
+  // A closed container — collapsed itself, or folded by the document — draws
+  // a chip, not its stored (expanded) frame, and its contents draw nothing at
+  // all. Measuring either would leave a large blank region in the crop where
+  // the frame used to be.
   const collapsed = new Set(
-    t.nodes.filter((n) => n.collapsed && containerSet.has(n.kind as string)).map((n) => n.id),
+    [...closedContainers(t, opts)].filter((id) => containerSet.has(byId.get(id)?.kind as string)),
   );
   const insideCollapsed = (n: DiagramNode): boolean => {
     let cur = n.parentId ? byId.get(n.parentId) : undefined;
@@ -2291,12 +2578,21 @@ export type DiagramNodeData = {
   outline?: NodeOutline;
   color?: string;
   opacity?: number;
+  /** The host's free-form bag — see `DiagramNode.data`. Carried, never read. */
+  data?: Record<string, unknown>;
   /**
    * Rendered only because ghost mode is on — this node is hidden by the active
    * provider selection. Purely presentational; never persisted, because it
    * describes the current view rather than the document.
    */
   ghost?: boolean;
+  /**
+   * A container drawn as a chip because the document's `settings.groupContents`
+   * is "hide" (see `foldedContainers`). Presentational like `ghost` and never
+   * persisted: the group's own `collapsed` flag is untouched underneath, so
+   * flipping the setting back reopens exactly what was open before.
+   */
+  folded?: boolean;
 };
 
 /** Payload for the React Flow node that renders a zone. */
@@ -2318,6 +2614,8 @@ export type DiagramEdgeData = {
   label: string;
   providers?: string[];
   tech?: string;
+  /** The relationship kind; see the schema field of the same name. */
+  relation?: string;
   direction?: EdgeDirection;
   /** End glyph overrides; see the schema field of the same name. */
   startHead?: EdgeHead;
@@ -2344,6 +2642,8 @@ export type DiagramEdgeData = {
   endField?: string;
   /** Absolute-canvas waypoints the line routes through. */
   points?: Array<[number, number]>;
+  /** The host's free-form bag — see `DiagramEdge.data`. Carried, never read. */
+  data?: Record<string, unknown>;
   /**
    * Set only by the read-only DiffCanvas overlay — recolours the edge by its
    * comparison state. View-only, like a node's `ghost`; never persisted
@@ -2365,6 +2665,12 @@ export type DiagramEdgeData = {
    * thing that knows the line's geometry. Never persisted.
    */
   pathGlow?: PathGlow[];
+  /**
+   * Set only by the path view pass on a BRIGHT lit route: the key (the
+   * referencing field) carrying this hop, drawn as a badge on the line.
+   * View-only, like `pathGlow`; never persisted.
+   */
+  routeKey?: string;
 };
 
 export type RFNode = {
@@ -2636,6 +2942,15 @@ export function toReactFlow(
     opts.applyCollapse === false
       ? new Set<string>()
       : hiddenByCollapse(t, { containerKinds: opts.containerKinds });
+  // The document-wide fold, and with it the chip it makes of every group with
+  // contents. Off alongside collapse: "the whole document, expanded" means
+  // the frames too.
+  const folded =
+    opts.applyCollapse === false
+      ? new Set<string>()
+      : foldedContainers(t, { containerKinds: opts.containerKinds });
+  /** Drawn as a chip — its own flag, or the document's fold. */
+  const chipped = (n: DiagramNode) => n.collapsed === true || folded.has(n.id);
 
   const rendered = [...t.nodes]
     .filter((n) => !collapseHidden.has(n.id) && (!visible || showHidden || visible.nodes.has(n.id)))
@@ -2647,13 +2962,13 @@ export function toReactFlow(
   // over, so nesting in a group must not lift anything.
   const levels = stackLevels(
     rendered
-      .filter((n) => !containers.has(n.kind as string) || n.collapsed)
+      .filter((n) => !containers.has(n.kind as string) || chipped(n))
       .map((n) => ({
         id: n.id,
         box: {
           ...absolutePosition(n, byId),
-          width: n.collapsed ? COLLAPSED_SIZE.w : n.w,
-          height: n.collapsed ? COLLAPSED_SIZE.h : n.h,
+          width: chipped(n) ? COLLAPSED_SIZE.w : n.w,
+          height: chipped(n) ? COLLAPSED_SIZE.h : n.h,
         },
       })),
   );
@@ -2670,10 +2985,11 @@ export function toReactFlow(
           : points.has(n.kind as string)
             ? "point"
             : "shape";
-      // A collapsed container renders as a compact chip; its stored w/h are
+      // A closed container renders as a compact chip; its stored w/h are
       // the expanded size and come back untouched on expand.
-      const w = n.collapsed ? COLLAPSED_SIZE.w : n.w;
-      const h = n.collapsed ? COLLAPSED_SIZE.h : n.h;
+      const chip = chipped(n);
+      const w = chip ? COLLAPSED_SIZE.w : n.w;
+      const h = chip ? COLLAPSED_SIZE.h : n.h;
       return {
         id: n.id,
         type,
@@ -2694,9 +3010,11 @@ export function toReactFlow(
           ...(n.plain ? { plain: true } : {}),
           ...(n.locked ? { locked: true } : {}),
           ...(n.collapsed ? { collapsed: true } : {}),
+          ...(folded.has(n.id) ? { folded: true } : {}),
           ...(n.textAlign ? { textAlign: n.textAlign } : {}),
           ...(n.textVAlign ? { textVAlign: n.textVAlign } : {}),
           ...(n.wrap ? { wrap: true } : {}),
+          ...(n.data ? { data: n.data } : {}),
           ...(n.fill === false ? { fill: false } : {}),
           ...(n.outline ? { outline: n.outline } : {}),
           ...(n.color ? { color: n.color } : {}),
@@ -2708,10 +3026,10 @@ export function toReactFlow(
         height: h,
         style: { width: w, height: h },
         // Containers must render behind their children; deeper nesting wins.
-        // A collapsed container is a solid chip with no children on the
-        // canvas, so it joins the leaf band and edges pass under it too.
+        // A closed container is a solid chip with no children on the canvas,
+        // so it joins the leaf band and edges pass under it too.
         zIndex:
-          isContainer && !n.collapsed
+          isContainer && !chip
             ? depth
             : LEAF_Z_INDEX + (levels.get(n.id) ?? 0) * STACK_BAND + depth,
         ...(n.locked ? { draggable: false } : {}),
@@ -2719,9 +3037,9 @@ export function toReactFlow(
         // With the whole frame as the drag surface there was no empty canvas
         // inside a group to start a rubber band from, so its children could
         // never be marquee-selected — and every press aimed at the space
-        // between them moved the group instead. A collapsed chip IS its label,
+        // between them moved the group instead. A closed chip IS its label,
         // so it keeps the whole surface.
-        ...(isContainer && !n.collapsed ? { dragHandle: ".as-group__label" } : {}),
+        ...(isContainer && !chip ? { dragHandle: ".as-group__label" } : {}),
         // Deliberately NOT `extent: "parent"`. That clamps a child inside its
         // container, which makes it impossible to drag a node back out of a
         // group. The editor re-parents on drop instead, so nesting stays
@@ -2796,6 +3114,7 @@ export function toReactFlow(
             label: summarising ? "" : e.label,
             ...(e.providers?.length ? { providers: e.providers } : {}),
             ...(!summarising && e.tech ? { tech: e.tech } : {}),
+            ...(!summarising && e.relation ? { relation: e.relation } : {}),
             ...(!summarising && e.date ? { date: e.date } : {}),
             ...(e.direction ? { direction: e.direction } : {}),
             ...(e.startHead ? { startHead: e.startHead } : {}),
@@ -2814,6 +3133,9 @@ export function toReactFlow(
             ...(!rerouted && e.startField ? { startField: e.startField } : {}),
             ...(!rerouted && e.endField ? { endField: e.endField } : {}),
             ...(!rerouted && e.points ? { points: e.points } : {}),
+            // A stand-in for several originals is none of them; a lone
+            // re-route is still the original edge and keeps its bag.
+            ...(!summarising && e.data ? { data: e.data } : {}),
             routingResolved: e.routing ?? defaultRouting,
           },
           style: {
@@ -2844,6 +3166,8 @@ export function fromReactFlow(
      * against the rebuilt ids, so a deleted node leaves every path it was on.
      */
     paths?: DiagramPath[];
+    /** The document's settings — ride through like `paths`; absent, `base.settings` serves. */
+    settings?: DiagramSettings;
     /**
      * The document the React Flow state was derived from.
      *
@@ -2901,10 +3225,13 @@ export function fromReactFlow(
 
   const built = diagramNodes.map((n) => {
     const collapsed = n.data?.collapsed === true;
-    // A collapsed container renders at chip size — its stored w/h are the
+    // A closed container renders at chip size — its stored w/h are the
     // EXPANDED dimensions and must never be overwritten by the chip's, or
     // expanding would restore a group shrunk to 180×44 with its layout gone.
-    const baseSize = collapsed ? baseNodeById.get(n.id) : undefined;
+    // `folded` is the same chip for the document's reason, with the same
+    // stakes: unfolding a whole diagram must not hand back a row of 180×44
+    // frames.
+    const baseSize = collapsed || n.data?.folded === true ? baseNodeById.get(n.id) : undefined;
     return {
       id: n.id,
       label: n.data?.label ?? n.id,
@@ -2930,6 +3257,7 @@ export function fromReactFlow(
       outline: n.data?.outline,
       color: n.data?.color,
       opacity: n.data?.opacity,
+      data: n.data?.data,
       x: n.position.x,
       y: n.position.y,
       // Size can live in any of three places: `width`/`height` after a
@@ -2957,6 +3285,7 @@ export function fromReactFlow(
       labelT: e.data?.labelT ?? 0.5,
       providers: e.data?.providers,
       tech: e.data?.tech,
+      relation: e.data?.relation,
       direction: e.data?.direction,
       startHead: e.data?.startHead,
       endHead: e.data?.endHead,
@@ -2972,6 +3301,7 @@ export function fromReactFlow(
       startField: e.data?.startField,
       endField: e.data?.endField,
       points: e.data?.points,
+      data: e.data?.data,
     }));
 
   // Carry through whatever was hidden, and only that.
@@ -3028,6 +3358,7 @@ export function fromReactFlow(
       ? opts.base.zones
       : [];
   const carriedPaths = opts.paths ?? opts.base?.paths;
+  const carriedSettings = opts.settings ?? opts.base?.settings;
   return validateTemplate(
     {
       version: 1,
@@ -3036,6 +3367,7 @@ export function fromReactFlow(
       nodes: built,
       edges: builtEdges,
       ...(carriedPaths?.length ? { paths: carriedPaths } : {}),
+      ...(carriedSettings ? { settings: carriedSettings } : {}),
     },
     opts,
   );

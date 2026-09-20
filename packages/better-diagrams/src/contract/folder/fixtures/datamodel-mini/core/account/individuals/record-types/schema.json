@@ -1,0 +1,13 @@
+{
+  "folder": "core/account/individuals/record-types",
+  "kind": "group",
+  "description": "Record types of Individuals",
+  "childCount": 1,
+  "children": [
+    {
+      "folder": "core/account/individuals/record-types/person",
+      "kind": "record-type",
+      "label": "Person"
+    }
+  ]
+}

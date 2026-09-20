@@ -1,0 +1,22 @@
+{
+  "folder": "core/account/individuals",
+  "kind": "view",
+  "entity": {
+    "name": "account",
+    "label": "Account"
+  },
+  "aliasOf": {
+    "folder": "core/account",
+    "name": "account",
+    "schema": "../schema.json"
+  },
+  "view": "account WHERE type = 'individual'",
+  "filter": "type = 'individual'",
+  "curated": {
+    "diagramName": "Individuals",
+    "diagramType": "standard"
+  },
+  "measured": {
+    "recordCount": 40
+  }
+}

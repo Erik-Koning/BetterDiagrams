@@ -330,3 +330,29 @@ describe("docDiagnostics — paths", () => {
     expect(warnings(JSON.stringify(EXAMPLE_ZONED_TEMPLATE))).toEqual([]);
   });
 });
+
+describe("docDiagnostics — settings", () => {
+  const base = '"version": 1, "nodes": [], "edges": []';
+
+  it("knows the settings keys and suggests near misses", () => {
+    const doc = `{${base}, "settings": {"groupContent": "hide"}}`;
+    const found = warnings(doc);
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toContain('Unknown key "groupContent"');
+    expect(found[0].message).toContain('did you mean "groupContents"?');
+    expect(doc.slice(found[0].from, found[0].to)).toBe('"groupContent"');
+  });
+
+  it("checks groupContents against its vocabulary, on the value", () => {
+    const doc = `{${base}, "settings": {"groupContents": "collapse"}}`;
+    const found = warnings(doc);
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toContain('Unknown group contents setting "collapse"');
+    expect(found[0].message).toContain("groups show their contents");
+    expect(doc.slice(found[0].from, found[0].to)).toBe('"collapse"');
+  });
+
+  it("lints a legal fold clean", () => {
+    expect(warnings(`{${base}, "settings": {"groupContents": "hide"}}`)).toEqual([]);
+  });
+});

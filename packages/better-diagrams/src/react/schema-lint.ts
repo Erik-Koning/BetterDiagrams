@@ -28,6 +28,8 @@ import type { Diagnostic } from "@codemirror/lint";
 import type { EditorState } from "@codemirror/state";
 import type { SyntaxNode } from "@lezer/common";
 import {
+  ARRANGE_MODES,
+  NOTATIONS,
   EDGE_COLORS,
   EDGE_DIRECTIONS,
   EDGE_HEADS,
@@ -35,12 +37,14 @@ import {
   EDGE_ROUTINGS,
   EDGE_STYLES,
   FIELD_KEYS,
+  GROUP_CONTENTS,
   ICON_NAMES,
   NODE_FIELD_KEYS,
   NODE_KEYS,
   NODE_KINDS,
   NODE_STATUSES,
   PROVIDER_IDS,
+  SETTINGS_KEYS,
   TEMPLATE_KEYS,
   validateTemplate,
 } from "../contract/schema";
@@ -132,6 +136,8 @@ const architectureKeyLookup: KeyLookup = (path) => {
       return ZONE_KEYS;
     case "paths.*":
       return PATH_KEYS;
+    case "settings":
+      return SETTINGS_KEYS;
     default:
       return null;
   }
@@ -275,6 +281,9 @@ export function buildArchitectureLint(
       { path: "zones.*", key: "shape", allowed: setOf(ZONE_SHAPES), noun: "zone shape", describe: "a zone shape", consequence: 'It will be inserted as "rounded".' },
       { path: "zones.*", key: "outline", allowed: setOf(ZONE_OUTLINES), noun: "zone outline", describe: "a zone outline", consequence: "It will be ignored (the outline stays solid)." },
       { path: "paths.*", key: "color", allowed: setOf(EDGE_COLORS), noun: "path color", describe: "an edge color", consequence: "It will be ignored (the path takes the next colour in the cycle)." },
+      { path: "settings", key: "groupContents", allowed: setOf(GROUP_CONTENTS), noun: "group contents setting", describe: "a group contents setting", consequence: "It will be ignored (groups show their contents)." },
+      { path: "settings", key: "arrange", allowed: setOf(ARRANGE_MODES), noun: "arrange mode", describe: "an arrange mode", consequence: "It will be ignored (Tidy arranges left to right)." },
+      { path: "settings", key: "notation", allowed: setOf(NOTATIONS), noun: "notation", describe: "a notation", consequence: "It will be ignored (ends show both the symbol and the text)." },
       providersRule("nodes.*"),
       providersRule("edges.*"),
       providersRule("zones.*"),

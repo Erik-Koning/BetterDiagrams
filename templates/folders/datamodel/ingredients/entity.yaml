@@ -1,0 +1,9 @@
+kind: custom
+label: Ingredient
+name: ingredient
+recordCount: 64
+fieldsTotal: 6
+fieldsVisible: 6
+diagramType: custom
+diagramName: Ingredient
+url: /entities/ingredient

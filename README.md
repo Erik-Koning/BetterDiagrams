@@ -81,6 +81,7 @@ shadow.
 | `registry` | `RegistryExtensions` | Add node kinds, icons, exporters. See below. |
 | `theme` | `Theme` | Overrides `--as-*` design tokens. `LIGHT_THEME` / `DARK_THEME` are complete presets — `theme={LIGHT_THEME}` flips the whole editor **and** its image exports (the export palette derives from the theme). |
 | `mode` | `"technical" \| "marketing"` | Presentation mode. Default `"technical"`. `"marketing"` restyles the same document for a slide or a landing page — see **Marketing mode** below. Both editors take it; unknown values fall back to technical. |
+| `gradients` | `boolean` | Marketing's one setting. Default `true`. `false` paints every fade the mode draws as one flat coat — on screen and in every picture export, which then carry no gradient at all. Ignored in technical. Both editors take it; see **Without gradients** under Marketing mode. |
 | `generate` | `DiagramGenerator` | Enables the AI panel. Omitted ⇒ no network code runs. |
 | `minimap` | `boolean` | Default `true`. |
 | `welcome` | `boolean` | Default `true`. Shows the **welcome modal** over a brand-new document — see below. |
@@ -92,6 +93,10 @@ shadow.
 | `removedFiles` / `onFileRestore` | `StudioFile[]`, `(id) => void` | Deleted documents the host still holds. The menu grows a **Recently removed…** entry opening a recovery modal. |
 | `onNavigateFile` | `(ref) => void` | Fired when a node url with the `file:` prefix (e.g. `file:Order flow`) has its ↗ clicked — resolve by id, then name, and switch documents. |
 | `onSelectionChange` | `(sel) => void` | The canvas selection in **document terms** — ids bucketed by template section (`{ nodes, edges, zones }` here; `{ participants, messages, activations, fragments, notes }` on the sequence editor), so a host can mirror it, e.g. highlight the matching entries of a live JSON view (the example app does exactly this). Fires on mount too, so a host that remounts per file never keeps a stale selection. |
+| `onPinsChange` | `(pins: Pin[]) => void` | The **pins** — a field (`{ nodeId, fieldId }`) or a whole table (`{ nodeId }`) — mirrored like the two above: fires on mount (empty) and on every change. View state — never in the document; a pin is dropped when its node leaves the document. See **Fields beyond the rows** below. |
+| `onCoverageChange` | `(keys: FieldRef[]) => void` | The keys the **Key coverage** panel is scoring, mirrored like the pins. View state; pruned when a key's table leaves the document. |
+| `onFocusChange` / `onActivePathsChange` | `(ids: string[]) => void` | The two pieces of **view state** the editor keeps outside the document, mirrored to the host: the drill-in stack (root first, `[]` at the top) and the ids of the lit paths. Both fire on mount and on every change, keyed by content, so a host can render its own breadcrumbs or path list. Neither is content — a drill never enters undo or `onChange`. |
+| `ref` | `Ref<StudioHandle>` | Imperative access to the same view state: `getFocus()`, `drillTo(stack)`, `navigateTo(nodeId)`, `getActivePaths()`, `setActivePaths(ids)`. `drillTo` fits the view to the new level; the deepest id the document knows names the level and its real ancestry becomes the stack; `navigateTo` drills to whichever level shows a node, then selects and centres it. Fields: `getPins()`, `setPins(refs)` (a pin is `{ nodeId, fieldId? }` — a whole table when `fieldId` is absent), `navigateToField(ref)` (drill, select, mark the row), `openFieldGrid(nodeId, fieldId?)`, and for the coverage panel `getCoverageKeys()`, `setCoverageKeys(refs)`, `openCoverage()`. The slot context (`toolbarExtras` / `inspectorExtras`) carries the same reads and writes as `focus`, `drillTo`, `activePaths`, `setActivePaths`, `pins`, `setPins`. |
 | `toolbarExtras` / `inspectorExtras` | `ReactNode \| (ctx) => ReactNode` | Slots for your own controls. |
 
 ### Marketing mode
@@ -135,8 +140,29 @@ Titles that are set to wrap keep their technical font size and chip width, becau
 height was measured with those, and a sequence participant's name stops one step short of a card
 title's for the same reason — its header is a fixed lane box.
 
-**Exports follow the mode.** PNG, PDF, SVG and the interactive HTML all render the dress the screen
-is wearing, gradients, shadows, tucked-away labels and all — see **Exports** below.
+#### Without gradients
+
+```jsx
+<ArchitectureStudio value={template} mode="marketing" gradients={false} />
+```
+
+Marketing has one setting of its own. `gradients={false}` keeps everything above — the bigger
+type and chips, the 12px corners, the accent-tinted shadows, the wider layout, the tucked-away
+labels — and replaces every fade with one flat coat: the card, the icon chip, a silhouette's SVG
+def, a collapsed group's chip, a boxed note, a sequence participant header. The coat sits a
+quarter of the way from the fade's pale end (`color-mix()` of its two ends at 25/75,
+`--as-mk-flat`) rather than at its midpoint: a whole card at the fade's average reads heavier
+than a fade that fell away to almost nothing, so the flat card is a wash of its kind's hue on
+paper that still reads as paper. Use it for a brand that wants flat colour, or for a consumer
+that mangles gradient defs — an SVG pasted into a slide deck or a design tool.
+
+The root adds `as-root--no-gradients` beside `as-root--marketing`. Technical never had a gradient
+to switch off, so the prop is inert there and still adds no class.
+
+**Exports follow the mode — and the setting.** PNG, PDF, SVG and the interactive HTML all render
+the dress the screen is wearing, gradients, shadows, tucked-away labels and all; with
+`gradients={false}` the same files come back with no gradient in them (no `<linearGradient>` in
+an SVG, no `createLinearGradient` on the canvas) — see **Exports** below.
 
 ### Starting from blank — the welcome modal
 
@@ -267,14 +293,26 @@ A note's `description` renders as a dim sub-line under its sentence (canvas and 
 alike), sized against the note's own `fontSize`; the sentence itself is the `label`, edited by
 double-clicking the note.
 
+Every node and edge may carry a **`data` bag** — `data?: Record<string, unknown>` — for whatever
+the host knows that the diagram doesn't: the record a node was generated from, an external id,
+a foreign key's delete rule, the metadata a custom inspector shows. It is the one lenient field
+on an otherwise strict element: any plain object is kept as-is (a shallow copy) and round-trips
+untouched through validation, the canvas, the clipboard and every exporter, the way `meta` does
+for the document; an array, a string or an empty object is dropped so the key is present exactly
+when it carries something. Nothing in the editor reads it. `DiagramNodeData.data` /
+`DiagramEdgeData.data` carry it on the React Flow side, so a custom node component can show it.
+
 ### Paths: named flows the reader can light up
 
 A document may name **paths** — ordered walks through the diagram, each with a title — and the
 toolbar's **Paths** menu lists them. Tick one and every node and arrow on it glows in that
 path's colour; tick several and each keeps its own colour, with a key in the corner legend. The
-glow pulses, and the bright spot travels the walk from its first step to its last while each
-arrow's dashes run the way the walk takes it — against the arrowhead when the flow goes back up
-an edge. Which paths are lit is view state, like the tag filter: it never enters the document.
+nodes wear a still halo; the arrows of **one** lit path move — a bright spot travels the walk
+from its first hop to its last while each arrow's dashes run the way the walk takes it, against
+the arrowhead when the flow goes back up an edge. The path that moves is the route singled out
+in the paths panel, else the shortest one lit; every other lit path keeps a still halo and a
+still dash pattern. Which paths are lit is view state, like the tag filter: it never enters the
+document.
 
 ```json
 {
@@ -299,6 +337,113 @@ dark default, because a glow on white has nothing to bloom into, and the hue its
 theme's `edgeColors`. Under `prefers-reduced-motion` the halo stays and nothing travels. The
 **Interactive HTML** export carries the paths too: its ⋯ menu lists them, lighting one adds the
 same glow and dash flow to the exported SVG, with a key over the stage.
+
+### Finding paths: graph search
+
+`paths.ts` resolves a walk someone has written down; `contract/graph.ts` **finds** one. Every
+search reads the structural slice a `DiagramTemplate` already satisfies (`{ nodes, edges }`), so a
+scoped view document serves too, and returns `GraphWalk`s — `{ nodes, edges }` interleaved, so
+`nodes[i]` is joined to `nodes[i + 1]` by `edges[i]`.
+
+```ts
+import {
+  shortestPath, shortestPaths, allSimplePaths, neighbourhood, walkToPath,
+} from "@mosphere/better-diagrams/contract";
+
+shortestPath(doc, "cdn", "db");                       // fewest hops (BFS), or null
+shortestPaths(doc, "cdn", "db", 3);                   // the 3 best simple routes (Yen's), shortest first
+allSimplePaths(doc, "cdn", "db", { maxDepth: 5, limit: 50 });
+neighbourhood(doc, "orders", 2);                      // { nodes: Map<id, hops>, edges } within two hops
+neighbourhood(doc, ["orders", "users"], 1, { undirected: true });
+
+// Light a found route: make it a document path, then tick it.
+const walk = shortestPath(doc, "cdn", "db")!;
+const path = walkToPath(doc, walk, { id: "cdn-to-db", title: "CDN → DB", color: "rose" });
+setTemplate({ ...doc, paths: [...(doc.paths ?? []), path] });
+studioRef.current?.setActivePaths([path.id]);
+```
+
+Direction is honoured by default — an edge is walked source → target, except one whose
+`direction` is `both` or `none`, which reads as a two-way link; `{ undirected: true }` ignores
+arrows. `edgeFilter` and `nodeFilter` narrow the graph (the endpoints of a search are always
+allowed). Parallel edges are distinct routes; self-loops are never walked. Ties break by document
+order, so a result is stable across runs. `walkToPath` writes the shortest `steps` that
+`resolvePath` expands back to exactly that walk — an edge id only where the pair is joined by
+more than one.
+
+#### Between fields
+
+The same searches run **field to field**: a route leaves the first table through an edge anchored
+at the pinned field (`startField`/`endField`, or the dialect's own record of the field when the
+row isn't drawn — `edgeFieldIds` in `contract/fields.ts` is the one definition of "anchored") and
+arrives on an edge anchored at the other.
+
+```ts
+import { fieldPaths, between, reachableFrom } from "@mosphere/better-diagrams/contract";
+
+fieldPaths(doc, { nodeId: "contact", fieldId: "AccountId" }, { nodeId: "account", fieldId: "Id" }, { undirected: true });
+// → { walks, constrained: { from, to }, truncated }     k = 10 routes, maxDepth = 10
+between(doc, a, b, { undirected: true });
+// → { onRoutes, corridor, routes, truncated }           two tiers, see below
+reachableFrom(doc, [a, b, c]);
+// → { nodes: Map<id, hops>, edges, constrained }        linear, no bound needed
+```
+
+`keyFrequency(doc, a, b)` shares one bounded enumeration with `between` and says, per key (a
+referencing field, see `keyFields`), how many of the routes travel it — the "keys most routes use"
+list. `keyCoverage(doc, keys, { scope })`, `marginalGains(doc, chosen)` and
+`minimalKeyCover(doc, { scope, budgetMs, exactUpTo })` in `contract/coverage.ts` are what the
+coverage panel draws: what a set of keys reaches, what each other key would add, and the fewest
+keys that reach everything (`optimal` only when the exact pass finished).
+
+Every result says when it was **cut short** (`truncated`) and whether an end was **held to its
+field** (`constrained`) or fell back to the table because the field anchors nothing on this
+document. `between` answers "which tables sit between these two fields" in two tiers, because
+enumerating simple routes is exponential: `onRoutes` is exact under the bounds (on at least one
+enumerated simple route — `maxDepth` 8, 20 000 expansions, 300 ms, an injectable clock), and
+`corridor` is the cheap superset (within `maxDepth` of both ends by shortest distance, two
+breadth-first searches) the panel can always show. A field that is two tables away in both
+directions but a dead end sits in the corridor and on no route; the panel labels the two.
+
+### Settings: how the whole document is shown
+
+A root-level `settings` object holds rendering preferences that apply document-wide — how the
+diagram is *shown*, never what it says. Unlike `meta`, it is strict: only the keys the schema
+defines survive validation (the JSON editor lints the rest), and an object left saying nothing
+is omitted, so a document that never set one round-trips byte-identical.
+
+```json
+{
+  "settings": { "groupContents": "hide" }
+}
+```
+
+`groupContents` decides what groups do with what they contain. `"show"` — the default, never
+stored — is the canvas you know: every group is an open frame, or a chip when its own
+`collapsed` flag says so. `"hide"` **folds every group that has contents** into a chip, whatever
+its own flag says: contents leave the canvas, their edges re-route to the chip, and the stored
+frame size survives — the same mechanics as collapsing one group by hand, applied to all of
+them at once. An empty frame hides nothing, so it stays open. Image exports and the export crop
+follow the fold; the whole-document exports (Template, React Flow) do not, and neither does a
+Compare overlay — a diff shows the architecture inside every group.
+
+The toolbar gets a **Fold groups** toggle whenever the document says something here and some
+group has contents to fold — a diagram that never set `groupContents` keeps the toolbar it always
+had. Pressed means folded; pressing it writes `"show"` (so the switch stays, and there is a way
+back), and the flip is a document edit like any other: committed, undoable, emitted through
+`onChange`. A **read-only** viewer gets the same toggle as a view-only override — it changes
+what they see, never the document, and is dropped the moment editing is re-enabled. Under a fold
+each chip loses its own ▸ expand toggle — flipping one group's flag underneath the document's
+fold would change nothing on screen — and the groups' own `collapsed` flags are never written,
+so unfolding reopens exactly what was open before.
+
+**The fold never eats an edit.** Under `"hide"`, an edit that gives a group contents — a card
+dropped into a frame, a selection wrapped in a group with `⌘G` — would fold that group at once
+and take the very cards you just placed off the canvas. Instead the document flips to `"show"`
+in the same undo entry (the toast says so), and **Fold groups** folds everything again when you
+are done. Edits that arrive as whole documents — import, paste, an AI reply — fold as authored.
+The setting is opt-in for the model too: the system prompt teaches it, but only for a request
+that asks for folded groups or a summary view.
 
 ## Node text: alignment and wrapping
 
@@ -410,6 +555,96 @@ const level = scopedView(template, "payments");   // an ordinary DiagramTemplate
 drillableIds(template);                            // every node with internal detail
 focusPath(template, "retry-worker");               // ["payments", "workers"] — the stack that shows it
 ```
+
+A host drives the drill the same way the reader does, through the component's `ref`
+(`StudioHandle`): `drillTo(["payments", "workers"])` lands on a level and fits to it,
+`navigateTo("retry-worker")` goes to whichever level shows a node and selects it, and
+`onFocusChange` reports every move — so an explorer can put its own tree or breadcrumbs beside
+the canvas and keep the two in step.
+
+## Folder format: a directory tree in, a document out
+
+A diagram can also live as a **folder tree** — one folder per node, nesting to any depth, with
+per-folder files carrying the node's content. `contract/folder` converts both ways, with a
+pluggable **dialect** deciding what the files mean:
+
+- **`generic`** — `node.json` / `edges.json` per folder plus a `.better-diagrams/manifest.json`.
+  What the **Folder (.zip)** export writes, and what any bare directory tree reads as (a folder
+  with children is a group, a leaf is a box, named after the folder).
+- **`datamodel`** — the tree a data-model exporter writes, from a database, an API's object
+  model or any system with entities and fields: bands and groups as folders, an entity per folder
+  with `schema.json` (fields, foreign keys), `entity.yaml` (a flat summary, read only as a
+  fallback), optional `forensics.json`; views aliasing an entity; record types beneath it; a root
+  `relationships.json` naming the business edges. A folder with no manifest that holds entities is
+  a group, so a plain directory structure — schemas as folders, tables inside — reads as it is.
+
+```ts
+import { importFolder, exportFolder, dataModelRegistry } from "@mosphere/better-diagrams/contract";
+import { readFolderToFileMap, writeFileMap } from "@mosphere/better-diagrams/contract/folder/node";
+
+const files = await readFolderToFileMap("./data-model");        // path → text; a browser builds one from a dropped directory
+const { template, dialect, warnings, stats, registry } = importFolder(files, {
+  fields: "keys",          // "keys" (primary key, name, references, external ids) | "visible" | "all" | predicate
+  edges: "business",       // hide audit FKs (owner_id, created_by_id…) | "all"
+  polymorphic: "collapse", // one point node per polymorphic FK | "in-model" (fan out, capped) | "none"
+});
+<ArchitectureStudio defaultValue={template} registry={dataModelRegistry} />
+
+// Later — positions, curated labels, notes and drawn paths back beside the source, nothing else:
+const out = exportFolder(edited, { tree: buildFolderTree(files) });   // sidecar mode
+await writeFileMap("./data-model", out.files, out.deletions);        // writes .better-diagrams/ only
+```
+
+A dialect-generated tree past `AUTO_FOLD_NODES` (40) nodes opens with its **top-level containers
+collapsed** and laid out again, so a real system's model is a map of chips to drill into rather
+than a wall of cards at fit-zoom — 137 entities arrive as eight chips at 107% rather than 180 cards at
+15%. `foldGroups` forces it either way; a generic tree never folds on its own, because it
+round-trips a document that already said what it wanted, and a **layout sidecar always wins** —
+the fold is applied but the reader's own arrangement is never re-laid-out over.
+`templates/folders/datamodel/` is a small worked example of the format — nine entities, a view, a
+group of record types, cross-cutting metadata.
+
+Import is dialect-detected (or named with `dialect`), never throws on a recoverable tree, and returns
+typed `warnings` — `unknown-shape`, `folder-mismatch`, `edge-target-missing`, `poly-capped`,
+`too-many-fields`, `sidecar-orphan`, `yaml-fallback-used`, … A dropped directory whose own name
+prefixes every path is re-rooted automatically. Node ids are folder paths (`core/account`), edge
+ids are `${from}::${field}::${to}`, so both stay stable across regenerations and addressable
+from a host. Every node and edge carries the source's metadata in `data` (`data.folder`, and for
+the data-model dialect `data.model` — entity name, record count, FK delete rules, business/audit
+flag, per-row visibility and external-id marks). The primary key is whatever the schema declares
+(`primaryKey: true`), else a field of type `id` or simply called `id`; references land on it, and a
+foreign key may name another `targetField`. A column that is both part of the key and a
+reference — a join table's — draws as `pfk`; with a composite key, references land on its first
+column unless the foreign key says otherwise. Relationship kinds are the editor's own
+(`composition`, `reference`, `hierarchy`, `polymorphic` — see *Data models*), written onto each
+edge as `relation`. Entities nested under entities become drill-in detail; views draw a single
+dashed `alias` link to their entity and no FK lines; references that leave the model get a stub
+under an **Outside the model** group so path search never dead-ends.
+
+Export is **partial and additive by contract**. Sidecar mode (the default for an imported
+data-model tree) writes only `.better-diagrams/layout.json` — the presentation half of the
+[split document](#content-and-layout-the-split-document) — and `.better-diagrams/overrides.json`,
+the labels, descriptions, tags, notes and `paths` a curator changed, diffed against a fresh import
+when the source tree is at hand. It never rewrites `schema.json`, `relationships.json` or the
+metadata folder; the exporter stays the sole writer of source-derived content. `writeEntityYaml`
+opts into patching the two curated keys (`diagramName`, `diagramType`) of existing `entity.yaml`
+files, byte-identical elsewhere. Full mode (`mode: "full"`, the generic writer) round-trips
+`importFolder(exportFolder(t).files) ≡ t` for any document, order included.
+
+In the editor: **Import folder** beside Import picks a directory; the Export menu offers
+**Folder (.zip)** built in, and **Folder sidecar (.zip)** once a host registers the opt-in preset
+(`registry={{ exporters: FOLDER_EXPORTERS }}`) — it only means something for a document that came
+from a folder tree. A node added on the canvas has no source folder, so a sidecar export reports it
+(`no-source-folder`) rather than writing it anywhere. The `bd-folder` CLI does the same from a shell —
+`bd-folder import <dir> --out t.json`, `bd-folder export t.json <dir>`, and `bd-folder check <dir>`
+(exit 1 when the sidecar on disk is out of date). The example app lists any tree dropped into
+`templates/folders/` under Settings ▾ → Templates.
+
+Every entity node also carries its **full field list** in `data.model.fields` — compact
+(name, label, type, primary key, nullable, external-id/unique marks, formula, visibility, reference
+targets; no enum values or lengths), whatever the `fields:` row mode drew on the canvas, capped at
+`MAX_NODE_FIELDS` (500) with a `fields-truncated` warning past that. `fieldRecords(node, doc)`
+merges it with the rows; the field grid, the search and the row menu read that, never the bag.
 
 ## Content and layout: the split document
 
@@ -539,7 +774,11 @@ for exactly-one, a ring for optional, three prongs for many — and that end dro
 since a relationship reads by its notation. The parser is deliberately strict: `endLabel: "owns"`
 is role text and keeps the plain arrow it always had, so no existing diagram sprouts symbols.
 The text still renders alongside the symbol, pushed clear of it, for readers who don't speak
-crow's foot.
+crow's foot. *View ▸ notation* chooses between the two — **symbols and numbers** (the default),
+**crow's-foot symbols** alone, or **UML numbers** alone — stored as `settings.notation` and
+honoured by the canvas and every picture export alike. Under UML the end glyphs get their point
+back: a composition's filled diamond and an aggregation's hollow one draw at the part, where a
+symbol would otherwise stand in for them.
 
 `startField`/`endField` are **semantic, not geometric**: the line re-aims itself when rows are
 reordered, and degrades to the box when the row isn't on screen — inside a collapsed group, or
@@ -547,6 +786,35 @@ one drill-in level away. Both the canvas and the image exporters resolve them th
 `fieldAnchors`, so a PNG's foreign keys land on the same columns the screen shows. A node is
 grown to fit every row it carries rather than clipping any, and a dangling field reference is
 dropped on validation like any other bad reference.
+
+Two foreign keys on neighbouring rows whose targets lie the other way round would cross the
+moment they leave the table, so lines leaving one side of a box **trade rows** to fan out in
+destination order — the same rows, handed out so nothing crosses (`uncrossFieldAnchors`, run by
+the canvas and the exporters alike). A traded line leaves from its neighbour's row rather than
+its own. Only row-placed ends take part: drag an endpoint to pin it and it is yours, and the
+line it was trading with returns to its own row.
+
+A relationship can also say what **kind** it is — `"relation"` on the edge, in a vocabulary the
+editor owns rather than any one source's: **`composition`** (owned — the child can't exist
+without its parent and goes with it: solid rose, a filled diamond at the child, `*` → `1`),
+**`aggregation`** (shared — the part belongs to a whole for now but outlives it: solid sky, a
+hollow diamond at the part, `*` → `0..1`), **`reference`** (an ordinary foreign key; either side
+can exist alone: dashed slate, `*` → `0..1`, or `*` → `1` when the key is required),
+**`hierarchy`** (a table pointing at itself: dashed violet), **`polymorphic`** (a target that
+varies per row: dotted amber) and **`generalization`** (is-a — a subtype or record type extending
+the table it points at: solid emerald, a hollow triangle at the parent, no cardinality; the
+folder importer draws one from every record type to its parent entity). Crow's-foot's identifying-solid / non-identifying-
+dashed rule is where the line styles come from; the colours keep the four apart at a glance. A
+kind **dresses** a line rather than being read at draw time — the importer or the inspector's
+*relation* picker writes `style`, `color`, the end glyph and the cardinality onto the edge
+alongside `relation`, so a document stays self-contained and a hand-recoloured line keeps its
+edit. What the kind itself does is explain: a **Relationships** key joins the corner legend (and
+the PNG/SVG/PDF legend) whenever the visible lines carry one, each kind drawn as its own line
+sample with a count, and the Mermaid ER export draws a composition identifying (`--`) and every
+other kind non-identifying (`..`). The vocabulary lives in `RELATION_KINDS`
+(`@mosphere/better-diagrams/contract`), and a registry relabels or extends it in a source's own
+words — `relationKinds: { composition: { label: "Master-detail" } }` — exactly as it does node
+kinds; the data-model folder dialect writes these kinds onto its edges directly.
 
 Rows and cardinality are **content**, so they ride the split with the architecture: an
 elements-only prompt owns them, a layout file never mentions a column, and an AI refine can add
@@ -564,6 +832,61 @@ The Mermaid export follows the document: when every visible box carries rows it 
 through the *same parser* the canvas draws its symbols from, so the two can't disagree. A mixed
 document stays a `flowchart`, because half the entities having no columns would make an ER
 diagram claim something false about them.
+
+### Fields beyond the rows
+
+A record node draws its `fields[]` rows; everything else a field *is* — its label, the tables a
+reference points at, visibility, external-id and unique marks, a formula, and the fields an
+import left off the canvas — lives in the node's `data` bag (`data.model.fields` after a
+data-model import; a host may put the same shape under `data.fields`). `fieldRecords(node, doc)` merges the
+two into one `FieldRecord` per field, `searchFields(doc, query)` finds them, and the editor builds
+on that:
+
+- **Rows are clickable.** A click (or right-click) opens the field menu: *Pin for search*, *View
+  all fields*, *Follow reference* (one per table the field points at — it goes to that table with
+  both halves of the join marked, the foreign key and the key it lands on), *Show references* (on a
+  key — the other direction: marks the key, every foreign-key row pointing at it, and the tables
+  those rows sit in, so a reference from across the canvas still shows, while every other card
+  steps back; the node's menu offers it for the whole table; `Esc` or a click on empty canvas
+  lifts the marks, as does selecting anything they did not touch), *Edit…* (hand-authored documents only — a folder-imported document's fields
+  belong to the source), *Copy name*. Rows stay 19px; the states are inset-only.
+- **The field grid** — *View all fields* on a row, the node's menu, or the inspector — lists every
+  field record of a node: sort by any column, filter, drag columns, walk with the keyboard (Enter
+  follows a reference, `p` pins, `/` filters), copy as TSV, download as CSV. Read-only. Also
+  exported as `FieldGridModal` for a host's own chrome.
+- **Search matches fields.** The toolbar search lists `Table · field` hits after node hits; Enter
+  marks the row, or opens the grid on a field the node doesn't draw.
+- **Pins.** A pinned field wears a mark and sits in the strip above the canvas; pins survive
+  drilling and navigating (view state, never in the document; pruned when the node goes away).
+  `getPins`/`setPins`/`navigateToField` on the ref, `onPinsChange` on the props.
+- **Show paths** (two pins — a field each, or a whole table via *Pin table for search* on the
+  node's menu): the routes between them, shortest first, each with its **hop strip** — the key
+  carrying every hop (`order_id ▸ user_id`). All routes light in palette colours; hover or click
+  one and it is singled out in the theme's **route colour** (`routeColor`, `--as-route`, a
+  highlighter outside the edge palette) with a **key badge** on every lit hop. Below the routes,
+  **Keys most routes use** (shown once there are two or more routes) ranks the keys the routes
+  share (`Contact.AccountId — 7 of 9`); hover one to light every route through it, click to keep
+  them lit — as with a route, and keeping one lets go of the other. Then the tables between and
+  the wider corridor, every table a click away. Three or more pins: what lies between every pair and
+  everything the pins reach, with the canvas dimmed to one or the other. "Ignore arrow direction"
+  is on by default. The panel says when a search stopped at its limits or a pin's field anchors
+  nothing. See **Between fields** under *Finding paths* for the contract calls.
+- **Key coverage** (View → *Key coverage*, or `openCoverage()` on the ref): a right-hand panel that
+  scores a chosen set of keys — **`73%` · 100 of 137 tables** — with a bar per key: the chosen ones
+  stacked with the running percentage, then every candidate ranked by what it would add. Click a
+  bar to add or drop a key; hover one and the canvas dims to what it reaches. **Find smallest set**
+  fills the chosen set with the fewest keys that reach everything any key can (greedy, then an
+  exact pass over up to 12 candidates within 300 ms — the panel says "proven" only when that pass
+  finished). Scope is *All tables* (a table counts when a chosen key's edge touches it) or *From
+  ‹the selected table›* (a breadth-first search over the chosen keys' edges).
+
+  A **table** is a node that stores field data — rows it draws, or fields in its `data` bag. That
+  is the whole of the test, and it leaves out by construction everything a key can never stand
+  for: bands and groups, views and record types, external stubs and polymorphic collapse points.
+  An object with no foreign key at all still counts, because "this table is an island" is exactly
+  what the score should tell you. Pass `isTable` to `keyCoverage` / `marginalGains` /
+  `minimalKeyCover` (or `storesFields`, the default, directly) when your documents say it
+  differently.
 
 ## Infrastructure zones
 
@@ -681,8 +1004,9 @@ gets readable text on it.
 
 ## Extending it
 
-Three plain records, shallow-merged over the built-ins. Omit a key to keep the built-in, pass a
-partial to override it, pass `null` to remove it:
+Plain records, shallow-merged over the built-ins — node kinds, icons, exporters, providers,
+lint rules, relationship kinds. Omit a key to keep the built-in, pass a partial to override it,
+pass `null` to remove it:
 
 ```jsx
 <ArchitectureStudio
@@ -694,6 +1018,10 @@ partial to override it, pass `null` to remove it:
     },
     icons: { lambda: ["M4 4h6l7 16h3", "M20 4h-5L8 20H4"] },  // 24x24 viewBox paths, stroke only
     exporters: { terraform: myExporter, pdf: null },
+    relationKinds: {
+      composition: { label: "Master-detail" },                 // a source's own name for a built-in kind
+      ownership: { label: "Ownership", color: "emerald" },     // a new kind, over the plain reference line
+    },
     promptExtraRules: "- This org runs on AWS; prefer lambda for compute.",
   }}
 />
@@ -732,7 +1060,9 @@ its own mode into every picture export, so a slide exported out of marketing mod
 looking like the slide. Whether a palette is light or dark is read off `palette.bg`, not passed in,
 so a headless `renderTemplateToSvg(doc, registry, LIGHT_EXPORT_PALETTE, { mode: "marketing" })`
 gets the light treatment with no theme in sight. Anything unrecognised in `mode` falls back to
-technical rather than half-applying a look.
+technical rather than half-applying a look. `gradients` rides beside it — `{ mode: "marketing",
+gradients: false }` is the flat marketing picture, with no gradient anywhere in the file; the
+editor threads its own `gradients` prop through exactly as it threads `mode`.
 
 Image exports draw zones behind everything, honour the active provider selection (hidden nodes
 and their edges are omitted, and the crop tightens to what's visible), and stamp the legend into
@@ -744,8 +1074,9 @@ formats never narrow — "export → save to your database" must not quietly bec
 I had highlighted". Mermaid can't express overlapping regions, so it
 records the active selection as `%% zone:` comments and reserves subgraphs for groups.
 
-A custom exporter receives the mode alongside the palette (`{ template, registry, filename,
-palette, mode }`), and returns a blob to download, or nothing if it delivered the result itself:
+A custom exporter receives the mode and its gradient setting alongside the palette
+(`{ template, registry, filename, palette, mode, gradients }`), and returns a blob to download,
+or nothing if it delivered the result itself:
 
 ```js
 const summary = {
@@ -780,20 +1111,25 @@ The schema and editor cover C4's notational essentials:
 | **Edge tech label** — C4's `[JSON/HTTPS]` | `edge.tech`, second line under the label |
 | **Numbered dynamic flows** | `edge.seq` renders a circled step badge; C4-PlantUML export prefixes `1.` |
 | **Direction** — `forward` / `both` / `none` arrowheads | `edge.direction` |
-| **End glyphs** — solid arrow, open chevron, hollow diamond (aggregation), circle, bar | `edge.startHead` / `edge.endHead`; an explicit `startHead` renders even on a `forward` edge. Drawn back from the attachment so nodes can't cover them |
+| **End glyphs** — solid arrow, open chevron, hollow diamond (aggregation), filled diamond (composition), hollow triangle (generalization), circle, bar | `edge.startHead` / `edge.endHead`; an explicit `startHead` renders even on a `forward` edge. Drawn back from the attachment so nodes can't cover them |
 | **Self-loops** | `source === target` draws a retry arrow out one face and back into an adjacent one; drag an edge's endpoint onto its own source to make one |
 | **Routing** — curved / right-angle / straight | `meta.routing` sets the diagram default (Arrange → connector picker); `edge.routing` overrides per edge. Right-angle elbows are rounded |
 | **Flow-chart kinds** — `decision` (diamond), `terminator` (stadium), `io` (parallelogram) | Insert or the kind picker; Mermaid exports each by its shape |
 | **Language models** — `lm-small`, `lm-medium`, `llm` | One hue at three strengths, so the weight class is legible at a glance: a 1B router never looks like a frontier model. Provider-neutral — name the model in `description` ("Phi-3 mini", "Claude Opus 5"); use a cloud's own kind (`azure-openai`, `aws-bedrock`, `gcp-vertex-ai`) when the box is the hosting *service* |
-| **Collapsible groups** | ▾ on a group collapses it to a chip; contents hide, their edges re-route to the chip, and the stored size survives expand. Never destructive — collapse is view state that rides the undo stack |
+| **Collapsible groups** | ▾ on a group collapses it to a chip; contents hide, their edges re-route to the chip, and the stored size survives expand. Never destructive — collapse is view state that rides the undo stack. `settings.groupContents: "hide"` folds every group with contents at once, with a **Fold groups** toolbar toggle to flip it (see **Settings** above) |
 | **Tags + filter** | `node.tags`; the View tag filter dims non-matching nodes — dim only, never hide, so the filter can't touch what persists |
-| **Doc links** | `node.url` renders an ↗ affix (a real link in read-only) |
+| **Doc links** | `node.url` renders an ↗ affix (a real link in read-only); View → Show link buttons hides the affixes without touching the document, and a multi-selection's inspector offers **Clear links** to drop them from every selected node at once |
 | **Team ownership** | `node.team` renders a tag riding the node's edge, coloured stably per team name (same hue on screen and in image exports); View → Show team badges toggles them while editing |
 | **Lifecycle status** | `node.status`: `proposed` (dotted) / `planned` (dashed) / `stubbed` (heavy construction dashes + faint hatch — scaffolding with no implementation) / `dark` (black/white hazard-tape outline — built and shipped but not yet enabled) / `active` (default, never stored) / `deprecated` (dimmed, salmon status text sharpening to red on hover/selection) / `retired` (dimmed + struck through). Every dulled stage brightens to full strength under the cursor so its label stays readable. Same conventions in image exports; C4-PlantUML gets `$tags` |
 | **Version tag** | `meta.versionTag` ("v2.1", "2026-Q3 draft") renders as a corner notice — `meta.versionTagPosition` picks the corner; click it to edit, View → Set version tag… to create one. Stamped into image exports |
 | **Lock** | `node.locked` / zone lock pins an element against drags and resizes |
 | **Search** | ⌘K, matches id/label/description/kind/tags, Enter cycles and centres |
 | **Snap & align** | Arrange: snap-to-grid, align left/centre/right/top/middle/bottom (2+ selected), distribute (3+), clear routes |
+| **Arrange modes** | Arrange: *Left to right* (default, proximity-based) or *Untangle lines* (fewest crossings, lanes for long lines); stored as `settings.arrange`, applied on pick, one `⌘Z` undoes both |
+| **Notation** — symbols and numbers / crow's foot / UML | View: how a line's ends draw cardinality; `settings.notation`. UML shows the end glyphs a crow's-foot symbol would replace |
+| **Enumerations** | Kind `enum`: a record whose rows are the allowed values, «enumeration» style; Insert ▸ Enumeration |
+| **Field flags** — unique, derived | `field.unique` wears a UQ badge and exports as Mermaid `UK`; `field.derived` takes UML's leading slash. The folder importer sets both from `unique` and `formula`/`calculated` |
+| **Junction tables** | Arrange ▸ Collapse junction tables: a table keyed by two foreign keys becomes one `*`–`*` line named after it, its other rows noted on the line; `junctionTables` / `collapseJunctions` in the contract |
 | **Title block** | `meta.title` stamps exported images |
 | **C4-PlantUML export** | `Person`/`ContainerDb`/`ContainerQueue`/`System_Ext`/`Container`, `Container_Boundary` for groups, `Deployment_Node` for zones, `Rel`/`BiRel` with tech |
 
@@ -1003,7 +1339,17 @@ render "the architecture as of 2026-06-15" without React.
 ## Layout, clipboard, ghosts
 
 **Tidy** arranges nodes within each zone and group using a layered (Sugiyama-style) layout,
-growing containers to fit but never moving them. It's written in-package rather than delegating
+growing containers to fit but never moving them. Two **arrange modes** live in the Arrange menu
+and are stored in the document as `settings.arrange`, so every later Tidy keeps arranging the
+same way. *Left to right* (the default, `"flow"`) is proximity-based: each node sits one rank
+past what feeds it and rank-mates are ordered once by where their predecessors sit — compact and
+quick. *Untangle lines* (`"untangle"`) spends its effort on the lines instead: ranks are re-ordered
+by repeated sweeps in both directions until as few lines as possible cross, a line that skips a
+rank is threaded through a lane of its own so it never runs through a box in between, and nodes
+slide level with what they connect to so lines run straight. Nodes no line touches are parked in
+a grid after the flow rather than padding the first rank. Picking a mode re-arranges the canvas
+on the spot, in the same edit that stores the choice — one `⌘Z` puts every box back *and* forgets
+the mode. It's written in-package rather than delegating
 to dagre because the layout has to be *container-constrained* — a global layout that ignored
 zones would drag nodes out of the region deciding whether they're visible, silently changing the
 document's meaning. It also runs automatically on generated diagrams, but only when
@@ -1052,17 +1398,37 @@ shows the active scenario.
 
 The toolbar opens with the **tool tray** (below), then groups its actions into four dropdowns —
 **Insert** (node/group/text/zone),
-**Arrange** (tidy, clear routes, align, distribute, routing, snap), **View** (ghosts, tag filter), and
+**Arrange** (tidy, arrange mode, clear routes, align, distribute, routing, snap), **View** (ghosts, tag filter), and
 **Export** — all sharing one open-menu slot, so opening one closes the rest and a click
 anywhere else closes them all — and the click that dismisses a menu is spent on dismissing it,
 rather than also selecting whatever was under the pointer. The inspector reads as captioned
 sections (Node · Style · On · Tags · Link) instead of an unbroken run of inputs.
 
-Selecting **more than one** element swaps the inspector for a bulk one: how many are selected,
-then the fields that mean something across a mixed selection — lifecycle status, owning team, a
-tag to add, line style and colour for the connections — plus align, distribute, group, lock,
-duplicate and delete. Each field shows the shared value, or blank when they disagree, and
-setting it writes to everything selected.
+Selecting **more than one** element keeps the same inspector, handed the whole selection: the
+count, then every node setting the selected nodes **share** — kind, icon, lifecycle status, text
+alignment, vertical alignment, label size and wrap, the frame styling when every one is a group,
+a note's outline when every one is a note, provider scoping when they all sit in one zone, tags,
+team, date, lock — and every connection setting the selected lines share: direction, the tail
+and head glyphs, routing, the side each end leaves from and arrives at, cardinality, technology,
+date, style, colour, providers, plus Reverse and Clear routes for the lot. Only what names *one*
+thing is withheld: a node's label, description, rows and link; a line's label, step number and
+row attachments — though a selection that carries links gets **Clear links (n)**, since an
+imported model arrives with a ↗ on every table and nobody clears a hundred by hand. Each control shows the shared value — or **Mixed** (a disabled option, an
+indeterminate checkbox, a placeholder) when the selection disagrees — and setting it writes to
+everything selected in one undo entry. A tag chip is on when *every* node carries it; toggling
+an on chip strips it everywhere, an off one gives it to everyone. The bar adds align, distribute,
+group, a lock that covers zones too, duplicate and delete. A selection of nodes **and**
+connections edits one side at a time: the count becomes a tab strip (`3 nodes` · `2 connections`),
+so the bar stays a few rows and never buries the canvas it is editing.
+
+**Resizing one node of a multi-selection resizes its peers.** React Flow already drags every
+selected node together; the resize handle now does the same, live, so five cards can be matched
+in one gesture. Peers are boxes of the same class — cards follow cards, frames follow frames,
+notes follow notes — and each keeps its own floor (a table its rows, a wrapped title its lines, a
+group its children), so a size the handle can reach on the dragged box never squashes a
+neighbour's contents. Locked nodes, zones, and dangling-arrow dots stay as they are, and so do
+the resized node's own container and contents: a band across a group selects the frame and what
+is in it, and resizing the frame must not stamp its size onto the cards inside.
 
 ## Canvas tools
 

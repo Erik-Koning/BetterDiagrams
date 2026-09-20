@@ -150,6 +150,7 @@ describe("resolveRegistry", () => {
       "client",
       "external",
       "table",
+      "enum",
       "group",
       "text",
       "decision",

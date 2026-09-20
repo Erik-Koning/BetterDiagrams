@@ -8,6 +8,8 @@
  * deliberately cover things the cloud packs don't.)
  */
 
+import { FOLDER_EXPORTERS, DATAMODEL_KINDS } from "@mosphere/better-diagrams";
+
 /** 24x24 viewBox path data, same format as the built-in icons. */
 export const icons = {
   vault: ["M12 2l9 5v10l-9 5-9-5V7z", "M12 9v6", "M9 12h6"],
@@ -19,6 +21,9 @@ export const icons = {
  * has to state what makes it different.
  */
 export const nodeKinds = {
+  // The data-model preset, so a folder imported under Settings ▾ →
+  // Templates / folders renders its entities, views and record types.
+  ...DATAMODEL_KINDS,
   vault: {
     label: "Vault",
     fill: "#241a04",
@@ -48,6 +53,9 @@ export const nodeKinds = {
  * delivers the result itself, as this one does when the clipboard is available.
  */
 export const exporters = {
+  // The folder sidecar export is opt-in: it only means something for a
+  // document imported from a folder tree, which this app offers.
+  ...FOLDER_EXPORTERS,
   summary: {
     label: "Copy summary",
     hint: "Plain-text inventory to the clipboard",

@@ -25,7 +25,7 @@
  */
 import { pointInZone } from "./zones";
 import { COLLAPSED_SIZE, CONTAINER_KINDS, visibleElements } from "./schema";
-import type { DiagramNode, DiagramTemplate } from "./schema";
+import type { ArrangeMode, DiagramNode, DiagramTemplate } from "./schema";
 
 /**
  * Provider ALTERNATES, mapped to the one that stands in for the set.
@@ -123,9 +123,48 @@ export interface LayoutOptions {
    *   { drill: id }    — only that card's drilled canvas (Tidy while focused)
    */
   frames?: "root" | "all" | { drill: string };
+  /**
+   * The width:height a frame should tend toward, 1.6 by default (a canvas is
+   * wider than it is tall). A rank with many members and few edges among them
+   * otherwise becomes one very tall spine — 22 tables in a band stack some
+   * 3,700px high and fit-zoom to 15% — so a rank taller than the target is
+   * wrapped into side-by-side sub-columns. A rank that fits on a screen
+   * ({@link WRAP_FLOOR}) is never wrapped, so small diagrams lay out exactly
+   * as they always did. 0 turns the wrapping off.
+   */
+  aspect?: number;
+  /**
+   * What the arrangement optimises for — see `ARRANGE_MODES`. Unset, the
+   * document's own `settings.arrange` decides, and "flow" when it says
+   * nothing: so a Tidy keeps arranging the way the document was last set.
+   */
+  mode?: ArrangeMode;
 }
 
-const DEFAULTS = { rankGap: 90, nodeGap: 28, padding: 28, headerGap: 52 } as const;
+/** The width:height a laid-out frame tends toward — a canvas is wider than tall. */
+export const WRAP_ASPECT = 1.6;
+/**
+ * A rank shorter than this is never wrapped, whatever the aspect asks: about
+ * a laptop canvas at 100%, so three stacked services stay a stack and the
+ * wrap only ever touches a rank that would not fit on a screen anyway.
+ */
+export const WRAP_FLOOR = 720;
+/**
+ * How tall a level whose boxes cover `area` should be to sit at
+ * {@link WRAP_ASPECT}, never below {@link WRAP_FLOOR}. Shared with the
+ * scoped view, which fans a drilled level's ghosts by the same rule.
+ */
+export function wrapHeight(area: number, aspect = WRAP_ASPECT): number {
+  return aspect > 0 ? Math.max(WRAP_FLOOR, Math.sqrt(area / aspect)) : Infinity;
+}
+const DEFAULTS = {
+  rankGap: 90,
+  nodeGap: 28,
+  padding: 28,
+  headerGap: 52,
+  aspect: WRAP_ASPECT,
+  mode: "flow",
+} as const satisfies LayoutMetrics;
 
 /** The numeric knobs — what the pure placement routines consume. */
 type LayoutMetrics = Required<Omit<LayoutOptions, "containerKinds" | "frames">>;
@@ -182,23 +221,23 @@ interface Placed {
   h: number;
 }
 
+interface Sized {
+  id: string;
+  w: number;
+  h: number;
+}
+
+interface Link {
+  source: string;
+  target: string;
+}
+
 /**
- * Arrange a set of boxes by the edges between them.
- *
- * Returns positions relative to (0,0) plus the total size occupied. Pure — it
- * knows nothing about zones or groups, which is what lets the same routine
- * drive every container and the root canvas.
+ * Rank by longest path from a source: a node sits one rank past its deepest
+ * predecessor. Kahn's algorithm, so a cycle simply leaves nodes unranked
+ * rather than looping forever; anything left over lands in rank 0.
  */
-function layoutGroup(
-  items: Array<{ id: string; w: number; h: number }>,
-  edges: ReadonlyArray<{ source: string; target: string }>,
-  opts: LayoutMetrics,
-): { placed: Placed[]; width: number; height: number } {
-  if (!items.length) return { placed: [], width: 0, height: 0 };
-
-  const ids = new Set(items.map((i) => i.id));
-  const internal = edges.filter((e) => ids.has(e.source) && ids.has(e.target) && e.source !== e.target);
-
+function rankNodes(ids: ReadonlySet<string>, internal: readonly Link[]): Map<string, number> {
   const outgoing = new Map<string, string[]>();
   const indegree = new Map<string, number>();
   for (const id of ids) {
@@ -210,9 +249,6 @@ function layoutGroup(
     indegree.set(e.target, (indegree.get(e.target) ?? 0) + 1);
   }
 
-  // ── Rank: longest path from a source ──────────────────────────────────────
-  // Kahn's algorithm, so a cycle simply leaves nodes unranked rather than
-  // looping forever. Anything left over is placed in rank 0.
   const rank = new Map<string, number>();
   const queue: string[] = [];
   for (const id of ids) if ((indegree.get(id) ?? 0) === 0) (rank.set(id, 0), queue.push(id));
@@ -222,13 +258,94 @@ function layoutGroup(
     const id = queue.shift()!;
     const r = rank.get(id) ?? 0;
     for (const next of outgoing.get(id) ?? []) {
-      // Longest path: a node sits one rank past its deepest predecessor.
       rank.set(next, Math.max(rank.get(next) ?? 0, r + 1));
       pending.set(next, (pending.get(next) ?? 0) - 1);
       if ((pending.get(next) ?? 0) === 0) queue.push(next);
     }
   }
   for (const id of ids) if (!rank.has(id)) rank.set(id, 0); // cycle remnants
+
+  // ── Tighten: pull a node toward what it feeds ─────────────────────────────
+  // Longest path puts every source in the first rank, however far away the
+  // one thing it connects to sits — a table whose only line goes to the last
+  // rank stretches that line across the whole diagram. Moving a node one rank
+  // right shortens each outgoing line by one and lengthens each incoming one
+  // by one, so a node with more lines out than in slides right until it sits
+  // just before its nearest successor. Predecessors never lose a rank to it:
+  // a node only ever moves right, and never past what it feeds.
+  let moved = true;
+  for (let guard = 0; moved && guard < ids.size; guard += 1) {
+    moved = false;
+    for (const id of ids) {
+      const succ = outgoing.get(id) ?? [];
+      if (succ.length <= (indegree.get(id) ?? 0)) continue;
+      const ceiling = Math.min(...succ.map((s) => rank.get(s)!)) - 1;
+      if (ceiling > rank.get(id)!) {
+        rank.set(id, ceiling);
+        moved = true;
+      }
+    }
+  }
+  return rank;
+}
+
+/**
+ * Split ranks that would tower (see `aspect`) into side-by-side sub-columns.
+ * The target comes from the total area the boxes occupy, so it scales with
+ * the content rather than being a fixed pixel count; the floor keeps it from
+ * ever touching a rank that fits on a screen, which is what keeps small
+ * diagrams byte-identical.
+ */
+function wrapRanks(
+  ranks: readonly (readonly string[])[],
+  sizeById: ReadonlyMap<string, Sized>,
+  opts: LayoutMetrics,
+): string[][] {
+  const colHeight = (row: readonly string[]) =>
+    row.reduce((sum, id) => sum + sizeById.get(id)!.h, 0) + opts.nodeGap * (row.length - 1);
+  const area = [...sizeById.values()].reduce(
+    (sum, i) => sum + (i.w + opts.rankGap) * (i.h + opts.nodeGap),
+    0,
+  );
+  const targetHeight = wrapHeight(area, opts.aspect);
+  const columns: string[][] = [];
+  for (const row of ranks) {
+    if (row.length < 2 || colHeight(row) <= targetHeight) {
+      columns.push([...row]);
+      continue;
+    }
+    const parts = Math.min(row.length, Math.ceil(colHeight(row) / targetHeight));
+    const per = Math.ceil(row.length / parts);
+    for (let i = 0; i < row.length; i += per) columns.push(row.slice(i, i + per));
+  }
+  return columns;
+}
+
+/**
+ * Arrange a set of boxes by the edges between them.
+ *
+ * Returns positions relative to (0,0) plus the total size occupied. Pure — it
+ * knows nothing about zones or groups, which is what lets the same routine
+ * drive every container and the root canvas.
+ *
+ * "flow" ranks by longest path, orders each rank once by the mean position of
+ * its predecessors, and stacks the ranks left to right — compact and quick.
+ * "untangle" is the same skeleton with the lines given the final say; see
+ * {@link layoutUntangled}.
+ */
+function layoutGroup(
+  items: Sized[],
+  edges: ReadonlyArray<Link>,
+  opts: LayoutMetrics,
+): { placed: Placed[]; width: number; height: number } {
+  if (!items.length) return { placed: [], width: 0, height: 0 };
+  if (opts.mode === "untangle") return layoutUntangled(items, edges, opts);
+
+  const ids = new Set(items.map((i) => i.id));
+  const internal = edges.filter((e) => ids.has(e.source) && ids.has(e.target) && e.source !== e.target);
+
+  // ── Rank: longest path from a source ──────────────────────────────────────
+  const rank = rankNodes(ids, internal);
 
   // ── Order within each rank: barycentre, to reduce crossings ───────────────
   const byRank = new Map<number, string[]>();
@@ -251,8 +368,8 @@ function layoutGroup(
       continue;
     }
     // Sort each rank by the mean position of its predecessors in the previous
-    // rank. Two passes would refine it further; one is enough to remove the
-    // obvious crossings without the cost.
+    // rank. One pass is enough to remove the obvious crossings without the
+    // cost; "untangle" is the mode that keeps going.
     const score = new Map<string, number>();
     row.forEach((id, i) => {
       const preds = (predecessors.get(id) ?? []).filter((p) => order.has(p));
@@ -267,13 +384,16 @@ function layoutGroup(
 
   // ── Coordinates ───────────────────────────────────────────────────────────
   const sizeById = new Map(items.map((i) => [i.id, i]));
-  const columns = ranks.map((r) => byRank.get(r)!);
-  const columnWidths = columns.map((row) =>
-    Math.max(...row.map((id) => sizeById.get(id)!.w)),
+  const colHeight = (row: readonly string[]) =>
+    row.reduce((sum, id) => sum + sizeById.get(id)!.h, 0) + opts.nodeGap * (row.length - 1);
+
+  const columns = wrapRanks(
+    ranks.map((r) => byRank.get(r)!),
+    sizeById,
+    opts,
   );
-  const columnHeights = columns.map((row) =>
-    row.reduce((sum, id) => sum + sizeById.get(id)!.h, 0) + opts.nodeGap * (row.length - 1),
-  );
+  const columnWidths = columns.map((row) => Math.max(...row.map((id) => sizeById.get(id)!.w)));
+  const columnHeights = columns.map(colHeight);
   const tallest = Math.max(...columnHeights, 0);
 
   const placed: Placed[] = [];
@@ -297,6 +417,354 @@ function layoutGroup(
   };
 }
 
+// ── Untangle ────────────────────────────────────────────────────────────────
+
+/**
+ * Lines between two consecutive layers that cross, given each layer's order.
+ * Sort the lines by their upper end, then count inversions among the lower
+ * ends — a Fenwick tree makes it O(E log E), which matters for a data model
+ * with a few hundred foreign keys in one zone.
+ */
+function bilayerCrossings(
+  links: ReadonlyArray<[upper: number, lower: number]>,
+  lowerSize: number,
+): number {
+  if (links.length < 2) return 0;
+  const sorted = [...links].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const tree = new Array<number>(lowerSize + 1).fill(0);
+  let crossings = 0;
+  let seen = 0;
+  for (const [, lower] of sorted) {
+    // How many earlier lines land at or above this one's lower end.
+    let notBelow = 0;
+    for (let i = lower + 1; i > 0; i -= i & -i) notBelow += tree[i]!;
+    crossings += seen - notBelow;
+    for (let i = lower + 1; i <= lowerSize; i += i & -i) tree[i]! += 1;
+    seen += 1;
+  }
+  return crossings;
+}
+
+/**
+ * Least-squares fit of `desired` under "each value at least the one before":
+ * pool-adjacent-violators, weighted. This is what lets a column of boxes slide
+ * toward the boxes they connect to without any two of them overlapping —
+ * the order the crossing pass chose is a hard constraint, the wish to sit
+ * level with a neighbour is a soft one.
+ */
+function isotonic(desired: readonly number[], weights: readonly number[]): number[] {
+  const blocks: Array<{ sum: number; weight: number; count: number }> = [];
+  for (let i = 0; i < desired.length; i += 1) {
+    blocks.push({ sum: desired[i]! * weights[i]!, weight: weights[i]!, count: 1 });
+    while (blocks.length > 1) {
+      const last = blocks[blocks.length - 1]!;
+      const prev = blocks[blocks.length - 2]!;
+      if (prev.sum / prev.weight <= last.sum / last.weight) break;
+      blocks.pop();
+      blocks.pop();
+      blocks.push({
+        sum: prev.sum + last.sum,
+        weight: prev.weight + last.weight,
+        count: prev.count + last.count,
+      });
+    }
+  }
+  const out: number[] = [];
+  for (const block of blocks) {
+    const value = block.sum / block.weight;
+    for (let i = 0; i < block.count; i += 1) out.push(value);
+  }
+  return out;
+}
+
+/** Prefix every channel id carries — a NUL, which no authored id contains. */
+const CHANNEL_PREFIX = " channel:";
+/** The pull a channel exerts on what it connects to — see `layoutUntangled`. */
+const CHANNEL_WEIGHT = 4;
+/** Crossing-reduction sweeps, and how many fruitless ones end the search. */
+const UNTANGLE_SWEEPS = 24;
+const UNTANGLE_PATIENCE = 4;
+/** Rounds of sliding boxes level with what they connect to. */
+const STRAIGHTEN_ROUNDS = 4;
+
+/**
+ * The same layered layout, optimised for the lines rather than the boxes.
+ *
+ * Three things "flow" does not do:
+ *
+ *  1. A line that spans several ranks is threaded through a *channel* — a
+ *     zero-width member of every rank between, ordered and spaced like a box.
+ *     Left to its own devices the straight line from rank 0 to rank 2 runs
+ *     through whatever sits in rank 1; a channel is a slot no box may take.
+ *  2. Ranks are re-ordered by repeated barycentre sweeps in both directions,
+ *     each followed by an adjacent-swap pass, keeping the ordering with the
+ *     fewest crossings. One downward pass fixes the obvious cases; a crossing
+ *     that only re-ordering the FIRST rank can remove needs the upward one.
+ *  3. Boxes then slide up or down their column toward the mean of what they
+ *     connect to, channels pulling hardest (`CHANNEL_WEIGHT`), so a line
+ *     runs level instead of diagonally across a neighbour. The order from
+ *     step 2 and the gaps between boxes are never violated.
+ *
+ * Boxes with no line at all have nothing to untangle, so they sit out of
+ * the sweeps and are parked in a grid after the last rank — otherwise they
+ * pad rank 0 and stretch every line that starts there.
+ */
+function layoutUntangled(
+  items: Sized[],
+  edges: ReadonlyArray<Link>,
+  opts: LayoutMetrics,
+): { placed: Placed[]; width: number; height: number } {
+  const ids = new Set(items.map((i) => i.id));
+  const seen = new Set<string>();
+  const internal: Link[] = [];
+  for (const e of edges) {
+    if (!ids.has(e.source) || !ids.has(e.target) || e.source === e.target) continue;
+    const key = `${e.source} ${e.target}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    internal.push({ source: e.source, target: e.target });
+  }
+
+  const degree = new Map<string, number>();
+  for (const e of internal) {
+    degree.set(e.source, (degree.get(e.source) ?? 0) + 1);
+    degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
+  }
+  const connected = items.filter((i) => (degree.get(i.id) ?? 0) > 0);
+  const isolated = items.filter((i) => (degree.get(i.id) ?? 0) === 0);
+
+  const rank = rankNodes(new Set(connected.map((i) => i.id)), internal);
+  const depth = connected.length ? Math.max(...connected.map((i) => rank.get(i.id)!)) + 1 : 0;
+
+  // ── The layered graph, channels included ──────────────────────────────────
+  const sizeById = new Map<string, Sized>(connected.map((i) => [i.id, i]));
+  const layers: string[][] = Array.from({ length: depth }, () => []);
+  for (const item of connected) layers[rank.get(item.id)!]!.push(item.id);
+  /** Neighbours one layer up (toward rank 0) and one layer down. */
+  const up = new Map<string, string[]>();
+  const down = new Map<string, string[]>();
+  const link = (upper: string, lower: string) => {
+    if (!down.has(upper)) down.set(upper, []);
+    if (!up.has(lower)) up.set(lower, []);
+    down.get(upper)!.push(lower);
+    up.get(lower)!.push(upper);
+  };
+  const spans = new Set<string>();
+  let channels = 0;
+  for (const e of internal) {
+    let [upper, lower] = [e.source, e.target];
+    // A back-edge (cycle remnant) is layered as if it pointed forward.
+    if (rank.get(upper)! > rank.get(lower)!) [upper, lower] = [lower, upper];
+    if (rank.get(upper) === rank.get(lower)) continue; // same rank: nothing to order across
+    const key = `${upper} ${lower}`;
+    if (spans.has(key)) continue;
+    spans.add(key);
+    let prev = upper;
+    for (let r = rank.get(upper)! + 1; r < rank.get(lower)!; r += 1) {
+      const id = `${CHANNEL_PREFIX}${channels++}`;
+      // A channel is spaced like a small box: zero wide, one gap tall, so the
+      // line it carries has a lane of its own between the real boxes.
+      sizeById.set(id, { id, w: 0, h: opts.nodeGap });
+      layers[r]!.push(id);
+      link(prev, id);
+      prev = id;
+    }
+    link(prev, lower);
+  }
+  const isChannel = (id: string) => id.startsWith(CHANNEL_PREFIX);
+
+  // ── Order: barycentre sweeps, best of many ────────────────────────────────
+  const pos = new Map<string, number>();
+  const index = (order: readonly (readonly string[])[]) => {
+    order.forEach((layer) => layer.forEach((id, i) => pos.set(id, i)));
+  };
+  const crossingsOf = (order: readonly (readonly string[])[]): number => {
+    index(order);
+    let total = 0;
+    for (let l = 0; l + 1 < order.length; l += 1) {
+      const links: Array<[number, number]> = [];
+      for (const id of order[l]!) {
+        for (const lower of down.get(id) ?? []) links.push([pos.get(id)!, pos.get(lower)!]);
+      }
+      total += bilayerCrossings(links, order[l + 1]!.length);
+    }
+    return total;
+  };
+  /**
+   * Re-order one layer by the mean position of its neighbours in the layer
+   * it is being sorted against. A member with no neighbour there has no
+   * opinion and keeps its slot; only the members that do are re-dealt.
+   */
+  const sortByBarycentre = (layer: string[], neighbours: ReadonlyMap<string, string[]>) => {
+    const score = new Map<string, number>();
+    for (const id of layer) {
+      const near = neighbours.get(id) ?? [];
+      if (near.length) score.set(id, near.reduce((sum, n) => sum + pos.get(n)!, 0) / near.length);
+    }
+    const movable = layer.filter((id) => score.has(id)).sort((a, b) => score.get(a)! - score.get(b)!);
+    let next = 0;
+    for (let i = 0; i < layer.length; i += 1) {
+      if (score.has(layer[i]!)) layer[i] = movable[next++]!;
+    }
+    layer.forEach((id, i) => pos.set(id, i));
+  };
+  /** Crossings between the lines of two rank-mates when `a` sits above `b`. */
+  const pairCrossings = (a: string, b: string): number => {
+    let n = 0;
+    for (const side of [up, down]) {
+      for (const x of side.get(a) ?? []) {
+        for (const y of side.get(b) ?? []) if (pos.get(x)! > pos.get(y)!) n += 1;
+      }
+    }
+    return n;
+  };
+  /** Swap adjacent rank-mates while doing so removes crossings. */
+  const transpose = (order: string[][]) => {
+    for (const layer of order) {
+      let improved = true;
+      let guard = 0;
+      while (improved && guard++ < layer.length) {
+        improved = false;
+        for (let i = 0; i + 1 < layer.length; i += 1) {
+          const a = layer[i]!;
+          const b = layer[i + 1]!;
+          if (pairCrossings(b, a) < pairCrossings(a, b)) {
+            layer[i] = b;
+            layer[i + 1] = a;
+            pos.set(b, i);
+            pos.set(a, i + 1);
+            improved = true;
+          }
+        }
+      }
+    }
+  };
+
+  let order = layers.map((layer) => [...layer]);
+  let best = order.map((layer) => [...layer]);
+  let bestCount = crossingsOf(order);
+  let stale = 0;
+  for (let sweep = 0; sweep < UNTANGLE_SWEEPS && bestCount > 0; sweep += 1) {
+    index(order);
+    if (sweep % 2 === 0) {
+      for (let l = 1; l < order.length; l += 1) sortByBarycentre(order[l]!, up);
+    } else {
+      for (let l = order.length - 2; l >= 0; l -= 1) sortByBarycentre(order[l]!, down);
+    }
+    transpose(order);
+    const count = crossingsOf(order);
+    if (count < bestCount) {
+      best = order.map((layer) => [...layer]);
+      bestCount = count;
+      stale = 0;
+    } else if (++stale >= UNTANGLE_PATIENCE) {
+      break;
+    }
+  }
+  order = best;
+
+  // ── Coordinates ───────────────────────────────────────────────────────────
+  const gap = opts.nodeGap;
+  const colHeight = (row: readonly string[]) =>
+    row.reduce((sum, id) => sum + sizeById.get(id)!.h, 0) + gap * (row.length - 1);
+
+  const columns = wrapRanks(order, sizeById, opts);
+  const columnWidths = columns.map((row) => Math.max(...row.map((id) => sizeById.get(id)!.w), 0));
+  const columnHeights = columns.map(colHeight);
+  const tallest = Math.max(...columnHeights, 0);
+
+  // Start from the flow arrangement — each column centred on the tallest —
+  // then let every column slide toward what it connects to.
+  const top = new Map<string, number>();
+  columns.forEach((row, ci) => {
+    let y = (tallest - columnHeights[ci]!) / 2;
+    for (const id of row) {
+      top.set(id, y);
+      y += sizeById.get(id)!.h + gap;
+    }
+  });
+  const centre = (id: string) => top.get(id)! + sizeById.get(id)!.h / 2;
+  const weightOf = (id: string) => (isChannel(id) ? CHANNEL_WEIGHT : 1);
+  const slide = (row: readonly string[], sides: ReadonlyArray<ReadonlyMap<string, string[]>>) => {
+    // Constraint space: subtract each box's offset down the stack so "no
+    // overlap, order kept" reads as plain "non-decreasing".
+    const offsets: number[] = [];
+    let offset = 0;
+    for (const id of row) {
+      offsets.push(offset);
+      offset += sizeById.get(id)!.h + gap;
+    }
+    const desired = row.map((id, i) => {
+      let sum = 0;
+      let weight = 0;
+      for (const side of sides) {
+        for (const n of side.get(id) ?? []) {
+          sum += centre(n) * weightOf(n);
+          weight += weightOf(n);
+        }
+      }
+      const want = weight ? sum / weight : centre(id);
+      return want - sizeById.get(id)!.h / 2 - offsets[i]!;
+    });
+    const fitted = isotonic(desired, row.map(weightOf));
+    row.forEach((id, i) => top.set(id, fitted[i]! + offsets[i]!));
+  };
+  for (let round = 0; round < STRAIGHTEN_ROUNDS; round += 1) {
+    for (const row of columns) slide(row, [up]);
+    for (let ci = columns.length - 1; ci >= 0; ci -= 1) slide(columns[ci]!, [down]);
+  }
+  for (const row of columns) slide(row, [up, down]);
+
+  // Real boxes only from here: the channels did their job in the ordering
+  // and the sliding, and a reader never sees them.
+  const real = columns.flat().filter((id) => !isChannel(id));
+  const minY = real.length ? Math.min(...real.map((id) => top.get(id)!)) : 0;
+  const placed: Placed[] = [];
+  let x = 0;
+  columns.forEach((row, ci) => {
+    for (const id of row) {
+      if (isChannel(id)) continue;
+      const size = sizeById.get(id)!;
+      placed.push({
+        id,
+        x: x + (columnWidths[ci]! - size.w) / 2,
+        y: top.get(id)! - minY,
+        w: size.w,
+        h: size.h,
+      });
+    }
+    x += columnWidths[ci]! + opts.rankGap;
+  });
+  let height = placed.length ? Math.max(...placed.map((p) => p.y + p.h)) : 0;
+
+  // ── The boxes no line touches, parked after the flow ──────────────────────
+  if (isolated.length) {
+    const parkedSizes = new Map<string, Sized>(isolated.map((i) => [i.id, i]));
+    const parked = wrapRanks([isolated.map((i) => i.id)], parkedSizes, opts);
+    const parkedHeights = parked.map(
+      (row) => row.reduce((sum, id) => sum + parkedSizes.get(id)!.h, 0) + gap * (row.length - 1),
+    );
+    const parkedTallest = Math.max(...parkedHeights, 0);
+    // Centre the grid on the flow beside it, or the flow on the grid when
+    // the grid is the taller of the two.
+    const shift = Math.max(0, (parkedTallest - height) / 2);
+    if (shift) for (const p of placed) p.y += shift;
+    height = Math.max(height, parkedTallest);
+    parked.forEach((row, ci) => {
+      const width = Math.max(...row.map((id) => parkedSizes.get(id)!.w));
+      let y = (height - parkedHeights[ci]!) / 2;
+      for (const id of row) {
+        const size = parkedSizes.get(id)!;
+        placed.push({ id, x: x + (width - size.w) / 2, y, w: size.w, h: size.h });
+        y += size.h + gap;
+      }
+      x += width + opts.rankGap;
+    });
+  }
+
+  return { placed, width: Math.max(0, x - opts.rankGap), height };
+}
+
 /**
  * Tidy a whole template.
  *
@@ -306,7 +774,11 @@ function layoutGroup(
  * their origin.
  */
 export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {}): DiagramTemplate {
-  const opts = { ...DEFAULTS, ...options };
+  const opts: LayoutMetrics = {
+    ...DEFAULTS,
+    ...options,
+    mode: options.mode ?? template.settings?.arrange ?? "flow",
+  };
   const zones = template.zones ?? [];
   // A card's children live in their own drilled canvas, so a tidy arranges
   // one FRAME — by default the visible one, never a level you can't see.
@@ -365,11 +837,20 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
 
   const positions = new Map<string, { x: number; y: number }>();
   const sizes = new Map<string, { w: number; h: number }>();
+  /** What a container should STORE, which for a chip is not what it is spaced by. */
+  const fitted = new Map<string, { w: number; h: number }>();
+  /**
+   * Containers drawn as a chip. Such a group is SPACED as a chip — its
+   * rank-mates must not leave a hole the size of the frame it is not
+   * drawing — while its STORED size still has to hold what it is hiding,
+   * or expanding it would spill its children outside their own frame.
+   * Two different sizes, so they are kept in two different maps.
+   */
+  const chipped = new Set(
+    template.nodes.filter((n) => n.collapsed && containerKindSet.has(n.kind as string)).map((n) => n.id),
+  );
   for (const n of template.nodes) {
-    // A collapsed container draws a chip. Spacing its rank-mates against the
-    // expanded frame it is NOT drawing leaves a hole the size of the group.
-    const chip = n.collapsed && containerKindSet.has(n.kind as string);
-    sizes.set(n.id, chip ? { ...COLLAPSED_SIZE } : { w: n.w, h: n.h });
+    sizes.set(n.id, chipped.has(n.id) ? { ...COLLAPSED_SIZE } : { w: n.w, h: n.h });
   }
 
   /** The members one layout pass should actually rank, in document order. */
@@ -413,10 +894,14 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
     // spacing against the card's REAL footprint.
     const groupId = key.slice(6);
     if (!cardParents.has(groupId)) {
-      sizes.set(groupId, {
+      const fit = {
         w: Math.max(160, result.width + opts.padding * 2),
         h: Math.max(120, result.height + opts.headerGap + opts.padding),
-      });
+      };
+      fitted.set(groupId, fit);
+      // A chip keeps its chip footprint for spacing; everything else is
+      // spaced by the box it actually draws.
+      if (!chipped.has(groupId)) sizes.set(groupId, fit);
     }
   }
 
@@ -478,7 +963,9 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
       ...(position ? { x: position.x, y: position.y } : {}),
       // Only containers were resized; leaves keep their authored size. A
       // locked container is not resized either — the lock covers both.
-      ...(containerIds.has(node.id) && !locked.has(node.id) ? { w: size.w, h: size.h } : {}),
+      ...(containerIds.has(node.id) && !locked.has(node.id)
+        ? (fitted.get(node.id) ?? size)
+        : {}),
     };
   });
 

@@ -1,0 +1,201 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": "https://bakery.example",
+  "folder": "people",
+  "entity": {
+    "name": "person",
+    "label": "Person",
+    "labelPlural": "Persons",
+    "kind": "custom",
+    "custom": true,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 37
+  },
+  "curated": {
+    "diagramName": "Person",
+    "diagramType": "custom",
+    "businessLine": "Bakery",
+    "source": "export",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 8,
+    "visible": 7,
+    "hidden": 1
+  },
+  "fields": [
+    {
+      "name": "id",
+      "label": "Record ID",
+      "type": "id",
+      "nullable": false,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "name",
+      "label": "Full name",
+      "type": "string",
+      "nullable": false,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "nameField": true,
+      "length": 255
+    },
+    {
+      "name": "email",
+      "label": "Email",
+      "type": "email",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "phone",
+      "label": "Phone",
+      "type": "phone",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "role",
+      "label": "Role",
+      "type": "enum",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "enumValues": [
+        {
+          "value": "Chef",
+          "label": "Chef",
+          "active": true
+        },
+        {
+          "value": "Manager",
+          "label": "Manager",
+          "active": true
+        },
+        {
+          "value": "Server",
+          "label": "Server",
+          "active": true
+        },
+        {
+          "value": "Baker",
+          "label": "Baker",
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "building_id",
+      "label": "Home building",
+      "type": "reference",
+      "displayType": "Reference",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "relationship": {
+        "kind": "reference",
+        "referenceTo": [
+          "building"
+        ],
+        "relationshipName": "people"
+      }
+    },
+    {
+      "name": "notes",
+      "label": "Notes",
+      "type": "textarea",
+      "nullable": true,
+      "visible": false,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "owner_id",
+      "label": "Owner ID",
+      "type": "reference",
+      "displayType": "Reference",
+      "nullable": false,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "relationship": {
+        "kind": "reference",
+        "referenceTo": [
+          "user"
+        ],
+        "relationshipName": null
+      }
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "building_id",
+      "label": "Home building",
+      "kind": "reference",
+      "referenceTo": [
+        "building"
+      ],
+      "relationshipName": "people",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visible": true,
+      "targetFolders": [
+        "buildings"
+      ]
+    },
+    {
+      "field": "owner_id",
+      "label": "Owner ID",
+      "kind": "reference",
+      "referenceTo": [
+        "user"
+      ],
+      "relationshipName": null,
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visible": true,
+      "targetFolders": []
+    }
+  ],
+  "referencedBy": [],
+  "validationRules": [],
+  "url": "/entities/person",
+  "notes": [
+    "Everyone who works for or buys from the bakery.",
+    "Record types split chefs from account holders."
+  ]
+}

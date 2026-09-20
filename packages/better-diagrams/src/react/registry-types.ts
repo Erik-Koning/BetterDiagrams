@@ -10,6 +10,7 @@ import type { DiagramTemplate, IconName, NodeKind } from "../contract/schema";
 import { DEFAULT_ZONE_OPACITY } from "../contract/schema";
 import type { DiagramZone } from "../contract/zones";
 import type { LintRuleDef } from "../contract/lint";
+import { FALLBACK_RELATION, type RelationKindDef } from "../contract/relations";
 // `shapes.ts` imports only TYPES from this module, so the pair is a
 // type-level cycle that erases at build time, not a runtime one.
 import { stableColor } from "./shapes";
@@ -123,6 +124,14 @@ export interface ExportContext<TDoc = DiagramTemplate> {
    * keep this module cycle-free; `StudioMode` in theme.ts is the shape.
    */
   mode?: string;
+  /**
+   * Marketing's one setting: whether its cards wear their gradients
+   * (`true`, the default) or the flat coat the editor shows with
+   * `gradients={false}`. A picture exporter passes it on beside `mode`, so
+   * the file has no gradient in it when the screen has none; a document
+   * exporter ignores it for the same reason it ignores `mode`.
+   */
+  gradients?: boolean;
 }
 
 export interface ExportResult {
@@ -167,6 +176,14 @@ export interface RegistryExtensions {
   providers?: Record<string, (Partial<ProviderDef> & { label?: string }) | null>;
   /** Add or override lint rules for the Checks menu. `null` removes a built-in. */
   lintRules?: Record<string, LintRuleDef | null>;
+  /**
+   * Add or override relationship kinds — what a data model's lines MEAN
+   * (`composition`, `reference`, `hierarchy`, `polymorphic` built in; see
+   * `contract/relations.ts`). A dialect relabels the built-ins in its own
+   * terms (a CRM may call a composition "Master-detail"); a host adds
+   * kinds of its own. `null` removes a built-in.
+   */
+  relationKinds?: Record<string, (Partial<RelationKindDef> & { label?: string }) | null>;
   /** Appended verbatim to the generated LLM system prompt. */
   promptExtraRules?: string;
 }
@@ -181,6 +198,8 @@ export interface ResolvedRegistry {
   providers: Record<string, ProviderDef>;
   providerOrder: string[];
   lintRules: Record<string, LintRuleDef>;
+  relationKinds: Record<string, RelationKindDef>;
+  relationOrder: string[];
   containerKinds: string[];
   annotationKinds: string[];
   pointKinds: string[];
@@ -218,6 +237,16 @@ export function providerDef(registry: ResolvedRegistry, provider: string): Provi
   if (known) return known;
   if (!provider) return FALLBACK_PROVIDER;
   return { ...FALLBACK_PROVIDER, label: titleCase(provider), color: stableColor(provider) };
+}
+
+/**
+ * The definition for a relationship kind, falling back for one nobody
+ * registered — named after its id, drawn as the plain reference line — so a
+ * document that names a kind the host never declared still lists it in the
+ * legend rather than vanishing from it.
+ */
+export function relationDef(registry: ResolvedRegistry, relation: string): RelationKindDef {
+  return registry.relationKinds[relation] ?? { ...FALLBACK_RELATION, label: titleCase(relation) };
 }
 
 /** "render" → "Render", "my-cloud" → "My Cloud". Ids are slugs; names are not. */

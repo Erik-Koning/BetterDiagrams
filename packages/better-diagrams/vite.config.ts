@@ -37,6 +37,9 @@ export default defineConfig({
         // must not pull the React half into a backend bundle.
         "better-diagrams": `${here}src/index.ts`,
         contract: `${here}src/contract/index.ts`,
+        // The Node adapter for the folder format: its own entry, so importing
+        // `contract` never pulls `node:fs` into a browser bundle.
+        "contract-folder-node": `${here}src/contract/folder/node.ts`,
       },
       name: "ArchitectureStudio",
       formats: ["es", "cjs"],
@@ -56,6 +59,7 @@ export default defineConfig({
         "@xyflow/react",
         /^@codemirror\//,
         /^@lezer\//,
+        /^node:/,
       ],
       output: {
         globals: { react: "React", "react-dom": "ReactDOM" },

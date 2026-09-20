@@ -1,0 +1,9 @@
+kind: custom
+label: Person
+name: person
+recordCount: 37
+fieldsTotal: 8
+fieldsVisible: 7
+diagramType: custom
+diagramName: Person
+url: /entities/person

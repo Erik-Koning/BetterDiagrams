@@ -5,9 +5,11 @@
  * the registry as a prop. A context keeps the alternative — stuffing a copy of
  * the registry into every node's `data` — out of the serialised document.
  */
+import type { Notation } from "../contract/schema";
 import { createContext, useContext } from "react";
 import { createRegistry } from "./create-registry";
 import type { ZoneBox } from "../contract/schema";
+import type { FieldRef } from "../contract/fields";
 import type { ResolvedRegistry } from "./registry-types";
 import type { StudioMode } from "./theme";
 
@@ -32,6 +34,13 @@ export interface StudioContextValue {
    * filter — presentational only, so hiding badges can't touch what persists.
    */
   showTeams: boolean;
+  /**
+   * Render the ↗ link affix on nodes that carry a `url`. The same kind of
+   * view preference as the team badges: the links stay in the document, so
+   * exports and the inspector still have them — only the canvas stops
+   * wearing them, which a hundred imported tables can be glad of.
+   */
+  showLinks: boolean;
   /**
    * Ask the editor to record the current state — an undo point plus onChange.
    * Node renderers mutate state directly via updateNodeData/setNodes (inline
@@ -89,6 +98,27 @@ export interface StudioContextValue {
    * broken, which is worse than the limit it is enforcing.
    */
   showToast: (message: string) => void;
+  /**
+   * A field row was clicked or right-clicked. Present when the editor offers
+   * a field menu; absent, rows stay inert. Renderers report where the press
+   * landed so the menu can open there.
+   */
+  onFieldClick?: (ref: FieldRef, at: { clientX: number; clientY: number }) => void;
+  /** `fieldKey`s of the pinned fields — a pinned row wears a mark; a pinned TABLE (no field) marks the card. */
+  pinnedFields: ReadonlySet<string>;
+  /** `fieldKey`s of the rows the reader was just taken to — a search hit, a pin chip, or both halves of a followed reference. */
+  highlightFields: ReadonlySet<string>;
+  /**
+   * When set, every node NOT in it renders dimmed — the path panel's
+   * "outside the reachable set" view. Presentational like the tag filter
+   * (dimmed, never hidden), and combined with it.
+   */
+  dimmedIds: ReadonlySet<string> | null;
+  /**
+   * How a line's ends draw their cardinality — the document's
+   * `settings.notation`, "both" when it says nothing. See `NOTATIONS`.
+   */
+  notation: Notation;
 }
 
 const FALLBACK: StudioContextValue = {
@@ -97,6 +127,7 @@ const FALLBACK: StudioContextValue = {
   mode: "technical",
   tagFilter: [],
   showTeams: true,
+  showLinks: true,
   requestCommit: () => {},
   beginZoneResize: () => {},
   endZoneResize: () => {},
@@ -107,6 +138,10 @@ const FALLBACK: StudioContextValue = {
   renamingId: null,
   setRenamingId: () => {},
   showToast: () => {},
+  pinnedFields: new Set(),
+  highlightFields: new Set(),
+  dimmedIds: null,
+  notation: "both",
 };
 
 export const StudioContext = createContext<StudioContextValue>(FALLBACK);

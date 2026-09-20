@@ -10,14 +10,17 @@
  *   - No network calls unless the host supplies `generate`.
  */
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
   type DragEvent,
   type ReactNode,
+  type Ref,
 } from "react";
 import {
   Background,
@@ -74,6 +77,8 @@ import {
   absolutePosition,
   activeScenario,
   assignZonesByGeometry,
+  closedContainers,
+  foldedContainers,
   snapNodesIntoZones,
   fromReactFlow,
   fromZoneNodeId,
@@ -104,6 +109,9 @@ import {
   type EdgeRouting,
   type EdgeStyle,
   type FieldKey,
+  type ArrangeMode,
+  type Notation,
+  type GroupContents,
   type NodeField,
   type NodeStatus,
   type VersionTagPosition,
@@ -111,7 +119,10 @@ import {
   type ZoneNodeData,
 } from "../contract/schema";
 import { pathColor, type DiagramPath } from "../contract/paths";
-import { applyPathView, buildPathGlowIndex } from "./path-view";
+import { applyOutsideView, applyPathView, buildPathGlowIndex, transientPathColors } from "./path-view";
+import { FieldPathPanel } from "./FieldPathPanel";
+import { computeRouteView, structureSignature, type RouteView } from "./field-routes";
+import { walkToPath } from "../contract/graph";
 import {
   DEFAULT_POLYGON_POINTS,
   ZONE_OUTLINES,
@@ -143,8 +154,10 @@ import { isMac, isTypingTarget } from "./keys";
 import {
   FileMenu,
   Breadcrumbs,
+  Modal,
   ShortcutsModal,
   InspectorSection,
+  RelationSwatch,
   TimelineScrubber,
   levelLabel,
   ToolbarMenu,
@@ -163,8 +176,16 @@ import {
   welcomeSuppressed,
 } from "./WelcomeModal";
 import { buildArchitectureLint } from "./schema-lint";
+import { fanOutResize } from "./resize";
 import { NestingModal } from "./NestingModal";
 import { inlineContents, nestContents } from "../contract/nesting";
+import { importFolder } from "../contract/folder";
+import { buildFieldIndex, fieldKey, fieldRecords, hasField, keyFields, referencedKey, referencesTo, sameFieldRef, searchFields, type FieldRef, type FieldTarget, type Pin } from "../contract/fields";
+import { keyCoverage, marginalGains, minimalKeyCover, storesFields, type CoverageScope } from "../contract/coverage";
+import { CoveragePanel } from "./CoveragePanel";
+import { FieldGridModal } from "./FieldGridModal";
+import { copyText } from "./copy-text";
+import { PinStrip } from "./FieldPins";
 import { KindSelect } from "./KindSelect";
 import { CLOUD_PROVIDER_IDS } from "../contract/cloud";
 import {
@@ -175,7 +196,8 @@ import {
   usedCloudResources,
   type PromptScopeOptions,
 } from "./template-prompt";
-import { autoLayout, hasOverlaps } from "../contract/layout";
+import { autoLayout, hasOverlaps, type LayoutOptions } from "../contract/layout";
+import { collapseJunctions, junctionTables } from "../contract/junctions";
 import {
   PRESENTATION_FORMAT,
   mergeTemplate,
@@ -195,7 +217,8 @@ import { BUILTIN_EXPORTERS, renderTemplateToCanvas, renderTemplateToSvg } from "
 import { ExportStatesModal, type ExportStatesChoice } from "./ExportStatesModal";
 import { runStateExport, type StateExportFormat } from "./state-export";
 import type { RegistryExtensions, ResolvedRegistry } from "./registry-types";
-import { kindDef, providerDef, zoneInk } from "./registry-types";
+import { kindDef, providerDef, relationDef, zoneInk } from "./registry-types";
+import { relationDressing } from "../contract/relations";
 import { NODE_TYPES } from "./nodes";
 import { EDGE_TYPES } from "./edges";
 import { topDropTarget } from "./dangling";
@@ -240,6 +263,9 @@ const SELECTED_EDGE_ELEVATION = SELECT_ELEVATION * 2;
 /** How close an edge has to come to a neighbour's before the guide catches. */
 const ALIGN_TOL = 6;
 
+/** No row marked — one shared empty set, so an unchanged "nothing" never re-renders the rows. */
+const NO_FIELDS: ReadonlySet<string> = new Set();
+
 // ─── Props ───────────────────────────────────────────────────────────────────
 
 export interface StudioSlotContext {
@@ -248,6 +274,71 @@ export interface StudioSlotContext {
   registry: ResolvedRegistry;
   /** Replace the whole document (adds an undo point). */
   setTemplate: (next: DiagramTemplate) => void;
+  /** The drill-in stack, root first — empty at the top level. */
+  focus: string[];
+  /** Drill to a level; see {@link StudioHandle.drillTo}. */
+  drillTo: (stack: readonly string[]) => void;
+  /** Ids of the document paths currently lit. */
+  activePaths: string[];
+  /** Light exactly these document paths; see {@link StudioHandle.setActivePaths}. */
+  setActivePaths: (ids: readonly string[]) => void;
+  /** The pinned fields and tables; see {@link StudioHandle.getPins}. */
+  pins: Pin[];
+  setPins: (refs: readonly Pin[]) => void;
+  /** The keys the coverage panel is scoring; see {@link StudioHandle.getCoverageKeys}. */
+  coverageKeys: FieldRef[];
+  setCoverageKeys: (refs: readonly FieldRef[]) => void;
+}
+
+/**
+ * What a host reaches through the component's `ref`: the two pieces of VIEW
+ * state the editor keeps outside the document — where the reader is drilled
+ * in, and which paths are lit — as reads and writes. Neither is content: a
+ * drill never enters undo or `onChange`, and lighting a path stores nothing.
+ * Mirror them with `onFocusChange` / `onActivePathsChange` when the host
+ * wants to render its own breadcrumbs or path list.
+ */
+export interface StudioHandle {
+  /** The drill-in stack, root first — empty at the top level. */
+  getFocus: () => string[];
+  /**
+   * Drill to a level, given as the stack of node ids from the root down
+   * (`[]` for the top). The deepest id the document knows names the level
+   * and its real ancestry becomes the stack, so the breadcrumbs never show
+   * a chain that isn't one. Fits the view to the new level. Ignored while
+   * compare mode owns the canvas.
+   */
+  drillTo: (stack: readonly string[]) => void;
+  /** Drill to the level that shows a node, then select and centre it. */
+  navigateTo: (id: string) => void;
+  /** Ids of the document paths currently lit. */
+  getActivePaths: () => string[];
+  /**
+   * Light exactly these paths (by id, from `template.paths`). Ids the
+   * document doesn't name are kept but light nothing until it does — so a
+   * host may set them before the path lands in the document.
+   */
+  setActivePaths: (ids: readonly string[]) => void;
+  /**
+   * The pinned fields and tables (a pin without `fieldId` is a whole table),
+   * in pin order. View state like the drill stack: never in the document,
+   * pruned when a pin's node leaves it.
+   */
+  getPins: () => Pin[];
+  /** Replace the pins (deduplicated; unknown fields are dropped on the next document change). */
+  setPins: (refs: readonly Pin[]) => void;
+  /** Go to the level that shows a field's node, select it, and mark the row. */
+  navigateToField: (ref: FieldRef) => void;
+  /** Open the field grid for a node, scrolled to a field when given. */
+  openFieldGrid: (nodeId: string, fieldId?: string) => void;
+  /**
+   * The keys the coverage panel scores — view state like pins, mirrored by
+   * `onCoverageChange`, pruned when a key's node leaves the document.
+   */
+  getCoverageKeys: () => FieldRef[];
+  setCoverageKeys: (refs: readonly FieldRef[]) => void;
+  /** Open (or close) the key-coverage panel. */
+  openCoverage: (open?: boolean) => void;
 }
 
 /**
@@ -288,6 +379,15 @@ export interface ArchitectureStudioProps {
    * technical.
    */
   mode?: StudioMode;
+  /**
+   * Marketing's one setting: whether its cards wear their gradients. Default
+   * `true`. `false` paints every fade the mode draws — cards, icon chips,
+   * silhouettes, collapsed groups — as one flat coat at the fade's midpoint,
+   * on screen and in every picture export (PNG, PDF, SVG, HTML), which then
+   * carry no gradient at all. Shadows, type, corners and spacing stay.
+   * Ignored in technical, which has none to switch off.
+   */
+  gradients?: boolean;
   /** Supply to enable the AI panel. Omit and no network code runs. */
   generate?: DiagramGenerator;
   /** Base name for exported files. Defaults to "architecture". */
@@ -339,6 +439,17 @@ export interface ArchitectureStudioProps {
    * selection from the previous document.
    */
   onSelectionChange?: (selection: StudioSelection) => void;
+  /**
+   * Fires with the drill-in stack on mount (empty) and whenever the reader
+   * drills in or out — by double-click, breadcrumb, Escape, or the `ref`.
+   */
+  onFocusChange?: (focus: string[]) => void;
+  /** Fires with the lit path ids on mount (empty) and whenever they change. */
+  onActivePathsChange?: (ids: string[]) => void;
+  /** Fires with the pinned fields and tables on mount (empty) and whenever they change. */
+  onPinsChange?: (pins: Pin[]) => void;
+  /** Fires with the coverage panel's chosen keys on mount (empty) and whenever they change. */
+  onCoverageChange?: (keys: FieldRef[]) => void;
   /** Extra toolbar content, rendered after the built-in buttons. */
   toolbarExtras?: ReactNode | ((ctx: StudioSlotContext) => ReactNode);
   /** Extra inspector content, rendered when something is selected. */
@@ -355,6 +466,17 @@ export interface ArchitectureStudioProps {
  * inspector — and a union repeated three times drifts.
  */
 export type AlignMode = "left" | "centerX" | "right" | "top" | "centerY" | "bottom";
+
+/** One search hit: a node, or a field on one (`id` is always the node). */
+type SearchMatch =
+  | { kind: "node"; id: string; w: number; h: number }
+  | {
+      kind: "field";
+      id: string;
+      w: number;
+      h: number;
+      field: { fieldId: string; name: string; row: boolean; nodeLabel: string };
+    };
 
 /** First usable number among React Flow's three places a size can live. */
 function firstNumber(...values: unknown[]): number | undefined {
@@ -537,6 +659,15 @@ const TYPED_FIELDS = new Set([
   "fields",
 ]);
 
+/**
+ * What an inspector writes: the fields to set, or a function of the element's
+ * current data producing them — for edits like "add this tag to whatever
+ * each node already has" that a fixed object cannot express across a
+ * selection.
+ */
+type NodePatch = Partial<DiagramNodeData> | ((data: DiagramNodeData) => Partial<DiagramNodeData>);
+type EdgePatch = Partial<DiagramEdgeData> | ((data: DiagramEdgeData) => Partial<DiagramEdgeData>);
+
 /** The coalescing key for a patch, or nothing when it is not a typing run. */
 function typingRunKey(scope: string, id: string, patch: object): string | undefined {
   const keys = Object.keys(patch);
@@ -544,17 +675,20 @@ function typingRunKey(scope: string, id: string, patch: object): string | undefi
 }
 
 
-export function ArchitectureStudio(props: ArchitectureStudioProps) {
-  // React Flow hooks require the provider to be an ancestor, so the real
-  // implementation lives one level down.
-  return (
-    <ReactFlowProvider>
-      <StudioInner {...props} />
-    </ReactFlowProvider>
-  );
-}
+export const ArchitectureStudio = forwardRef<StudioHandle, ArchitectureStudioProps>(
+  function ArchitectureStudio(props, ref) {
+    // React Flow hooks require the provider to be an ancestor, so the real
+    // implementation lives one level down.
+    return (
+      <ReactFlowProvider>
+        <StudioInner {...props} handleRef={ref} />
+      </ReactFlowProvider>
+    );
+  },
+);
 
 function StudioInner({
+  handleRef,
   value,
   defaultValue,
   onChange,
@@ -563,6 +697,7 @@ function StudioInner({
   registry: registryExtensions,
   theme,
   mode,
+  gradients = true,
   generate,
   filename = "architecture",
   minimap = true,
@@ -580,11 +715,15 @@ function StudioInner({
   onFileRestore,
   onNavigateFile,
   onSelectionChange: onHostSelectionChange,
+  onFocusChange,
+  onActivePathsChange,
+  onPinsChange,
+  onCoverageChange,
   toolbarExtras,
   inspectorExtras,
   className,
   style,
-}: ArchitectureStudioProps) {
+}: ArchitectureStudioProps & { handleRef: Ref<StudioHandle> }) {
   const registry = useMemo(() => createRegistry(registryExtensions), [registryExtensions]);
   const flow = useReactFlow();
   const studioMode = resolveStudioMode(mode);
@@ -631,7 +770,9 @@ function StudioInner({
 
   const onNodesChange = useCallback(
     (changes: NodeChange<Node>[]) => {
-      flowNodesChange(changes);
+      // A resize of one selected node is repeated for the rest of the
+      // selection, so they follow the handle together (see resize.ts).
+      flowNodesChange(fanOutResize(changes, flow.getNodes(), registry) as NodeChange<Node>[]);
       const base = mergeBase.current;
       if (!base?.nodes.size || !changes.some((change) => change.type === "select")) return;
       setNodes((current) =>
@@ -640,7 +781,7 @@ function StudioInner({
           : current,
       );
     },
-    [flowNodesChange, setNodes],
+    [flowNodesChange, setNodes, flow, registry],
   );
 
   const onEdgesChange = useCallback(
@@ -724,6 +865,21 @@ function StudioInner({
   const [refineInput, setRefineInput] = useState("");
   const [zoom, setZoom] = useState(1);
   const [showHidden, setShowHidden] = useState(defaultShowHidden);
+  /**
+   * A read-only viewer's own say on the document's fold (see
+   * `settings.groupContents`). The toolbar toggle EDITS the document when
+   * editing is allowed; a viewer cannot edit, but "show me what is inside"
+   * is exactly what a viewer needs most — so for them the toggle overrides
+   * the setting in the view alone. Never persisted, never in undo, and
+   * dropped the moment editing is re-enabled, so the canvas an editor sees
+   * is always the document's own.
+   */
+  const [foldOverride, setFoldOverride] = useState<GroupContents | null>(null);
+  useEffect(() => {
+    if (!readOnly) setFoldOverride(null);
+  }, [readOnly]);
+  /** What the canvas is rendered under — the override while it stands, else nothing. */
+  const viewFold: GroupContents | null = readOnly ? foldOverride : null;
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   /**
    * Which of the document's paths are lit. View state like the tag filter —
@@ -731,7 +887,51 @@ function StudioInner({
    * was edited away in JSON) are simply never matched, so no pruning.
    */
   const [activePathIds, setActivePathIds] = useState<string[]>([]);
+  /**
+   * Pinned fields — view state like the lit paths, never in the document.
+   * Unlike lit path ids they ARE pruned when a node vanishes (see
+   * `materializeTemplate`): a chip for a field that no longer exists would
+   * be a dead control and a bad path endpoint. The ref is the FACT the
+   * imperative reads answer from.
+   */
+  const [pins, setPinsState] = useState<Pin[]>([]);
+  const pinsRef = useRef<Pin[]>([]);
+  /**
+   * The rows the reader was just taken to, as `fieldKey`s: the one a search
+   * or a pin chip jumped to, or both halves of a followed reference — the
+   * foreign key here and the key it points at there.
+   */
+  const [highlightFields, setHighlightFields] = useState<ReadonlySet<string>>(NO_FIELDS);
+  /** The node whose field grid is open, and the row to scroll to. */
+  const [fieldGrid, setFieldGrid] = useState<{ nodeId: string; fieldId?: string } | null>(null);
+  /** The row the inspector should put its cursor in — the field menu's Edit…. */
+  const [editField, setEditField] = useState<FieldRef | null>(null);
+  /** The paths panel: routes between the pins. Opens from the pin strip. */
+  const [pathPanelOpen, setPathPanelOpen] = useState(false);
+  /** Ignore arrow direction — the default a "how do these connect" question wants. */
+  const [routeUndirected, setRouteUndirected] = useState(true);
+  /** With three or more pins: dim the canvas to what lies between, or to what they reach. */
+  const [routeMode, setRouteMode] = useState<"between" | "reachable">("between");
+  /** The route under the pointer (lit alone) and the one clicked (kept lit alone). */
+  const [hoverRoute, setHoverRoute] = useState<number | null>(null);
+  const [stickyRoute, setStickyRoute] = useState<number | null>(null);
+  /**
+   * The key under the pointer in "Keys most routes use", and the one clicked:
+   * every route through it lights. A kept key and a kept route are two
+   * answers to "what stays lit", so keeping one lets go of the other.
+   */
+  const [hoverKey, setHoverKey] = useState<string | null>(null);
+  const [stickyKey, setStickyKey] = useState<string | null>(null);
+  /** The key-coverage panel: which keys are chosen, how coverage is scoped, what is hovered. */
+  const [coverageOpen, setCoverageOpen] = useState(false);
+  const [coverageKeys, setCoverageKeysState] = useState<FieldRef[]>([]);
+  const coverageKeysRef = useRef<FieldRef[]>([]);
+  const [coverageScope, setCoverageScope] = useState<CoverageScope>({ kind: "all" });
+  const [coverageHover, setCoverageHover] = useState<FieldRef | null>(null);
+  /** What the last "Find smallest set" said about its answer; cleared when the keys change by hand. */
+  const [smallest, setSmallest] = useState<{ optimal: boolean; truncated: boolean } | null>(null);
   const [showTeams, setShowTeams] = useState(true);
+  const [showLinks, setShowLinks] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   /** The match the canvas is centred on. -1 = a query typed but not yet jumped to. */
@@ -759,7 +959,9 @@ function StudioInner({
   /** Narrow picture exports to the selection. See `runDirectExport`. */
   const [exportSelectionOnly, setExportSelectionOnly] = useState(false);
   const [contextMenu, setContextMenu] = useState<
-    { x: number; y: number; kind: "node" | "edge" | "zone" | "pane" } | null
+    | { x: number; y: number; kind: "node" | "edge" | "zone" | "pane" }
+    | { x: number; y: number; kind: "field"; ref: FieldRef }
+    | null
   >(null);
   /**
    * The element whose name is open for editing on the canvas.
@@ -781,6 +983,15 @@ function StudioInner({
   const [pendingExport, setPendingExport] = useState<StateExportFormat | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  /** What the last folder import had to say — warnings and registry advice, dismissable. */
+  const [importNotes, setImportNotes] = useState<string[]>([]);
+  /**
+   * An import waiting on "Replace this diagram?". One question for the three
+   * ways a document can arrive — the Import button, Import folder, and a
+   * drop — asked only when the canvas holds something to lose.
+   */
+  const [pendingReplace, setPendingReplace] = useState<{ name: string; run: () => void } | null>(null);
   const compareInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -806,7 +1017,9 @@ function StudioInner({
   const lastEmitted = useRef<string | null>(JSON.stringify(initialTemplate));
   const meta = useRef<DiagramTemplate["meta"]>(initialTemplate.meta);
   /** Which provider each zone is on; a change here means the canvas must rebuild. */
-  const zoneSignatureRef = useRef<string>(viewSignatureOf(initialTemplate, defaultShowHidden));
+  const zoneSignatureRef = useRef<string>(
+    viewSignatureOf(initialTemplate, defaultShowHidden, null, registry.containerKinds, null),
+  );
   /**
    * Whether the React Flow state currently includes provider-hidden nodes.
    *
@@ -955,10 +1168,30 @@ function StudioInner({
    * inspector input undoes as the one edit it was rather than a character at
    * a time. Omit it for anything a person would call a single action.
    */
+  /**
+   * The deferred commit in flight, if any. The rebuild effect below
+   * SUPERSEDES it: when the edit it was queued for also changes what the
+   * canvas shows (a group folding, a provider hiding nodes), the effect
+   * rebuilds and commits the rebuilt canvas itself — and the deferred commit
+   * must then stand down rather than derive a second document from a store
+   * the rebuild has not reached yet. That derive was judged against the
+   * ALREADY-advanced base, so a node the rebuild was about to reveal read as
+   * "absent but visible" — user-deleted — and was dropped: the data-loss
+   * class the FACT refs exist to prevent, arriving by another door. The
+   * token is what a superseded microtask checks; the coalescing key rides
+   * along so the effect's commit joins the same undo run the edit meant to.
+   */
+  const deferredCommit = useRef<{ token: number; coalesce?: string } | null>(null);
   const commitLater = useCallback(
     (coalesce?: string) => {
+      const token = (deferredCommit.current?.token ?? 0) + 1;
+      deferredCommit.current = { token, coalesce };
       // Read the freshest state from the store rather than the render closure.
-      queueMicrotask(() => commit(flow.getNodes(), flow.getEdges(), undefined, coalesce));
+      queueMicrotask(() => {
+        if (deferredCommit.current?.token !== token) return; // superseded
+        deferredCommit.current = null;
+        commit(flow.getNodes(), flow.getEdges(), undefined, coalesce);
+      });
     },
     [commit, flow],
   );
@@ -973,31 +1206,81 @@ function StudioInner({
    * (and loses) hidden nodes. Focus-aware: while drilled in, the canvas shows
    * `scopedView(doc, focus)` and the FACT ref records that; a focus whose
    * node vanished (undo, AI edit, controlled swap) prunes automatically.
+   *
+   * `select` names what the rebuilt canvas should have selected — the copies
+   * a paste just made, say — in place of the selection carried from before.
+   * It is applied IN the rebuild rather than by a follow-up `setNodes`: a
+   * second write straight after a rebuild is exactly what wipes the handle
+   * geometry (see the `measured` carry below).
    */
   const materializeTemplate = useCallback(
-    (doc: DiagramTemplate) => {
+    (doc: DiagramTemplate, select?: { nodes: readonly string[]; edges?: readonly string[] }) => {
       const stack = pruneFocusStack(doc, focusStackRef.current);
       const top = stack.at(-1) ?? null;
       if (stack.length !== focusStackRef.current.length) {
         focusStackRef.current = stack;
         setFocusStack(stack);
       }
+      const keptPins = prunePins(doc, pinsRef.current);
+      if (keptPins.length !== pinsRef.current.length) {
+        pinsRef.current = keptPins;
+        setPinsState(keptPins);
+      }
+      const keptKeys = coverageKeysRef.current.filter((k) => hasField(doc, k));
+      if (keptKeys.length !== coverageKeysRef.current.length) {
+        coverageKeysRef.current = keptKeys;
+        setCoverageKeysState(keptKeys);
+      }
+      // A coverage scope whose root has gone would score every key at zero
+      // and label a button with a missing id — fall back to the whole model.
+      setCoverageScope((current) =>
+        current.kind === "from" && !doc.nodes.some((n) => n.id === current.nodeId) ? { kind: "all" } : current,
+      );
       meta.current = doc.meta;
       baseRef.current = doc; // materialization point
       templateRef.current = doc;
-      zoneSignatureRef.current = viewSignatureOf(doc, showHidden, top);
+      zoneSignatureRef.current = viewSignatureOf(doc, showHidden, top, registry.containerKinds, viewFold);
       rfIncludesHiddenRef.current = showHidden;
       rfFocusRef.current = top;
-      const viewDoc = top
+      const scoped = top
         ? scopedView(doc, top, { containerKinds: registry.containerKinds })
         : doc;
+      // A viewer's fold override is applied to the VIEW document only — the
+      // base the canvas is judged against stays the document as written.
+      const viewDoc = viewFold
+        ? { ...scoped, settings: { ...scoped.settings, groupContents: viewFold } }
+        : scoped;
       const rf = toReactFlow(viewDoc, registryKinds(registry, showHidden));
-      const rfNodes = top ? decorateScopedNodes(rf.nodes as Node[]) : (rf.nodes as Node[]);
+      const fresh = top ? decorateScopedNodes(rf.nodes as Node[]) : (rf.nodes as Node[]);
+
+      // Carry each surviving node's DOM measurement across the rebuild.
+      //
+      // React Flow keeps a node's handle geometry across a `nodes` update
+      // only when the incoming node already carries `measured`; unmeasured,
+      // it is treated as new — handle bounds dropped — until its
+      // ResizeObserver reports again. `toReactFlow` builds unmeasured
+      // objects, so every rebuild used to blink every line out for a frame,
+      // and it opened a window in which any further `setNodes` was fatal: a
+      // write landing after the observer had re-measured but before that
+      // `dimensions` change had round-tripped through React state wiped the
+      // fresh handle bounds — and since the node THEN arrived measured, React
+      // Flow never observed it again. No handle bounds, no edge: that was
+      // "paste deleted every line on the diagram" (the paste's deferred
+      // select was exactly such a write). Carried, a surviving node never
+      // leaves the initialized state. One the document resized is reported
+      // at its old size for a frame, as React Flow itself does for any style
+      // change, until the observer — still attached — sees the new one.
+      const measuredById = new Map(flow.getNodes().map((n) => [n.id, n.measured]));
+      const rfNodes = fresh.map((n) => {
+        const measured = measuredById.get(n.id);
+        return measured?.width && measured?.height ? { ...n, measured } : n;
+      });
 
       // Carry the selection across the rebuild for everything that still
       // exists. `toReactFlow` produces a fresh, unselected canvas, so without
       // this every undo closes the inspector — and "edit a label, press ⌘Z"
       // becomes "edit a label, press ⌘Z, find the node again".
+      if (select) selectionRef.current = { nodes: [...select.nodes], edges: [...(select.edges ?? [])] };
       const keepNodes = new Set(selectionRef.current.nodes);
       const keepEdges = new Set(selectionRef.current.edges);
       const selected = keepNodes.size || keepEdges.size;
@@ -1012,7 +1295,13 @@ function StudioInner({
       setEdges(outEdges);
       return { nodes: outNodes, edges: outEdges };
     },
-    [registry, showHidden, setNodes, setEdges],
+    [registry, showHidden, viewFold, flow, setNodes, setEdges],
+  );
+
+  /** Whether the document folds its groups (`settings.groupContents`), read off the live document. */
+  const documentFolds = useCallback(
+    () => templateRef.current.settings?.groupContents === "hide",
+    [],
   );
 
   // ── Controlled mode: adopt external value changes ─────────────────────────
@@ -1059,7 +1348,7 @@ function StudioInner({
     // and commit it into the new one.
     const live = templateRef.current;
     if (live !== template) return;
-    const signature = viewSignatureOf(template, showHidden, focusId);
+    const signature = viewSignatureOf(template, showHidden, focusId, registry.containerKinds, viewFold);
     if (signature === zoneSignatureRef.current) return;
     // The document part alone decides whether this rebuild is an EDIT
     // (provider switch, collapse — belongs in undo, host must hear) or a pure
@@ -1075,7 +1364,25 @@ function StudioInner({
     // first" as an undocumented step. Selection is view state about IDS, and
     // ids survive a rebuild, so carry it across.
     const selected = new Set(flow.getNodes().filter((n) => n.selected).map((n) => n.id));
-    const next = materializeTemplate(template);
+    // The fold never eats an edit. Under `settings.groupContents: "hide"`
+    // a canvas edit that gives a group contents — a card dropped into a
+    // frame, a selection wrapped in one — would fold that group right here
+    // and take the very cards the user just placed off the canvas. The fold
+    // is for READING; an edit that fills a group is the user working, so
+    // the document flips to "show" in the same commit. (Edits that arrive
+    // as whole documents — import, paste, an AI reply — materialize directly
+    // and never pass through here, so a generated overview folds as
+    // authored.) The toolbar toggle folds it all again.
+    const opts = { containerKinds: registry.containerKinds };
+    const foldedBefore = foldedContainers(baseRef.current, opts);
+    const newlyFolded = [...foldedContainers(template, opts)].some((id) => !foldedBefore.has(id));
+    const doc = newlyFolded
+      ? validateTemplate(
+          { ...template, settings: { ...template.settings, groupContents: "show" } },
+          registryOpts(registry),
+        )
+      : template;
+    const next = materializeTemplate(doc);
     if (selected.size) {
       // A node the rebuild removed (hidden by a provider switch, collapsed
       // into its frame) is simply not in the new list, so it drops out here
@@ -1084,15 +1391,29 @@ function StudioInner({
         current.map((n) => (selected.has(n.id) ? { ...n, selected: true } : n)),
       );
     }
-    if (docChanged) commit(next.nodes, next.edges, template);
-  }, [template, focusId, materializeTemplate, showHidden, commit, flow, setNodes]);
+    if (docChanged) {
+      // This commit is the edit's commit — see `deferredCommit`.
+      const pending = deferredCommit.current;
+      deferredCommit.current = null;
+      commit(next.nodes, next.edges, doc, pending?.coalesce);
+    }
+  }, [template, focusId, materializeTemplate, showHidden, viewFold, commit, flow, setNodes, registry]);
 
   // ── Replace the whole document ────────────────────────────────────────────
 
   const applyTemplate = useCallback(
     (
       incoming: DiagramTemplate,
-      { fit = true, coalesce }: { fit?: boolean; coalesce?: string } = {},
+      {
+        fit = true,
+        coalesce,
+        select,
+      }: {
+        fit?: boolean;
+        coalesce?: string;
+        /** What to leave selected — see materializeTemplate. */
+        select?: { nodes: readonly string[]; edges?: readonly string[] };
+      } = {},
     ) => {
       // The declaration is truth on import: a generated document usually gets
       // membership right and coordinates approximately right, so move the node
@@ -1100,7 +1421,7 @@ function StudioInner({
       const validated = snapNodesIntoZones(validateTemplate(incoming, registryOpts(registry)), {
         containerKinds: registry.containerKinds,
       });
-      const next = materializeTemplate(validated);
+      const next = materializeTemplate(validated, select);
       commitHistory(
         { nodes: next.nodes, edges: next.edges, meta: meta.current, template: validated },
         { coalesce },
@@ -1282,20 +1603,17 @@ function StudioInner({
               ),
             }
           : next;
-      applyTemplate(rooted, { fit: false });
-      // Select the pasted copy, so it can be dragged away immediately.
-      window.setTimeout(() => {
-        setNodes((current) =>
-          current.map((n) => ({ ...n, selected: newNodeIds.includes(n.id) })),
-        );
-      }, 0);
+      // Selected as it lands, so it can be dragged away immediately. Never
+      // as a follow-up `setNodes` on a timer: that second write is what
+      // stripped every line off the canvas (see materializeTemplate).
+      applyTemplate(rooted, { fit: false, select: { nodes: newNodeIds } });
       const parts = [
         newNodeIds.length ? `${newNodeIds.length} node${newNodeIds.length === 1 ? "" : "s"}` : "",
         newZoneIds.length ? `${newZoneIds.length} zone${newZoneIds.length === 1 ? "" : "s"}` : "",
       ].filter(Boolean);
       showToast(`Pasted ${parts.join(" + ")}`);
     },
-    [readOnly, registry, applyTemplate, setNodes, showToast],
+    [readOnly, registry, applyTemplate, showToast],
   );
 
   const duplicateSelection = useCallback(() => {
@@ -1315,16 +1633,14 @@ function StudioInner({
       offset: PASTE_OFFSET,
       zones: zoneIds,
     });
-    applyTemplate(next, { fit: false });
-    // Select the copies, so they can be dragged away immediately.
-    window.setTimeout(() => {
-      setNodes((current) => current.map((n) => ({ ...n, selected: newNodeIds.includes(n.id) })));
-    }, 0);
+    // Selected as they land, so they can be dragged away immediately (and not
+    // by a deferred `setNodes` — see materializeTemplate for why that broke).
+    applyTemplate(next, { fit: false, select: { nodes: newNodeIds } });
     const what = zoneIds.length
       ? `${zoneIds.length} zone${zoneIds.length === 1 ? "" : "s"} + ${newNodeIds.length} node${newNodeIds.length === 1 ? "" : "s"}`
       : `${newNodeIds.length} node${newNodeIds.length === 1 ? "" : "s"}`;
     showToast(`Duplicated ${what} with connections`);
-  }, [readOnly, selectedNodeIds, registry, applyTemplate, setNodes, showToast]);
+  }, [readOnly, selectedNodeIds, registry, applyTemplate, showToast]);
 
   // ── Search ────────────────────────────────────────────────────────────────
 
@@ -1333,18 +1649,37 @@ function StudioInner({
    * drilled in, most of the architecture lives on other levels; a search that
    * couldn't see them would read as data loss.
    */
-  const searchMatches = useMemo(() => {
+  // The field index exists only while a query is typed: a drag with an
+  // empty search box rebuilds nothing, and a keystroke scans it with one
+  // `includes` per field.
+  const searching = searchQuery.trim().length > 0;
+  const fieldIndex = useMemo(() => (searching ? buildFieldIndex(template) : null), [template, searching]);
+  const searchMatches = useMemo((): SearchMatch[] => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return [];
-    return template.nodes.filter(
-      (n) =>
-        n.id.toLowerCase().includes(q) ||
-        n.label?.toLowerCase().includes(q) ||
-        n.description?.toLowerCase().includes(q) ||
-        String(n.kind).toLowerCase().includes(q) ||
-        n.tags?.some((t) => t.toLowerCase().includes(q)),
-    );
-  }, [template, searchQuery]);
+    const nodes: SearchMatch[] = template.nodes
+      .filter(
+        (n) =>
+          n.id.toLowerCase().includes(q) ||
+          n.label?.toLowerCase().includes(q) ||
+          n.description?.toLowerCase().includes(q) ||
+          String(n.kind).toLowerCase().includes(q) ||
+          n.tags?.some((t) => t.toLowerCase().includes(q)),
+      )
+      .map((n) => ({ kind: "node", id: n.id, w: n.w, h: n.h }));
+    if (!fieldIndex) return nodes;
+    const byId = new Map(template.nodes.map((n) => [n.id, n]));
+    const fields: SearchMatch[] = searchFields(fieldIndex, q, { limit: 200 }).flatMap((hit) => {
+      const n = byId.get(hit.nodeId);
+      return n
+        ? [{ kind: "field", id: n.id, w: n.w, h: n.h, field: { fieldId: hit.fieldId, name: hit.name, row: hit.row, nodeLabel: hit.nodeLabel } }]
+        : [];
+    });
+    return [...nodes, ...fields];
+  }, [template, searchQuery, fieldIndex]);
+  const currentMatch = searchMatches.length
+    ? searchMatches[(searchIndex < 0 ? 0 : searchIndex) % searchMatches.length]
+    : undefined;
 
   /** Declared later (needs the drill machinery); the search jumps through it. */
   const navigateToNodeRef = useRef<(id: string) => void>(() => {});
@@ -1354,10 +1689,20 @@ function StudioInner({
     (index: number) => {
       const match = searchMatches[((index % searchMatches.length) + searchMatches.length) % searchMatches.length];
       if (!match) return;
+      // A field hit marks its row; one the node doesn't draw opens the grid
+      // on it instead (after the level has had its moment to materialise).
+      const land = () => {
+        if (match.kind !== "field") return;
+        setHighlightFields(new Set([fieldKey({ nodeId: match.id, fieldId: match.field.fieldId })]));
+        if (!match.field.row) {
+          window.setTimeout(() => setFieldGrid({ nodeId: match.id, fieldId: match.field.fieldId }), 80);
+        }
+      };
       const internal = flow.getInternalNode(match.id);
       if (!internal) {
         // The match lives on another level (or is hidden) — drill to it.
         navigateToNodeRef.current(match.id);
+        land();
         return;
       }
       const abs = internal.internals.positionAbsolute;
@@ -1368,6 +1713,7 @@ function StudioInner({
         zoom: Math.max(flow.getViewport().zoom, 0.9),
         duration: 300,
       });
+      land();
     },
     [searchMatches, flow, setNodes],
   );
@@ -1488,10 +1834,89 @@ function StudioInner({
         .filter((p) => activePathIds.includes(p.id)),
     [paths, activePathIds],
   );
-  const pathGlowIndex = useMemo(
-    () => buildPathGlowIndex(template, activePathIds),
-    [template, activePathIds],
+  // Routes between the pins. Memoised on the document's STRUCTURE — ids,
+  // endpoints, anchors, direction — so a drag never re-runs a search that
+  // may take its whole 300 ms budget; and only while the panel is open.
+  const structureSig = useMemo(() => structureSignature(template), [template]);
+  const routeColors = useMemo(
+    () => transientPathColors(10, activePaths.map((p) => p.color), paths.length),
+    [activePaths, paths.length],
   );
+  const routeView = useMemo<RouteView | null>(() => {
+    if (!pathPanelOpen || pins.length < 2) return null;
+    return computeRouteView(templateRef.current, { pins, undirected: routeUndirected, mode: routeMode }, routeColors);
+    // `structureSig` stands in for the template on purpose (see above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structureSig, pins, routeUndirected, routeMode, pathPanelOpen, routeColors]);
+  /** The found routes as transient paths — all of them, or the hovered/kept one alone. */
+  const transientPaths = useMemo(() => {
+    if (!routeView || routeView.kind !== "pair") return [];
+    const only = hoverRoute ?? stickyRoute;
+    // A key the current routes don't use (kept, then the direction toggled)
+    // lights nothing through it — it falls through to the routes instead.
+    const litKey = hoverKey ?? stickyKey;
+    const keyEdges = litKey ? routeView.keyUse?.keys.find((k) => fieldKey(k.ref) === litKey)?.edges : undefined;
+    const throughKey = keyEdges ? new Set(keyEdges) : null;
+    return routeView.routes
+      .map((route, i) => ({ route, i }))
+      .filter(({ route, i }) =>
+        throughKey
+          ? route.walk.edges.some((e) => throughKey.has(e))
+          : only === null || only >= routeView.routes.length || only === i,
+      )
+      .map(({ route, i }) =>
+        walkToPath(templateRef.current, route.walk, { id: `~route:${i}`, title: route.title, color: route.color }),
+      );
+  }, [routeView, hoverRoute, stickyRoute, hoverKey, stickyKey]);
+  // Several routes lit at once keep their palette colours so they stay
+  // distinguishable; one route singled out (hovered or kept) goes bright.
+  const pathGlowIndex = useMemo(
+    () => buildPathGlowIndex(template, activePathIds, transientPaths, { bright: transientPaths.length === 1 }),
+    [template, activePathIds, transientPaths],
+  );
+  // Key coverage — memoised on structure like the routes, and only while open.
+  const coverageResult = useMemo(
+    () => (coverageOpen ? keyCoverage(templateRef.current, coverageKeys, { scope: coverageScope }) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [structureSig, coverageKeys, coverageScope, coverageOpen],
+  );
+  const coverageGains = useMemo(
+    () => (coverageOpen ? marginalGains(templateRef.current, coverageKeys, { scope: coverageScope }) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [structureSig, coverageKeys, coverageScope, coverageOpen],
+  );
+  /** With keys chosen (or a candidate hovered) the canvas dims to what they reach. */
+  const coverageMask = useMemo(() => {
+    if (!coverageOpen || !coverageResult || (!coverageKeys.length && !coverageHover)) return null;
+    const keep = new Set(coverageResult.reached);
+    if (coverageHover) {
+      const gain = coverageGains.find((g) => sameFieldRef(g.ref, coverageHover));
+      for (const id of gain?.adds ?? []) keep.add(id);
+      // A chosen key hovered: what it contributes is already in `reached`.
+    }
+    if (coverageScope.kind === "from") keep.add(coverageScope.nodeId);
+    return keep;
+  }, [coverageOpen, coverageResult, coverageKeys, coverageHover, coverageGains, coverageScope]);
+  const coverageKeepEdges = useMemo(() => {
+    if (!coverageMask) return null;
+    const chosen = new Set([...coverageKeys, ...(coverageHover ? [coverageHover] : [])].map(fieldKey));
+    const doc = templateRef.current;
+    const carried = new Set(
+      keyFields(doc)
+        .filter((k) => chosen.has(fieldKey(k.ref)))
+        .flatMap((k) => k.edges),
+    );
+    // Both ends have to be in the lit set: a chosen key's line that leads out
+    // of a "from" scope is not part of what the reader can reach.
+    return new Set(doc.edges.filter((e) => carried.has(e.id) && coverageMask.has(e.source) && coverageMask.has(e.target)).map((e) => e.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coverageMask, coverageKeys, coverageHover, structureSig]);
+  /**
+   * One dim mask for the canvas: the coverage panel's while it is showing
+   * something, else the paths panel's reachable set, else nothing.
+   */
+  const dimmedIds = coverageMask ?? routeView?.keep ?? null;
+  const routeKeepEdges = coverageMask ? coverageKeepEdges : (routeView?.keepEdges ?? null);
 
   const allTags = useMemo(() => {
     const out: string[] = [];
@@ -1500,6 +1925,18 @@ function StudioInner({
   }, [template]);
 
   const anyTeams = useMemo(() => template.nodes.some((n) => n.team), [template]);
+  const anyLinks = useMemo(() => template.nodes.some((n) => n.url), [template]);
+  /** Whether any line states a cardinality or a kind — what the notation choice acts on. */
+  const anyCardinality = useMemo(
+    () => template.edges.some((e) => e.startLabel || e.endLabel || e.relation),
+    [template],
+  );
+  /** Many-to-many spelled as tables — what *Collapse junction tables* folds into one line each. */
+  const junctions = useMemo(() => junctionTables(template), [template]);
+  // Key coverage scores tables; a document with none has nothing for it to
+  // say, so the View menu does not offer it — as *Paths* is only offered
+  // when the document names one. `openCoverage()` on the ref still works.
+  const anyTables = useMemo(() => template.nodes.some(storesFields), [template]);
 
   // Architecture lint — pure over the document, so it re-runs per committed
   // edit and can never touch what persists.
@@ -1674,7 +2111,10 @@ function StudioInner({
     const scrubbed = applyTimelineView(nodes, edges, timelineFutureIds, timelineFuture);
     // Lit paths glow. After the timeline pass (a hidden node stays hidden),
     // before the lifts below, which append their classes rather than replace.
-    const view = applyPathView(scrubbed.nodes, scrubbed.edges, pathGlowIndex);
+    const lit = applyPathView(scrubbed.nodes, scrubbed.edges, pathGlowIndex);
+    // Everything outside the pins' reach recedes (nodes take the same
+    // treatment through the studio context, where the renderer dims).
+    const view = { nodes: lit.nodes, edges: applyOutsideView(lit.edges, routeKeepEdges) };
     // Manual z-index mode (see the <ReactFlow> props) drops React Flow's
     // built-in elevate-on-select, so restore it here as a display pass: a
     // selected node floats above whatever it is dragged across. Containers
@@ -1706,7 +2146,7 @@ function StudioInner({
         e.selected ? { ...e, zIndex: (e.zIndex ?? 0) + SELECTED_EDGE_ELEVATION } : e,
       ),
     };
-  }, [nodes, edges, timelineFutureIds, timelineFuture, dropTargetId, pathGlowIndex]);
+  }, [nodes, edges, timelineFutureIds, timelineFuture, dropTargetId, pathGlowIndex, routeKeepEdges]);
 
   useEffect(() => {
     timelineAtRef.current = timelineAt;
@@ -1755,22 +2195,151 @@ function StudioInner({
     [readOnly, applyTemplate, showToast],
   );
 
+  // ── Notation: how a line's ends draw their cardinality ────────────────────
+
+  /** The document's `settings.notation`, "both" when it says nothing. */
+  const notation: Notation = template.settings?.notation ?? "both";
+
+  /**
+   * A document setting, like the default routing: through applyTemplate so
+   * it is validated, committed, undoable, and emitted, and every line on
+   * the canvas re-reads it through the studio context.
+   */
+  const setNotation = useCallback(
+    (next: Notation) => {
+      if (readOnly) return;
+      applyTemplate(
+        { ...templateRef.current, settings: { ...templateRef.current.settings, notation: next } },
+        { fit: false },
+      );
+      showToast(
+        next === "uml"
+          ? "UML notation: multiplicities as numbers, glyphs at the ends"
+          : next === "crowsfoot"
+            ? "Crow's-foot notation: symbols at the boxes"
+            : "Symbols at the boxes, numbers beside them",
+      );
+    },
+    [readOnly, applyTemplate, showToast],
+  );
+
+  /**
+   * Fold every junction table into the many-to-many line it stands for —
+   * one document edit, so one ⌘Z brings the tables back.
+   */
+  const collapseJunctionTables = useCallback(() => {
+    if (readOnly) return;
+    const found = junctionTables(templateRef.current);
+    if (!found.length) return;
+    applyTemplate(collapseJunctions(templateRef.current), { fit: false });
+    const mod = isMac() ? "⌘" : "Ctrl+";
+    showToast(
+      `${found.length} junction table${found.length === 1 ? "" : "s"} folded into a many-to-many line · ${mod}Z to undo`,
+    );
+  }, [readOnly, applyTemplate, showToast]);
+
+  // ── Group contents: the document-wide fold ────────────────────────────────
+
+  const groupContents = template.settings?.groupContents;
+  /**
+   * Whether the fold has anything to fold — some group with contents. The
+   * toolbar toggle exists only while it does: a document whose groups are all
+   * empty would otherwise show a switch that changes nothing on the canvas.
+   */
+  const groupsFoldable = useMemo(() => {
+    const containers = new Set(
+      template.nodes.filter((n) => kindDef(registry, n.kind).container).map((n) => n.id),
+    );
+    return template.nodes.some((n) => !!n.parentId && containers.has(n.parentId));
+  }, [template, registry]);
+  /**
+   * The toggle appears once the document says something about group
+   * contents. A diagram that never set `settings.groupContents` keeps the
+   * toolbar it always had; one that folds its groups gets the switch — and
+   * keeps it after unfolding, or there would be no way back. Read-only
+   * viewers get it too, as a view-only override (see `foldOverride`).
+   */
+  const showGroupsToggle = groupContents !== undefined && groupsFoldable;
+  /** What the canvas is actually showing: the viewer's override, else the document. */
+  const groupsShownFolded = (viewFold ?? groupContents) === "hide";
+
+  const setGroupContents = useCallback(
+    (next: GroupContents) => {
+      if (readOnly) {
+        // A viewer's toggle is a view override, never a document edit.
+        setFoldOverride(next);
+        return;
+      }
+      // Through applyTemplate (the setDefaultRouting pattern) so the fold is
+      // validated, committed, undoable, and emitted like any document edit —
+      // and the canvas rebuilds from the document, folding or unfolding every
+      // group at once.
+      applyTemplate(
+        {
+          ...templateRef.current,
+          settings: { ...templateRef.current.settings, groupContents: next },
+        },
+        { fit: false },
+      );
+      showToast(next === "hide" ? "Group contents folded away" : "Group contents shown");
+    },
+    [readOnly, applyTemplate, showToast],
+  );
+
+  /**
+   * What a Tidy of the level you are looking at tells the layout: the
+   * focused component's own canvas while drilled in, the root canvas
+   * otherwise. Either way the levels you can't see are left exactly as you
+   * left them. The arrange MODE is not in here on purpose — the layout reads
+   * it off the document's `settings.arrange`, so a Tidy keeps arranging the
+   * way the document was last set.
+   */
+  const levelLayoutOptions = useCallback((): LayoutOptions => {
+    const focus = rfFocusRef.current;
+    return {
+      containerKinds: registry.containerKinds,
+      ...modeLayoutOptions(studioMode),
+      ...(focus ? { frames: { drill: focus } } : {}),
+    };
+  }, [registry, studioMode]);
+
   const tidy = useCallback(() => {
     if (readOnly) return;
-    // Tidy arranges the level you are looking at — the focused component's
-    // own canvas while drilled in, the root canvas otherwise. Either way the
-    // levels you can't see are left exactly as you left them.
-    const focus = rfFocusRef.current;
-    applyTemplate(
-      autoLayout(templateRef.current, {
-        containerKinds: registry.containerKinds,
-        ...modeLayoutOptions(studioMode),
-        ...(focus ? { frames: { drill: focus } } : {}),
-      }),
-      { fit: true },
-    );
-    showToast(focus ? "Tidied this level" : "Tidied");
-  }, [readOnly, applyTemplate, showToast, registry, studioMode]);
+    applyTemplate(autoLayout(templateRef.current, levelLayoutOptions()), { fit: true });
+    showToast(rfFocusRef.current ? "Tidied this level" : "Tidied");
+  }, [readOnly, applyTemplate, showToast, levelLayoutOptions]);
+
+  /** What Tidy optimises for, read off the live document. Absent means "flow". */
+  const arrangeMode: ArrangeMode = template.settings?.arrange ?? "flow";
+
+  /**
+   * Pick what Tidy optimises for — and tidy, right there, so the choice is
+   * seen rather than remembered. The setting and the new arrangement travel
+   * in ONE applyTemplate, so they are one undo entry: ⌘Z puts every box back
+   * AND forgets the choice, and redo restores both. The setting lives in the
+   * document, so every later Tidy — and the auto-tidy after a generation —
+   * keeps arranging the same way.
+   */
+  const setArrangeMode = useCallback(
+    (next: ArrangeMode) => {
+      if (readOnly) return;
+      const current = templateRef.current;
+      applyTemplate(
+        autoLayout(
+          { ...current, settings: { ...current.settings, arrange: next } },
+          levelLayoutOptions(),
+        ),
+        { fit: true },
+      );
+      const mod = isMac() ? "⌘" : "Ctrl+";
+      showToast(
+        next === "untangle"
+          ? `Untangled the lines · ${mod}Z to undo`
+          : `Arranged left to right · ${mod}Z to undo`,
+      );
+    },
+    [readOnly, applyTemplate, showToast, levelLayoutOptions],
+  );
 
   const addZone = useCallback(() => {
     if (readOnly) return;
@@ -2077,13 +2646,22 @@ function StudioInner({
     }
   }, [readOnly, selectedNodeIds, selectedEdgeIds, showToast, registry, materializeTemplate, commit]);
 
-  const patchNode = useCallback(
-    (id: string, patch: Partial<DiagramNodeData>) => {
-      if (readOnly) return;
+  /**
+   * Patch several nodes in ONE state write and ONE commit — what the
+   * multi-selection inspector runs on, so "align five labels centre" is one
+   * undo entry rather than five. `patch` may be a function of each node's
+   * current data, for edits that depend on what the node already has (adding
+   * a tag to whatever tags it carries, say).
+   */
+  const patchNodes = useCallback(
+    (ids: readonly string[], patch: NodePatch) => {
+      if (readOnly || !ids.length) return;
+      const targets = new Set(ids);
       setNodes((current) =>
         current.map((n) => {
-          if (n.id !== id) return n;
-          const data = { ...(n.data as DiagramNodeData), ...patch };
+          if (!targets.has(n.id)) return n;
+          const own = typeof patch === "function" ? patch(n.data as DiagramNodeData) : patch;
+          const data = { ...(n.data as DiagramNodeData), ...own };
           // Explicit undefined means "clear the field", not "keep the old value".
           for (const key of [
             "tags",
@@ -2099,8 +2677,11 @@ function StudioInner({
             "color",
             "opacity",
             "fontSize",
+            "team",
+            "status",
+            "plain",
           ] as const) {
-            if (key in patch && patch[key] === undefined) delete data[key];
+            if (key in own && own[key] === undefined) delete data[key];
           }
           // Changing kind can change which renderer the node needs.
           const def = kindDef(registry, data.kind);
@@ -2118,7 +2699,7 @@ function StudioInner({
           // old height back off it and the extra lines spill out of the box.
           // Anything that changes how many lines the label takes lands here.
           const affectsHeight =
-            "wrap" in patch || "fontSize" in patch || ("label" in patch && data.wrap);
+            "wrap" in own || "fontSize" in own || ("label" in own && data.wrap);
           const grown =
             affectsHeight && data.wrap && !def.container && !def.annotation
               ? wrappedTitleHeight(
@@ -2140,7 +2721,7 @@ function StudioInner({
           // stored size survives the round trip, like a collapsed group's.)
           const wasPoint = kindDef(registry, (n.data as DiagramNodeData).kind).point;
           const bodied =
-            "kind" in patch && wasPoint && !def.point
+            "kind" in own && wasPoint && !def.point
               ? KIND_DEFAULT_SIZE[data.kind] ?? KIND_DEFAULT_SIZE.default
               : null;
 
@@ -2159,31 +2740,34 @@ function StudioInner({
                 ? { height, style: { ...(n.style ?? {}), height } }
                 : {}),
             // React Flow reads draggability from the node object, not data.
-            ...("locked" in patch ? { draggable: !data.locked } : {}),
+            ...("locked" in own ? { draggable: !data.locked } : {}),
           };
         }),
       );
-      commitLater(typingRunKey("node", id, patch));
+      commitLater(typeof patch === "function" ? undefined : typingRunKey("node", ids.join("+"), patch));
     },
     [readOnly, setNodes, registry, commitLater],
   );
 
-  const patchEdge = useCallback(
-    (id: string, patch: Partial<DiagramEdgeData>) => {
-      if (readOnly) return;
+  /** The edge twin of `patchNodes`. */
+  const patchEdges = useCallback(
+    (ids: readonly string[], patch: EdgePatch) => {
+      if (readOnly || !ids.length) return;
+      const targets = new Set(ids);
       setEdges((current) =>
         current.map((e) => {
-          if (e.id !== id) return e;
-          const data = { ...(e.data as DiagramEdgeData), ...patch };
+          if (!targets.has(e.id)) return e;
+          const own = typeof patch === "function" ? patch((e.data ?? {}) as DiagramEdgeData) : patch;
+          const data = { ...(e.data as DiagramEdgeData), ...own };
           // A spread keeps keys explicitly set to undefined; delete them so
           // "routing: default" and a cleared seq, date, anchor, or route
           // genuinely unset the field.
-          for (const key of ["routing", "seq", "direction", "startHead", "endHead", "date", "start", "end", "points"] as const) {
-            if (key in patch && patch[key] === undefined) delete data[key];
+          for (const key of ["routing", "seq", "direction", "startHead", "endHead", "date", "start", "end", "points", "providers", "startLabel", "endLabel", "startField", "endField", "tech", "relation"] as const) {
+            if (key in own && own[key] === undefined) delete data[key];
           }
           // The edge's own routing changed (or was cleared) — recompute what
           // the renderer draws from the diagram default.
-          if ("routing" in patch) {
+          if ("routing" in own) {
             data.routingResolved = data.routing ?? resolveRouting(meta.current?.routing);
           }
           return {
@@ -2197,10 +2781,11 @@ function StudioInner({
           };
         }),
       );
-      commitLater(typingRunKey("edge", id, patch));
+      commitLater(typeof patch === "function" ? undefined : typingRunKey("edge", ids.join("+"), patch));
     },
     [readOnly, setEdges, commitLater],
   );
+
 
   // ── Re-parenting on drop ──────────────────────────────────────────────────
 
@@ -2424,7 +3009,7 @@ function StudioInner({
         if (movingIds.has(candidate.id) || isZoneNodeId(candidate.id)) continue;
         if (isBoundaryNodeId(candidate.id) || isGhostNodeId(candidate.id)) continue;
         const data = candidate.data as DiagramNodeData;
-        if (!kindDef(registry, data.kind).container || data.collapsed) continue;
+        if (!kindDef(registry, data.kind).container || data.collapsed || data.folded) continue;
         const box = boxOf(candidate.id);
         if (!box) continue;
         if (cx <= box.x || cx >= box.x + box.w || cy <= box.y || cy >= box.y + box.h) continue;
@@ -2594,8 +3179,14 @@ function StudioInner({
           if (target && (target.data as DiagramNodeData).collapsed) {
             expanded.add(target.id);
           }
+          // Under the document's fold the frame would close over the drop;
+          // the rebuild lifts the fold instead (see the rebuild effect).
           showToast(
-            target ? `Moved into ${(target.data as DiagramNodeData).label}` : "Moved to canvas",
+            target
+              ? `Moved into ${(target.data as DiagramNodeData).label}${
+                  documentFolds() ? " — group contents shown" : ""
+                }`
+              : "Moved to canvas",
           );
         } else if (zoneChanged) {
           // Tinted like the zone it landed in, so the toast and the region
@@ -2681,7 +3272,7 @@ function StudioInner({
       }
       commitLater(dragKey);
     },
-    [readOnly, flow, registry, setNodes, showToast, commitLater, deriveTemplate, materializeTemplate, commit, finishAltDrag, dragZoneMembers],
+    [readOnly, flow, registry, setNodes, showToast, commitLater, documentFolds, deriveTemplate, materializeTemplate, commit, finishAltDrag, dragZoneMembers],
   );
 
   // ── Undo / redo ───────────────────────────────────────────────────────────
@@ -2738,6 +3329,10 @@ function StudioInner({
         // The document may have changed mid-tween (an AI reply landing) —
         // a vanished target must not throw inside a timer callback.
         if (!templateRef.current.nodes.some((n) => n.id === id)) return;
+        // A double-click on the drill badge is click, click, dblclick: three
+        // drills into the same node, each queued behind its own tween. The
+        // first lands; the rest would stack the focus on itself.
+        if (focusStackRef.current[focusStackRef.current.length - 1] === id) return;
         drillTo([...focusStackRef.current, id]);
         canvasRef.current?.classList.remove("as-canvas--refocus");
         window.setTimeout(
@@ -2809,6 +3404,255 @@ function StudioInner({
     navigateToNodeRef.current = navigateToNode;
   }, [navigateToNode]);
 
+  /**
+   * The host's way in: drill to a whole level and fit to it. The focus stack
+   * is an ancestry chain by construction (every drill pushes a child of the
+   * current level), so a host-supplied stack is canonicalised rather than
+   * trusted: the deepest id the document knows names the level, and
+   * `focusPath` supplies its real ancestors — a stale or mis-ordered stack
+   * lands on a level that exists instead of drawing breadcrumbs that lie.
+   */
+  const drillToLevel = useCallback(
+    (stack: readonly string[]) => {
+      if (activeDiffBase) return; // compare mode owns the canvas
+      const doc = templateRef.current;
+      const known = new Set(doc.nodes.map((n) => n.id));
+      const top = [...stack].reverse().find((id) => known.has(id));
+      const next = top ? [...focusPath(doc, top), top] : [];
+      const same =
+        next.length === focusStackRef.current.length &&
+        next.every((id, i) => id === focusStackRef.current[i]);
+      if (same) return;
+      drillTo(next);
+      canvasRef.current?.classList.add("as-canvas--refocus");
+      window.setTimeout(() => {
+        canvasRef.current?.classList.remove("as-canvas--refocus");
+        void flow.fitView({ padding: 0.15, duration: 250 });
+      }, 60);
+    },
+    [activeDiffBase, drillTo, flow],
+  );
+
+  const setActivePaths = useCallback((ids: readonly string[]) => {
+    setActivePathIds([...new Set(ids)]);
+  }, []);
+
+  const setPins = useCallback((refs: readonly Pin[]) => {
+    const next: Pin[] = [];
+    for (const ref of refs) {
+      if (next.some((p) => sameFieldRef(p, ref))) continue;
+      next.push(ref.fieldId ? { nodeId: ref.nodeId, fieldId: ref.fieldId } : { nodeId: ref.nodeId });
+    }
+    pinsRef.current = next;
+    setPinsState(next);
+  }, []);
+  const togglePin = useCallback(
+    (ref: Pin) => {
+      const current = pinsRef.current;
+      setPins(current.some((p) => sameFieldRef(p, ref)) ? current.filter((p) => !sameFieldRef(p, ref)) : [...current, ref]);
+    },
+    [setPins],
+  );
+  const setCoverageKeys = useCallback((refs: readonly FieldRef[]) => {
+    const next: FieldRef[] = [];
+    for (const ref of refs) if (!next.some((k) => sameFieldRef(k, ref))) next.push({ nodeId: ref.nodeId, fieldId: ref.fieldId });
+    coverageKeysRef.current = next;
+    setCoverageKeysState(next);
+    setSmallest(null);
+  }, []);
+  const toggleCoverageKey = useCallback(
+    (ref: FieldRef) => {
+      const current = coverageKeysRef.current;
+      setCoverageKeys(current.some((k) => sameFieldRef(k, ref)) ? current.filter((k) => !sameFieldRef(k, ref)) : [...current, ref]);
+    },
+    [setCoverageKeys],
+  );
+  /** The fewest keys that reach everything any key can, in the current scope. */
+  const findSmallestCover = useCallback(() => {
+    const result = minimalKeyCover(templateRef.current, { scope: coverageScope });
+    coverageKeysRef.current = result.keys;
+    setCoverageKeysState(result.keys);
+    setSmallest({ optimal: result.optimal, truncated: result.truncated });
+  }, [coverageScope]);
+  useEffect(() => {
+    if (!coverageOpen) setCoverageHover(null);
+  }, [coverageOpen]);
+
+  /** Go to a field: its node's level, selected and centred, with the row marked. */
+  const navigateToField = useCallback(
+    (ref: FieldRef) => {
+      navigateToNode(ref.nodeId);
+      setHighlightFields(new Set([fieldKey(ref)]));
+    },
+    [navigateToNode],
+  );
+  /**
+   * Follow a reference: go to the table it points at with BOTH rows marked —
+   * the referencing field left behind and the key it lands on. A foreign key
+   * is a pair, and a reader who followed one wants to see the join, not just
+   * arrive at a table.
+   */
+  const followReference = useCallback(
+    (from: FieldRef, target: FieldTarget) => {
+      if (!target.nodeId) return;
+      navigateToNode(target.nodeId);
+      const key = referencedKey(templateRef.current, target);
+      setHighlightFields(new Set([fieldKey(from), ...(key ? [fieldKey(key)] : [])]));
+    },
+    [navigateToNode],
+  );
+  /**
+   * The other direction: light everything that points AT a key — its own
+   * row, every foreign-key row landing on it, and the tables those rows sit
+   * in, so a reference from across the canvas still shows. A table (no
+   * field) lights every reference into it. The marks are the transient kind
+   * a followed reference leaves, and clear the same way.
+   */
+  const showReferences = useCallback(
+    (ref: Pin) => {
+      const refs = referencesTo(templateRef.current, ref);
+      const marks = new Set<string>([fieldKey(ref), fieldKey({ nodeId: ref.nodeId })]);
+      for (const r of refs) {
+        marks.add(fieldKey({ nodeId: r.nodeId }));
+        if (r.fieldId) marks.add(fieldKey(r));
+      }
+      setHighlightFields(marks);
+      const tables = new Set(refs.map((r) => r.nodeId)).size;
+      showToast(
+        refs.length
+          ? `${refs.length} reference${refs.length === 1 ? "" : "s"} from ${tables} table${tables === 1 ? "" : "s"} marked`
+          : "Nothing points at it",
+      );
+    },
+    [showToast],
+  );
+  const pinnedFields = useMemo(() => new Set(pins.map(fieldKey)), [pins]);
+  /** "Account · AccountId" — what a chip and a menu caption call a field; a table pin is the label alone. */
+  const fieldLabel = useCallback((ref: Pin) => {
+    const label = templateRef.current.nodes.find((n) => n.id === ref.nodeId)?.label ?? ref.nodeId;
+    return ref.fieldId ? `${label} · ${ref.fieldId}` : label;
+  }, []);
+  // The row marks are transient: they go when the reader selects something
+  // else (a click elsewhere, not the jump's own selection — a drill clears
+  // the selection on the way, which must not take the marks with it; and
+  // either table of a followed reference keeps the pair) or starts a new
+  // search.
+  const highlightFieldsRef = useRef<ReadonlySet<string>>(NO_FIELDS);
+  highlightFieldsRef.current = highlightFields;
+  useEffect(() => {
+    const marks = highlightFieldsRef.current;
+    if (!marks.size || !selectedNodeIds.length) return;
+    const marked = new Set([...marks].map((mark) => mark.slice(0, mark.indexOf("\u0000"))));
+    if (!selectedNodeIds.some((id) => marked.has(id))) setHighlightFields(NO_FIELDS);
+  }, [selectedNodeIds]);
+  useEffect(() => {
+    setHighlightFields(NO_FIELDS);
+  }, [searchQuery]);
+  const togglePathPanel = useCallback(() => {
+    setPathPanelOpen((open) => !open);
+    setPanelOpen(false); // the two panels share a slot
+  }, []);
+  // Fewer than two pins, nothing to search: the panel closes; a changed set
+  // of pins forgets which route was kept.
+  useEffect(() => {
+    if (pins.length < 2) setPathPanelOpen(false);
+    setStickyRoute(null);
+    setHoverRoute(null);
+    setHoverKey(null);
+    setStickyKey(null);
+  }, [pins]);
+  /** Keep every route through a key lit — or let it go, clicked again. */
+  const pickKey = useCallback((key: string) => {
+    setStickyKey((current) => (current === key ? null : key));
+    setStickyRoute(null);
+  }, []);
+  /** Keep a route lit alone and frame it — or, when it crosses levels, go to it. */
+  const pickRoute = useCallback(
+    (index: number) => {
+      setStickyRoute((current) => (current === index ? null : index));
+      setStickyKey(null);
+      const route = routeView?.routes[index];
+      if (!route) return;
+      const boxes = route.walk.nodes.map((id) => flow.getInternalNode(id));
+      if (boxes.every((b) => b)) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const b of boxes) {
+          const abs = b!.internals.positionAbsolute;
+          const w = (b!.measured?.width as number) ?? 170;
+          const h = (b!.measured?.height as number) ?? 76;
+          minX = Math.min(minX, abs.x);
+          minY = Math.min(minY, abs.y);
+          maxX = Math.max(maxX, abs.x + w);
+          maxY = Math.max(maxY, abs.y + h);
+        }
+        void flow.fitBounds({ x: minX, y: minY, width: maxX - minX, height: maxY - minY }, { padding: 0.3, duration: 300 });
+      } else {
+        navigateToNode(route.walk.nodes[1] ?? route.walk.nodes[0]);
+      }
+    },
+    [routeView, flow, navigateToNode],
+  );
+
+  // The FACT refs the imperative reads answer from — a handle method runs
+  // outside render, where the state variable may already be a step behind.
+  const activePathIdsRef = useRef<string[]>(activePathIds);
+  activePathIdsRef.current = activePathIds;
+
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      getFocus: () => focusStackRef.current,
+      drillTo: drillToLevel,
+      navigateTo: navigateToNode,
+      getActivePaths: () => activePathIdsRef.current,
+      setActivePaths,
+      getPins: () => pinsRef.current,
+      setPins,
+      navigateToField,
+      openFieldGrid: (nodeId: string, fieldId?: string) => setFieldGrid({ nodeId, ...(fieldId ? { fieldId } : {}) }),
+      getCoverageKeys: () => coverageKeysRef.current,
+      setCoverageKeys,
+      openCoverage: (open = true) => setCoverageOpen(open),
+    }),
+    [drillToLevel, navigateToNode, setActivePaths, setPins, navigateToField, setCoverageKeys],
+  );
+
+  // Mirrors for a host rendering its own breadcrumbs or path list. Keyed by
+  // content like the selection report, so a host passing a fresh callback
+  // each render isn't told about a change that didn't happen.
+  const lastFocusReported = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onFocusChange) return;
+    const key = focusStack.join("\u0000");
+    if (key === lastFocusReported.current) return;
+    lastFocusReported.current = key;
+    onFocusChange(focusStack);
+  }, [focusStack, onFocusChange]);
+  const lastPathsReported = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onActivePathsChange) return;
+    const key = activePathIds.join("\u0000");
+    if (key === lastPathsReported.current) return;
+    lastPathsReported.current = key;
+    onActivePathsChange(activePathIds);
+  }, [activePathIds, onActivePathsChange]);
+  const lastPinsReported = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onPinsChange) return;
+    const key = pins.map(fieldKey).join("\u0001");
+    if (key === lastPinsReported.current) return;
+    lastPinsReported.current = key;
+    onPinsChange(pins.map((p) => ({ ...p })));
+  }, [pins, onPinsChange]);
+  const lastCoverageReported = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onCoverageChange) return;
+    const key = coverageKeys.map(fieldKey).join("\u0001");
+    if (key === lastCoverageReported.current) return;
+    lastCoverageReported.current = key;
+    onCoverageChange(coverageKeys.map((k) => ({ ...k })));
+  }, [coverageKeys, onCoverageChange]);
+
   // Compare mode owns the whole canvas — entering it exits any drill.
   useEffect(() => {
     if (activeDiffBase && focusStackRef.current.length) drillTo([]);
@@ -2861,9 +3705,28 @@ function StudioInner({
         setNodes((current) => current.map((n) => ({ ...n, selected: false })));
       }
       const kind = edgeId ? "edge" : nodeId ? (isZoneNodeId(nodeId) ? "zone" : "node") : "pane";
-      setContextMenu({ x: event.clientX, y: event.clientY, kind });
+      setContextMenu({ ...clampMenu(event.clientX, event.clientY), kind });
     },
     [readOnly, activeDiffBase, setNodes, setEdges],
+  );
+
+  /**
+   * The field menu: a row was clicked. Not guarded on `readOnly` — pinning
+   * and the grid are reading tools — only on compare mode, which owns the
+   * canvas. Selects the row's node the way the node menu does, so the
+   * inspector shows the node the items act on.
+   */
+  const openFieldMenu = useCallback(
+    (ref: FieldRef, at: { clientX: number; clientY: number }) => {
+      if (activeDiffBase) return;
+      setOpenMenu(null);
+      if (!selectionRef.current.nodes.includes(ref.nodeId)) {
+        setNodes((current) => current.map((n) => ({ ...n, selected: n.id === ref.nodeId })));
+        setEdges((current) => current.map((e) => ({ ...e, selected: false })));
+      }
+      setContextMenu({ ...clampMenu(at.clientX, at.clientY), kind: "field", ref });
+    },
+    [activeDiffBase, setNodes, setEdges],
   );
 
   // Any click or Escape dismisses it, like every other menu here.
@@ -3008,9 +3871,10 @@ function StudioInner({
             );
           }
         }
-        // The mode goes with it: a picture exported out of marketing mode has
-        // to come back dressed the way the screen was dressing it.
-        const result = await exporter.run({ template: subject, registry, filename, palette: exportPalette, mode: studioMode });
+        // The mode goes with it, and its gradient setting: a picture exported
+        // out of marketing mode has to come back dressed the way the screen
+        // was dressing it.
+        const result = await exporter.run({ template: subject, registry, filename, palette: exportPalette, mode: studioMode, gradients });
         if (result) {
           download(result.blob, result.filename);
           showToast(`Exported ${result.filename}`);
@@ -3020,7 +3884,7 @@ function StudioInner({
         setPanelOpen(true);
       }
     },
-    [registry, template, filename, exportPalette, studioMode, showToast, timelineActive, timelineAt, timelineFuture, focusId, exportSelectionOnly, selectedDocNodeIds, selectedZoneIds],
+    [registry, template, filename, exportPalette, studioMode, gradients, showToast, timelineActive, timelineAt, timelineFuture, focusId, exportSelectionOnly, selectedDocNodeIds, selectedZoneIds],
   );
 
   const stateAxes = useMemo(() => templateStateAxes(template), [template]);
@@ -3072,8 +3936,8 @@ function StudioInner({
               ? scopedView(doc, focusId, { containerKinds: registry.containerKinds })
               : doc;
           },
-          renderSvg: (doc) => renderTemplateToSvg(doc, registry, exportPalette, { mode: studioMode }),
-          renderCanvas: (doc) => renderTemplateToCanvas(doc, registry, 2, exportPalette, { mode: studioMode }),
+          renderSvg: (doc) => renderTemplateToSvg(doc, registry, exportPalette, { mode: studioMode, gradients }),
+          renderCanvas: (doc) => renderTemplateToCanvas(doc, registry, 2, exportPalette, { mode: studioMode, gradients }),
         });
         download(result.blob, result.filename);
         showToast(
@@ -3086,7 +3950,7 @@ function StudioInner({
         setPanelOpen(true);
       }
     },
-    [pendingExport, runDirectExport, filename, stateAxes, template, registry, exportPalette, studioMode, showToast, focusId],
+    [pendingExport, runDirectExport, filename, stateAxes, template, registry, exportPalette, studioMode, gradients, showToast, focusId],
   );
 
   const loadFile = useCallback(
@@ -3140,6 +4004,86 @@ function StudioInner({
     [registry, applyTemplate, showToast],
   );
 
+  /**
+   * A whole directory, picked with `webkitdirectory`: every JSON, YAML and
+   * Markdown file becomes one entry of a file map keyed by its path inside
+   * the picked folder, and the folder format's importer takes it from there
+   * — dialect detection, the tree walk, layout, the sidecar.
+   */
+  const loadFolder = useCallback(
+    async (list: readonly File[]) => {
+      const picked = list.filter(
+        (f) => /\.(json|ya?ml|md)$/i.test(f.name) && f.size <= 5 * 1024 * 1024,
+      );
+      // `webkitRelativePath` always begins with the picked directory's own
+      // name; that segment is the root, not a folder inside it.
+      const inside = (f: File) => {
+        const rel = f.webkitRelativePath || f.name;
+        return rel.includes("/") ? rel.slice(rel.indexOf("/") + 1) : rel;
+      };
+      const files = new Map<string, string>();
+      await Promise.all(
+        picked.map(async (f) => {
+          files.set(inside(f), await f.text());
+        }),
+      );
+      if (!files.size) {
+        setError("That folder has no JSON, YAML or Markdown files to import");
+        setPanelOpen(true);
+        return;
+      }
+      try {
+        const result = importFolder(files, { validate: registryOpts(registry) });
+        // An empty result is a wrong folder, not an empty diagram: replacing
+        // the canvas with nothing would be the loudest possible answer to
+        // the quietest mistake.
+        if (!result.stats.nodes) {
+          setError("Nothing in that folder reads as a diagram — pick the tree's root folder");
+          setPanelOpen(true);
+          return;
+        }
+        applyTemplate(result.template);
+        setError("");
+        const notes = result.warnings.map(
+          (w) => `${w.code}${w.path ? ` · ${w.path}` : ""}: ${w.message}`,
+        );
+        // Kinds the dialect draws with that this editor was not told about
+        // render as plain services — say so, since the fix is one prop.
+        const unregistered = Object.keys(result.registry.nodeKinds ?? {}).filter(
+          (kind) => !registry.nodeKinds[kind],
+        );
+        if (unregistered.length) {
+          notes.unshift(
+            `${unregistered.length} node kind${unregistered.length === 1 ? "" : "s"} from the ${result.dialect} dialect (${unregistered.join(", ")}) are not in this editor's registry — pass the dialect's registry preset to the \`registry\` prop so they render as their own kinds.`,
+          );
+        }
+        setImportNotes(notes);
+        const top = list[0]?.webkitRelativePath?.split("/")[0] || "folder";
+        showToast(
+          `Imported ${result.stats.nodes} node${result.stats.nodes === 1 ? "" : "s"} · ${result.stats.edges} edge${result.stats.edges === 1 ? "" : "s"} from ${top}` +
+            (notes.length ? ` · ${notes.length} note${notes.length === 1 ? "" : "s"}` : ""),
+        );
+      } catch (err) {
+        setError(`Could not import that folder: ${(err as Error).message}`);
+        setPanelOpen(true);
+      }
+    },
+    [registry, applyTemplate, showToast],
+  );
+
+  /**
+   * Run an import, asking first when it would replace a diagram. A template
+   * REPLACES the whole canvas: undoable, but a mis-aimed drag or click over
+   * unsaved work is a shock worth one question. A LAYOUT file only
+   * re-dresses what is here, so it never needs asking — and neither does an
+   * empty canvas.
+   */
+  const confirmReplace = useCallback((name: string, run: () => void) => {
+    const replaces = templateRef.current.nodes.length > 0 && !/\.layout\.json$/i.test(name);
+    if (replaces) setPendingReplace({ name, run });
+    else run();
+  }, []);
+
   const onDrop = useCallback(
     (event: DragEvent) => {
       event.preventDefault();
@@ -3147,27 +4091,9 @@ function StudioInner({
       if (readOnly) return;
       const file = event.dataTransfer?.files?.[0];
       if (!file) return;
-      // A template REPLACES the whole diagram. It is undoable, but a
-      // mis-aimed drag onto a canvas full of unsaved work is a shock worth
-      // one question — and a LAYOUT file only re-dresses what is here, so it
-      // never needs asking.
-      const replaces =
-        templateRef.current.nodes.length > 0 && !/\.layout\.json$/i.test(file.name);
-      if (
-        replaces &&
-        typeof window !== "undefined" &&
-        typeof window.confirm === "function" &&
-        !window.confirm(
-          `Replace this diagram with “${file.name}”?\n\n` +
-            `The ${templateRef.current.nodes.length} elements on the canvas are replaced. ` +
-            `${modKeyRef.current}Z undoes it.`,
-        )
-      ) {
-        return;
-      }
-      void loadFile(file);
+      confirmReplace(file.name, () => void loadFile(file));
     },
-    [readOnly, loadFile],
+    [readOnly, loadFile, confirmReplace],
   );
 
   const onDragOver = useCallback(
@@ -3198,8 +4124,18 @@ function StudioInner({
    * whether there is anything to save. Without it Save looks identical
    * before and after, and the only way to know whether your work is safe is
    * to press it again.
+   *
+   * Seeded with the document as first derived from the canvas — what Save
+   * would hand over if pressed at mount — so the first edit after a load is
+   * unsaved work. (The derived form rather than the host's `value`: the
+   * canvas orders parents before children, so a document written child-first
+   * differs byte-wise from its own round trip without anything having
+   * changed.) It used to start empty, which read as "everything is saved"
+   * for every edit made before the session's first save — a recoloured line
+   * on a freshly opened diagram, say — and a reload then threw the change
+   * away with the button never having said otherwise.
    */
-  const [savedJson, setSavedJson] = useState<string | null>(null);
+  const [savedJson, setSavedJson] = useState<string>(() => JSON.stringify(template));
   const handleSave = useCallback(async () => {
     if (!onSave || savingRef.current) return;
     savingRef.current = true;
@@ -3218,8 +4154,8 @@ function StudioInner({
     }
   }, [onSave, template, showToast]);
 
-  /** Whether the document differs from what was last handed to `onSave`. */
-  const dirty = savedJson !== null && savedJson !== JSON.stringify(template);
+  /** Whether the document differs from what was last handed to `onSave` (or, before any save, to us). */
+  const dirty = savedJson !== JSON.stringify(template);
 
   // ── AI generation ─────────────────────────────────────────────────────────
 
@@ -3634,6 +4570,27 @@ function StudioInner({
 
   const singleSelected =
     selectedNodeIds.length === 1 ? nodes.find((n) => n.id === selectedNodeIds[0]) : undefined;
+  /** The selected document nodes and connections, as React Flow holds them. */
+  const selectedDocNodes = useMemo(
+    () => selectedDocNodeIds.map((id) => nodes.find((n) => n.id === id)).filter((n): n is Node => !!n),
+    // The id list is rebuilt from the selection on every render; its content
+    // is what matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [nodes, selectedDocNodeIds.join("\u0000")],
+  );
+  const selectedEdges = useMemo(
+    () => selectedEdgeIds.map((id) => edges.find((e) => e.id === id)).filter((e): e is Edge => !!e),
+    [edges, selectedEdgeIds],
+  );
+  /**
+   * Authoritative zone membership comes from the derived template. React
+   * Flow's copy can lag by a frame after a zone is dragged, since the
+   * reassignment happens during derivation.
+   */
+  const zoneIdOf = useCallback(
+    (id: string): string | null => template.nodes.find((n) => n.id === id)?.zoneId ?? null,
+    [template],
+  );
   // Zones share React Flow's node array but need their own inspector.
   const selectedZoneNode = singleSelected && isZoneNodeId(singleSelected.id) ? singleSelected : undefined;
   const selectedNode = singleSelected && !isZoneNodeId(singleSelected.id) ? singleSelected : undefined;
@@ -3664,11 +4621,12 @@ function StudioInner({
    * direction is dropped: it bent toward where the line used to go.
    */
   const swapEdgeEnds = useCallback(
-    (id: string) => {
-      if (readOnly) return;
+    (ids: readonly string[]) => {
+      if (readOnly || !ids.length) return;
+      const targets = new Set(ids);
       setEdges((current) =>
         current.map((e) => {
-          if (e.id !== id) return e;
+          if (!targets.has(e.id)) return e;
           const d = (e.data ?? {}) as DiagramEdgeData;
           const next: DiagramEdgeData = { ...d };
           [next.start, next.end] = [d.end, d.start];
@@ -3744,6 +4702,29 @@ function StudioInner({
       def: providerDef(registry, id),
     }));
   }, [zones, registry]);
+  /**
+   * The relationship kinds the DRAWN lines carry, with how many of each —
+   * a data model's key, so a solid rose line with a diamond reads as
+   * "composition" rather than as someone's colour choice. Counted over the
+   * canvas's own edges rather than the document's: a folded group's inner
+   * wiring is not on screen, and a chip's summarising re-route carries no
+   * kind, so the key says what the eye can check — and what the export's
+   * key says, which counts the same way. Registry order first, then any
+   * kind the document names that nobody registered.
+   */
+  const relationRows = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const edge of viewEdges) {
+      const relation = (edge.data as DiagramEdgeData | undefined)?.relation;
+      if (!relation || edge.hidden) continue;
+      counts.set(relation, (counts.get(relation) ?? 0) + 1);
+    }
+    const ids = [
+      ...registry.relationOrder.filter((id) => counts.has(id)),
+      ...[...counts.keys()].filter((id) => !registry.relationOrder.includes(id)),
+    ];
+    return ids.map((id) => ({ id, count: counts.get(id)!, def: relationDef(registry, id) }));
+  }, [viewEdges, registry]);
 
   const patchZone = useCallback(
     (zoneId: string, patch: Partial<DiagramZone>) => {
@@ -3870,11 +4851,15 @@ function StudioInner({
       const node = flow.getNode(id);
       return node && !isNodeLocked(node);
     });
+    // One write for every node, so the press is one undo entry.
+    patchNodes(
+      selectedNodeIds.filter((id) => !isZoneNodeId(id)),
+      { locked: anyUnlocked || undefined },
+    );
     for (const id of selectedNodeIds) {
       if (isZoneNodeId(id)) patchZone(fromZoneNodeId(id), { locked: anyUnlocked || undefined });
-      else patchNode(id, { locked: anyUnlocked || undefined });
     }
-  }, [readOnly, selectedNodeIds, flow, patchNode, patchZone]);
+  }, [readOnly, selectedNodeIds, flow, patchNodes, patchZone]);
 
   /**
    * Restack a selected ZONE.
@@ -3999,8 +4984,16 @@ function StudioInner({
       return sortByDepth([...next, groupNode]);
     });
     commitLater();
-    showToast(`Grouped ${roots.length} node${roots.length === 1 ? "" : "s"}`);
-  }, [readOnly, selectedNodeIds, flow, setNodes, commitLater, showToast]);
+    // Under the document's fold the new frame would close over its members —
+    // the one thing a person wrapping a selection did not ask for. The
+    // rebuild lifts the fold instead (see the rebuild effect); the toolbar
+    // toggle restores it.
+    showToast(
+      `Grouped ${roots.length} node${roots.length === 1 ? "" : "s"}${
+        documentFolds() ? " — group contents shown" : ""
+      }`,
+    );
+  }, [readOnly, selectedNodeIds, flow, setNodes, commitLater, documentFolds, showToast]);
 
   /** Unwrap: children go back to the group's own parent, the frame is removed. */
   const ungroupSelection = useCallback(() => {
@@ -4085,7 +5078,7 @@ function StudioInner({
   // they could not, and why, are commented at the point of divergence.
 
   /** Any dialog is up, so the canvas is not what the keyboard is aimed at. */
-  const modalOpen = welcomeOpen || !!pendingExport || !!pendingNest;
+  const modalOpen = welcomeOpen || !!pendingExport || !!pendingNest || !!fieldGrid;
 
   /**
    * Whether a keystroke on `window` was meant for THIS editor.
@@ -4386,6 +5379,14 @@ function StudioInner({
           setOpenMenu(null);
           return;
         }
+        if (coverageOpen) {
+          setCoverageOpen(false);
+          return;
+        }
+        if (pathPanelOpen) {
+          setPathPanelOpen(false);
+          return;
+        }
         if (panelOpen) {
           setPanelOpen(false);
           return;
@@ -4395,6 +5396,14 @@ function StudioInner({
         // selection, and a stuck tool is the likelier thing to be undoing.
         if (tool !== "cursor") {
           setTool("cursor");
+          return;
+        }
+        // Row and table marks — a shown reference, a followed one, a search
+        // hit — are a mode of the canvas too, and the one a reader most
+        // wants a way out of: Escape lifts them before it touches the
+        // selection they were left around.
+        if (highlightFieldsRef.current.size) {
+          setHighlightFields(NO_FIELDS);
           return;
         }
         if (selectedNodeIds.length || selectedEdgeIds.length) {
@@ -4411,7 +5420,7 @@ function StudioInner({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
+  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, pathPanelOpen, coverageOpen, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
 
   // ── Zone resize gesture ───────────────────────────────────────────────────
   //
@@ -4462,9 +5471,28 @@ function StudioInner({
 
   // ── Slots ─────────────────────────────────────────────────────────────────
 
+  /** How many field records the single selected node has — the grid's openers show it. */
+  const selectedFieldCount = useMemo(() => {
+    if (selectedNodeIds.length !== 1) return 0;
+    const node = template.nodes.find((n) => n.id === selectedNodeIds[0]);
+    return node ? fieldRecords(node, template).length : 0;
+  }, [selectedNodeIds, template]);
+
   const slotContext: StudioSlotContext = useMemo(
-    () => ({ template, registry, setTemplate: (next) => applyTemplate(next, { fit: false }) }),
-    [template, registry, applyTemplate],
+    () => ({
+      template,
+      registry,
+      setTemplate: (next) => applyTemplate(next, { fit: false }),
+      focus: focusStack,
+      drillTo: drillToLevel,
+      activePaths: activePathIds,
+      setActivePaths,
+      pins,
+      setPins,
+      coverageKeys,
+      setCoverageKeys,
+    }),
+    [template, registry, applyTemplate, focusStack, drillToLevel, activePathIds, setActivePaths, pins, setPins, coverageKeys, setCoverageKeys],
   );
   const renderSlot = (slot: ArchitectureStudioProps["toolbarExtras"]) =>
     typeof slot === "function" ? slot(slotContext) : slot;
@@ -4518,6 +5546,7 @@ function StudioInner({
       mode: studioMode,
       tagFilter,
       showTeams,
+      showLinks,
       requestCommit: commitLater,
       beginZoneResize,
       endZoneResize,
@@ -4529,11 +5558,16 @@ function StudioInner({
       renamingId,
       setRenamingId,
       showToast,
+      onFieldClick: openFieldMenu,
+      pinnedFields,
+      highlightFields,
+      dimmedIds,
+      notation,
     }),
-    [registry, readOnly, studioMode, tagFilter, showTeams, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast],
+    [registry, readOnly, studioMode, tagFilter, showTeams, showLinks, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast, openFieldMenu, pinnedFields, highlightFields, dimmedIds, notation],
   );
   const rootStyle = { ...themeToStyle(theme), ...style };
-  const modeClass = modeClassName(studioMode);
+  const modeClass = modeClassName(studioMode, gradients);
 
   return (
     <StudioContext.Provider value={studioContext}>
@@ -4622,6 +5656,18 @@ function StudioInner({
                 >
                   <div className="as-menu__label">Table</div>
                   <div className="as-menu__hint">An entity with columns — for data models</div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  onClick={() => {
+                    addNode("enum");
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">Enumeration</div>
+                  <div className="as-menu__hint">A picklist or enum — its rows are the allowed values</div>
                 </button>
                 <button
                   type="button"
@@ -4737,8 +5783,44 @@ function StudioInner({
                   }}
                 >
                   <div className="as-menu__label">Tidy</div>
-                  <div className="as-menu__hint">Arrange nodes within their zones and groups</div>
+                  <div className="as-menu__hint">
+                    Arrange nodes within their zones and groups
+                    {arrangeMode === "untangle" ? ", untangling the lines" : ", left to right"}
+                  </div>
                 </button>
+                {/* What Tidy optimises for. Unnamed radios, like the connector
+                    picker below: checked state comes from the document, and
+                    choosing one re-arranges the canvas in the same undoable
+                    edit that stores the choice. */}
+                <label
+                  className="as-menu__check"
+                  title="Left to right by proximity: each node one rank past what feeds it, rank-mates next to what they connect to — compact and quick"
+                >
+                  <input
+                    type="radio"
+                    checked={arrangeMode === "flow"}
+                    onChange={() => {
+                      setArrangeMode("flow");
+                      setOpenMenu(null);
+                    }}
+                  />
+                  Left to right
+                </label>
+                <label
+                  className="as-menu__check"
+                  title="Fewest crossing lines: ranks are re-ordered until lines stop crossing, a line that skips a rank gets a lane of its own, and nodes sit level with what they connect to"
+                >
+                  <input
+                    type="radio"
+                    checked={arrangeMode === "untangle"}
+                    onChange={() => {
+                      setArrangeMode("untangle");
+                      setOpenMenu(null);
+                    }}
+                  />
+                  Untangle lines
+                </label>
+                <div className="as-menu__sep" role="separator" />
                 <button
                   type="button"
                   role="menuitem"
@@ -4790,6 +5872,28 @@ function StudioInner({
                   <div className="as-menu__label">Nest contents a level deeper</div>
                   <div className="as-menu__hint">
                     The frame becomes one card; its contents move to their own C4 level
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  disabled={!junctions.length}
+                  title={
+                    junctions.length
+                      ? undefined
+                      : "No table whose key is two foreign keys — nothing spells a many-to-many"
+                  }
+                  onClick={() => {
+                    collapseJunctionTables();
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">
+                    Collapse junction tables{junctions.length ? ` (${junctions.length})` : ""}
+                  </div>
+                  <div className="as-menu__hint">
+                    Each table keyed by two foreign keys becomes one many-to-many line named after it
                   </div>
                 </button>
                 <button
@@ -4934,6 +6038,39 @@ function StudioInner({
                     Show hidden nodes{hiddenCount ? ` (${hiddenCount})` : ""}
                   </label>
                 ) : null}
+                {/* How a relationship's ends draw their cardinality. Unnamed
+                    radios, checked from the document; offered once a line
+                    says something a notation could draw. */}
+                {anyCardinality ? (
+                  <>
+                    <label
+                      className="as-menu__check"
+                      title="The crow's-foot symbol at each box and the multiplicity beside it"
+                    >
+                      <input type="radio" checked={notation === "both"} onChange={() => setNotation("both")} />
+                      Symbols and numbers
+                    </label>
+                    <label
+                      className="as-menu__check"
+                      title="Crow's-foot symbols alone — one bar for exactly one, a ring for optional, three prongs for many"
+                    >
+                      <input
+                        type="radio"
+                        checked={notation === "crowsfoot"}
+                        onChange={() => setNotation("crowsfoot")}
+                      />
+                      Crow's-foot symbols
+                    </label>
+                    <label
+                      className="as-menu__check"
+                      title="UML multiplicities as numbers, and the UML glyphs at the ends — a composition's filled diamond, a generalization's triangle"
+                    >
+                      <input type="radio" checked={notation === "uml"} onChange={() => setNotation("uml")} />
+                      UML numbers
+                    </label>
+                    <div className="as-menu__sep" role="separator" />
+                  </>
+                ) : null}
                 {anyTeams ? (
                   <label className="as-menu__check" title="Show each node's owning-team tag">
                     <input
@@ -4942,6 +6079,22 @@ function StudioInner({
                       onChange={() => setShowTeams((on) => !on)}
                     />
                     Show team badges
+                  </label>
+                ) : null}
+                {/* Offered while the document has a link to show — and while
+                    it is off, so turning it back on never needs a link to
+                    exist first. */}
+                {anyLinks || !showLinks ? (
+                  <label
+                    className="as-menu__check"
+                    title="Show the ↗ link button on nodes that carry a link — hiding it changes nothing in the document"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={showLinks}
+                      onChange={() => setShowLinks((on) => !on)}
+                    />
+                    Show link buttons
                   </label>
                 ) : null}
                 <button
@@ -5008,7 +6161,47 @@ function StudioInner({
                     ) : null}
                   </>
                 ) : null}
+                {anyTables ? (
+                  <>
+                    <div className="as-menu__caption">Keys</div>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="as-menu__item"
+                      onClick={() => {
+                        setCoverageOpen((open) => !open);
+                        setOpenMenu(null);
+                      }}
+                    >
+                      <div className="as-menu__label">{coverageOpen ? "Hide key coverage" : "Key coverage"}</div>
+                      <div className="as-menu__hint">How much of the model a set of keys reaches</div>
+                    </button>
+                  </>
+                ) : null}
               </ToolbarMenu>
+            </div>
+          ) : null}
+
+          {/* The document-wide fold. A pressed button means every group with
+              contents is drawn as a chip; pressing it again shows the
+              contents. See `showGroupsToggle` for when it is offered. */}
+          {showGroupsToggle ? (
+            <div className="as-toolbar__group">
+              <button
+                type="button"
+                className={`as-btn${groupsShownFolded ? " as-btn--on" : ""}`}
+                onClick={() => setGroupContents(groupsShownFolded ? "show" : "hide")}
+                aria-pressed={groupsShownFolded}
+                title={
+                  (groupsShownFolded
+                    ? "Every group's contents are folded away behind a chip — click to show them"
+                    : "Fold every group's contents away behind a chip") +
+                  (readOnly ? " (read-only: changes the view, not the document)" : "")
+                }
+              >
+                <UiIcon name="group" />
+                Fold groups
+              </button>
             </div>
           ) : null}
 
@@ -5177,7 +6370,7 @@ function StudioInner({
               className="as-input as-search"
               value={searchQuery}
               placeholder={`Search… (${modKey}K)`}
-              aria-label="Search nodes"
+              aria-label="Search nodes and fields"
               onChange={(event) => {
                 setSearchQuery(event.target.value);
                 setSearchIndex(-1);
@@ -5215,6 +6408,15 @@ function StudioInner({
                 {searchMatches.length
                   ? `${(searchIndex < 0 ? 0 : searchIndex % searchMatches.length) + 1}/${searchMatches.length}`
                   : "0 matches"}
+              </span>
+            ) : null}
+            {searchQuery && currentMatch?.kind === "field" ? (
+              <span
+                className="as-search__hit"
+                title={`${currentMatch.field.nodeLabel} · ${currentMatch.field.name}${currentMatch.field.row ? "" : " — not drawn on the node; Enter opens the field grid"}`}
+              >
+                {currentMatch.field.nodeLabel} · {currentMatch.field.name}
+                {currentMatch.field.row ? "" : " (not a row)"}
               </span>
             ) : null}
             {/* A readout you can act on: click resets to 100%, which is the
@@ -5277,7 +6479,34 @@ function StudioInner({
                   className="as-sr-only"
                   onChange={(event) => {
                     const file = event.target.files?.[0];
-                    if (file) void loadFile(file);
+                    if (file) confirmReplace(file.name, () => void loadFile(file));
+                    event.target.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  className="as-btn"
+                  title="Import a folder-format tree — a data-model export, or a Folder (.zip) export unzipped"
+                  onClick={() => folderInputRef.current?.click()}
+                >
+                  Import folder
+                </button>
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  className="as-sr-only"
+                  // Not in React's typings, but every engine that can pick a
+                  // directory honours it; the input degrades to a file picker
+                  // elsewhere, and a lone JSON file still imports.
+                  {...({ webkitdirectory: "", directory: "", multiple: true } as Record<string, unknown>)}
+                  onChange={(event) => {
+                    // Copied out before the input is reset: the FileList is
+                    // the input's, and it is emptied along with the value.
+                    const list = [...(event.target.files ?? [])];
+                    if (list.length) {
+                      const top = list[0]?.webkitRelativePath?.split("/")[0] || "folder";
+                      confirmReplace(`${top}/`, () => void loadFolder(list));
+                    }
                     event.target.value = "";
                   }}
                 />
@@ -5378,6 +6607,18 @@ function StudioInner({
           />
         ) : null}
 
+        {pins.length > 0 && !activeDiffBase ? (
+          <PinStrip
+            pins={pins}
+            labelOf={fieldLabel}
+            onJump={(pin) => (pin.fieldId ? navigateToField({ nodeId: pin.nodeId, fieldId: pin.fieldId }) : navigateToNode(pin.nodeId))}
+            onRemove={togglePin}
+            onClear={() => setPins([])}
+            pathsOpen={pathPanelOpen}
+            onTogglePaths={togglePathPanel}
+          />
+        ) : null}
+
         {focusStack.length > 0 && !activeDiffBase ? (
           <Breadcrumbs
             path={[
@@ -5387,8 +6628,12 @@ function StudioInner({
                 label: template.nodes.find((n) => n.id === id)?.label ?? id,
               })),
             ]}
-            onNavigate={(index) => drillTo(focusStack.slice(0, index))}
-            onExit={() => drillTo([])}
+            // Through `drillToLevel`, not the raw setter: every other way of
+            // changing level fits the view to it, and on a big model a
+            // breadcrumb that kept the previous zoom left you staring at a
+            // handful of chips the size of a full stop.
+            onNavigate={(index) => drillToLevel(focusStack.slice(0, index))}
+            onExit={() => drillToLevel([])}
           />
         ) : null}
 
@@ -5405,7 +6650,28 @@ function StudioInner({
             mergeBase.current = null;
           }}
         >
-          {aiPanelVisible ? (
+          {pathPanelOpen && routeView && !activeDiffBase ? (
+            <FieldPathPanel
+              view={routeView}
+              pins={pins}
+              labelOf={fieldLabel}
+              nodeLabel={(id) => template.nodes.find((n) => n.id === id)?.label ?? id}
+              undirected={routeUndirected}
+              onUndirectedChange={setRouteUndirected}
+              mode={routeMode}
+              onModeChange={setRouteMode}
+              hoverRoute={hoverRoute}
+              onHoverRoute={setHoverRoute}
+              stickyRoute={stickyRoute}
+              onPickRoute={pickRoute}
+              hoverKey={hoverKey}
+              onHoverKey={setHoverKey}
+              stickyKey={stickyKey}
+              onPickKey={pickKey}
+              onNavigate={navigateToNode}
+              onClose={() => setPathPanelOpen(false)}
+            />
+          ) : aiPanelVisible ? (
             <div className="as-panel">
               <div className="as-panel__head">
                 <h2 className="as-panel__title">Generate architecture</h2>
@@ -5522,6 +6788,11 @@ function StudioInner({
             onPaneClick={() => {
               setOpenMenu(null);
               setContextMenu(null);
+              // A click on empty canvas is "done looking": it lifts the row
+              // and table marks along with the menus. (Selection is cleared
+              // by React Flow itself; the marks effect deliberately ignores
+              // an EMPTY selection, since a drill empties it on the way.)
+              setHighlightFields(NO_FIELDS);
             }}
             onNodeContextMenu={(event, node) => openContextMenu(event, node.id)}
             onEdgeContextMenu={(event, edge) => openContextMenu(event, undefined, edge.id)}
@@ -5630,7 +6901,7 @@ function StudioInner({
                 both — React Flow stacks nothing, so a second top-right panel
                 would sit on top of the first. Corner-anchored so it reads as
                 a map key. */}
-            {legend && (legendRows.length || activePaths.length) ? (
+            {legend && (legendRows.length || relationRows.length || activePaths.length || transientPaths.length) ? (
               <Panel position="top-right" className="as-legend">
                 {legendRows.length ? (
                   <>
@@ -5656,8 +6927,22 @@ function StudioInner({
                     ) : null}
                   </>
                 ) : null}
+                {relationRows.length ? (
+                  <div className={legendRows.length ? "as-legend__section" : undefined} role="list" aria-label="Relationships">
+                    <p className="as-legend__title">Relationships</p>
+                    {relationRows.map((row) => (
+                      <div key={row.id} className="as-legend__row" role="listitem" title={row.def.description || undefined}>
+                        <RelationSwatch def={row.def} />
+                        {row.def.label}
+                        {relationRows.length > 1 || row.count > 1 ? (
+                          <span className="as-legend__count">{row.count}</span>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 {activePaths.length ? (
-                  <div className={legendRows.length ? "as-legend__section" : undefined}>
+                  <div className={legendRows.length || relationRows.length ? "as-legend__section" : undefined}>
                     <p className="as-legend__title">Paths</p>
                     {activePaths.map((path) => (
                       <div key={path.id} className="as-legend__row">
@@ -5666,6 +6951,20 @@ function StudioInner({
                           style={{ "--as-legend-color": `var(--as-edge-${path.color})` } as CSSProperties}
                         />
                         {path.title}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {transientPaths.length ? (
+                  <div className={legendRows.length || relationRows.length || activePaths.length ? "as-legend__section" : undefined}>
+                    <p className="as-legend__title">Routes</p>
+                    {transientPaths.map((path) => (
+                      <div key={path.id} className="as-legend__row">
+                        <span
+                          className="as-legend__swatch"
+                          style={{ "--as-legend-color": `var(--as-edge-${path.color})` } as CSSProperties}
+                        />
+                        <span className="as-legend__label">{path.title}</span>
                       </div>
                     ))}
                   </div>
@@ -5695,12 +6994,20 @@ function StudioInner({
           {multiSelected && !readOnly && !activeDiffBase ? (
             <div className="as-inspector">
               <MultiInspector
-                nodeIds={selectedDocNodeIds}
-                edgeIds={selectedEdgeIds}
+                nodes={selectedDocNodes}
+                edges={selectedEdges}
                 zoneIds={selectedZoneIds}
-                onPatchNode={patchNode}
-                onPatchEdge={patchEdge}
+                registry={registry}
+                zones={zones}
+                zoneIdOf={zoneIdOf}
+                relevantProviders={referencedProviderSet}
+                fieldsOf={edgeEndFields}
+                labelOf={nodeLabelOf}
+                onPatchNodes={patchNodes}
+                onPatchEdges={patchEdges}
                 onPatchZone={patchZone}
+                onSwapEnds={swapEdgeEnds}
+                onClearRoutes={(ids) => clearEdgeRoutes(ids)}
                 onAlign={alignSelection}
                 onDistribute={distributeSelection}
                 onDuplicate={duplicateSelection}
@@ -5739,16 +7046,17 @@ function StudioInner({
                 </InspectorSection>
               ) : selectedNode ? (
                 <NodeInspector
-                  node={selectedNode}
+                  nodes={[selectedNode]}
                   linkRef={linkInputRef}
                   registry={registry}
                   zones={zones}
-                  // Authoritative membership comes from the derived template.
-                  // React Flow's copy can lag by a frame after a zone is
-                  // dragged, since the reassignment happens during derivation.
-                  zoneId={template.nodes.find((n) => n.id === selectedNode.id)?.zoneId ?? null}
+                  zoneIdOf={zoneIdOf}
                   relevantProviders={referencedProviderSet}
-                  onPatch={patchNode}
+                  onPatch={patchNodes}
+                  editFieldId={editField?.nodeId === selectedNode.id ? editField.fieldId : undefined}
+                  onEditFieldFocused={() => setEditField(null)}
+                  viewFieldsCount={selectedFieldCount}
+                  onViewFields={(nodeId) => setFieldGrid({ nodeId })}
                 />
               ) : null}
               {selectedEdge && isGhostEdgeId(selectedEdge.id) ? (
@@ -5760,16 +7068,14 @@ function StudioInner({
                 </InspectorSection>
               ) : selectedEdge ? (
                 <EdgeInspector
-                  edge={selectedEdge}
-                  sourceFields={edgeEndFields(selectedEdge.source)}
-                  targetFields={edgeEndFields(selectedEdge.target)}
-                  sourceLabel={nodeLabelOf(selectedEdge.source)}
-                  targetLabel={nodeLabelOf(selectedEdge.target)}
+                  edges={[selectedEdge]}
+                  fieldsOf={edgeEndFields}
+                  labelOf={nodeLabelOf}
                   relevantProviders={[...referencedProviderSet]}
                   registry={registry}
-                  onPatch={patchEdge}
+                  onPatch={patchEdges}
                   onSwapEnds={swapEdgeEnds}
-                  onClearRoute={() => clearEdgeRoutes([selectedEdge.id])}
+                  onClearRoutes={(ids) => clearEdgeRoutes(ids)}
                 />
               ) : null}
               {renderSlot(inspectorExtras)}
@@ -5854,6 +7160,51 @@ function StudioInner({
               The panel is the only other home for `error`, and it only renders
               when the host passed `generate` — so without one, a rejected save
               flipped the button back to "Save" and said nothing at all. */}
+          {coverageOpen && coverageResult && !activeDiffBase ? (
+            <CoveragePanel
+              coverage={coverageResult}
+              gains={coverageGains}
+              keys={coverageKeys}
+              scope={coverageScope}
+              root={
+                selectedNode
+                  ? { id: selectedNode.id, label: template.nodes.find((n) => n.id === selectedNode.id)?.label ?? selectedNode.id }
+                  : null
+              }
+              labelOf={fieldLabel}
+              nodeLabel={(id) => template.nodes.find((n) => n.id === id)?.label ?? id}
+              smallest={smallest}
+              onToggleKey={toggleCoverageKey}
+              onScopeChange={setCoverageScope}
+              onFindSmallest={findSmallestCover}
+              onHoverKey={setCoverageHover}
+              onClear={() => setCoverageKeys([])}
+              onClose={() => setCoverageOpen(false)}
+            />
+          ) : null}
+          {importNotes.length ? (
+            <div className="as-errorbar as-errorbar--notes" role="status">
+              <div className="as-errorbar__text">
+                <strong>
+                  {importNotes.length} import note{importNotes.length === 1 ? "" : "s"}
+                </strong>
+                <ul className="as-errorbar__list">
+                  {importNotes.map((note, i) => (
+                    <li key={i}>{note}</li>
+                  ))}
+                </ul>
+              </div>
+              <button
+                type="button"
+                className="as-btn as-btn--icon"
+                onClick={() => setImportNotes([])}
+                aria-label="Dismiss import notes"
+                title="Dismiss"
+              >
+                <UiIcon name="close" size={13} />
+              </button>
+            </div>
+          ) : null}
           {error && !aiPanelVisible ? (
             <div className="as-errorbar" role="alert">
               <span className="as-errorbar__text">{error}</span>
@@ -5922,6 +7273,29 @@ function StudioInner({
           />
         ) : null}
 
+        {fieldGrid
+          ? (() => {
+              const node = template.nodes.find((n) => n.id === fieldGrid.nodeId);
+              return node ? (
+                <FieldGridModal
+                  node={node}
+                  doc={template}
+                  initialFieldId={fieldGrid.fieldId}
+                  filename={filename}
+                  pins={pins.filter((p): p is FieldRef => !!p.fieldId)}
+                  onTogglePin={togglePin}
+                  onNavigate={(id, via) => {
+                    setFieldGrid(null);
+                    if (via) followReference(via.from, via.target);
+                    else navigateToNode(id);
+                  }}
+                  onDownload={download}
+                  onClose={() => setFieldGrid(null)}
+                />
+              ) : null;
+            })()
+          : null}
+
         {pendingNest ? (
           <NestingModal
             subject={pendingNest}
@@ -5940,7 +7314,54 @@ function StudioInner({
             style={{ left: contextMenu.x, top: contextMenu.y }}
             onPointerDown={(event) => event.stopPropagation()}
           >
-            {contextMenu.kind === "pane" ? (
+            {contextMenu.kind === "field" ? (
+              (() => {
+                const { ref } = contextMenu;
+                const node = template.nodes.find((n) => n.id === ref.nodeId);
+                const record = node ? fieldRecords(node, template).find((f) => f.id === ref.fieldId) : undefined;
+                const pinned = pins.some((p) => sameFieldRef(p, ref));
+                // Rows are the source folder's when the document came from one.
+                const editable = !readOnly && !template.meta?.folderFormat && !!record?.row;
+                const targets = (record?.fk ?? []).filter((t) => t.nodeId);
+                // What points at this row — a key's other direction.
+                const referencers = referencesTo(template, ref);
+                const referencingTables = [...new Set(referencers.map((r) => r.nodeId))].map(
+                  (id) => template.nodes.find((n) => n.id === id)?.label ?? id,
+                );
+                return (
+                  <>
+                    <div className="as-context__caption">{fieldLabel(ref)}</div>
+                    <ContextItem
+                      label={pinned ? "Unpin" : "Pin for search"}
+                      hint={pinned ? undefined : "Paths between pins"}
+                      onPick={() => togglePin(ref)}
+                      close={closeContext}
+                    />
+                    <ContextItem label="View all fields" onPick={() => setFieldGrid({ nodeId: ref.nodeId, fieldId: ref.fieldId })} close={closeContext} />
+                    {targets.map((t) => (
+                      <ContextItem
+                        key={t.nodeId}
+                        label={targets.length > 1 ? `Follow reference → ${t.label}` : "Follow reference"}
+                        hint={targets.length > 1 ? undefined : t.label}
+                        onPick={() => followReference(ref, t)}
+                        close={closeContext}
+                      />
+                    ))}
+                    {referencers.length ? (
+                      <ContextItem
+                        label={`Show references (${referencers.length})`}
+                        hint={`${referencingTables.slice(0, 3).join(", ")}${referencingTables.length > 3 ? "…" : ""}`}
+                        onPick={() => showReferences(ref)}
+                        close={closeContext}
+                      />
+                    ) : null}
+                    {editable ? <ContextItem label="Edit…" onPick={() => setEditField(ref)} close={closeContext} /> : null}
+                    <hr className="as-context__rule" />
+                    <ContextItem label="Copy name" onPick={() => void copyText(record?.name ?? ref.fieldId)} close={closeContext} />
+                  </>
+                );
+              })()
+            ) : contextMenu.kind === "pane" ? (
               <>
                 <ContextItem label="Node" hint="N" onPick={() => addNode("service")} close={closeContext} />
                 <ContextItem label="Group" hint="G" onPick={() => addNode("group")} close={closeContext} />
@@ -5970,6 +7391,35 @@ function StudioInner({
                   onPick={() => void duplicateSelection()}
                   close={closeContext}
                 />
+                {contextMenu.kind === "node" && selectedNodeIds.length === 1 ? (
+                  <ContextItem
+                    label={pins.some((p) => !p.fieldId && p.nodeId === selectedNodeIds[0]) ? "Unpin table" : "Pin table for search"}
+                    hint="Paths to and from it"
+                    onPick={() => togglePin({ nodeId: selectedNodeIds[0]! })}
+                    close={closeContext}
+                  />
+                ) : null}
+                {contextMenu.kind === "node" && selectedFieldCount ? (
+                  <ContextItem
+                    label="View all fields"
+                    hint={String(selectedFieldCount)}
+                    onPick={() => setFieldGrid({ nodeId: selectedNodeIds[0]! })}
+                    close={closeContext}
+                  />
+                ) : null}
+                {contextMenu.kind === "node" && selectedFieldCount
+                  ? (() => {
+                      const count = referencesTo(template, { nodeId: selectedNodeIds[0]! }).length;
+                      return count ? (
+                        <ContextItem
+                          label={`Show references (${count})`}
+                          hint="Every foreign key pointing here"
+                          onPick={() => showReferences({ nodeId: selectedNodeIds[0]! })}
+                          close={closeContext}
+                        />
+                      ) : null;
+                    })()
+                  : null}
                 {contextMenu.kind !== "edge" ? (
                   <>
                     <ContextItem
@@ -6013,6 +7463,40 @@ function StudioInner({
           </div>
         ) : null}
         {shortcutsOpen ? <ShortcutsModal onClose={() => setShortcutsOpen(false)} /> : null}
+        {pendingReplace ? (
+          <Modal
+            title={`Replace this diagram with “${pendingReplace.name}”?`}
+            onClose={() => setPendingReplace(null)}
+          >
+            <p className="as-modal__body">
+              The {templateRef.current.nodes.length} element
+              {templateRef.current.nodes.length === 1 ? "" : "s"} on the canvas{" "}
+              {templateRef.current.nodes.length === 1 ? "is" : "are"} replaced. {modKeyRef.current}Z
+              undoes it.
+            </p>
+            <div className="as-modal__actions">
+              <button
+                type="button"
+                className="as-btn as-btn--outline"
+                onClick={() => setPendingReplace(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="as-btn as-btn--danger"
+                autoFocus
+                onClick={() => {
+                  const { run } = pendingReplace;
+                  setPendingReplace(null);
+                  run();
+                }}
+              >
+                Replace
+              </button>
+            </div>
+          </Modal>
+        ) : null}
       </div>
     </StudioContext.Provider>
   );
@@ -6037,12 +7521,19 @@ function DateSection({
   date,
   what,
   label,
+  clearable = !!date,
   onChange,
 }: {
   date?: string;
   /** What carries the date — "Node", "Edge", "Zone". Names the control. */
   what: string;
   label: string;
+  /**
+   * Offer the clear button. Defaults to "there is a date to clear"; a
+   * selection whose dates DISAGREE shows no one date yet still has some to
+   * clear, so the bulk bar passes "any of them is dated" instead.
+   */
+  clearable?: boolean;
   onChange: (date: string | undefined) => void;
 }) {
   return (
@@ -6057,7 +7548,7 @@ function DateSection({
         aria-label={`${what} date`}
         title={label}
       />
-      {date ? (
+      {clearable ? (
         <button
           type="button"
           className="as-btn as-btn--icon"
@@ -6203,12 +7694,13 @@ function ContextItem({
  * There was none: the bar rendered only for exactly one element, so selecting
  * five nodes hid it — along with Delete and Duplicate, leaving a
  * multi-selection with fewer controls than a single node. And the fields a
- * team actually sets in bulk (owner, lifecycle stage, a tag, a lock) had to be
- * set one box at a time.
+ * team actually sets in bulk had to be set one box at a time.
  *
- * Only the fields that MEAN something across a mixed selection are offered.
- * Each shows the shared value, or blank when they disagree — and setting one
- * writes it to everything selected, which is the whole point.
+ * The node and edge settings are the SAME inspectors a single element gets,
+ * handed the whole selection: each control shows the shared value (or
+ * "Mixed" when they disagree) and writes to everything selected. This bar
+ * adds only what a selection has and an element doesn't — the count, the
+ * arrangement tools, grouping, and a lock that covers zones too.
  */
 
 /**
@@ -6227,24 +7719,41 @@ const ALIGN_BUTTONS = [
 ] as const satisfies readonly (readonly [AlignMode, UiIconName])[];
 
 function MultiInspector({
-  nodeIds,
-  edgeIds,
+  nodes,
+  edges,
   zoneIds,
-  onPatchNode,
-  onPatchEdge,
+  registry,
+  zones,
+  zoneIdOf,
+  relevantProviders,
+  fieldsOf,
+  labelOf,
+  onPatchNodes,
+  onPatchEdges,
   onPatchZone,
+  onSwapEnds,
+  onClearRoutes,
   onAlign,
   onDistribute,
   onDuplicate,
   onDelete,
   onGroup,
 }: {
-  nodeIds: string[];
-  edgeIds: string[];
+  /** The selected document nodes (ghosts and boundary frames already excluded). */
+  nodes: readonly Node[];
+  edges: readonly Edge[];
   zoneIds: string[];
-  onPatchNode: (id: string, patch: Partial<DiagramNodeData>) => void;
-  onPatchEdge: (id: string, patch: Partial<DiagramEdgeData>) => void;
+  registry: ResolvedRegistry;
+  zones: DiagramZone[];
+  zoneIdOf: (id: string) => string | null;
+  relevantProviders: ReadonlySet<string>;
+  fieldsOf: (nodeId: string) => readonly NodeField[];
+  labelOf: (nodeId: string) => string;
+  onPatchNodes: (ids: readonly string[], patch: NodePatch) => void;
+  onPatchEdges: (ids: readonly string[], patch: EdgePatch) => void;
   onPatchZone: (id: string, patch: Partial<DiagramZone>) => void;
+  onSwapEnds: (ids: readonly string[]) => void;
+  onClearRoutes: (ids: readonly string[]) => void;
   onAlign: (mode: AlignMode) => void;
   onDistribute: (axis: "x" | "y") => void;
   onDuplicate: () => void;
@@ -6252,140 +7761,86 @@ function MultiInspector({
   onGroup: () => void;
 }) {
   const flow = useReactFlow();
-  const [team, setTeam] = useState("");
-  const [tag, setTag] = useState("");
+  const nodeIds = nodes.map((n) => n.id);
 
-  const dataOf = (id: string) => flow.getNode(id)?.data as DiagramNodeData | undefined;
-  /** The one value they all share, or undefined when they disagree. */
-  const shared = <T,>(read: (d: DiagramNodeData) => T): T | undefined => {
-    const values = nodeIds.map((id) => dataOf(id)).filter(Boolean).map((d) => read(d!));
-    if (!values.length) return undefined;
-    const first = values[0];
-    return values.every((v) => v === first) ? first : undefined;
-  };
+  const nodeCount = nodeIds.length ? `${nodeIds.length} node${nodeIds.length === 1 ? "" : "s"}` : "";
+  const zoneCount = zoneIds.length ? `${zoneIds.length} zone${zoneIds.length === 1 ? "" : "s"}` : "";
+  const edgeCount = edges.length ? `${edges.length} connection${edges.length === 1 ? "" : "s"}` : "";
+  /**
+   * A selection of nodes AND connections edits one side at a time: the two
+   * inspectors together ran to five rows and hid the canvas they were for.
+   * The count doubles as the tab strip, so nothing new has to be learned —
+   * and a selection of one kind reads exactly as it always did.
+   */
+  const [wanted, setWanted] = useState<"nodes" | "edges">("nodes");
+  const mixed = nodes.length > 0 && edges.length > 0;
+  const tab: "nodes" | "edges" = mixed ? wanted : nodes.length ? "nodes" : "edges";
 
-  const counts = [
-    nodeIds.length ? `${nodeIds.length} node${nodeIds.length === 1 ? "" : "s"}` : "",
-    zoneIds.length ? `${zoneIds.length} zone${zoneIds.length === 1 ? "" : "s"}` : "",
-    edgeIds.length ? `${edgeIds.length} connection${edgeIds.length === 1 ? "" : "s"}` : "",
-  ].filter(Boolean);
-
-  const sharedStatus = shared((d) => d.status ?? "active");
-  const sharedLocked = shared((d) => !!d.locked);
+  // The lock covers nodes AND zones, so it is read across both.
+  const lockables = [
+    ...nodes.map((n) => !!(n.data as DiagramNodeData).locked),
+    ...zoneIds.map((id) => isNodeLocked(flow.getNode(toZoneNodeId(id)))),
+  ];
+  const allLocked = lockables.length > 0 && lockables.every(Boolean);
 
   return (
     <>
       <InspectorSection caption="Selection">
-        <span className="as-inspector__count">{counts.join(" · ")}</span>
+        {mixed ? (
+          <span
+            className="as-inspector__tabs"
+            role="tablist"
+            aria-label="Which part of the selection to edit"
+          >
+            {(
+              [
+                ["nodes", nodeCount],
+                ["edges", edgeCount],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={tab === key}
+                className={`as-btn${tab === key ? " as-btn--on" : ""}`}
+                onClick={() => setWanted(key)}
+              >
+                {label}
+              </button>
+            ))}
+            {zoneCount ? <span className="as-inspector__count">· {zoneCount}</span> : null}
+          </span>
+        ) : (
+          <span className="as-inspector__count">
+            {[nodeCount, zoneCount, edgeCount].filter(Boolean).join(" · ")}
+          </span>
+        )}
       </InspectorSection>
 
-      {nodeIds.length ? (
-        <>
-          <InspectorSection caption="Status">
-            <select
-              className="as-select"
-              value={sharedStatus ?? ""}
-              aria-label="Lifecycle status for the whole selection"
-              onChange={(event) => {
-                const next = event.target.value as NodeStatus;
-                for (const id of nodeIds) {
-                  onPatchNode(id, { status: next === "active" ? undefined : next });
-                }
-              }}
-            >
-              {sharedStatus === undefined ? (
-                <option value="" disabled>
-                  Mixed
-                </option>
-              ) : null}
-              {NODE_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
-          </InspectorSection>
-
-          <InspectorSection caption="Team">
-            <input
-              className="as-input"
-              value={team}
-              placeholder={shared((d) => d.team ?? "") ?? "Mixed"}
-              aria-label="Owning team for the whole selection"
-              title="Type a team and press Enter to set it on everything selected"
-              onChange={(event) => setTeam(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return event.stopPropagation();
-                const next = team.trim();
-                for (const id of nodeIds) onPatchNode(id, { team: next || undefined });
-                setTeam("");
-                event.stopPropagation();
-              }}
-            />
-          </InspectorSection>
-
-          <InspectorSection caption="Add tag">
-            <input
-              className="as-input"
-              value={tag}
-              placeholder="+ tag…"
-              aria-label="Add a tag to the whole selection"
-              title="Type a tag and press Enter to add it to everything selected"
-              onChange={(event) => setTag(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return event.stopPropagation();
-                const next = tag.trim();
-                if (next) {
-                  for (const id of nodeIds) {
-                    const current = dataOf(id)?.tags ?? [];
-                    if (!current.includes(next)) onPatchNode(id, { tags: [...current, next] });
-                  }
-                }
-                setTag("");
-                event.stopPropagation();
-              }}
-            />
-          </InspectorSection>
-        </>
+      {nodes.length && tab === "nodes" ? (
+        <NodeInspector
+          nodes={nodes}
+          registry={registry}
+          zones={zones}
+          zoneIdOf={zoneIdOf}
+          relevantProviders={relevantProviders}
+          lock={false}
+          onPatch={onPatchNodes}
+        />
       ) : null}
 
-      {edgeIds.length ? (
-        <InspectorSection caption="Line">
-          <select
-            className="as-select"
-            defaultValue=""
-            aria-label="Line style for the selected connections"
-            onChange={(event) => {
-              const next = event.target.value as EdgeStyle;
-              if (!next) return;
-              for (const id of edgeIds) onPatchEdge(id, { style: next });
-            }}
-          >
-            <option value="" disabled>
-              Style…
-            </option>
-            {EDGE_STYLES.map((style) => (
-              <option key={style} value={style}>
-                {style}
-              </option>
-            ))}
-          </select>
-          <span className="as-swatches" role="group" aria-label="Colour for the selected connections">
-            {EDGE_COLORS.map((color) => (
-              <button
-                key={color}
-                type="button"
-                className="as-swatch"
-                style={{ background: EDGE_COLOR_HEX[color] }}
-                aria-label={`Edge colour ${color}`}
-                title={color}
-                onClick={() => {
-                  for (const id of edgeIds) onPatchEdge(id, { color });
-                }}
-              />
-            ))}
-          </span>
-        </InspectorSection>
+      {edges.length && tab === "edges" ? (
+        <EdgeInspector
+          edges={edges}
+          fieldsOf={fieldsOf}
+          labelOf={labelOf}
+          relevantProviders={[...relevantProviders]}
+          registry={registry}
+          onPatch={onPatchEdges}
+          onSwapEnds={onSwapEnds}
+          onClearRoutes={onClearRoutes}
+        />
       ) : null}
 
       <InspectorSection caption="Arrange">
@@ -6427,20 +7882,22 @@ function MultiInspector({
           Group
         </button>
       ) : null}
-      <button
-        type="button"
-        className={`as-btn as-btn--icon${sharedLocked ? " as-btn--on" : ""}`}
-        onClick={() => {
-          const next = !sharedLocked;
-          for (const id of nodeIds) onPatchNode(id, { locked: next || undefined });
-          for (const id of zoneIds) onPatchZone(id, { locked: next || undefined });
-        }}
-        aria-pressed={!!sharedLocked}
-        aria-label={sharedLocked ? "Unlock the selection" : "Lock the selection in place"}
-        title={sharedLocked ? "Unlock the selection" : "Lock the selection in place"}
-      >
-        <UiIcon name={sharedLocked ? "lock" : "unlock"} />
-      </button>
+      {lockables.length ? (
+        <button
+          type="button"
+          className={`as-btn as-btn--icon${allLocked ? " as-btn--on" : ""}`}
+          onClick={() => {
+            const next = !allLocked;
+            onPatchNodes(nodeIds, { locked: next || undefined });
+            for (const id of zoneIds) onPatchZone(id, { locked: next || undefined });
+          }}
+          aria-pressed={allLocked}
+          aria-label={allLocked ? "Unlock the selection" : "Lock the selection in place"}
+          title={allLocked ? "Unlock the selection" : "Lock the selection in place"}
+        >
+          <UiIcon name={allLocked ? "lock" : "unlock"} />
+        </button>
+      ) : null}
       <button
         type="button"
         className="as-btn as-btn--icon"
@@ -6690,161 +8147,302 @@ function ZoneInspector({
   );
 }
 
+/**
+ * A field read across a selection: the value every element carries, and
+ * whether they disagree. Each inspector control reads through this, which is
+ * what lets ONE element and FIVE render through the same markup — the only
+ * thing a multi-selection changes is that a disagreeing field shows "Mixed"
+ * until the user sets it, at which point the value is written to everything
+ * selected. Arrays compare by content, so two nodes tagged ["pci"] agree.
+ */
+function sharedField<D, T>(datas: readonly D[], pick: (d: D) => T): { value: T; mixed: boolean } {
+  const first = pick(datas[0]!);
+  const key = (v: T) => (Array.isArray(v) ? JSON.stringify(v) : v);
+  const mixed = datas.some((d) => !Object.is(key(pick(d)), key(first)));
+  return { value: first, mixed };
+}
+
+/** The placeholder row a <select> shows while the selection disagrees. */
+function MixedOption({ when }: { when: boolean }) {
+  return when ? (
+    <option value="" disabled>
+      Mixed
+    </option>
+  ) : null;
+}
+
+/** A checkbox that reads indeterminate while the selection disagrees. */
+function SharedCheck({
+  checked,
+  mixed,
+  label,
+  title,
+  onChange,
+}: {
+  checked: boolean;
+  mixed: boolean;
+  label: string;
+  title: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="as-check" title={title}>
+      <input
+        type="checkbox"
+        checked={!mixed && checked}
+        ref={(el) => {
+          if (el) el.indeterminate = mixed;
+        }}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      {label}
+    </label>
+  );
+}
+
+/**
+ * The node inspector — for one node, or for every node in a selection.
+ *
+ * One component for both, deliberately. There used to be a second, thinner
+ * bar for multi-selections that offered a handful of bulk fields; every
+ * control the single-node bar grew (text alignment, the frame styling, wrap)
+ * had to be added there a second time or it simply wasn't available in
+ * bulk — and mostly it wasn't. Here every control reads the selection's
+ * shared value (or "Mixed") and writes to every node, so a multi-selection
+ * has exactly the settings a single node has, minus the ones that name ONE
+ * thing: the label, the description, the rows, the link.
+ *
+ * Sections gated on kind (the frame controls, a note's outline) appear when
+ * every selected node qualifies — the settings the selection SHARES — so a
+ * frame picker never writes `outline` onto a service.
+ */
 function NodeInspector({
-  node,
+  nodes,
   linkRef,
   registry,
   zones,
-  zoneId,
+  zoneIdOf,
   relevantProviders,
+  lock = true,
   onPatch,
+  editFieldId,
+  onEditFieldFocused,
+  viewFieldsCount = 0,
+  onViewFields,
 }: {
-  node: Node;
+  /** The selection — at least one. */
+  nodes: readonly Node[];
+  /** The row whose name input should take the cursor — the field menu's Edit…. */
+  editFieldId?: string;
+  onEditFieldFocused?: () => void;
+  /** Field records on the single selected node; > 0 offers the grid. */
+  viewFieldsCount?: number;
+  onViewFields?: (nodeId: string) => void;
   /** So ⌘⇧K can put the cursor straight in the Link field. */
-  linkRef: React.RefObject<HTMLInputElement>;
+  linkRef?: React.RefObject<HTMLInputElement>;
   registry: ResolvedRegistry;
   zones: DiagramZone[];
-  zoneId: string | null;
+  /** Authoritative zone membership, by node id (from the derived template). */
+  zoneIdOf: (id: string) => string | null;
   /** Providers the document references — the kind picker demotes the rest. */
   relevantProviders: ReadonlySet<string>;
-  onPatch: (id: string, patch: Partial<DiagramNodeData>) => void;
+  /** Render the lock button. A mixed selection's bar draws its own, covering zones too. */
+  lock?: boolean;
+  onPatch: (ids: readonly string[], patch: NodePatch) => void;
 }) {
-  const data = node.data as DiagramNodeData;
-  const def = kindDef(registry, data.kind);
-  const zone = zoneId ? zones.find((z) => z.id === zoneId) : undefined;
+  const ids = nodes.map((n) => n.id);
+  const datas = nodes.map((n) => n.data as DiagramNodeData);
+  const single = nodes.length === 1;
+  const data = datas[0]!;
+  const defs = datas.map((d) => kindDef(registry, d.kind));
+  const def = defs[0]!;
+  const patch = (p: NodePatch) => onPatch(ids, p);
+  const read = <T,>(pick: (d: DiagramNodeData) => T) => sharedField(datas, pick);
+
+  // Which sections the selection qualifies for — ALL of it, or none.
+  const allContainers = defs.every((d) => d.container);
+  const allAnnotations = defs.every((d) => d.annotation);
+  const noAnnotations = defs.every((d) => !d.annotation);
+  const allPlainBoxes = defs.every((d) => !d.container && !d.annotation);
+
+  // Provider scoping lives on a zone, so it is offered when the whole
+  // selection sits in the same one.
+  const zoneIds = new Set(ids.map(zoneIdOf));
+  const sharedZoneId = zoneIds.size === 1 ? [...zoneIds][0] : null;
+  const zone = sharedZoneId ? zones.find((z) => z.id === sharedZoneId) : undefined;
 
   /**
    * Toggling a provider off restricts the node to the remaining ones. Turning
    * every provider on is the same as "always visible", so that clears the list
-   * rather than storing a redundant full set.
+   * rather than storing a redundant full set. Applied per node, since each
+   * starts from its own list.
    */
   const toggleNodeProvider = (provider: string) => {
     if (!zone) return;
-    const current = data.providers?.length ? data.providers : [...zone.providers];
-    const next = current.includes(provider)
-      ? current.filter((p) => p !== provider)
-      : [...current, provider];
-    const all = zone.providers.every((p) => next.includes(p));
-    onPatch(node.id, { providers: all || !next.length ? undefined : next });
+    patch((d) => {
+      const current = d.providers?.length ? d.providers : [...zone.providers];
+      const next = current.includes(provider)
+        ? current.filter((p) => p !== provider)
+        : [...current, provider];
+      const all = zone.providers.every((p) => next.includes(p));
+      return { providers: all || !next.length ? undefined : next };
+    });
   };
+  /** A provider is "on" for the selection when every node shows on it. */
+  const providerOn = (p: string) => datas.every((d) => !d.providers?.length || d.providers.includes(p));
+
+  const kind = read((d) => d.kind as string);
+  const linked = datas.filter((d) => !!d.url);
+  const status = read((d) => d.status ?? "active");
+  const icon = read((d) => d.icon as string);
+  const fontSize = read((d) => d.fontSize ?? DEFAULT_FONT_SIZE);
+  const plain = read((d) => !!d.plain);
+  const textAlign = read((d) => d.textAlign ?? "left");
+  const textVAlign = read((d) => d.textVAlign ?? "middle");
+  const wrap = read((d) => !!d.wrap);
+  const outline = read((d) => d.outline ?? "dashed");
+  const fill = read((d) => d.fill !== false);
+  const opacity = read((d) => d.opacity ?? DEFAULT_CONTAINER_OPACITY);
+  const color = read((d) => d.color ?? "");
+  const team = read((d) => d.team ?? "");
+  const date = read((d) => d.date);
+  const locked = read((d) => !!d.locked);
+  // Tags: every tag anyone carries is offered; a chip is ON when everyone
+  // carries it. Toggling an ON chip strips it from all, an OFF one adds it
+  // to all — so "tag these five pci" is one click.
+  const tagUnion = [...new Set(datas.flatMap((d) => d.tags ?? []))];
+  const tagsOnAll = tagUnion.filter((tag) => datas.every((d) => d.tags?.includes(tag)));
 
   return (
     <>
-      <InspectorSection caption="Node">
-        <input
-          className="as-input as-inspector__name"
-          value={data.label}
-          onChange={(event) => onPatch(node.id, { label: event.target.value })}
-          aria-label="Node label"
-        />
+      <InspectorSection caption={single ? "Node" : "Nodes"}>
+        {single ? (
+          <input
+            className="as-input as-inspector__name"
+            value={data.label}
+            onChange={(event) => patch({ label: event.target.value })}
+            aria-label="Node label"
+          />
+        ) : null}
         <KindSelect
           registry={registry}
-          value={data.kind as string}
+          value={kind.mixed ? "" : kind.value}
+          placeholder="Mixed kinds"
           relevantProviders={relevantProviders}
-          onChange={(kind) => {
+          onChange={(next) => {
             // Adopt the new kind's default icon so the node doesn't keep a glyph
             // that made sense only for the old kind.
-            onPatch(node.id, { kind, icon: kindDef(registry, kind).icon });
+            patch({ kind: next, icon: kindDef(registry, next).icon });
           }}
         />
-        {!def.annotation ? (
+        {noAnnotations ? (
           <select
             className="as-select"
-            value={data.status ?? "active"}
+            value={status.mixed ? "" : status.value}
             onChange={(event) => {
               const value = event.target.value as NodeStatus;
+              if (!value) return;
               // `active` is the default and never stored.
-              onPatch(node.id, { status: value === "active" ? undefined : value });
+              patch({ status: value === "active" ? undefined : value });
             }}
             aria-label="Lifecycle status"
             title="Lifecycle stage — proposed/planned/stubbed outline, dark hazard-taped, deprecated/retired dim"
           >
-            {NODE_STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {status}
+            <MixedOption when={status.mixed} />
+            {NODE_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
               </option>
             ))}
           </select>
         ) : null}
       </InspectorSection>
 
-      {!def.container && !def.annotation ? (
+      {allPlainBoxes ? (
         <InspectorSection caption="Style">
           <select
             className="as-select"
-            value={data.icon as string}
-            onChange={(event) => onPatch(node.id, { icon: event.target.value })}
+            value={icon.mixed ? "" : icon.value}
+            onChange={(event) => {
+              if (event.target.value) patch({ icon: event.target.value });
+            }}
             aria-label="Node icon"
           >
-            {registry.iconNames.map((icon) => (
-              <option key={icon} value={icon}>
-                {icon === "none" ? "no icon" : icon}
+            <MixedOption when={icon.mixed} />
+            {registry.iconNames.map((name) => (
+              <option key={name} value={name}>
+                {name === "none" ? "no icon" : name}
               </option>
             ))}
           </select>
-          <input
-            className="as-input as-inspector__desc"
-            value={data.description}
-            placeholder="Description…"
-            onChange={(event) => onPatch(node.id, { description: event.target.value })}
-            aria-label="Node description"
-          />
+          {single ? (
+            <input
+              className="as-input as-inspector__desc"
+              value={data.description}
+              placeholder="Description…"
+              onChange={(event) => patch({ description: event.target.value })}
+              aria-label="Node description"
+            />
+          ) : null}
         </InspectorSection>
       ) : null}
 
-      {def.annotation ? (
+      {allAnnotations ? (
         <InspectorSection caption="Style">
           <select
             className="as-select"
-            value={data.fontSize ?? 13}
-            onChange={(event) => onPatch(node.id, { fontSize: Number(event.target.value) })}
+            value={fontSize.mixed ? "" : fontSize.value}
+            onChange={(event) => {
+              if (event.target.value) patch({ fontSize: Number(event.target.value) });
+            }}
             aria-label="Font size"
           >
+            <MixedOption when={fontSize.mixed} />
             {[11, 13, 16, 20, 26].map((size) => (
               <option key={size} value={size}>
                 {size}px
               </option>
             ))}
           </select>
-          <label className="as-check" title="Draw an outline and background behind this note">
-            <input
-              type="checkbox"
-              checked={!data.plain}
-              onChange={(event) =>
-                // Boxed is the default, so only the opt-OUT is stored.
-                onPatch(node.id, { plain: event.target.checked ? undefined : true })
-              }
-            />
-            Outline
-          </label>
+          <SharedCheck
+            checked={!plain.value}
+            mixed={plain.mixed}
+            label="Outline"
+            title="Draw an outline and background behind this note"
+            // Boxed is the default, so only the opt-OUT is stored.
+            onChange={(checked) => patch({ plain: checked ? undefined : true })}
+          />
           {/* A note's sentence is its label (double-click the note to edit);
               the description is the dim sub-line under it, and this is the
               only place to type one. */}
-          <input
-            className="as-input as-inspector__desc"
-            value={data.description}
-            placeholder="Description…"
-            onChange={(event) => onPatch(node.id, { description: event.target.value })}
-            aria-label="Node description"
-          />
+          {single ? (
+            <input
+              className="as-input as-inspector__desc"
+              value={data.description}
+              placeholder="Description…"
+              onChange={(event) => patch({ description: event.target.value })}
+              aria-label="Node description"
+            />
+          ) : null}
         </InspectorSection>
       ) : null}
 
       {/* Text layout. Every default is left/middle/unwrapped, and validation
           stores a value only when it differs — so touching nothing here leaves
           the document byte-identical. Annotations keep their own editor. */}
-      {!def.annotation ? (
+      {noAnnotations ? (
         <InspectorSection caption="Text">
           <select
             className="as-select"
-            value={data.textAlign ?? "left"}
+            value={textAlign.mixed ? "" : textAlign.value}
             onChange={(event) => {
               const value = event.target.value as NodeTextAlign;
-              onPatch(node.id, { textAlign: value === "left" ? undefined : value });
+              if (value) patch({ textAlign: value === "left" ? undefined : value });
             }}
             aria-label="Text alignment"
             title="Horizontal alignment of the label and description"
           >
+            <MixedOption when={textAlign.mixed} />
             {NODE_TEXT_ALIGNS.map((a) => (
               <option key={a} value={a}>
                 align: {a}
@@ -6853,14 +8451,15 @@ function NodeInspector({
           </select>
           <select
             className="as-select"
-            value={data.textVAlign ?? "middle"}
+            value={textVAlign.mixed ? "" : textVAlign.value}
             onChange={(event) => {
               const value = event.target.value as NodeTextVAlign;
-              onPatch(node.id, { textVAlign: value === "middle" ? undefined : value });
+              if (value) patch({ textVAlign: value === "middle" ? undefined : value });
             }}
             aria-label="Vertical text alignment"
             title="Where the text block sits in the box"
           >
+            <MixedOption when={textVAlign.mixed} />
             {NODE_TEXT_VALIGNS.map((a) => (
               <option key={a} value={a}>
                 vertical: {a}
@@ -6869,92 +8468,88 @@ function NodeInspector({
           </select>
           <select
             className="as-select"
-            value={data.fontSize ?? DEFAULT_FONT_SIZE}
+            value={fontSize.mixed ? "" : fontSize.value}
             onChange={(event) => {
               const value = Number(event.target.value);
-              onPatch(node.id, { fontSize: value === DEFAULT_FONT_SIZE ? undefined : value });
+              if (value) patch({ fontSize: value === DEFAULT_FONT_SIZE ? undefined : value });
             }}
             aria-label="Label size"
             title="Label size"
           >
+            <MixedOption when={fontSize.mixed} />
             {[11, 13, 16, 20, 26].map((size) => (
               <option key={size} value={size}>
                 {size}px
               </option>
             ))}
           </select>
-          <label className="as-check" title="Wrap the label across lines, growing the box to fit">
-            <input
-              type="checkbox"
-              checked={!!data.wrap}
-              onChange={(event) =>
-                // One ellipsised line is the default, so only the opt-IN is stored.
-                onPatch(node.id, { wrap: event.target.checked ? true : undefined })
-              }
-            />
-            Wrap
-          </label>
+          <SharedCheck
+            checked={wrap.value}
+            mixed={wrap.mixed}
+            label="Wrap"
+            title="Wrap the label across lines, growing the box to fit"
+            // One ellipsised line is the default, so only the opt-IN is stored.
+            onChange={(checked) => patch({ wrap: checked ? true : undefined })}
+          />
         </InspectorSection>
       ) : null}
 
       {/* Container frame — the same three controls a zone gets, because it is
           the same vocabulary. Fill off + outline none is an invisible grouping
           box that still nests, still accepts drops, and still drills in. */}
-      {def.container ? (
+      {allContainers ? (
         <InspectorSection caption="Frame">
           <select
             className="as-select"
-            value={data.outline ?? "dashed"}
+            value={outline.mixed ? "" : outline.value}
             onChange={(event) => {
               const value = event.target.value as NodeOutline;
               // `dashed` is the group default and never stored.
-              onPatch(node.id, { outline: value === "dashed" ? undefined : value });
+              if (value) patch({ outline: value === "dashed" ? undefined : value });
             }}
             aria-label="Frame outline style"
             title="Outline — solid, dashed, dotted, or none"
           >
+            <MixedOption when={outline.mixed} />
             {NODE_OUTLINES.map((o) => (
               <option key={o} value={o}>
                 outline: {o}
               </option>
             ))}
           </select>
-          <label className="as-check" title="Draw the background tint">
-            <input
-              type="checkbox"
-              checked={data.fill !== false}
-              onChange={(event) =>
-                // Filled is the default; only the opt-out is stored.
-                onPatch(node.id, { fill: event.target.checked ? undefined : false })
-              }
-            />
-            Fill
-          </label>
+          <SharedCheck
+            checked={fill.value}
+            mixed={fill.mixed}
+            label="Fill"
+            title="Draw the background tint"
+            // Filled is the default; only the opt-out is stored.
+            onChange={(checked) => patch({ fill: checked ? undefined : false })}
+          />
           <input
             className="as-range"
             type="range"
             min={0}
             max={0.6}
             step={0.02}
-            value={data.opacity ?? DEFAULT_CONTAINER_OPACITY}
-            disabled={data.fill === false}
-            onChange={(event) => onPatch(node.id, { opacity: Number(event.target.value) })}
+            value={opacity.mixed ? DEFAULT_CONTAINER_OPACITY : opacity.value}
+            disabled={!fill.mixed && !fill.value}
+            onChange={(event) => patch({ opacity: Number(event.target.value) })}
             aria-label="Frame fill opacity"
-            title="How strong the background tint is"
+            title={opacity.mixed ? "Mixed — drag to set one tint for all" : "How strong the background tint is"}
           />
           <input
             className="as-swatch as-swatch--custom"
             type="color"
-            value={data.color ?? def.accent}
-            onChange={(event) => onPatch(node.id, { color: event.target.value })}
+            value={color.mixed || !color.value ? def.accent : color.value}
+            onChange={(event) => patch({ color: event.target.value })}
             aria-label="Frame colour"
-            title="Frame ink — the outline colour the fill is derived from"
+            title={color.mixed ? "Mixed — pick one ink for all" : "Frame ink — the outline colour the fill is derived from"}
           />
-          {data.color ? (
+          {datas.some((d) => d.color) ? (
             <button
               type="button"
               className="as-chip"
-              onClick={() => onPatch(node.id, { color: undefined, opacity: undefined })}
+              onClick={() => patch({ color: undefined, opacity: undefined })}
               title="Back to the kind's own colour"
             >
               Auto
@@ -6969,7 +8564,7 @@ function NodeInspector({
         <span className="as-inspector__group" role="group" aria-label="Visible on">
           <span className="as-inspector__caption">On</span>
           {zone.providers.map((p) => {
-            const on = !data.providers?.length || data.providers.includes(p);
+            const on = providerOn(p);
             const pd = providerDef(registry, p);
             return (
               <button
@@ -6988,59 +8583,78 @@ function NodeInspector({
         </span>
       ) : null}
 
+      {single && onViewFields && viewFieldsCount > 0 ? (
+        <button type="button" className="as-btn as-inspector__viewfields" onClick={() => onViewFields(ids[0]!)}>
+          View all fields ({viewFieldsCount})
+        </button>
+      ) : null}
+
       {/* Rows, for the kinds whose substance is rows — plus any node that
           already has some, so a document that arrived with fields on a
           "service" can still be edited rather than only viewed. */}
-      {def.record || data.fields?.length ? (
+      {single && (def.record || data.fields?.length) ? (
         <FieldsEditor
           fields={data.fields ?? []}
-          onChange={(fields) => onPatch(node.id, { fields })}
+          onChange={(fields) => patch({ fields })}
+          focusFieldId={editFieldId}
+          onFocused={onEditFieldFocused}
         />
       ) : null}
 
-      {!def.annotation ? (
+      {noAnnotations ? (
         <ChipListEditor
           caption="Tags"
           ariaLabel="Node tags"
           addPlaceholder="+ tag…"
-          options={data.tags ?? []}
-          active={data.tags ?? []}
-          customIds={new Set(data.tags ?? [])}
-          onToggle={(tag) => {
-            const next = (data.tags ?? []).filter((t) => t !== tag);
-            onPatch(node.id, { tags: next.length ? next : undefined });
-          }}
-          onAdd={(tag) => onPatch(node.id, { tags: [...(data.tags ?? []), tag] })}
+          options={tagUnion}
+          active={tagsOnAll}
+          customIds={new Set(tagUnion)}
+          onToggle={(tag) =>
+            tagsOnAll.includes(tag)
+              ? patch((d) => {
+                  const next = (d.tags ?? []).filter((t) => t !== tag);
+                  return { tags: next.length ? next : undefined };
+                })
+              : patch((d) => ({ tags: d.tags?.includes(tag) ? d.tags : [...(d.tags ?? []), tag] }))
+          }
+          onAdd={(tag) =>
+            patch((d) => ({ tags: d.tags?.includes(tag) ? d.tags : [...(d.tags ?? []), tag] }))
+          }
         />
       ) : null}
 
-      {!def.annotation ? (
+      {noAnnotations ? (
         <InspectorSection caption="Team">
           <input
             className="as-input as-inspector__team"
-            value={data.team ?? ""}
-            placeholder="Owning team…"
-            onChange={(event) => onPatch(node.id, { team: event.target.value || undefined })}
+            value={team.mixed ? "" : team.value}
+            placeholder={team.mixed ? "Mixed" : "Owning team…"}
+            onChange={(event) => patch({ team: event.target.value || undefined })}
             aria-label="Owning team"
           />
         </InspectorSection>
       ) : null}
 
       <DateSection
-        date={data.date}
+        date={date.mixed ? undefined : date.value}
+        clearable={datas.some((d) => !!d.date)}
         what="Node"
-        label="When this node lands. Undated means it is always there."
-        onChange={(date) => onPatch(node.id, { date })}
+        label={
+          date.mixed
+            ? "Mixed — pick one date for all"
+            : "When this node lands. Undated means it is always there."
+        }
+        onChange={(next) => patch({ date: next })}
       />
 
-      {!def.annotation ? (
+      {single && noAnnotations ? (
         <InspectorSection caption="Link">
           <input
             ref={linkRef}
             className="as-input as-inspector__url"
             value={data.url ?? ""}
             placeholder="https://… or file:Name"
-            onChange={(event) => onPatch(node.id, { url: event.target.value || undefined })}
+            onChange={(event) => patch({ url: event.target.value || undefined })}
             aria-label="Documentation link"
           />
           {data.url && !data.url.startsWith("file:") ? (
@@ -7056,18 +8670,34 @@ function NodeInspector({
             </a>
           ) : null}
         </InspectorSection>
+      ) : !single && noAnnotations && linked.length ? (
+        // A link names ONE place, so a selection gets no input for it — but
+        // it can drop the ones it has, which is what a hundred imported
+        // tables all wearing their source's ↗ actually want.
+        <InspectorSection caption="Link">
+          <button
+            type="button"
+            className="as-btn"
+            onClick={() => patch({ url: undefined })}
+            title={`${linked.length} of ${ids.length} selected nodes carry a ↗ link — remove them all; ⌘Z restores them`}
+          >
+            Clear link{linked.length > 1 ? "s" : ""} ({linked.length})
+          </button>
+        </InspectorSection>
       ) : null}
 
-      <button
-        type="button"
-        className={`as-btn as-btn--icon${data.locked ? " as-btn--on" : ""}`}
-        onClick={() => onPatch(node.id, { locked: data.locked ? undefined : true })}
-        aria-pressed={!!data.locked}
-        aria-label={data.locked ? "Unlock" : "Lock in place"}
-        title={data.locked ? "Unlock — allow moving and resizing" : "Lock in place"}
-      >
-        <UiIcon name={data.locked ? "lock" : "unlock"} />
-      </button>
+      {lock ? (
+        <button
+          type="button"
+          className={`as-btn as-btn--icon${locked.value && !locked.mixed ? " as-btn--on" : ""}`}
+          onClick={() => patch({ locked: locked.value && !locked.mixed ? undefined : true })}
+          aria-pressed={locked.value && !locked.mixed}
+          aria-label={locked.value && !locked.mixed ? "Unlock" : "Lock in place"}
+          title={locked.value && !locked.mixed ? "Unlock — allow moving and resizing" : "Lock in place"}
+        >
+          <UiIcon name={locked.value && !locked.mixed ? "lock" : "unlock"} />
+        </button>
+      ) : null}
     </>
   );
 }
@@ -7082,10 +8712,25 @@ function NodeInspector({
 function FieldsEditor({
   fields,
   onChange,
+  focusFieldId,
+  onFocused,
 }: {
   fields: readonly NodeField[];
   onChange: (fields: NodeField[] | undefined) => void;
+  /** Put the cursor in this row's name input once, then report it done. */
+  focusFieldId?: string;
+  onFocused?: () => void;
 }) {
+  const rootRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!focusFieldId) return;
+    const input = rootRef.current?.querySelector<HTMLInputElement>(
+      `input[data-field-id="${focusFieldId.replace(/["\\]/g, "\\$&")}"]`,
+    );
+    input?.focus();
+    input?.select();
+    onFocused?.();
+  }, [focusFieldId, onFocused]);
   /** An id nothing else in this node uses — edges reference rows by id. */
   const freshId = () => {
     const taken = new Set(fields.map((f) => f.id));
@@ -7099,7 +8744,7 @@ function FieldsEditor({
     replace(fields.map((f, i) => (i === index ? { ...f, ...part } : f)));
 
   return (
-    <span className="as-inspector__section as-fields" role="group" aria-label="Fields">
+    <span ref={rootRef} className="as-inspector__section as-fields" role="group" aria-label="Fields">
       <span className="as-inspector__caption">Fields</span>
       <span className="as-fields__list">
         {fields.map((field, index) => (
@@ -7122,6 +8767,7 @@ function FieldsEditor({
             </select>
             <input
               className="as-input as-fieldrow__name"
+              data-field-id={field.id}
               value={field.name}
               placeholder="column"
               onChange={(event) => patch(index, { name: event.target.value })}
@@ -7206,60 +8852,106 @@ function FieldsEditor({
   );
 }
 
+/**
+ * The edge inspector — for one connection, or every connection selected.
+ *
+ * Same doctrine as `NodeInspector`: one component, every control reading the
+ * shared value and writing to the whole selection. A multi-selection keeps
+ * every setting a line can share — heads, direction, routing, the side each
+ * end leaves from, style, colour, tech, date, providers, cardinality — and
+ * drops only what names ONE line: its label, its step number, and which row
+ * of which box it attaches to.
+ */
 function EdgeInspector({
-  edge,
-  sourceFields,
-  targetFields,
-  sourceLabel,
-  targetLabel,
+  edges,
+  fieldsOf,
+  labelOf,
   relevantProviders,
   registry,
   onPatch,
   onSwapEnds,
-  onClearRoute,
+  onClearRoutes,
 }: {
-  edge: Edge;
-  /** Rows of the endpoint nodes — what an end may attach to. */
-  sourceFields: readonly NodeField[];
-  targetFields: readonly NodeField[];
-  /** What the ends are called, so the bar can say what this line joins. */
-  sourceLabel: string;
-  targetLabel: string;
+  /** The selection — at least one. */
+  edges: readonly Edge[];
+  /** Rows of a node — what an end may attach to. */
+  fieldsOf: (nodeId: string) => readonly NodeField[];
+  /** What a node is called, so the bar can say what a line joins. */
+  labelOf: (nodeId: string) => string;
   relevantProviders: readonly string[];
   registry: ResolvedRegistry;
-  onPatch: (id: string, patch: Partial<DiagramEdgeData>) => void;
-  onSwapEnds: (id: string) => void;
+  onPatch: (ids: readonly string[], patch: EdgePatch) => void;
+  onSwapEnds: (ids: readonly string[]) => void;
   /**
-   * Drop this line's waypoints. Goes through the studio's shared clear rather
+   * Drop these lines' waypoints. Goes through the studio's shared clear rather
    * than a `points: undefined` patch of its own, so the inspector, the
    * right-click menu and the Arrange item are one code path with one
    * undo entry — they used to be two.
    */
-  onClearRoute: () => void;
+  onClearRoutes: (ids: readonly string[]) => void;
 }) {
-  const data = (edge.data ?? {}) as DiagramEdgeData;
+  const ids = edges.map((e) => e.id);
+  const datas = edges.map((e) => (e.data ?? {}) as DiagramEdgeData);
+  const single = edges.length === 1;
+  const edge = edges[0]!;
+  const data = datas[0]!;
+  const patch = (p: EdgePatch) => onPatch(ids, p);
+  const read = <T,>(pick: (d: DiagramEdgeData) => T) => sharedField(datas, pick);
+
+  const sourceFields = single ? fieldsOf(edge.source) : [];
+  const targetFields = single ? fieldsOf(edge.target) : [];
+  // Cardinality is offered where it means something: an endpoint has rows,
+  // or a line already carries end labels. Across a selection, "any" of them.
+  const anyEndRows = edges.some((e) => fieldsOf(e.source).length || fieldsOf(e.target).length);
+  const anyEndLabels = datas.some((d) => d.startLabel || d.endLabel);
+  const anyRelation = datas.some((d) => d.relation);
+  const routed = edges.filter((e) => (e.data as DiagramEdgeData | undefined)?.points?.length);
+
+  const tech = read((d) => d.tech ?? "");
+  const relation = read((d) => d.relation ?? "");
+  const direction = read((d) => d.direction ?? "forward");
+  const startHead = read((d) => d.startHead ?? "default");
+  const endHead = read((d) => d.endHead ?? "default");
+  const startLabel = read((d) => d.startLabel ?? "");
+  const endLabel = read((d) => d.endLabel ?? "");
+  const date = read((d) => d.date);
+  const style = read((d) => d.style ?? "solid");
+  const routing = read((d) => d.routing ?? "default");
+  const startSide = read((d) => d.start?.side ?? "auto");
+  const endSide = read((d) => d.end?.side ?? "auto");
+  const color = read((d) => d.color);
+  // Providers, like node tags: every provider any line names is offered, a
+  // chip is ON when every line names it.
+  const providerUnion = [...new Set([...relevantProviders, ...datas.flatMap((d) => d.providers ?? [])])];
+  const providersOnAll = providerUnion.filter((p) => datas.every((d) => d.providers?.includes(p)));
+
   return (
     <>
       {/* Which boxes this line joins, and a way to turn it round. The schema
           has carried edge endpoints since the beginning and the inspector
           never showed them — so "I drew that the wrong way" meant deleting
           the line and drawing it again, losing its label and its route. */}
-      <InspectorSection caption="Between">
-        <span className="as-inspector__ends" title={`${sourceLabel} → ${targetLabel}`}>
-          {sourceLabel} → {targetLabel}
-        </span>
+      <InspectorSection caption={single ? "Between" : "Connections"}>
+        {single ? (
+          <span
+            className="as-inspector__ends"
+            title={`${labelOf(edge.source)} → ${labelOf(edge.target)}`}
+          >
+            {labelOf(edge.source)} → {labelOf(edge.target)}
+          </span>
+        ) : null}
         <button
           type="button"
           className="as-btn as-btn--icon"
-          onClick={() => onSwapEnds(edge.id)}
-          aria-label="Reverse this connection"
+          onClick={() => onSwapEnds(ids)}
+          aria-label={single ? "Reverse this connection" : "Reverse the selected connections"}
           title="Reverse — swap which end it starts from"
         >
           <UiIcon name="swap" />
         </button>
       </InspectorSection>
 
-      {relevantProviders.length ? (
+      {providerUnion.length ? (
         // An edge can be scoped to a topology exactly like a node — the
         // README sells "a replication stream present on AWS but not Azure" —
         // and there was no control for it anywhere, so the field could only
@@ -7268,34 +8960,43 @@ function EdgeInspector({
           caption="On"
           ariaLabel="Providers this connection exists on"
           addPlaceholder="+ add…"
-          options={[...relevantProviders]}
-          active={data.providers ?? []}
+          options={providerUnion}
+          active={providersOnAll}
           labelOf={(p) => providerDef(registry, p).label}
           colorOf={(p) => providerDef(registry, p).color}
-          onToggle={(p) => {
-            const current = data.providers ?? [];
-            const next = current.includes(p)
-              ? current.filter((x) => x !== p)
-              : [...current, p];
-            onPatch(edge.id, { providers: next.length ? next : undefined });
-          }}
-          onAdd={(p) => onPatch(edge.id, { providers: [...(data.providers ?? []), p] })}
+          onToggle={(p) =>
+            providersOnAll.includes(p)
+              ? patch((d) => {
+                  const next = (d.providers ?? []).filter((x) => x !== p);
+                  return { providers: next.length ? next : undefined };
+                })
+              : patch((d) => ({
+                  providers: d.providers?.includes(p) ? d.providers : [...(d.providers ?? []), p],
+                }))
+          }
+          onAdd={(p) =>
+            patch((d) => ({
+              providers: d.providers?.includes(p) ? d.providers : [...(d.providers ?? []), p],
+            }))
+          }
         />
       ) : null}
 
       <InspectorSection caption="Edge">
-        <input
-          className="as-input as-inspector__name"
-          value={data.label ?? ""}
-          placeholder="Edge label"
-          onChange={(event) => onPatch(edge.id, { label: event.target.value })}
-          aria-label="Edge label"
-        />
+        {single ? (
+          <input
+            className="as-input as-inspector__name"
+            value={data.label ?? ""}
+            placeholder="Edge label"
+            onChange={(event) => patch({ label: event.target.value })}
+            aria-label="Edge label"
+          />
+        ) : null}
         <input
           className="as-input as-inspector__tech"
-          value={data.tech ?? ""}
-          placeholder="Tech: JSON/HTTPS"
-          onChange={(event) => onPatch(edge.id, { tech: event.target.value })}
+          value={tech.mixed ? "" : tech.value}
+          placeholder={tech.mixed ? "Tech: mixed" : "Tech: JSON/HTTPS"}
+          onChange={(event) => patch({ tech: event.target.value })}
           aria-label="Edge technology"
         />
       </InspectorSection>
@@ -7303,27 +9004,29 @@ function EdgeInspector({
       <InspectorSection caption="Flow">
         <select
           className="as-select"
-          value={data.direction ?? "forward"}
-          onChange={(event) => onPatch(edge.id, { direction: event.target.value as EdgeDirection })}
+          value={direction.mixed ? "" : direction.value}
+          onChange={(event) => {
+            if (event.target.value) patch({ direction: event.target.value as EdgeDirection });
+          }}
           aria-label="Edge direction"
           title="Arrowheads"
         >
+          <MixedOption when={direction.mixed} />
           <option value="forward">→</option>
           <option value="both">↔</option>
           <option value="none">—</option>
         </select>
         <select
           className="as-select"
-          value={data.startHead ?? "default"}
+          value={startHead.mixed ? "" : startHead.value}
           onChange={(event) => {
             const value = event.target.value;
-            onPatch(edge.id, {
-              startHead: value === "default" ? undefined : (value as EdgeHead),
-            });
+            if (value) patch({ startHead: value === "default" ? undefined : (value as EdgeHead) });
           }}
           aria-label="Start glyph"
           title="Glyph at the source end — default follows the direction setting"
         >
+          <MixedOption when={startHead.mixed} />
           <option value="default">tail: default</option>
           {EDGE_HEADS.map((head) => (
             <option key={head} value={head}>
@@ -7333,16 +9036,15 @@ function EdgeInspector({
         </select>
         <select
           className="as-select"
-          value={data.endHead ?? "default"}
+          value={endHead.mixed ? "" : endHead.value}
           onChange={(event) => {
             const value = event.target.value;
-            onPatch(edge.id, {
-              endHead: value === "default" ? undefined : (value as EdgeHead),
-            });
+            if (value) patch({ endHead: value === "default" ? undefined : (value as EdgeHead) });
           }}
           aria-label="End glyph"
           title="Glyph at the target end — default follows the direction setting"
         >
+          <MixedOption when={endHead.mixed} />
           <option value="default">head: default</option>
           {EDGE_HEADS.map((head) => (
             <option key={head} value={head}>
@@ -7350,31 +9052,59 @@ function EdgeInspector({
             </option>
           ))}
         </select>
-        <input
-          className="as-input as-inspector__seq"
-          type="number"
-          min={0}
-          value={data.seq ?? ""}
-          placeholder="#"
-          onChange={(event) => {
-            const n = Number.parseInt(event.target.value, 10);
-            onPatch(edge.id, { seq: Number.isFinite(n) && n > 0 ? n : undefined });
-          }}
-          aria-label="Sequence number"
-          title="Step number for a dynamic (numbered-flow) diagram"
-        />
+        {single ? (
+          <input
+            className="as-input as-inspector__seq"
+            type="number"
+            min={0}
+            value={data.seq ?? ""}
+            placeholder="#"
+            onChange={(event) => {
+              const n = Number.parseInt(event.target.value, 10);
+              patch({ seq: Number.isFinite(n) && n > 0 ? n : undefined });
+            }}
+            aria-label="Sequence number"
+            title="Step number for a dynamic (numbered-flow) diagram"
+          />
+        ) : null}
       </InspectorSection>
 
       {/* Cardinality and the rows each end attaches to. Offered where it means
           something — either endpoint has rows, or this edge already carries
           end labels — rather than on every architecture connection. */}
-      {sourceFields.length || targetFields.length || data.startLabel || data.endLabel ? (
+      {anyEndRows || anyEndLabels || anyRelation ? (
         <InspectorSection caption="Ends">
+          {/* What kind of relationship the line is. Choosing one dresses the
+              line the way the legend shows that kind — style, colour, end
+              glyphs, cardinality — as one edit; clearing it leaves the
+              dressing alone, so a line keeps looking as it did. */}
+          <select
+            className="as-select"
+            value={relation.mixed ? "" : relation.value}
+            onChange={(event) => {
+              const id = event.target.value;
+              patch(id ? { relation: id, ...relationDressing(relationDef(registry, id)) } : { relation: undefined });
+            }}
+            aria-label="Relationship kind"
+            title="What kind of relationship this is — picking one dresses the line to match"
+          >
+            <MixedOption when={relation.mixed} />
+            <option value="">relation: none</option>
+            {registry.relationOrder.map((id) => (
+              <option key={id} value={id} title={registry.relationKinds[id]?.description}>
+                {registry.relationKinds[id]?.label ?? id}
+              </option>
+            ))}
+            {/* A kind the document names that nobody registered stays pickable rather than reading as "none". */}
+            {!relation.mixed && relation.value && !registry.relationKinds[relation.value] ? (
+              <option value={relation.value}>{relationDef(registry, relation.value).label}</option>
+            ) : null}
+          </select>
           <input
             className="as-input as-inspector__end"
-            value={data.startLabel ?? ""}
-            placeholder="1"
-            onChange={(event) => onPatch(edge.id, { startLabel: event.target.value || undefined })}
+            value={startLabel.mixed ? "" : startLabel.value}
+            placeholder={startLabel.mixed ? "Mixed" : "1"}
+            onChange={(event) => patch({ startLabel: event.target.value || undefined })}
             aria-label="Cardinality at the source end"
             title="Cardinality at the source end — 1, 0..1, 0..*, 1..*"
           />
@@ -7382,7 +9112,7 @@ function EdgeInspector({
             <select
               className="as-select"
               value={data.startField ?? ""}
-              onChange={(event) => onPatch(edge.id, { startField: event.target.value || undefined })}
+              onChange={(event) => patch({ startField: event.target.value || undefined })}
               aria-label="Source field"
               title="Which row of the source this line leaves from"
             >
@@ -7398,7 +9128,7 @@ function EdgeInspector({
             <select
               className="as-select"
               value={data.endField ?? ""}
-              onChange={(event) => onPatch(edge.id, { endField: event.target.value || undefined })}
+              onChange={(event) => patch({ endField: event.target.value || undefined })}
               aria-label="Target field"
               title="Which row of the target this line lands on"
             >
@@ -7412,9 +9142,9 @@ function EdgeInspector({
           ) : null}
           <input
             className="as-input as-inspector__end"
-            value={data.endLabel ?? ""}
-            placeholder="0..*"
-            onChange={(event) => onPatch(edge.id, { endLabel: event.target.value || undefined })}
+            value={endLabel.mixed ? "" : endLabel.value}
+            placeholder={endLabel.mixed ? "Mixed" : "0..*"}
+            onChange={(event) => patch({ endLabel: event.target.value || undefined })}
             aria-label="Cardinality at the target end"
             title="Cardinality at the target end — 1, 0..1, 0..*, 1..*"
           />
@@ -7422,35 +9152,44 @@ function EdgeInspector({
       ) : null}
 
       <DateSection
-        date={data.date}
+        date={date.mixed ? undefined : date.value}
+        clearable={datas.some((d) => !!d.date)}
         what="Edge"
-        label="When this connection lands. It is never shown before the nodes it joins."
-        onChange={(date) => onPatch(edge.id, { date })}
+        label={
+          date.mixed
+            ? "Mixed — pick one date for all"
+            : "When this connection lands. It is never shown before the nodes it joins."
+        }
+        onChange={(next) => patch({ date: next })}
       />
 
       <InspectorSection caption="Style">
         <select
           className="as-select"
-          value={data.style ?? "solid"}
-          onChange={(event) => onPatch(edge.id, { style: event.target.value as EdgeStyle })}
+          value={style.mixed ? "" : style.value}
+          onChange={(event) => {
+            if (event.target.value) patch({ style: event.target.value as EdgeStyle });
+          }}
           aria-label="Edge style"
         >
-          {EDGE_STYLES.map((style) => (
-            <option key={style} value={style}>
-              {style}
+          <MixedOption when={style.mixed} />
+          {EDGE_STYLES.map((s) => (
+            <option key={s} value={s}>
+              {s}
             </option>
           ))}
         </select>
         <select
           className="as-select"
-          value={data.routing ?? "default"}
+          value={routing.mixed ? "" : routing.value}
           onChange={(event) => {
             const value = event.target.value;
-            onPatch(edge.id, { routing: value === "default" ? undefined : (value as EdgeRouting) });
+            if (value) patch({ routing: value === "default" ? undefined : (value as EdgeRouting) });
           }}
           aria-label="Edge routing"
           title="Routing — default follows the diagram setting"
         >
+          <MixedOption when={routing.mixed} />
           <option value="default">routing: default</option>
           {EDGE_ROUTINGS.map((mode) => (
             <option key={mode} value={mode}>
@@ -7460,18 +9199,17 @@ function EdgeInspector({
         </select>
         <select
           className="as-select"
-          value={data.start?.side ?? "auto"}
+          value={startSide.mixed ? "" : startSide.value}
           onChange={(event) => {
             const value = event.target.value;
             // Choosing a side drops any stored fraction: the picker pins the
             // centre of that side; drag the line itself for finer routing.
-            onPatch(edge.id, {
-              start: value === "auto" ? undefined : { side: value as EdgeAnchorSide },
-            });
+            if (value) patch({ start: value === "auto" ? undefined : { side: value as EdgeAnchorSide } });
           }}
           aria-label="Start anchor"
           title="Which side of the source box the line leaves — auto faces wherever it's going"
         >
+          <MixedOption when={startSide.mixed} />
           <option value="auto">start: auto</option>
           {EDGE_ANCHOR_SIDES.map((side) => (
             <option key={side} value={side}>
@@ -7481,16 +9219,15 @@ function EdgeInspector({
         </select>
         <select
           className="as-select"
-          value={data.end?.side ?? "auto"}
+          value={endSide.mixed ? "" : endSide.value}
           onChange={(event) => {
             const value = event.target.value;
-            onPatch(edge.id, {
-              end: value === "auto" ? undefined : { side: value as EdgeAnchorSide },
-            });
+            if (value) patch({ end: value === "auto" ? undefined : { side: value as EdgeAnchorSide } });
           }}
           aria-label="End anchor"
           title="Which side of the target box the line arrives at"
         >
+          <MixedOption when={endSide.mixed} />
           <option value="auto">end: auto</option>
           {EDGE_ANCHOR_SIDES.map((side) => (
             <option key={side} value={side}>
@@ -7498,29 +9235,30 @@ function EdgeInspector({
             </option>
           ))}
         </select>
-        {data.points?.length ? (
+        {routed.length ? (
           <button
             type="button"
             className="as-btn"
-            onClick={onClearRoute}
-            title="Remove the waypoints this line bends through (drag the line to bend it; double-click edits the label) — ⌘Z restores them"
+            onClick={() => onClearRoutes(routed.map((e) => e.id))}
+            title="Remove the waypoints these lines bend through (drag a line to bend it; double-click edits the label) — ⌘Z restores them"
           >
-            Clear route ({data.points.length})
+            Clear route{routed.length > 1 ? "s" : ""} (
+            {single ? data.points!.length : routed.length})
           </button>
         ) : null}
         <div className="as-swatches">
-          {EDGE_COLORS.map((color) => (
+          {EDGE_COLORS.map((c) => (
             <button
-              key={color}
+              key={c}
               type="button"
-              title={color}
-              aria-label={`Edge colour ${color}`}
-              aria-pressed={data.color === color}
-              className={`as-swatch${data.color === color ? " as-swatch--on" : ""}`}
+              title={c}
+              aria-label={`Edge colour ${c}`}
+              aria-pressed={!color.mixed && color.value === c}
+              className={`as-swatch${!color.mixed && color.value === c ? " as-swatch--on" : ""}`}
               // Resolves through the theme's --as-edge-* override when set,
               // so the picker shows the colour the edge will actually be.
-              style={{ background: `var(--as-edge-${color}, ${EDGE_COLOR_HEX[color as EdgeColor]})` }}
-              onClick={() => onPatch(edge.id, { color: color as EdgeColor })}
+              style={{ background: `var(--as-edge-${c}, ${EDGE_COLOR_HEX[c as EdgeColor]})` }}
+              onClick={() => patch({ color: c as EdgeColor })}
             />
           ))}
         </div>
@@ -7592,20 +9330,42 @@ function viewSignatureOf(
   template: DiagramTemplate,
   showHidden: boolean,
   focusId: string | null = null,
+  containerKinds?: readonly string[],
+  /** A read-only viewer's fold override — view state, like `showHidden`. */
+  viewFold: GroupContents | null = null,
 ): string {
   const zones = (template.zones ?? []).map((z) => `${z.id}:${z.provider}`).join("|");
-  const collapsed = template.nodes
-    .filter((n) => n.collapsed)
-    .map((n) => n.id)
-    .join(",");
+  // Every container drawn closed — its own flag, or the document's fold. The
+  // fold makes this depend on what a group CONTAINS: dropping a card into an
+  // empty frame under `settings.groupContents: "hide"` gives the frame
+  // something to fold, and the canvas must rebuild to fold it.
+  const collapsed = [...closedContainers(template, { containerKinds })].sort().join(",");
   // The DOCUMENT part is everything before `|hidden:` — the rebuild effect
   // splits on it to separate edits (provider switch, collapse → commit) from
   // pure view changes (ghost toggle, drill focus → no undo entry). Anything
   // document-derived added later must go BEFORE that marker; view state after.
-  return `${zones}|collapsed:${collapsed}|hidden:${showHidden}|focus:${focusId ?? ""}`;
+  return `${zones}|collapsed:${collapsed}|hidden:${showHidden}|focus:${focusId ?? ""}|fold:${viewFold ?? ""}`;
 }
 
 /** The longest prefix of the focus stack whose nodes still exist in `doc`. */
+/** Pins whose field (or table) still exists. */
+function prunePins(doc: DiagramTemplate, pins: readonly Pin[]): Pin[] {
+  return pins.filter((p) => hasField(doc, p));
+}
+
+/**
+ * Where a context menu may open so it stays on screen: `.as-context` is
+ * `position: fixed` with a 260×320 ceiling, and a row near the bottom edge
+ * would otherwise hang its items below the viewport.
+ */
+function clampMenu(x: number, y: number): { x: number; y: number } {
+  if (typeof window === "undefined") return { x, y };
+  return {
+    x: Math.max(0, Math.min(x, window.innerWidth - 270)),
+    y: Math.max(0, Math.min(y, window.innerHeight - 330)),
+  };
+}
+
 function pruneFocusStack(doc: DiagramTemplate, stack: readonly string[]): string[] {
   const ids = new Set(doc.nodes.map((n) => n.id));
   const out: string[] = [];

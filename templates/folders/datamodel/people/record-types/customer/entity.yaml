@@ -1,0 +1,5 @@
+kind: record-type
+label: Customer
+key: customer
+diagramType: record-type
+diagramName: Customer

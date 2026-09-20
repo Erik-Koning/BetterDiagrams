@@ -8,6 +8,7 @@
  */
 import {
   DARK_EXPORT_PALETTE,
+  cardFill,
   makeSkin,
   paletteRecord,
   GRID,
@@ -73,7 +74,7 @@ export function emitSequence(
   const palette: ExportPalette = { ...DARK_EXPORT_PALETTE, ...paletteOverride };
   // The same dressing table the architecture emitter reads, so the two
   // editors' marketing exports are the one look rather than two.
-  const skin = makeSkin(resolveStudioMode(opts.mode), palette);
+  const skin = makeSkin(resolveStudioMode(opts.mode), palette, opts.gradients !== false);
   // Per-kind accents re-resolve through the palette, mirroring the editor's
   // --as-seq-* variables.
   const accents = { ...SEQ_KIND_ACCENT, ...paletteRecord(palette.seqAccents) };
@@ -262,9 +263,7 @@ export function emitSequence(
     cmds.push({
       op: "path",
       d: headRect,
-      ...(paint.gradient
-        ? { gradient: paint.gradient, ...(dim < 1 ? { fillAlpha: dim } : {}) }
-        : { fill: accent, fillAlpha: 0.08 * dim }),
+      ...cardFill(paint, accent, 0.08, dim),
       stroke: paint.stroke,
       strokeAlpha: (skin.marketing ? 1 : 0.5) * dim,
       strokeWidth: paint.strokeWidth,

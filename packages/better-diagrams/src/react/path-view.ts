@@ -26,7 +26,9 @@ import {
   isZoneNodeId,
   type DiagramTemplate,
 } from "../contract/schema";
-import { pathColor, resolvePath, type PathGlow } from "../contract/paths";
+import { PATH_COLOR_CYCLE, pathColor, resolvePath, type DiagramPath, type PathGlow } from "../contract/paths";
+import type { EdgeColor } from "../contract/schema";
+import { edgeKeyOf } from "../contract/fields";
 
 /** Every lit path each element is on, keyed by DOCUMENT id. */
 export interface PathGlowIndex {
@@ -40,21 +42,32 @@ export interface PathGlowIndex {
  *
  * Colours are assigned by a path's position among ALL the document's paths,
  * not among the lit ones, so lighting a second path never recolours the first.
+ *
+ * `extra` are TRANSIENT paths — routes a search found, never part of the
+ * document — lit alongside, each in the colour its caller gave it (see
+ * `transientPathColors`). They resolve against the same document, so a
+ * route names ordinary node and edge ids.
  */
 export function buildPathGlowIndex(
   template: DiagramTemplate,
   activeIds: readonly string[],
+  extra: readonly DiagramPath[] = [],
+  opts: {
+    /** Draw the extras in the dedicated route colour — a route singled out, not a set of them. */
+    bright?: boolean;
+  } = {},
 ): PathGlowIndex | null {
   const paths = template.paths ?? [];
-  if (!paths.length || !activeIds.length) return null;
+  if ((!paths.length || !activeIds.length) && !extra.length) return null;
   const active = new Set(activeIds);
   const index: PathGlowIndex = { nodes: new Map(), edges: new Map() };
   let any = false;
-  paths.forEach((path, i) => {
-    if (!active.has(path.id)) return;
-    const color = pathColor(path, i);
+  /** Each lit path's hop count, in lighting order — what picks the one that moves. */
+  const lit: Array<{ id: string; steps: number; bright: boolean }> = [];
+  const light = (path: DiagramPath, color: EdgeColor, bright: boolean) => {
     const resolved = resolvePath(template, path);
     const steps = resolved.steps.length;
+    if (steps) lit.push({ id: path.id, steps, bright });
     for (const step of resolved.steps) {
       const glow: PathGlow = {
         pathId: path.id,
@@ -62,6 +75,7 @@ export function buildPathGlowIndex(
         step: step.index,
         steps,
         ...(step.reversed ? { reversed: true } : {}),
+        ...(bright ? { bright: true } : {}),
       };
       const bucket = step.kind === "node" ? index.nodes : index.edges;
       const list = bucket.get(step.id);
@@ -69,8 +83,50 @@ export function buildPathGlowIndex(
       else bucket.set(step.id, [glow]);
       any = true;
     }
+  };
+  paths.forEach((path, i) => {
+    if (active.has(path.id)) light(path, pathColor(path, i), false);
   });
-  return any ? index : null;
+  for (const path of extra) light(path, path.color ?? PATH_COLOR_CYCLE[0], opts.bright === true);
+  if (!any) return null;
+  // One path moves: the route singled out, else the shortest lit one (the
+  // first of equals). Several pulses at once were a canvas full of blinking
+  // and said nothing about which walk to follow.
+  const moving =
+    lit.find((p) => p.bright) ??
+    lit.reduce<{ id: string; steps: number } | null>((best, p) => (best && best.steps <= p.steps ? best : p), null);
+  if (moving) {
+    for (const bucket of [index.nodes, index.edges]) {
+      for (const glows of bucket.values()) {
+        for (const glow of glows) if (glow.pathId === moving.id) glow.animate = true;
+      }
+    }
+  }
+  return index;
+}
+
+/** The ink a glow paints with: the route colour when bright, else its palette colour. */
+export const glowInk = (glow: Pick<PathGlow, "color" | "bright">): string =>
+  glow.bright ? "var(--as-route)" : `var(--as-edge-${glow.color})`;
+
+/**
+ * Colours for `count` transient paths: the cycle from `offset` — the slot
+ * the document's NEXT path would take, so a route never wears the colour
+ * of a path that exists — skipping any colour a lit document path wears.
+ * Past six distinct routes the cycle wraps; a collision is then unavoidable.
+ */
+export function transientPathColors(
+  count: number,
+  taken: readonly EdgeColor[],
+  offset: number,
+): EdgeColor[] {
+  const n = PATH_COLOR_CYCLE.length;
+  const start = ((offset % n) + n) % n;
+  const rotated = Array.from({ length: n }, (_, i) => PATH_COLOR_CYCLE[(start + i) % n]);
+  const avoid = new Set(taken);
+  const pool = rotated.filter((c) => !avoid.has(c));
+  const cycle = pool.length ? pool : rotated;
+  return Array.from({ length: Math.max(0, count) }, (_, i) => cycle[i % cycle.length]);
 }
 
 /**
@@ -82,7 +138,7 @@ export function buildPathGlowIndex(
 export function glowShadow(glows: readonly PathGlow[]): string {
   const layers: string[] = [];
   glows.forEach((glow, k) => {
-    const ink = `var(--as-edge-${glow.color})`;
+    const ink = glowInk(glow);
     const halo = `color-mix(in srgb, ${ink} calc(var(--as-glow-alpha) * 100%), transparent)`;
     if (k === 0) layers.push(`0 0 0 1.5px ${ink}`);
     layers.push(`0 0 var(--as-glow-blur) ${2 + 4 * k}px ${halo}`);
@@ -91,7 +147,7 @@ export function glowShadow(glows: readonly PathGlow[]): string {
 }
 
 /** The document node a canvas node stands for, or null for zones. */
-function documentNodeId(id: string): string | null {
+export function documentNodeId(id: string): string | null {
   if (isZoneNodeId(id)) return null;
   if (isBoundaryNodeId(id)) return id.slice(BOUNDARY_NODE_PREFIX.length);
   if (isGhostNodeId(id)) return ghostSourceId(id);
@@ -99,7 +155,7 @@ function documentNodeId(id: string): string | null {
 }
 
 /** The document edge a canvas edge stands for (collapse re-routes, ghosts). */
-function documentEdgeId(id: string): string {
+export function documentEdgeId(id: string): string {
   if (isCollapsedEdgeId(id)) return id.slice(COLLAPSED_EDGE_PREFIX.length);
   if (isGhostEdgeId(id)) return id.slice(GHOST_EDGE_PREFIX.length);
   return id;
@@ -131,7 +187,7 @@ export function applyPathView(
         className: withClass(n.className, "as-path-node"),
         style: {
           ...n.style,
-          "--as-path-ink": `var(--as-edge-${first.color})`,
+          "--as-path-ink": glowInk(first),
           "--as-path-shadow": glowShadow(glows),
           "--as-path-step": first.step,
           "--as-path-steps": first.steps,
@@ -141,11 +197,29 @@ export function applyPathView(
     edges: edges.map((e) => {
       const glows = index.edges.get(documentEdgeId(e.id));
       if (!glows?.length) return e;
+      // A bright route names the key carrying each hop on the line itself.
+      const bright = glows.some((g) => g.bright);
+      const data = e.data as { startField?: string; data?: Record<string, unknown> } | undefined;
+      const routeKey = bright ? edgeKeyOf({ startField: data?.startField, data: data?.data }) : undefined;
       return {
         ...e,
-        className: withClass(e.className, "as-path-edge"),
-        data: { ...e.data, pathGlow: glows },
+        className: withClass(e.className, bright ? "as-path-edge as-path-edge--bright" : "as-path-edge"),
+        data: { ...e.data, pathGlow: glows, ...(routeKey ? { routeKey } : {}) },
       };
     }),
   };
+}
+
+/**
+ * Fade every edge outside a kept set — the path panel's "everything not
+ * reachable from the pins" view. Nodes take the same treatment through the
+ * studio context (`dimmedIds`), where the node renderer already dims for the
+ * tag filter; edges have no such hook, so the class goes on the React Flow
+ * wrapper here. Null keeps everything, by identity.
+ */
+export function applyOutsideView(edges: Edge[], keepEdges: ReadonlySet<string> | null): Edge[] {
+  if (!keepEdges) return edges;
+  return edges.map((e) =>
+    keepEdges.has(documentEdgeId(e.id)) ? e : { ...e, className: withClass(e.className, "as-edge--outside") },
+  );
 }

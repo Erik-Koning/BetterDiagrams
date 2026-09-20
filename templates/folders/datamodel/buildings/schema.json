@@ -1,0 +1,165 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": "https://bakery.example",
+  "folder": "buildings",
+  "entity": {
+    "name": "building",
+    "label": "Building",
+    "labelPlural": "Buildings",
+    "kind": "custom",
+    "custom": true,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 4
+  },
+  "curated": {
+    "diagramName": "Building",
+    "diagramType": "custom",
+    "businessLine": "Bakery",
+    "source": "export",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 7,
+    "visible": 7,
+    "hidden": 0
+  },
+  "fields": [
+    {
+      "name": "id",
+      "label": "Record ID",
+      "type": "id",
+      "nullable": false,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "name",
+      "label": "Building name",
+      "type": "string",
+      "nullable": false,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "nameField": true,
+      "length": 255
+    },
+    {
+      "name": "address",
+      "label": "Address",
+      "type": "textarea",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "city",
+      "label": "City",
+      "type": "string",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "capacity",
+      "label": "Capacity",
+      "type": "int",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "opened",
+      "label": "Opened",
+      "type": "date",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "owner_id",
+      "label": "Owner ID",
+      "type": "reference",
+      "displayType": "Reference",
+      "nullable": false,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "relationship": {
+        "kind": "reference",
+        "referenceTo": [
+          "user"
+        ],
+        "relationshipName": null
+      }
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "owner_id",
+      "label": "Owner ID",
+      "kind": "reference",
+      "referenceTo": [
+        "user"
+      ],
+      "relationshipName": null,
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visible": true,
+      "targetFolders": []
+    }
+  ],
+  "referencedBy": [
+    {
+      "entity": "person",
+      "field": "building_id",
+      "kind": "reference",
+      "inModel": true,
+      "folders": [
+        "people"
+      ],
+      "label": "Person"
+    },
+    {
+      "entity": "cutlery",
+      "field": "building_id",
+      "kind": "reference",
+      "inModel": true,
+      "folders": [
+        "cutlery"
+      ],
+      "label": "Cutlery"
+    }
+  ],
+  "validationRules": [],
+  "url": "/entities/building",
+  "notes": [
+    "Every bakery and its kitchen.",
+    "Capacity is covers, not staff."
+  ]
+}

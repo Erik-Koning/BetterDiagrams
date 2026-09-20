@@ -1,0 +1,9 @@
+kind: custom
+label: Product
+name: product
+recordCount: 41
+fieldsTotal: 7
+fieldsVisible: 7
+diagramType: custom
+diagramName: Product
+url: /entities/product

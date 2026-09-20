@@ -1,0 +1,147 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": "https://bakery.example",
+  "folder": "customers",
+  "entity": {
+    "name": "customer",
+    "label": "Customer",
+    "labelPlural": "Customers",
+    "kind": "custom",
+    "custom": true,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 812
+  },
+  "curated": {
+    "diagramName": "Customer",
+    "diagramType": "custom",
+    "businessLine": "Bakery",
+    "source": "export",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 7,
+    "visible": 7,
+    "hidden": 0
+  },
+  "fields": [
+    {
+      "name": "id",
+      "label": "Record ID",
+      "type": "id",
+      "nullable": false,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "name",
+      "label": "Customer name",
+      "type": "string",
+      "nullable": false,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "nameField": true,
+      "length": 255
+    },
+    {
+      "name": "person_id",
+      "label": "Person",
+      "type": "reference",
+      "displayType": "Reference",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "relationship": {
+        "kind": "reference",
+        "referenceTo": [
+          "person"
+        ],
+        "relationshipName": "customers"
+      }
+    },
+    {
+      "name": "email",
+      "label": "Email",
+      "type": "email",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "loyalty_points",
+      "label": "Loyalty Points",
+      "type": "int",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "joined",
+      "label": "Joined",
+      "type": "date",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true
+    },
+    {
+      "name": "external_key",
+      "label": "External key",
+      "type": "string",
+      "nullable": true,
+      "visible": true,
+      "createable": true,
+      "updateable": true,
+      "filterable": true,
+      "sortable": true,
+      "externalId": true,
+      "unique": true
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "person_id",
+      "label": "Person",
+      "kind": "reference",
+      "referenceTo": [
+        "person"
+      ],
+      "relationshipName": "customers",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visible": true,
+      "targetFolders": [
+        "people"
+      ]
+    }
+  ],
+  "referencedBy": [],
+  "validationRules": [],
+  "url": "/entities/customer",
+  "notes": [
+    "A person who buys. The loyalty view filters this object."
+  ]
+}

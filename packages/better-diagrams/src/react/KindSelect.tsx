@@ -23,6 +23,11 @@ export interface KindSelectProps {
    * another container, or the contents would stay inline.
    */
   omit?: (kind: string) => boolean;
+  /**
+   * What the button reads while `value` is empty — a selection whose nodes
+   * are of different kinds has no one kind to show.
+   */
+  placeholder?: string;
 }
 
 interface CloudGroup {
@@ -32,7 +37,7 @@ interface CloudGroup {
   kinds: string[];
 }
 
-export function KindSelect({ registry, value, onChange, relevantProviders, omit }: KindSelectProps) {
+export function KindSelect({ registry, value, onChange, relevantProviders, omit, placeholder }: KindSelectProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -104,7 +109,7 @@ export function KindSelect({ registry, value, onChange, relevantProviders, omit 
         aria-label="Node kind"
         title="Node kind"
       >
-        {registry.nodeKinds[value]?.label ?? value}
+        {value ? (registry.nodeKinds[value]?.label ?? value) : placeholder}
       </button>
       {open ? (
         <div className="as-menu as-kindmenu" role="listbox" aria-label="Node kind">

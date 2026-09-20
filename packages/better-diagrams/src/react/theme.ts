@@ -47,6 +47,12 @@ export interface Theme {
   hazardInk?: string;
   /** The dark-status hazard ring's light half. */
   hazardTape?: string;
+  /**
+   * The colour a single found route is drawn in when the reader singles it
+   * out — deliberately outside the edge palette, so it reads as a
+   * highlighter rather than as one more path.
+   */
+  routeColor?: string;
   /** Per-edge-colour overrides, e.g. { sky: "#0284c7" } for light themes. */
   edgeColors?: Partial<Record<string, string>>;
   /** Per-participant-kind accent overrides for the sequence editor. */
@@ -108,6 +114,7 @@ const TOKEN: Record<keyof Theme, string> = {
   overdue: "--as-overdue",
   hazardInk: "--as-hazard-ink",
   hazardTape: "--as-hazard-tape",
+  routeColor: "--as-route",
   edgeColors: "",
   seqAccents: "",
   nodeAccents: "",
@@ -140,6 +147,7 @@ export const DARK_THEME: Theme = {
   shadowInk: "rgb(0 0 0 / 45%)",
   glowAlpha: "0.65",
   glowBlur: "18px",
+  routeColor: "#ff2d95",
   colorScheme: "dark",
 };
 
@@ -188,6 +196,8 @@ export const LIGHT_THEME: Theme = {
   // one — the darker light-theme edge hues carry the rest.
   glowAlpha: "0.85",
   glowBlur: "12px",
+  // A highlighter that still clears 3:1 on white.
+  routeColor: "#c2007a",
   colorScheme: "light",
   // Darker warning/comparison hues — the dark-canvas values sit near 2:1
   // contrast on a light page.
@@ -214,6 +224,7 @@ export const LIGHT_THEME: Theme = {
     client: "#475569",
     external: "#52627a",
     table: "#0f766e",
+    enum: "#4d7c0f",
     group: "#475569",
     text: "#0369a1",
     decision: "#c2410c",
@@ -295,6 +306,10 @@ export function paletteFromTheme(theme: Theme | undefined): Record<string, strin
  * Applied as a class on the root (`as-root--marketing`) so a host can also
  * reach it from its own CSS. Technical adds no class at all — an existing
  * host stylesheet keeps matching exactly what it matched before.
+ *
+ * Marketing has one setting of its own, `gradients` (see `modeClassName`):
+ * off, every fade it paints becomes a flat coat, on screen and in every
+ * picture export alike.
  */
 export type StudioMode = "technical" | "marketing";
 
@@ -312,9 +327,21 @@ export function resolveStudioMode(mode: unknown): StudioMode {
   return mode === "marketing" ? "marketing" : DEFAULT_STUDIO_MODE;
 }
 
-/** The root class that selects a mode's stylesheet block; empty for technical. */
-export function modeClassName(mode: StudioMode | undefined): string {
-  return resolveStudioMode(mode) === "marketing" ? "as-root--marketing" : "";
+/**
+ * The root class(es) that select a mode's stylesheet block; empty for
+ * technical.
+ *
+ * `gradients` is marketing's one sub-setting: `false` adds
+ * `as-root--no-gradients`, and the stylesheet paints every fade the mode
+ * draws — the card, the icon chip, a silhouette's SVG def, a collapsed
+ * group's chip, a sequence header — as one flat coat at the fade's own
+ * midpoint instead. Shadows, type, corners and spacing are untouched. It is
+ * meaningless in technical, which never had a gradient to switch off, so
+ * technical still adds no class at all.
+ */
+export function modeClassName(mode: StudioMode | undefined, gradients = true): string {
+  if (resolveStudioMode(mode) !== "marketing") return "";
+  return gradients ? "as-root--marketing" : "as-root--marketing as-root--no-gradients";
 }
 
 /**

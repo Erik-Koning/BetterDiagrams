@@ -1,0 +1,152 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-01T00:00:00Z",
+  "$source": "https://example.test",
+  "folder": "core/contact",
+  "entity": {
+    "name": "contact",
+    "label": "Contact",
+    "labelPlural": "Contacts",
+    "kind": "standard",
+    "custom": false,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 0
+  },
+  "curated": {
+    "diagramName": "Contact",
+    "diagramType": "standard",
+    "businessLine": null,
+    "source": "export",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 6,
+    "visible": 6,
+    "hidden": 0
+  },
+  "fields": [
+    {
+      "name": "id",
+      "label": "ID",
+      "type": "id",
+      "nullable": false,
+      "visible": true
+    },
+    {
+      "name": "name",
+      "label": "Name",
+      "type": "string",
+      "nullable": true,
+      "visible": true,
+      "nameField": true
+    },
+    {
+      "name": "account_id",
+      "label": "Account ID",
+      "type": "reference",
+      "displayType": "Reference",
+      "nullable": true,
+      "visible": true,
+      "relationship": {
+        "kind": "reference",
+        "referenceTo": [
+          "account"
+        ],
+        "relationshipName": "contacts"
+      }
+    },
+    {
+      "name": "email",
+      "label": "Email",
+      "type": "email",
+      "nullable": true,
+      "visible": true
+    },
+    {
+      "name": "region_id",
+      "label": "Region ID",
+      "type": "reference",
+      "displayType": "Reference",
+      "nullable": true,
+      "visible": true,
+      "relationship": {
+        "kind": "reference",
+        "referenceTo": [
+          "region"
+        ],
+        "relationshipName": "contacts_region"
+      }
+    },
+    {
+      "name": "owner_id",
+      "label": "Owner ID",
+      "type": "reference",
+      "displayType": "Reference",
+      "nullable": false,
+      "visible": true,
+      "relationship": {
+        "kind": "reference",
+        "referenceTo": [
+          "user"
+        ],
+        "relationshipName": null
+      }
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "account_id",
+      "label": "Account ID",
+      "kind": "reference",
+      "referenceTo": [
+        "account"
+      ],
+      "relationshipName": "contacts",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visible": true,
+      "targetFolders": [
+        "core/account",
+        "core/account/individuals"
+      ]
+    },
+    {
+      "field": "region_id",
+      "label": "Region ID",
+      "kind": "reference",
+      "referenceTo": [
+        "region"
+      ],
+      "relationshipName": "contacts_region",
+      "required": false,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visible": true,
+      "targetFolders": []
+    },
+    {
+      "field": "owner_id",
+      "label": "Owner ID",
+      "kind": "reference",
+      "referenceTo": [
+        "user"
+      ],
+      "relationshipName": null,
+      "required": true,
+      "cascadeDelete": false,
+      "deleteConstraint": "SetNull",
+      "visible": true,
+      "targetFolders": []
+    }
+  ],
+  "referencedBy": [],
+  "validationRules": [],
+  "url": "/entities/contact",
+  "notes": []
+}

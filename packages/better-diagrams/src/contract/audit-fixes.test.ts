@@ -194,6 +194,44 @@ describe("Tidy", () => {
     // A node whose providers OVERLAP an alternate is not one of them.
     expect(at("cache")).not.toBe(at("sql-az"));
   });
+
+  it("wraps a towering rank into side-by-side columns, so a band of tables fits the canvas", () => {
+    // Twenty-two tables with no edges among them are one rank. Stacked they
+    // make a 22-high spine that fit-zooms to about 15%.
+    const t = doc({
+      nodes: Array.from({ length: 22 }, (_, i) => ({
+        id: `t${i}`, label: `T${i}`, kind: "table", x: 0, y: 0, w: 230, h: 140,
+        fields: [{ id: "id", name: "id", key: "pk" }],
+      })),
+    });
+    const box = (laid: DiagramTemplate) => {
+      const b = templateBounds(laid);
+      return { width: b.maxX - b.minX, height: b.maxY - b.minY };
+    };
+    const wrapped = box(autoLayout(t));
+    const spine = box(autoLayout(t, { aspect: 0 }));
+    expect(spine.height).toBeGreaterThan(3000);
+    expect(spine.width).toBe(230);
+    expect(wrapped.height).toBeLessThan(spine.height / 2);
+    expect(wrapped.width / wrapped.height).toBeGreaterThan(0.8);
+    expect(wrapped.width / wrapped.height).toBeLessThan(2.4);
+    // Every table still has a box of its own.
+    const boxes = autoLayout(t).nodes.map((n) => ({ x: n.x, y: n.y, r: n.x + n.w, b: n.y + n.h }));
+    for (let i = 0; i < boxes.length; i++)
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i], b = boxes[j];
+        expect(a.x >= b.r || b.x >= a.r || a.y >= b.b || b.y >= a.b).toBe(true);
+      }
+  });
+
+  it("leaves a rank that fits on a screen exactly as it was", () => {
+    // Six stacked services are 600px: taller than wide, but nothing to wrap.
+    const t = doc({
+      nodes: ["a", "b", "c", "d", "e", "f"].map((id) => ({ id, label: id, kind: "service", x: 0, y: 0 })),
+    });
+    const at = (laid: DiagramTemplate) => laid.nodes.map((n) => `${n.id}:${n.x},${n.y}`);
+    expect(at(autoLayout(t))).toEqual(at(autoLayout(t, { aspect: 0 })));
+  });
 });
 
 describe("what an export has to draw", () => {

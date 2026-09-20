@@ -27,13 +27,14 @@ import {
 import { cardinalityMarker, type CardinalityMarker } from "../contract/geometry";
 import { formatDiagramDate, templateTimeline } from "../contract/timeline";
 import { splitTemplate } from "../contract/presentation";
+import { exportFolder } from "../contract/folder";
+import { buildZip, type ZipEntry } from "./zip";
 import { drillableIds, focusPath, scopedView } from "../contract/scope";
 import { CLOUD_NODE_KINDS } from "./cloud-kinds";
 // Imports `./registry-types`, not `./registry` — registry.ts imports
 // BUILTIN_EXPORTERS from here, so depending on it directly would be a cycle.
 import type { ExportContext, ExporterDef, ResolvedRegistry } from "./registry-types";
-import { emitTemplate, paletteRecord, type ExportPalette } from "./draw";
-import { resolveStudioMode } from "./theme";
+import { emitOptions, emitTemplate, paletteRecord, type ExportPalette, type PictureOptions } from "./draw";
 import { levelLabel } from "./chrome";
 import {
   buildMultiViewHtml,
@@ -63,15 +64,10 @@ export function renderTemplateToCanvas(
   registry: ResolvedRegistry,
   scale = 2,
   palette: Partial<ExportPalette> = {},
-  /**
-   * `mode` is a loose string here rather than `StudioMode`: this is the
-   * host-facing wrapper, and the value a host has is the one it threaded in
-   * from a query string or a saved preference. Anything unrecognised resolves
-   * to technical rather than half-applying a look.
-   */
-  opts: { mode?: string } = {},
+  /** The dress, as the host has it — see `PictureOptions` for the coercion. */
+  opts: PictureOptions = {},
 ): RenderedCanvas {
-  return emittedToCanvas(emitTemplate(template, registry, palette, { mode: resolveStudioMode(opts.mode) }), scale);
+  return emittedToCanvas(emitTemplate(template, registry, palette, emitOptions(opts)), scale);
 }
 
 // ─── SVG ─────────────────────────────────────────────────────────────────────
@@ -81,9 +77,9 @@ export function renderTemplateToSvg(
   template: DiagramTemplate,
   registry: ResolvedRegistry,
   palette: Partial<ExportPalette> = {},
-  opts: { gridId?: string; mode?: string } = {},
+  opts: PictureOptions & { gridId?: string } = {},
 ): string {
-  return emittedToSvg(emitTemplate(template, registry, palette, { mode: resolveStudioMode(opts.mode) }), opts);
+  return emittedToSvg(emitTemplate(template, registry, palette, emitOptions(opts)), opts);
 }
 
 // ─── Interactive HTML: paths ─────────────────────────────────────────────────
@@ -382,10 +378,18 @@ function renderTemplateToMermaidEr(template: DiagramTemplate, safe: (id: string)
     if (!visible.nodes.has(n.id) || !n.fields?.length) continue;
     lines.push(`  ${safe(n.id)} {`);
     for (const field of n.fields) {
-      // Mermaid wants `type name KEY`; it has no "optional" marker, so a
-      // required column says so in the comment slot instead.
-      const key = field.key === "pk" || field.key === "pfk" ? " PK" : field.key === "fk" ? " FK" : "";
-      const note = field.required ? ' "required"' : "";
+      // Mermaid wants `type name KEYS "comment"`: a comma list of PK, FK,
+      // UK — so a `pfk` is "PK, FK" and a unique column adds UK — and one
+      // quoted comment, which is where "required" and "derived" go, since
+      // the grammar has no marker for either.
+      const roles = [
+        ...(field.key === "pk" || field.key === "pfk" ? ["PK"] : []),
+        ...(field.key === "fk" || field.key === "pfk" ? ["FK"] : []),
+        ...(field.unique ? ["UK"] : []),
+      ];
+      const key = roles.length ? ` ${roles.join(", ")}` : "";
+      const notes = [...(field.required ? ["required"] : []), ...(field.derived ? ["derived"] : [])];
+      const note = notes.length ? ` "${notes.join(", ")}"` : "";
       lines.push(`    ${token(field.type || "string")} ${token(field.name) || "column"}${key}${note}`);
     }
     lines.push("  }");
@@ -399,7 +403,12 @@ function renderTemplateToMermaidEr(template: DiagramTemplate, safe: (id: string)
     // An ER diagram has no dangling relationships — Mermaid would conjure an
     // empty entity for the unknown id, which reads as a data-model mistake.
     if (pointIds.has(e.source) || pointIds.has(e.target)) continue;
-    const rel = `${erCardinality(e.startLabel, "left")}--${erCardinality(e.endLabel, "right")}`;
+    // Mermaid draws an identifying relationship solid (`--`) and a
+    // non-identifying one dashed (`..`) — the same distinction the canvas
+    // makes between a composition and every other kind. A line that says
+    // nothing about its kind stays solid, as it always was.
+    const line = e.relation && e.relation !== "composition" ? ".." : "--";
+    const rel = `${erCardinality(e.startLabel, "left")}${line}${erCardinality(e.endLabel, "right")}`;
     // The relationship label is mandatory in Mermaid's ER grammar; the joined
     // columns are the truest thing to say when the edge carries no words.
     const label =
@@ -513,6 +522,12 @@ export function renderTemplateToMermaid(rawTemplate: DiagramTemplate): string {
 
 const json = (value: unknown) => new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
 
+/** A folder export's file map as archive entries, paths intact. */
+function zipEntries(files: ReadonlyMap<string, string>): ZipEntry[] {
+  const encoder = new TextEncoder();
+  return [...files].map(([name, text]) => ({ name, data: encoder.encode(text) }));
+}
+
 /**
  * Validation options mirroring the registry, for `splitTemplate`'s internal
  * re-validate — without them a custom kind or provider would be "repaired"
@@ -535,7 +550,7 @@ function buildDrillViews(
   template: DiagramTemplate,
   registry: ResolvedRegistry,
   palette: Partial<ExportPalette> = {},
-  mode?: string,
+  dress: PictureOptions = {},
 ): ViewEntry[] {
   const parents = drillableIds(template);
   const parentSet = new Set(parents);
@@ -564,7 +579,7 @@ function buildDrillViews(
       crumb: [{ key: "", label: rootLabel }],
       levelLabel: levelLabel(0),
       parent: null,
-      svg: renderTemplateToSvg(template, registry, palette, { gridId: "as-grid-v0", mode }),
+      svg: renderTemplateToSvg(template, registry, palette, { ...dress, gridId: "as-grid-v0" }),
       drills: rootDrills,
     },
   ];
@@ -586,7 +601,7 @@ function buildDrillViews(
       crumb: crumbFor(focusId),
       levelLabel: levelLabel(focusPath(template, focusId).length + 1),
       parent: homeViewOf(focusId),
-      svg: renderTemplateToSvg(view, registry, palette, { gridId: `as-grid-v${i + 1}`, mode }),
+      svg: renderTemplateToSvg(view, registry, palette, { ...dress, gridId: `as-grid-v${i + 1}` }),
       drills,
     });
   });
@@ -597,20 +612,20 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
   png: {
     label: "PNG image",
     hint: "Raster snapshot at 2x",
-    async run({ template, registry, filename, palette, mode }: ExportContext) {
-      const { canvas } = renderTemplateToCanvas(template, registry, 2, palette, { mode });
+    async run({ template, registry, filename, palette, mode, gradients }: ExportContext) {
+      const { canvas } = renderTemplateToCanvas(template, registry, 2, palette, { mode, gradients });
       return { blob: await canvasToBlob(canvas, "image/png"), filename: `${filename}.png` };
     },
   },
   pdf: {
     label: "PDF document",
     hint: "Single page, sized to fit",
-    async run({ template, registry, filename, palette, mode }: ExportContext) {
+    async run({ template, registry, filename, palette, mode, gradients }: ExportContext) {
       // The PAGE is sized in CSS pixels, not backing-store pixels: the canvas
       // is rendered at 2x for sharpness, and handing those dimensions to the
       // PDF writer prints the diagram at twice its physical size (a 1036px
       // document came out as a 21-inch page).
-      const { canvas, width, height } = renderTemplateToCanvas(template, registry, 2, palette, { mode });
+      const { canvas, width, height } = renderTemplateToCanvas(template, registry, 2, palette, { mode, gradients });
       const jpegBlob = await canvasToBlob(canvas, "image/jpeg", 0.92);
       const jpeg = await blobToUint8(jpegBlob);
       return {
@@ -622,9 +637,9 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
   svg: {
     label: "SVG vector",
     hint: "Editable in Figma or Illustrator",
-    run({ template, registry, filename, palette, mode }: ExportContext) {
+    run({ template, registry, filename, palette, mode, gradients }: ExportContext) {
       return {
-        blob: new Blob([renderTemplateToSvg(template, registry, palette, { mode })], { type: "image/svg+xml" }),
+        blob: new Blob([renderTemplateToSvg(template, registry, palette, { mode, gradients })], { type: "image/svg+xml" }),
         filename: `${filename}.svg`,
       };
     },
@@ -635,7 +650,7 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
     // The page carries its own scrubber, so it needs every element and every
     // date — a hide-mode slice would leave it nothing to scrub.
     fullDocument: true,
-    run({ template, registry, filename, palette, mode }: ExportContext) {
+    run({ template, registry, filename, palette, mode, gradients }: ExportContext) {
       const title = String(template.meta?.title ?? filename);
       const stops = templateTimeline(template).stops;
       const paths = htmlPathEntries(template, palette);
@@ -643,9 +658,9 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
       // drillable level, clickable in place. A flat document keeps the
       // original single-view page byte-for-byte.
       const page = drillableIds(template).length
-        ? buildMultiViewHtml({ views: buildDrillViews(template, registry, palette, mode), title, stops, palette, paths })
+        ? buildMultiViewHtml({ views: buildDrillViews(template, registry, palette, { mode, gradients }), title, stops, palette, paths })
         : buildTimelineHtml({
-            svg: renderTemplateToSvg(template, registry, palette, { mode }),
+            svg: renderTemplateToSvg(template, registry, palette, { mode, gradients }),
             title,
             stops,
             palette,
@@ -725,6 +740,33 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
         blob: new Blob([renderTemplateToC4Puml(template)], { type: "text/plain" }),
         filename: `${filename}.puml`,
       };
+    },
+  },
+  "folder-full": {
+    label: "Folder (.zip)",
+    hint: "One folder per node — node.json, edges.json, and the layout sidecar",
+    fullDocument: true,
+    run({ template, filename }: ExportContext) {
+      const out = exportFolder(template, { mode: "full" });
+      return { blob: buildZip(zipEntries(out.files)), filename: `${filename}-folder.zip` };
+    },
+  },
+};
+
+/**
+ * Exporters that only mean something for a document that CAME from a folder
+ * tree — opt-in, so a host that never imports one doesn't grow a menu entry
+ * whose output is an empty overrides file. Register with
+ * `registry={{ exporters: FOLDER_EXPORTERS }}`.
+ */
+export const FOLDER_EXPORTERS: Record<string, ExporterDef> = {
+  "folder-sidecar": {
+    label: "Folder sidecar (.zip)",
+    hint: "Only .better-diagrams/ — layout & overrides beside the imported source tree",
+    fullDocument: true,
+    run({ template, filename }: ExportContext) {
+      const out = exportFolder(template, { mode: "sidecar" });
+      return { blob: buildZip(zipEntries(out.files)), filename: `${filename}-sidecar.zip` };
     },
   },
 };

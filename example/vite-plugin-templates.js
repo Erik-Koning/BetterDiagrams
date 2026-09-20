@@ -27,7 +27,7 @@
  * ever having to argue about ordering.
  */
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 
 const ROUTE = "/__templates";
 
@@ -114,7 +114,57 @@ function listFolder(dirs, folder) {
   return listed.sort((a, b) => b.updated - a.updated);
 }
 
-/** @param {{ scratch: string, examples: string }} dirs absolute folder paths */
+/** The folder-format root: one subdirectory per tree, listed by name. */
+const FOLDERS = "folders";
+const FOLDER_FILE = /\.(json|ya?ml|md)$/i;
+const FOLDER_SKIP = new Set(["node_modules", ".git"]);
+const FOLDER_MAX_BYTES = 5_000_000;
+
+function listFolders(dirs) {
+  const root = dirs[FOLDERS];
+  if (!root) return [];
+  let names;
+  try {
+    names = readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
+  return names.sort().map((name) => {
+    let title = name;
+    try {
+      const manifest = JSON.parse(readFileSync(join(root, name, "schema.json"), "utf8"));
+      if (typeof manifest?.title === "string" && manifest.title.trim()) title = manifest.title;
+    } catch {
+      // No root manifest, or not JSON — the folder name is the title.
+    }
+    return { folder: FOLDERS, file: name, name: title, kind: "architecture", nodes: 0, updated: statSync(join(root, name)).mtimeMs };
+  });
+}
+
+/**
+ * A tree as the `FileMap` the client hands to `importFolder`: relative path
+ * → text, the same files and limits the Node adapter reads.
+ */
+function readFolderMap(root) {
+  const files = {};
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!FOLDER_SKIP.has(entry.name)) walk(full);
+        continue;
+      }
+      if (!entry.isFile() || !FOLDER_FILE.test(entry.name) || statSync(full).size > FOLDER_MAX_BYTES) continue;
+      files[relative(root, full).split(sep).join("/")] = readFileSync(full, "utf8");
+    }
+  };
+  walk(root);
+  return files;
+}
+
+/** @param {{ scratch: string, examples: string, folders?: string }} dirs absolute folder paths */
 export function templatesPlugin(dirs) {
   return {
     name: "better-diagrams-templates",
@@ -132,11 +182,21 @@ export function templatesPlugin(dirs) {
           if (req.method === "GET" && !path) {
             return json(res, 200, {
               dirs,
-              templates: [...listFolder(dirs, "examples"), ...listFolder(dirs, WRITABLE)],
+              templates: [...listFolder(dirs, "examples"), ...listFolder(dirs, WRITABLE), ...listFolders(dirs)],
             });
           }
 
           const [folder, name, extra] = path.split("/");
+          // A folder-format tree is served whole, as a file map, read-only.
+          if (folder === FOLDERS && req.method === "GET") {
+            const root = dirs[FOLDERS];
+            if (!root || !name || extra || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
+              return json(res, 400, { error: `Bad folder path: ${path}` });
+            }
+            const full = resolve(root, name);
+            if (!full.startsWith(resolve(root) + sep)) return json(res, 400, { error: `Bad folder path: ${path}` });
+            return json(res, 200, { name, files: readFolderMap(full) });
+          }
           const full = !extra ? safePath(dirs, folder, name ?? "") : null;
           if (!full) return json(res, 400, { error: `Bad template path: ${path}` });
 
@@ -171,7 +231,7 @@ export function templatesPlugin(dirs) {
           return json(res, 500, { error: String(error?.message ?? error) });
         }
       });
-      server.config.logger.info(`  ➜  templates:  ${dirs.examples} (examples), ${dirs.scratch} (scratch, auto-save)`, {
+      server.config.logger.info(`  ➜  templates:  ${dirs.examples} (examples), ${dirs.scratch} (scratch, auto-save)${dirs.folders ? `, ${dirs.folders} (folders)` : ""}`, {
         timestamp: true,
       });
     },

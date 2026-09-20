@@ -1,0 +1,12 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-17T00:00:00Z",
+  "$source": {
+    "system": "example",
+    "url": "https://bakery.example",
+    "version": "1"
+  },
+  "title": "Bakery data model",
+  "bands": [],
+  "crossCutting": "metadata"
+}

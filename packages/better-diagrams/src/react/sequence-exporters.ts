@@ -5,9 +5,8 @@
  * order, messages in order, fragments as nested blocks).
  */
 import type { ExporterDef } from "./registry-types";
-import type { ExportPalette } from "./draw";
+import { emitOptions, type ExportPalette, type PictureOptions } from "./draw";
 import { emitSequence } from "./sequence-draw";
-import { resolveStudioMode } from "./theme";
 import { buildTimelineHtml } from "./html-export";
 import {
   blobToUint8,
@@ -27,17 +26,17 @@ export function renderSequenceToCanvas(
   scale = 2,
   palette: Partial<ExportPalette> = {},
   /** Loose, like the architecture wrappers: whatever the host threaded in. */
-  opts: { mode?: string } = {},
+  opts: PictureOptions = {},
 ): RenderedCanvas {
-  return emittedToCanvas(emitSequence(template, palette, { mode: resolveStudioMode(opts.mode) }), scale);
+  return emittedToCanvas(emitSequence(template, palette, emitOptions(opts)), scale);
 }
 
 export function renderSequenceToSvg(
   template: SequenceTemplate,
   palette: Partial<ExportPalette> = {},
-  opts: { mode?: string } = {},
+  opts: PictureOptions = {},
 ): string {
-  return emittedToSvg(emitSequence(template, palette, { mode: resolveStudioMode(opts.mode) }));
+  return emittedToSvg(emitSequence(template, palette, emitOptions(opts)));
 }
 
 // ─── Fragment walking (shared by both text formats) ──────────────────────────
@@ -236,16 +235,16 @@ export const BUILTIN_SEQUENCE_EXPORTERS: Record<string, ExporterDef<SequenceTemp
   png: {
     label: "PNG image",
     hint: "Raster at 2x, matches the canvas exactly",
-    async run({ template, filename, palette, mode }) {
-      const { canvas } = renderSequenceToCanvas(template, 2, palette, { mode });
+    async run({ template, filename, palette, mode, gradients }) {
+      const { canvas } = renderSequenceToCanvas(template, 2, palette, { mode, gradients });
       return { blob: await canvasToBlob(canvas, "image/png"), filename: `${filename}.png` };
     },
   },
   pdf: {
     label: "PDF document",
     hint: "Single page, prints at a sane size",
-    async run({ template, filename, palette, mode }) {
-      const { canvas } = renderSequenceToCanvas(template, 2, palette, { mode });
+    async run({ template, filename, palette, mode, gradients }) {
+      const { canvas } = renderSequenceToCanvas(template, 2, palette, { mode, gradients });
       const jpeg = await blobToUint8(await canvasToBlob(canvas, "image/jpeg", 0.92));
       return {
         blob: buildSinglePageJpegPdf(jpeg, canvas.width, canvas.height),
@@ -256,8 +255,8 @@ export const BUILTIN_SEQUENCE_EXPORTERS: Record<string, ExporterDef<SequenceTemp
   svg: {
     label: "SVG vector",
     hint: "Editable in Figma / Illustrator",
-    run({ template, filename, palette, mode }) {
-      const svg = renderSequenceToSvg(template, palette, { mode });
+    run({ template, filename, palette, mode, gradients }) {
+      const svg = renderSequenceToSvg(template, palette, { mode, gradients });
       return { blob: new Blob([svg], { type: "image/svg+xml" }), filename: `${filename}.svg` };
     },
   },
@@ -265,9 +264,9 @@ export const BUILTIN_SEQUENCE_EXPORTERS: Record<string, ExporterDef<SequenceTemp
     label: "Interactive HTML",
     hint: "Self-contained page with a timeline scrubber",
     fullDocument: true,
-    run({ template, filename, palette, mode }) {
+    run({ template, filename, palette, mode, gradients }) {
       const page = buildTimelineHtml({
-        svg: renderSequenceToSvg(template, palette, { mode }),
+        svg: renderSequenceToSvg(template, palette, { mode, gradients }),
         title: String(template.meta?.title ?? filename),
         stops: sequenceTimeline(template).stops,
         palette,

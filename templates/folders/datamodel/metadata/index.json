@@ -1,0 +1,12 @@
+{
+  "roles": [
+    "Baker",
+    "Manager",
+    "Integration"
+  ],
+  "permissions": [
+    "recipe_editor",
+    "coupon_issuer"
+  ],
+  "note": "Cross-cutting metadata. Never a node \u2014 see crossCutting in the root manifest."
+}

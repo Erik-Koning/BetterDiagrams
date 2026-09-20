@@ -1,0 +1,22 @@
+{
+  "folder": "customers/loyalty-members",
+  "kind": "view",
+  "entity": {
+    "name": "customer",
+    "label": "Customer"
+  },
+  "aliasOf": {
+    "folder": "customers",
+    "name": "customer",
+    "schema": "../schema.json"
+  },
+  "view": "customer WHERE loyalty_points > 100",
+  "filter": "loyalty_points > 100",
+  "curated": {
+    "diagramName": "Loyalty members",
+    "diagramType": "custom"
+  },
+  "measured": {
+    "recordCount": 174
+  }
+}
