@@ -124,7 +124,7 @@
     "typescript": "^5.6.3",
     "vite": "^7.3.6",
     "vite-plugin-dts": "^4.5.4",
-    "vitest": "^3.2.7"
+    "vitest": "^5.0.1"
   },
   "bin": {
     "bd-folder": "./bin/bd-folder.mjs"
