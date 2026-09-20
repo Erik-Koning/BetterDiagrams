@@ -1,12 +1,12 @@
 {
-  "profiles": [
+  "roles": [
     "Baker",
     "Manager",
-    "Integration User"
+    "Integration"
   ],
-  "permissionSets": [
-    "Recipe_Editor",
-    "Coupon_Issuer"
+  "permissions": [
+    "recipe_editor",
+    "coupon_issuer"
   ],
   "note": "Cross-cutting metadata. Never a node \u2014 see crossCutting in the root manifest."
 }

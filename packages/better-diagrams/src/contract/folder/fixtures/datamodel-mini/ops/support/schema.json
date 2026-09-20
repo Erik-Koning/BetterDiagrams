@@ -1,0 +1,14 @@
+{
+  "folder": "ops/support",
+  "kind": "group",
+  "description": "Support desk",
+  "childCount": 1,
+  "children": [
+    {
+      "folder": "ops/support/case",
+      "name": "case",
+      "label": "Case",
+      "kind": "standard"
+    }
+  ]
+}

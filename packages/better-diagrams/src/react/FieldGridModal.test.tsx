@@ -21,8 +21,8 @@ const DOC: DiagramTemplate = validateTemplate({
         fields: [
           { name: "Id", type: "id" },
           { name: "AccountId", label: "Account ID", type: "reference", relationship: { referenceTo: ["Account"] } },
-          { name: "Email", label: "Email", type: "email", visibleToIntegrationUser: false },
-          { name: "Score__c", label: "Score", type: "double", formula: "1 + 1", unique: true },
+          { name: "Email", label: "Email", type: "email", visible: false },
+          { name: "Score", label: "Score", type: "double", formula: "1 + 1", unique: true },
         ],
       },
     },
@@ -53,7 +53,7 @@ describe("FieldGridModal", () => {
   it("lists every field record, rows and data-only, in a labelled dialog", () => {
     mountGrid();
     expect(screen.getByRole("dialog", { name: "Contact — fields" })).toBeInTheDocument();
-    expect(rowIds()).toEqual(["Id", "AccountId", "Email", "Score__c"]);
+    expect(rowIds()).toEqual(["Id", "AccountId", "Email", "Score"]);
     expect(screen.getByText("4 fields")).toBeInTheDocument();
     expect(screen.getByRole("row", { name: /Email/ }).className).toContain("as-grid__row--data");
     expect(within(screen.getByRole("row", { name: /Email/ })).getByText("hidden")).toBeInTheDocument();
@@ -64,13 +64,13 @@ describe("FieldGridModal", () => {
     const th = screen.getByRole("columnheader", { name: /Label/ });
     fireEvent.click(within(th).getByRole("button"));
     expect(th).toHaveAttribute("aria-sort", "ascending");
-    expect(rowIds()).toEqual(["AccountId", "Email", "Score__c", "Id"]);
+    expect(rowIds()).toEqual(["AccountId", "Email", "Score", "Id"]);
     fireEvent.click(within(th).getByRole("button"));
     expect(th).toHaveAttribute("aria-sort", "descending");
     expect(rowIds()[0]).toBe("Id");
     fireEvent.click(within(th).getByRole("button"));
     expect(th).toHaveAttribute("aria-sort", "none");
-    expect(rowIds()).toEqual(["Id", "AccountId", "Email", "Score__c"]);
+    expect(rowIds()).toEqual(["Id", "AccountId", "Email", "Score"]);
   });
 
   it("filters, and says how many remain", () => {
@@ -91,7 +91,12 @@ describe("FieldGridModal", () => {
     const accountId = screen.getByRole("row", { name: /AccountId/ });
     expect(accountId).toHaveAttribute("aria-selected", "true");
     fireEvent.keyDown(grid, { key: "Enter" });
-    expect(props.onNavigate).toHaveBeenCalledWith("account");
+    // The table, plus which field was followed and through what — so the
+    // parent can mark both halves of the join.
+    expect(props.onNavigate).toHaveBeenCalledWith("account", {
+      from: { nodeId: "contact", fieldId: "AccountId" },
+      target: { label: "Account", nodeId: "account", edgeId: "c-a" },
+    });
     fireEvent.keyDown(grid, { key: "p" });
     expect(props.onTogglePin).toHaveBeenCalledWith({ nodeId: "contact", fieldId: "AccountId" });
     fireEvent.keyDown(grid, { key: "End" });
@@ -103,7 +108,10 @@ describe("FieldGridModal", () => {
   it("reference cells are links; the pin column mirrors the pins", () => {
     const { props } = mountGrid({ pins: [{ nodeId: "contact", fieldId: "Id" }] });
     fireEvent.click(screen.getByRole("button", { name: "Go to Account" }));
-    expect(props.onNavigate).toHaveBeenCalledWith("account");
+    expect(props.onNavigate).toHaveBeenCalledWith("account", {
+      from: { nodeId: "contact", fieldId: "AccountId" },
+      target: { label: "Account", nodeId: "account", edgeId: "c-a" },
+    });
     expect(screen.getByRole("button", { name: "Unpin Id" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Pin Email" }));
     expect(props.onTogglePin).toHaveBeenCalledWith({ nodeId: "contact", fieldId: "Email" });
@@ -117,7 +125,7 @@ describe("FieldGridModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy TSV" }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
     const tsv = writeText.mock.calls[0][0] as string;
-    expect(tsv.split("\n")[1].split("\t")[1]).toBe("Score__c");
+    expect(tsv.split("\n")[1].split("\t")[1]).toBe("Score");
     await waitFor(() => expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
     expect(props.onDownload).toHaveBeenCalledTimes(1);

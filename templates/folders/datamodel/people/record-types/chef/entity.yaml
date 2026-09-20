@@ -1,0 +1,5 @@
+kind: record-type
+label: Chef
+key: chef
+diagramType: record-type
+diagramName: Chef

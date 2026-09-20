@@ -11,7 +11,7 @@ import { importFolder } from "./import";
 import { exportFolder } from "./export";
 import { MANIFEST_FILE, LAYOUT_FILE } from "./sidecar";
 import { genericDialect, slugFolder, humanise } from "./dialects/generic";
-import { parseFlatYaml, patchFlatYaml } from "./dialects/salesforce/yaml";
+import { parseFlatYaml, patchFlatYaml } from "./dialects/datamodel/yaml";
 import { EXAMPLE_TEMPLATE, EXAMPLE_ZONED_TEMPLATE, validateTemplate, type DiagramTemplate } from "../schema";
 
 describe("buildFolderTree", () => {
@@ -49,10 +49,10 @@ describe("buildFolderTree", () => {
 });
 
 describe("flat YAML", () => {
-  const TEXT = "# summary\ntype: standard\ndisplayName: \"Case: Comment\"\nrecordCount: 12\n\nkeyPrefix: '00a'\n";
+  const TEXT = "# summary\nkind: standard\nlabel: \"Case: Comment\"\nrecordCount: 12\n\nname: 'case_comment'\n";
 
   it("reads scalars, unquoting both styles", () => {
-    expect(parseFlatYaml(TEXT)).toEqual({ type: "standard", displayName: "Case: Comment", recordCount: "12", keyPrefix: "00a" });
+    expect(parseFlatYaml(TEXT)).toEqual({ kind: "standard", label: "Case: Comment", recordCount: "12", name: "case_comment" });
   });
 
   it("refuses nested documents", () => {
@@ -62,9 +62,9 @@ describe("flat YAML", () => {
   });
 
   it("patches in place, byte-identical elsewhere, quoting only what YAML would misread", () => {
-    const out = patchFlatYaml(TEXT, { displayName: "Case Comment", diagramName: "Case: Comment", recordCount: "13" })!;
+    const out = patchFlatYaml(TEXT, { label: "Case Comment", diagramName: "Case: Comment", recordCount: "13" })!;
     expect(out).toBe(
-      "# summary\ntype: standard\ndisplayName: Case Comment\nrecordCount: \"13\"\n\nkeyPrefix: '00a'\ndiagramName: \"Case: Comment\"\n",
+      "# summary\nkind: standard\nlabel: Case Comment\nrecordCount: \"13\"\n\nname: 'case_comment'\ndiagramName: \"Case: Comment\"\n",
     );
     expect(patchFlatYaml("a: 1", { a: "true" })).toBe('a: "true"');
   });
@@ -136,15 +136,15 @@ describe("full round trip", () => {
     const doc = validateTemplate(
       {
         version: 1,
-        nodes: [{ id: "acc", label: "Account", kind: "sf-object-std", icon: "none", description: "", parentId: null, x: 0, y: 0, w: 230, h: 96 }],
+        nodes: [{ id: "acc", label: "Account", kind: "entity-standard", icon: "none", description: "", parentId: null, x: 0, y: 0, w: 230, h: 96 }],
         edges: [],
       },
-      { knownKinds: ["sf-object-std"] },
+      { knownKinds: ["entity-standard"] },
     );
-    expect(doc.nodes[0].kind).toBe("sf-object-std");
-    const out = exportFolder(doc, { mode: "full", validate: { knownKinds: ["sf-object-std"] } });
-    expect(JSON.parse(out.files.get(MANIFEST_FILE)!).kinds).toEqual(["sf-object-std"]);
-    expect(importFolder(out.files).template.nodes[0].kind).toBe("sf-object-std");
+    expect(doc.nodes[0].kind).toBe("entity-standard");
+    const out = exportFolder(doc, { mode: "full", validate: { knownKinds: ["entity-standard"] } });
+    expect(JSON.parse(out.files.get(MANIFEST_FILE)!).kinds).toEqual(["entity-standard"]);
+    expect(importFolder(out.files).template.nodes[0].kind).toBe("entity-standard");
   });
 
   it("names folders after ids, nested by parent, never colliding", () => {

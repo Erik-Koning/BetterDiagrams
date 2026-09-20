@@ -1,13 +1,12 @@
 {
   "$schemaVersion": 1,
   "$generatedAt": "2026-09-17T00:00:00Z",
-  "$source": "https://bakery.my.salesforce.com",
+  "$source": "https://bakery.example",
   "folder": "buildings",
-  "object": {
-    "apiName": "Building__c",
+  "entity": {
+    "name": "building",
     "label": "Building",
     "labelPlural": "Buildings",
-    "keyPrefix": "a01",
     "kind": "custom",
     "custom": true,
     "namespace": null,
@@ -21,106 +20,99 @@
     "diagramName": "Building",
     "diagramType": "custom",
     "businessLine": "Bakery",
-    "source": "describe",
+    "source": "export",
     "note": ""
   },
   "recordTypes": [],
   "fieldSummary": {
     "total": 7,
-    "visibleToIntegrationUser": 7,
-    "hiddenFromIntegrationUser": 0
+    "visible": 7,
+    "hidden": 0
   },
   "fields": [
     {
-      "name": "Id",
+      "name": "id",
       "label": "Record ID",
       "type": "id",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "Name",
+      "name": "name",
       "label": "Building name",
       "type": "string",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
       "nameField": true,
       "length": 255
     },
     {
-      "name": "Address__c",
+      "name": "address",
       "label": "Address",
       "type": "textarea",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "City__c",
+      "name": "city",
       "label": "City",
       "type": "string",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "Capacity__c",
+      "name": "capacity",
       "label": "Capacity",
       "type": "int",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "Opened__c",
+      "name": "opened",
       "label": "Opened",
       "type": "date",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "OwnerId",
+      "name": "owner_id",
       "label": "Owner ID",
       "type": "reference",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "displayType": "Reference",
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "toolingType": "Lookup",
       "relationship": {
-        "kind": "lookup",
+        "kind": "reference",
         "referenceTo": [
-          "User"
+          "user"
         ],
         "relationshipName": null
       }
@@ -128,25 +120,25 @@
   ],
   "foreignKeys": [
     {
-      "field": "OwnerId",
+      "field": "owner_id",
       "label": "Owner ID",
-      "kind": "lookup",
+      "kind": "reference",
       "referenceTo": [
-        "User"
+        "user"
       ],
       "relationshipName": null,
       "required": false,
       "cascadeDelete": false,
       "deleteConstraint": "SetNull",
-      "visibleToIntegrationUser": true,
+      "visible": true,
       "targetFolders": []
     }
   ],
   "referencedBy": [
     {
-      "object": "Person__c",
-      "field": "Building__c",
-      "kind": "lookup",
+      "entity": "person",
+      "field": "building_id",
+      "kind": "reference",
       "inModel": true,
       "folders": [
         "people"
@@ -154,9 +146,9 @@
       "label": "Person"
     },
     {
-      "object": "Cutlery__c",
-      "field": "Building__c",
-      "kind": "lookup",
+      "entity": "cutlery",
+      "field": "building_id",
+      "kind": "reference",
       "inModel": true,
       "folders": [
         "cutlery"
@@ -165,10 +157,7 @@
     }
   ],
   "validationRules": [],
-  "routes": {
-    "lightningList": "/lightning/o/Building__c/list",
-    "describe": "/services/data/v60.0/sobjects/Building__c/describe"
-  },
+  "url": "/entities/building",
   "notes": [
     "Every bakery and its kitchen.",
     "Capacity is covers, not staff."

@@ -1,0 +1,9 @@
+kind: custom
+label: Bread
+name: bread
+recordCount: 19
+fieldsTotal: 6
+fieldsVisible: 6
+diagramType: custom
+diagramName: Bread
+url: /entities/bread

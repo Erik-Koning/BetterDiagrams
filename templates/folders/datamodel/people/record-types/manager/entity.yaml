@@ -1,0 +1,5 @@
+kind: record-type
+label: Manager
+key: manager
+diagramType: record-type
+diagramName: Manager

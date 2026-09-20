@@ -51,7 +51,7 @@ export interface GenericCtx {
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v);
 
-/** "person-account" → "Person account". */
+/** "loyalty-members" → "Loyalty members". */
 export function humanise(segment: string): string {
   const words = segment.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
   return words ? words[0].toUpperCase() + words.slice(1) : segment;

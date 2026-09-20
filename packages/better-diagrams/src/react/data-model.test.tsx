@@ -70,6 +70,47 @@ const MODEL = validateTemplate({
   ],
 } as unknown as DiagramTemplate);
 
+/**
+ * The crossed pair: Coupon's product_id row sits ABOVE its customer_id row,
+ * but Product sits BELOW Customer — the lines cross as they leave the table
+ * unless they trade rows.
+ */
+const CROSSED = validateTemplate({
+  version: 1,
+  nodes: [
+    {
+      id: "coupon",
+      label: "Coupon",
+      kind: "table",
+      icon: "none",
+      description: "",
+      parentId: null,
+      x: 0,
+      y: 0,
+      w: 230,
+      h: 200,
+      fields: [
+        { id: "id", name: "Id", key: "pk" },
+        { id: "code", name: "code" },
+        { id: "product", name: "product_id", key: "fk" },
+        { id: "customer", name: "customer_id", key: "fk" },
+      ],
+    },
+    { id: "customer", label: "Customer", kind: "table", icon: "none", description: "", parentId: null, x: 900, y: 0, w: 230, h: 200, fields: [{ id: "id", name: "Id", key: "pk" }] },
+    { id: "product", label: "Product", kind: "table", icon: "none", description: "", parentId: null, x: 900, y: 600, w: 230, h: 200, fields: [{ id: "id", name: "Id", key: "pk" }] },
+  ],
+  edges: [
+    { id: "toProduct", source: "coupon", target: "product", label: "", style: "dashed", color: "slate", startField: "product", endField: "id" },
+    { id: "toCustomer", source: "coupon", target: "customer", label: "", style: "dashed", color: "slate", startField: "customer", endField: "id" },
+  ],
+} as unknown as DiagramTemplate);
+
+/** Where row `index` of a table at y = 0 (no description) centres. */
+const rowY = (index: number) => fieldListTop(false) + index * FIELD_ROW_H + FIELD_ROW_H / 2;
+
+/** The y a path leaves its source at. */
+const startYOf = (d: string) => Number(/^M ([\d.-]+) ([\d.-]+)/.exec(d)![2]);
+
 const texts = (t: DiagramTemplate) =>
   emitTemplate(t, createRegistry())
     .cmds.filter((c) => c.op === "text")
@@ -103,6 +144,15 @@ describe("export", () => {
     const [, startY] = /^M ([\d.-]+) ([\d.-]+)/.exec(edgePath!.d)!.slice(1).map(Number);
     // `user_id` is the first row of orders, whose box top is y = 0.
     expect(startY).toBeCloseTo(fieldListTop(false) + FIELD_ROW_H / 2, 5);
+  });
+
+  it("trades the rows of two foreign keys whose lines would cross", () => {
+    const { cmds } = emitTemplate(CROSSED, createRegistry());
+    const pathOf = (id: string) =>
+      (cmds.find((c) => c.op === "path" && c.tag?.id === `edge:${id}`) as { d: string }).d;
+    // product_id is row 2 and customer_id row 3 — each line leaves from the other's.
+    expect(startYOf(pathOf("toProduct"))).toBeCloseTo(rowY(3), 5);
+    expect(startYOf(pathOf("toCustomer"))).toBeCloseTo(rowY(2), 5);
   });
 
   it("draws a crow's foot at a cardinality end, and no arrowhead there", () => {
@@ -210,6 +260,27 @@ describe("canvas", () => {
     expect(container.querySelectorAll(".as-edge__arrow")).toHaveLength(0);
   });
 
+  it("trades the rows of two foreign keys whose lines would cross — the same trade the export makes", async () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={CROSSED} welcome={false} />);
+    const dOf = (id: string) => container.querySelector(`[data-id="${id}"] .as-edge__hit`)?.getAttribute("d") ?? "";
+    await waitFor(() => expect(dOf("toProduct")).toMatch(/^M /));
+    // The canvas draws the same lines from the same rows as the PNG would.
+    await waitFor(() => expect(startYOf(dOf("toProduct"))).toBeCloseTo(rowY(3), 5));
+    expect(startYOf(dOf("toCustomer"))).toBeCloseTo(rowY(2), 5);
+  });
+
+  it("puts the rows back once the tables are moved out of each other's way", async () => {
+    const uncrossed = validateTemplate({
+      ...CROSSED,
+      nodes: CROSSED.nodes.map((n) => (n.id === "customer" ? { ...n, y: 600 } : n.id === "product" ? { ...n, y: 0 } : n)),
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={uncrossed} welcome={false} />);
+    const dOf = (id: string) => container.querySelector(`[data-id="${id}"] .as-edge__hit`)?.getAttribute("d") ?? "";
+    await waitFor(() => expect(dOf("toProduct")).toMatch(/^M /));
+    await waitFor(() => expect(startYOf(dOf("toProduct"))).toBeCloseTo(rowY(2), 5));
+    expect(startYOf(dOf("toCustomer"))).toBeCloseTo(rowY(3), 5);
+  });
+
   it("edits a row through the inspector and keeps it in the emitted document", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -269,5 +340,31 @@ describe("canvas", () => {
     await selectNode("API");
     await screen.findByLabelText("Node label");
     expect(screen.queryByRole("button", { name: "Add field" })).toBeNull();
+  });
+});
+
+describe("mermaid ER field flags", () => {
+  it("writes UK for a unique column, PK, FK for a join column, and derived in the comment", () => {
+    const flagged = validateTemplate({
+      ...MODEL,
+      nodes: [
+        {
+          ...MODEL.nodes[0]!,
+          fields: [
+            { id: "id", name: "id", type: "uuid", key: "pk" },
+            { id: "email", name: "email", type: "citext", unique: true, required: true },
+            { id: "score", name: "score", type: "int", derived: true },
+          ],
+        },
+        {
+          ...MODEL.nodes[1]!,
+          fields: [{ id: "user_id", name: "user_id", type: "uuid", key: "pfk" }],
+        },
+      ],
+    } as unknown as DiagramTemplate);
+    const out = renderTemplateToMermaid(flagged);
+    expect(out).toContain('citext email UK "required"');
+    expect(out).toContain('int score "derived"');
+    expect(out).toContain("uuid user_id PK, FK");
   });
 });

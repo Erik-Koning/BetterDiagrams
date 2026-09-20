@@ -155,6 +155,45 @@ describe("scopedView — nodes", () => {
     expect(ops.x).toBeGreaterThan(boundary.x + boundary.w); // only receives
   });
 
+  it("fans a side with dozens of ghosts into further stacks instead of one tower", () => {
+    // A hub every one of forty outside tables sends into: one stack would be
+    // forty boxes high, several times the frame and the screen.
+    const hub = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "hub", label: "Hub", kind: "group", x: 0, y: 0, w: 400, h: 300 },
+        { id: "in", label: "In", kind: "service", parentId: "hub", x: 40, y: 80, w: 170, h: 76 },
+        ...Array.from({ length: 40 }, (_, i) => ({
+          id: `o${i}`, label: `O${i}`, kind: "service", x: 2000, y: i * 120, w: 170, h: 76,
+        })),
+      ],
+      edges: Array.from({ length: 40 }, (_, i) => ({ id: `e${i}`, source: `o${i}`, target: "in" })),
+    });
+    const v = scopedView(hub, "hub");
+    const boundary = v.nodes.find((n) => n.id === `${BOUNDARY_NODE_PREFIX}hub`)!;
+    const ghosts = v.nodes.filter((n) => isGhostNodeId(n.id));
+    expect(ghosts).toHaveLength(40);
+    // All still senders — every one to the left of the frame — in more than
+    // one stack, and the level as a whole nearer the canvas's shape than a
+    // forty-high tower (4,132px) beside a 300px frame.
+    for (const g of ghosts) expect(g.x + g.w).toBeLessThanOrEqual(boundary.x - 90);
+    const stacks = new Map<number, typeof ghosts>();
+    for (const g of ghosts) stacks.set(g.x, [...(stacks.get(g.x) ?? []), g]);
+    expect(stacks.size).toBeGreaterThan(1);
+    const minX = Math.min(...ghosts.map((g) => g.x));
+    const height = Math.max(...v.nodes.map((n) => n.y + n.h)) - Math.min(...v.nodes.map((n) => n.y));
+    const width = boundary.x + boundary.w - minX;
+    expect(height).toBeLessThan(4132 / 2);
+    expect(width / height).toBeGreaterThan(0.8);
+    expect(width / height).toBeLessThan(2.4);
+    // Nothing overlaps.
+    for (let i = 0; i < ghosts.length; i++)
+      for (let j = i + 1; j < ghosts.length; j++) {
+        const a = ghosts[i], b = ghosts[j];
+        expect(a.x >= b.x + b.w || b.x >= a.x + a.w || a.y >= b.y + b.h || b.y >= a.y + a.h).toBe(true);
+      }
+  });
+
   it("no zones in a scoped view; empty focus gets a fallback frame", () => {
     expect(scopedView(DOC, "pay").zones).toBeUndefined();
     const empty = scopedView(DOC, "web");

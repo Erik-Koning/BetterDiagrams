@@ -11,8 +11,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { createRegistry } from "./create-registry";
-import { emitTemplate, drawToSvg, LIGHT_EXPORT_PALETTE, type DrawCmd, type ExportPalette } from "./draw";
-import { BUILTIN_EXPORTERS, renderTemplateToSvg } from "./exporters";
+import { emitTemplate, drawToSvg, makeSkin, DARK_EXPORT_PALETTE, LIGHT_EXPORT_PALETTE, type DrawCmd, type ExportPalette } from "./draw";
+import { BUILTIN_EXPORTERS, renderTemplateToCanvas, renderTemplateToSvg } from "./exporters";
 import { EXAMPLE_ZONED_TEMPLATE, validateTemplate, type DiagramTemplate } from "../contract/schema";
 
 const registry = createRegistry();
@@ -157,6 +157,129 @@ describe("export presentation mode", () => {
     const text = await (svg as { blob: Blob }).blob.text();
     expect(text).toMatch(/<linearGradient/);
     expect(text).not.toMatch(/\[SQL\]/);
+  });
+});
+
+describe("marketing without gradients", () => {
+  /** A card, a chip-bearing card, a collapsed group and a record: every fade the mode paints. */
+  const EVERY_FADE = doc({
+    nodes: [
+      { id: "a", label: "REST API", kind: "service", icon: "box", x: 0, y: 0 },
+      { id: "g", label: "Platform", kind: "group", collapsed: true, x: 320, y: 0 },
+      { id: "t", label: "orders", kind: "table", x: 0, y: 200, fields: [{ name: "id", type: "uuid", key: "pk" }] },
+    ],
+  });
+  const flat = (palette: Partial<ExportPalette> = {}) =>
+    emitTemplate(EVERY_FADE, registry, palette, { mode: "marketing", gradients: false });
+  const glossy = (palette: Partial<ExportPalette> = {}) =>
+    emitTemplate(EVERY_FADE, registry, palette, { mode: "marketing" });
+
+  it("emits no gradient at all, on either palette", () => {
+    expect(paths(glossy().cmds).filter((p) => p.gradient).length).toBeGreaterThan(2);
+    expect(paths(flat().cmds).some((p) => p.gradient)).toBe(false);
+    expect(paths(flat(LIGHT_EXPORT_PALETTE).cmds).some((p) => p.gradient)).toBe(false);
+  });
+
+  it("is still the marketing dress: only the fills differ", () => {
+    // Strip the paint from every path and the two are the same drawing —
+    // shadows, corners, the bigger type and the tucked labels included.
+    const strip = (cmds: DrawCmd[]) =>
+      cmds.map((c) => (c.op === "path" ? { ...c, gradient: undefined, fill: undefined, fillAlpha: undefined } : c));
+    expect(strip(flat().cmds)).toEqual(strip(glossy().cmds));
+    expect(paths(flat().cmds).some((p) => p.shadow)).toBe(true);
+    expect(texts(flat().cmds).find((t) => t.text === "REST API")?.size).toBe(16);
+  });
+
+  it("paints each fade as a flat hex where the gradient was", () => {
+    const g = paths(glossy().cmds);
+    const f = paths(flat().cmds);
+    expect(f.length).toBe(g.length);
+    g.forEach((p, i) => {
+      if (!p.gradient) return;
+      expect(f[i].gradient).toBeUndefined();
+      expect(f[i].fill).toMatch(/^#[0-9a-f]{6}$/);
+    });
+  });
+
+  it("the flat coat sits a quarter of the way from the fade's pale end, like `--as-mk-flat`", () => {
+    const box = { x: 0, y: 0, width: 100, height: 50 };
+    const ends = makeSkin("marketing", DARK_EXPORT_PALETTE).card("#38bdf8", box).gradient!;
+    const coat = makeSkin("marketing", DARK_EXPORT_PALETTE, false).card("#38bdf8", box);
+    const channel = (hex: string, i: number) => Number.parseInt(hex.slice(i, i + 2), 16);
+    // 25% of the tinted end, 75% of the pale one — lighter than the midpoint.
+    const wash = [1, 3, 5]
+      .map((i) => Math.round(channel(ends.from, i) * 0.25 + channel(ends.to, i) * 0.75).toString(16).padStart(2, "0"))
+      .join("");
+    expect(coat.gradient).toBeUndefined();
+    expect(coat.fill).toBe(`#${wash}`);
+    // The chip's coat too, on the palette where the chip inverts.
+    const chip = makeSkin("marketing", LIGHT_EXPORT_PALETTE, false).iconChip("#38bdf8", 0, 0, 36);
+    expect(chip.gradient).toBeUndefined();
+    expect(chip.fill).toMatch(/^#[0-9a-f]{6}$/);
+  });
+
+  it("technical is untouched by the setting, and gradients default on", () => {
+    const base = emitTemplate(EVERY_FADE, registry);
+    expect(emitTemplate(EVERY_FADE, registry, {}, { gradients: false })).toEqual(base);
+    expect(emitTemplate(EVERY_FADE, registry, {}, { mode: "marketing", gradients: true })).toEqual(glossy());
+  });
+
+  it("reaches the SVG and both HTML pages through the built-in exporters", async () => {
+    const ctx = { template: EVERY_FADE, registry, filename: "x", mode: "marketing", gradients: false };
+    const svg = await (BUILTIN_EXPORTERS.svg.run(ctx) as { blob: Blob }).blob.text();
+    expect(svg).not.toMatch(/<linearGradient/);
+    expect(svg).toMatch(/<feDropShadow /);
+    const html = await (BUILTIN_EXPORTERS.html.run(ctx) as { blob: Blob }).blob.text();
+    expect(html).not.toMatch(/<linearGradient/);
+    // The drilling page pre-renders one SVG per level; the switch has to
+    // reach every one of them.
+    const nested = doc({
+      nodes: [
+        { id: "g", label: "Platform", kind: "group", x: 0, y: 0, w: 400, h: 200 },
+        { id: "a", label: "API", kind: "service", parentId: "g", x: 20, y: 40 },
+      ],
+    });
+    const drilled = await (BUILTIN_EXPORTERS.html.run({ ...ctx, template: nested }) as { blob: Blob }).blob.text();
+    expect(drilled).toMatch(/as-grid-v1/);
+    expect(drilled).not.toMatch(/<linearGradient/);
+  });
+
+  it("reaches the canvas, which PNG and PDF replay", () => {
+    // A context that swallows every call and counts the one that matters.
+    let gradients = 0;
+    const fakeContext = new Proxy({} as Record<string, unknown>, {
+      get: (target, key) =>
+        key === "createLinearGradient"
+          ? () => {
+              gradients += 1;
+              return { addColorStop() {} };
+            }
+          : key in target
+            ? target[key as string]
+            : () => undefined,
+      set: (target, key, value) => {
+        target[key as string] = value;
+        return true;
+      },
+    });
+    const priorDocument = (globalThis as { document?: unknown }).document;
+    const priorPath2D = (globalThis as { Path2D?: unknown }).Path2D;
+    (globalThis as { Path2D?: unknown }).Path2D = class {
+      constructor(readonly d: string) {}
+    };
+    (globalThis as { document?: unknown }).document = {
+      createElement: () => ({ width: 0, height: 0, getContext: () => fakeContext }),
+    };
+    try {
+      renderTemplateToCanvas(EVERY_FADE, registry, 2, {}, { mode: "marketing" });
+      expect(gradients).toBeGreaterThan(2);
+      gradients = 0;
+      renderTemplateToCanvas(EVERY_FADE, registry, 2, {}, { mode: "marketing", gradients: false });
+      expect(gradients).toBe(0);
+    } finally {
+      (globalThis as { document?: unknown }).document = priorDocument;
+      (globalThis as { Path2D?: unknown }).Path2D = priorPath2D;
+    }
   });
 });
 

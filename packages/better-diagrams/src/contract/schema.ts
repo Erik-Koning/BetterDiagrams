@@ -33,6 +33,9 @@ import { normalizeDate, type DiagramDate } from "./timeline";
 import { parseLlmJsonReport } from "./json-repair";
 import { wrappedLineCount } from "./text";
 import { validatePaths, type DiagramPath, type PathGlow } from "./paths";
+import { uncrossSideSlots, type Box, type EndSlots, type SideSlotEdge } from "./geometry";
+import { RELATION_KIND_ORDER } from "./relations";
+export type { EndSlots } from "./geometry";
 
 // ─── Vocabulary ──────────────────────────────────────────────────────────────
 
@@ -44,6 +47,7 @@ export const NODE_KINDS = [
   "client",
   "external",
   "table", // data-model entity — its columns live in `fields`
+  "enum", // enumeration / picklist — its allowed values live in `fields`
   "group", // container / boundary — other nodes nest inside via parentId
   "text", // free-floating annotation; the text lives in `label`
   "point", // bare arrow endpoint — a dot an edge can end on in empty space
@@ -150,13 +154,14 @@ export type EdgeDirection = (typeof EDGE_DIRECTIONS)[number];
 
 /**
  * End-glyph vocabulary: the classic solid arrow, an open chevron, a hollow
- * diamond (UML aggregation), a hollow circle, and a bar/tee. `direction`
+ * diamond (UML aggregation), a filled diamond (UML composition), a hollow
+ * triangle (UML generalization), a hollow circle, and a bar/tee. `direction`
  * decides WHICH ends get a glyph by default; `startHead`/`endHead` override
  * WHAT is drawn there — and a startHead set explicitly renders even on a
  * `forward` edge, which is how a diamond-at-source aggregation coexists with
  * its arrow-at-target. A recognisable cardinality still wins its end.
  */
-export const EDGE_HEADS = ["arrow", "open", "diamond", "circle", "bar"] as const;
+export const EDGE_HEADS = ["arrow", "open", "diamond", "diamond-filled", "triangle", "circle", "bar"] as const;
 export type EdgeHead = (typeof EDGE_HEADS)[number];
 
 /** How an edge is routed. Unset on an edge means "inherit `meta.routing`". */
@@ -216,6 +221,10 @@ export interface NodeField {
   key?: FieldKey;
   /** Required / NOT NULL — renders as a trailing marker. */
   required?: boolean;
+  /** Unique across rows (UML `{unique}`, ER's UK) — renders as a trailing badge. */
+  unique?: boolean;
+  /** Computed rather than stored — a formula field, a UML derived attribute. Renders with UML's leading slash. */
+  derived?: boolean;
 }
 
 /**
@@ -318,6 +327,33 @@ export type VersionTagPosition = (typeof VERSION_TAG_POSITIONS)[number];
 export const GROUP_CONTENTS = ["show", "hide"] as const;
 export type GroupContents = (typeof GROUP_CONTENTS)[number];
 
+/**
+ * What Tidy optimises for, document-wide. "flow" is the default and never
+ * needs storing: a left-to-right layered layout where a node sits one rank
+ * past its deepest predecessor and rank-mates are ordered by proximity to
+ * what they connect to — compact, and the shape an LLM is asked to author.
+ * "untangle" spends more effort on the lines: crossings are minimised over
+ * repeated sweeps, a line that spans several ranks is given a channel of its
+ * own so it never runs through a box in between, and nodes are nudged level
+ * with what they connect to so lines run straight. See `DiagramSettings`.
+ */
+export const ARRANGE_MODES = ["flow", "untangle"] as const;
+export type ArrangeMode = (typeof ARRANGE_MODES)[number];
+
+/**
+ * How a relationship's cardinality is drawn at each end, document-wide.
+ * "both" is the default and never needs storing: the crow's-foot symbol at
+ * the box AND the multiplicity text further in. "crowsfoot" keeps only the
+ * symbol for an end whose text reads as a cardinality (role text still
+ * shows). "uml" draws no symbols — the text carries the multiplicity, as a
+ * class diagram does — which is also what lets the UML end glyphs show: a
+ * composition's filled diamond, a generalization's triangle. The rule that
+ * a symbol takes an end's glyph is unchanged; this only decides whether the
+ * symbol exists. See `DiagramSettings`.
+ */
+export const NOTATIONS = ["both", "uml", "crowsfoot"] as const;
+export type Notation = (typeof NOTATIONS)[number];
+
 /** Horizontal placement of a node's text. "left" is the default and never stored. */
 export const NODE_TEXT_ALIGNS = ["left", "center", "right"] as const;
 export type NodeTextAlign = (typeof NODE_TEXT_ALIGNS)[number];
@@ -373,6 +409,8 @@ export const KIND_DEFAULT_SIZE: Record<string, { w: number; h: number }> = {
   // Wider than a service box: a column line is "name  type", two words that
   // must not ellipsise. The height is a floor — a table with rows grows.
   table: { w: 230, h: 96 },
+  // Values are single words, so an enumeration needs less width than a table.
+  enum: { w: 180, h: 96 },
   default: { w: 170, h: 76 },
 };
 
@@ -521,6 +559,16 @@ export interface DiagramEdge {
 
   /** Technology / protocol, C4-style: rendered as a smaller `[JSON/HTTPS]` line. */
   tech?: string;
+  /**
+   * What KIND of relationship this is, in the registry's relation vocabulary
+   * — `composition`, `reference`, `hierarchy`, `polymorphic` built in (see
+   * `contract/relations.ts`); a host or dialect adds and relabels its own.
+   * Semantic, like `startField`: the legend counts it and the inspector's
+   * picker dresses the line from it, but the line's own `style`, `color`,
+   * heads and cardinality stay stored here, so a document is self-contained
+   * and a hand-edited line keeps its edit. Free vocabulary, like `kind`.
+   */
+  relation?: string;
   /** Arrowheads: `forward` (default), `both`, or `none`. Stored only when non-default. */
   direction?: EdgeDirection;
   /**
@@ -591,6 +639,15 @@ export interface DiagramSettings {
    * has contents to fold.
    */
   groupContents?: GroupContents;
+  /**
+   * What Tidy optimises for — see `ARRANGE_MODES`. Absent means "flow".
+   * Picking a mode from the Arrange menu re-arranges the canvas and stores
+   * the choice here in the same edit, so one ⌘Z takes both back and the
+   * next Tidy keeps arranging the way the document says.
+   */
+  arrange?: ArrangeMode;
+  /** How cardinality is drawn — see `NOTATIONS`. Absent means "both". */
+  notation?: Notation;
 }
 
 export interface DiagramTemplate {
@@ -661,6 +718,8 @@ export const TEMPLATE_KEYS: readonly string[] = Object.keys(TEMPLATE_KEY_MAP);
 
 const SETTINGS_KEY_MAP: Record<keyof DiagramSettings, true> = {
   groupContents: true,
+  arrange: true,
+  notation: true,
 };
 export const SETTINGS_KEYS: readonly string[] = Object.keys(SETTINGS_KEY_MAP);
 
@@ -708,6 +767,7 @@ const EDGE_KEY_MAP: Record<keyof DiagramEdge, true> = {
   color: true,
   providers: true,
   tech: true,
+  relation: true,
   direction: true,
   startHead: true,
   endHead: true,
@@ -732,6 +792,8 @@ const FIELD_KEY_MAP: Record<keyof NodeField, true> = {
   type: true,
   key: true,
   required: true,
+  unique: true,
+  derived: true,
 };
 export const NODE_FIELD_KEYS: readonly string[] = Object.keys(FIELD_KEY_MAP);
 
@@ -797,6 +859,8 @@ export interface PromptOptions {
   icons?: readonly string[];
   /** Provider ids contributed by a registry. */
   providers?: readonly string[];
+  /** Relationship kinds contributed by a registry, appended to the built-ins. */
+  relations?: readonly string[];
   /** Appended verbatim — domain rules like "always place the CDN left of the ALB". */
   extraRules?: string;
   /**
@@ -830,6 +894,7 @@ export function buildSystemPrompt(opts: PromptOptions = {}): string {
   const providers = [...new Set([...PROVIDER_IDS, ...(opts.providers ?? [])])].join("|");
   const styles = EDGE_STYLES.join("|");
   const colors = EDGE_COLORS.join("|");
+  const relations = [...new Set([...RELATION_KIND_ORDER, ...(opts.relations ?? [])])].join("|");
   const shapes = ZONE_SHAPES.join("|");
   const routings = EDGE_ROUTINGS.join("|");
   const geo = opts.geometry !== false;
@@ -844,14 +909,14 @@ export function buildSystemPrompt(opts: PromptOptions = {}): string {
       : `Use it to show provider-specific services: one node per provider's equivalent service, each carrying only its own provider id.`;
 
   return `You convert software requirements, source code, or natural-language descriptions into an architecture diagram template. Respond with ONLY compact valid JSON (no markdown fences, no commentary) matching:
-{"version":1,"meta":{"title":"Name","routing":"${routings}","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${zoneProvider}"],"provider":"${zoneProvider}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","providers":[],"direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":""${geo ? `,"routing":"${routings}"` : ""},"date":"YYYY-MM-DD"}],"paths":[{"id":"slug","title":"Name","steps":["nodeId","edgeId","nodeId"],"color":"${colors}","description":""}],"settings":{"groupContents":"${GROUP_CONTENTS.join("|")}"}}
+{"version":1,"meta":{"title":"Name","routing":"${routings}","versionTag":"v1.0"},"zones":[{"id":"slug","label":"Name","shape":"${shapes}","x":0,"y":0,"w":900,"h":600,"providers":["${zoneProvider}"],"provider":"${zoneProvider}","z":0,"date":"YYYY-MM-DD","color":"#38bdf8","outline":"solid|dashed|dotted|none"}],"nodes":[{"id":"slug","label":"Name","kind":"${kinds}","icon":"${icons}","description":"one short line or empty","fields":[{"id":"col","name":"user_id","type":"uuid","key":"${FIELD_KEYS.join("|")}","required":true}],"parentId":null,"zoneId":null,"providers":[],"tags":[],"url":"","team":"","status":"${NODE_STATUSES.join("|")}","date":"YYYY-MM-DD","plain":false${geo ? ',"x":0,"y":0,"w":170,"h":76' : ""},"fontSize":13}],"edges":[{"id":"e1","source":"id","target":"id","label":"","tech":""${geo ? ',"labelT":0.5' : ""},"style":"${styles}","color":"${colors}","providers":[],"direction":"forward|both|none","seq":0,"startLabel":"","endLabel":"","startField":"","endField":"","relation":"${relations}"${geo ? `,"routing":"${routings}"` : ""},"date":"YYYY-MM-DD"}],"paths":[{"id":"slug","title":"Name","steps":["nodeId","edgeId","nodeId"],"color":"${colors}","description":""}],"settings":{"groupContents":"${GROUP_CONTENTS.join("|")}"}}
 Rules:
 - "group" = boundary (VPC, cluster, tier, bounded context). Children set parentId${geo ? "; child x/y are RELATIVE to the group's top-left. Size groups to contain all children (+24px sides, +48px top). Children of a NON-group parent use small local coordinates starting near 0,0 (their own drilled canvas); never size the parent to contain them." : "."}
 - "text" = free annotation; put the sentence in label, fontSize 12-16${geo ? ", w~300 h~60" : ""}, no edges.
 - "point" = the bare endpoint of a dangling arrow: a tiny dot an edge can end on, for an arrow into empty space (a dependency on something that doesn't exist yet). label ""${geo ? ", w=h=12" : ""}; use ONLY as an edge's source/target, and only when the user asks for an open-ended/abstract arrow.
 - FLOW CHARTS: "terminator" (stadium) for start/end, "decision" (diamond) for branches — label its outgoing edges "yes"/"no" — "io" (parallelogram) for input/output, "service" for process steps. An edge may target its own source ("source"==="target") to draw a retry/self loop. Use these kinds only for flow charts, not architecture.
 - LANGUAGE MODELS: "lm-small" (on-device or a few B params), "lm-medium" (self-hosted mid-size), "llm" (frontier, typically hosted) — pick by the weight class the design depends on, and name the actual model in the description ("Phi-3 mini", "Llama 3 8B", "Claude Opus 5"). When the box is the cloud SERVICE hosting a model rather than the model itself, prefer that provider's own model kind where one is listed below.
-- Edge "startHead"/"endHead" (${EDGE_HEADS.join("|")}) override the glyph at each end when the user asks for UML-style notation (hollow "diamond" at the source = aggregation, "open" arrow = dependency); omit for normal arrows.
+- Edge "startHead"/"endHead" (${EDGE_HEADS.join("|")}) override the glyph at each end when the user asks for UML-style notation (hollow "diamond" at the source = aggregation, "diamond-filled" at the source = composition, hollow "triangle" at the target = generalization/inheritance, "open" arrow = dependency); omit for normal arrows.
 - ${geo ? "Regular nodes: w 160-200, h 64-84. Pick" : "Pick"} a fitting icon. description is an optional one-line tech detail (C4 style, e.g. "Node.js / Express").
 - Edge style semantics: dashed = async/event-driven, dotted = cache/optional/telemetry, solid = synchronous. Vary color by concern (e.g. amber = data, violet = messaging).${geo ? " labelT (0.15-0.85) slides the label along the arrow to avoid collisions." : ""}
 - Edge "tech" = protocol/format, C4 style ("JSON/HTTPS", "gRPC", "SQL"); omit when obvious. "direction":"both" for genuinely bidirectional links, "none" for plain association; omit for normal flow. When the user asks for a request flow or sequence, number the participating edges with "seq":1,2,3… in traversal order; omit seq otherwise.
@@ -863,7 +928,7 @@ Rules:
 - A "group" may also be styled as a purely visual grouping frame: "fill":false drops its background, "outline":"none" drops its border, "outline":"dotted"/"solid" changes it (default dashed), and "color" is an "#rrggbb" ink the background tint derives from. Use "fill":false with "outline":"none" only when the user explicitly wants an invisible/abstract grouping box.
 - Node/edge/zone "date" = when that piece lands or landed, as "YYYY-MM-DD". Set it ONLY when the user gives a roadmap, phases, quarters, or a migration order; omit it everywhere else. Undated elements are treated as always present, so a phased plan dates the new pieces and leaves today's system undated. A node inside a group is never shown before the group, so date the group with its earliest phase.
 - parentId may reference ANY existing node. A child of a "group" renders inside its frame. A child of any other node is that component's INTERNAL decomposition (the next C4 level) — shown only when the user drills into that component, never on the parent's own diagram. Do NOT decompose a component into children unless the user explicitly asks for its internal detail. Never create a parent cycle.
-- DATA MODELS: an entity/table is a node of kind "table" whose columns are "fields" — {id, name, type, key:"pk"/"fk"/"pfk", required}. Field ids are unique within their node.${geo ? " Give a table w 200-260; the editor grows its height to fit the rows, so h is only a hint." : ""} A relationship is an ordinary edge between the two tables: name the columns it joins with "startField"/"endField" (field ids on the source and target), and put cardinality in "startLabel"/"endLabel" ("1", "0..1", "0..*", "1..*") — these render as crow's-foot symbols, so write real cardinalities there rather than prose. Use "fields" ONLY for data modelling — an ordinary architecture node omits the key entirely. Subject areas are "group" parents, exactly as elsewhere.
+- DATA MODELS: an entity/table is a node of kind "table" whose columns are "fields" — {id, name, type, key:"pk"/"fk"/"pfk", required, unique, derived}; "unique" marks a unique column, "derived" a computed/formula one; omit both when false. An enumeration or picklist is a node of kind "enum" whose "fields" are its values (name only). Field ids are unique within their node.${geo ? " Give a table w 200-260; the editor grows its height to fit the rows, so h is only a hint." : ""} A relationship is an ordinary edge between the two tables: name the columns it joins with "startField"/"endField" (field ids on the source and target), and put cardinality in "startLabel"/"endLabel" ("1", "0..1", "0..*", "1..*") — these render as crow's-foot symbols, so write real cardinalities there rather than prose. Say what KIND of relationship it is with "relation": "composition" when the child cannot exist without the parent (owned, cascade delete), "reference" for an ordinary foreign key, "hierarchy" when a table points at itself, "polymorphic" when the target varies per row — "aggregation" for shared ownership (the part outlives the whole), "generalization" from a subtype to the type it extends (record types, table inheritance) — and dress the line to match (composition: solid rose with "startHead":"diamond-filled", "*" → "1"; aggregation: solid sky with "startHead":"diamond", "*" → "0..1"; reference: dashed slate, "*" → "0..1", or "*" → "1" when the foreign key is required; hierarchy: dashed violet; polymorphic: dotted amber; generalization: solid emerald with "endHead":"triangle" and no cardinality). Omit "relation" on an architecture edge. Use "fields" ONLY for data modelling — an ordinary architecture node omits the key entirely. Subject areas are "group" parents, exactly as elsewhere.
 - ZONES are infra backgrounds, drawn behind everything, in ABSOLUTE canvas coordinates (never relative). Provider ids: ${providers}. Omit the "zones" key entirely unless the request actually involves infrastructure or hosting.
 - Zone "color" (optional) is the OUTLINE hex; the background derives from it automatically. It may carry "/NN" percent alpha for fill strength ("#38bdf8/22"). Omit for the provider's default colour. Zone "outline" (optional): dashed for logical/planned boundaries, dotted for soft groupings, none for a pure background wash; omit for solid.
 - A zone's "providers" lists every provider it could run on; "provider" is the one shown. Use a higher "z" for a small zone that sits on top of a bigger one (e.g. a third-party SaaS island inside a cloud region).
@@ -1106,6 +1171,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         ? [...new Set(e.providers.filter((p): p is string => typeof p === "string" && !!p))]
         : undefined;
       const tech = typeof e.tech === "string" ? e.tech.trim() : "";
+      const relation = typeof e.relation === "string" ? e.relation.trim() : "";
       const seq = Math.floor(num(e.seq, 0));
       const date = normalizeDate(e.date);
       const start = validateAnchor(e.start);
@@ -1131,6 +1197,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         // An empty list would hide the edge everywhere, which is never meant.
         ...(providers && providers.length ? { providers } : {}),
         ...(tech ? { tech } : {}),
+        ...(relation ? { relation } : {}),
         ...(date ? { date } : {}),
         // Defaults are stripped so an old document round-trips byte-identical.
         ...(e.direction === "both" || e.direction === "none" ? { direction: e.direction } : {}),
@@ -1227,6 +1294,12 @@ function validateSettings(raw: unknown): DiagramSettings | undefined {
   const out: DiagramSettings = {};
   if (GROUP_CONTENTS.includes(r.groupContents as GroupContents)) {
     out.groupContents = r.groupContents as GroupContents;
+  }
+  if (ARRANGE_MODES.includes(r.arrange as ArrangeMode)) {
+    out.arrange = r.arrange as ArrangeMode;
+  }
+  if (NOTATIONS.includes(r.notation as Notation)) {
+    out.notation = r.notation as Notation;
   }
   return Object.keys(out).length ? out : undefined;
 }
@@ -1361,6 +1434,8 @@ function validateFields(raw: unknown): NodeField[] | undefined {
         ? { key: f.key as FieldKey }
         : {}),
       ...(f.required === true ? { required: true } : {}),
+      ...(f.unique === true ? { unique: true } : {}),
+      ...(f.derived === true ? { derived: true } : {}),
     });
     if (out.length === MAX_NODE_FIELDS) break;
   }
@@ -1423,22 +1498,98 @@ export function fieldAnchors(
   source: FieldAnchorNode,
   target: FieldAnchorNode,
 ): { start?: EdgeAnchor; end?: EdgeAnchor } {
-  const resolve = (
-    anchor: EdgeAnchor | undefined,
-    fieldId: string | undefined,
-    self: FieldAnchorNode,
-    other: FieldAnchorNode,
-  ): EdgeAnchor | undefined => {
-    if (!fieldId) return anchor;
-    if (anchor && (anchor.side === "top" || anchor.side === "bottom")) return anchor;
-    const t = fieldRowT({ fields: self.fields, description: self.description, h: self.h }, fieldId);
-    if (t === undefined) return anchor;
-    const side: EdgeAnchorSide = anchor?.side ?? (other.centerX >= self.centerX ? "right" : "left");
-    return { side, t };
-  };
-  const start = resolve(edge.start, edge.startField, source, target);
-  const end = resolve(edge.end, edge.endField, target, source);
+  const start = rowAnchor(edge.start, edge.startField, source, target).anchor;
+  const end = rowAnchor(edge.end, edge.endField, target, source).anchor;
   return { ...(start ? { start } : {}), ...(end ? { end } : {}) };
+}
+
+/**
+ * One end of `fieldAnchors`: the anchor, and whether a ROW placed it — the
+ * fact the un-crossing pass needs, because only a row-placed end may be
+ * traded (see `uncrossFieldAnchors`).
+ */
+function rowAnchor(
+  anchor: EdgeAnchor | undefined,
+  fieldId: string | undefined,
+  self: FieldAnchorNode,
+  other: FieldAnchorNode,
+): { anchor: EdgeAnchor | undefined; onRow: boolean } {
+  if (!fieldId) return { anchor, onRow: false };
+  if (anchor && (anchor.side === "top" || anchor.side === "bottom")) return { anchor, onRow: false };
+  const t = fieldRowT({ fields: self.fields, description: self.description, h: self.h }, fieldId);
+  if (t === undefined) return { anchor, onRow: false };
+  const side: EdgeAnchorSide = anchor?.side ?? (other.centerX >= self.centerX ? "right" : "left");
+  return { anchor: { side, t }, onRow: true };
+}
+
+/** A node as the un-crossing pass needs to see it: its rows and its absolute box. */
+export interface UncrossNode {
+  fields?: readonly NodeField[];
+  description?: string;
+  box: Box;
+}
+
+/**
+ * Which row-anchored ends should trade rows so lines leaving one side of a
+ * table don't cross — a document-wide pass, where `fieldAnchors` is one
+ * edge's.
+ *
+ * Two foreign keys on neighbouring rows whose targets lie the other way
+ * round cross each other the moment they leave the table. The pass hands
+ * the same rows out in destination order instead (`uncrossSideSlots` has
+ * the rule), so the lines fan out cleanly — at the price that a traded line
+ * leaves from its neighbour's row rather than its own. Only ends a ROW
+ * placed take part: a fraction the user dragged into place is theirs, a
+ * top/bottom pin has no row, and a floating end has no slot to trade.
+ *
+ * Returns the fraction each moved end now sits at, by edge id, for callers
+ * to lay over `fieldAnchors` with `withEndSlots`. Both the canvas and the
+ * exporters run this over the same edges, which is what keeps a PNG's lines
+ * leaving the same rows as the screen's.
+ */
+export function uncrossFieldAnchors(
+  edges: ReadonlyArray<
+    Pick<DiagramEdge, "id" | "source" | "target" | "start" | "end" | "startField" | "endField" | "points">
+  >,
+  nodeOf: (id: string) => UncrossNode | undefined,
+): Map<string, EndSlots> {
+  const anchorNode = (n: UncrossNode): FieldAnchorNode => ({
+    fields: n.fields,
+    description: n.description,
+    h: n.box.height,
+    centerX: n.box.x + n.box.width / 2,
+  });
+  const items: SideSlotEdge[] = [];
+  for (const e of edges) {
+    const s = nodeOf(e.source);
+    const t = nodeOf(e.target);
+    if (!s || !t) continue;
+    const start = rowAnchor(e.start, e.startField, anchorNode(s), anchorNode(t));
+    const end = rowAnchor(e.end, e.endField, anchorNode(t), anchorNode(s));
+    if (!start.onRow && !end.onRow) continue;
+    items.push({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      spec: { start: start.anchor, end: end.anchor, points: e.points },
+      autoStart: start.onRow,
+      autoEnd: end.onRow,
+    });
+  }
+  return uncrossSideSlots(items, (id) => nodeOf(id)?.box);
+}
+
+/** `fieldAnchors` with an un-crossing trade laid over it: the moved ends take their new fraction. */
+export function withEndSlots(
+  anchors: { start?: EdgeAnchor; end?: EdgeAnchor },
+  slots: EndSlots | undefined,
+): { start?: EdgeAnchor; end?: EdgeAnchor } {
+  if (!slots) return anchors;
+  return {
+    ...anchors,
+    ...(slots.start !== undefined && anchors.start ? { start: { ...anchors.start, t: slots.start } } : {}),
+    ...(slots.end !== undefined && anchors.end ? { end: { ...anchors.end, t: slots.end } } : {}),
+  };
 }
 
 /**
@@ -2463,6 +2614,8 @@ export type DiagramEdgeData = {
   label: string;
   providers?: string[];
   tech?: string;
+  /** The relationship kind; see the schema field of the same name. */
+  relation?: string;
   direction?: EdgeDirection;
   /** End glyph overrides; see the schema field of the same name. */
   startHead?: EdgeHead;
@@ -2961,6 +3114,7 @@ export function toReactFlow(
             label: summarising ? "" : e.label,
             ...(e.providers?.length ? { providers: e.providers } : {}),
             ...(!summarising && e.tech ? { tech: e.tech } : {}),
+            ...(!summarising && e.relation ? { relation: e.relation } : {}),
             ...(!summarising && e.date ? { date: e.date } : {}),
             ...(e.direction ? { direction: e.direction } : {}),
             ...(e.startHead ? { startHead: e.startHead } : {}),
@@ -3131,6 +3285,7 @@ export function fromReactFlow(
       labelT: e.data?.labelT ?? 0.5,
       providers: e.data?.providers,
       tech: e.data?.tech,
+      relation: e.data?.relation,
       direction: e.data?.direction,
       startHead: e.data?.startHead,
       endHead: e.data?.endHead,

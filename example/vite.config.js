@@ -10,8 +10,8 @@ import { templatesPlugin } from "./vite-plugin-templates.js";
  *                         you work
  *   templates/folders/  — FOLDER-FORMAT trees (one subdirectory each), read
  *                         only; imported through `importFolder` on the client.
- *                         Git-ignored: drop a Salesforce data-model export in
- *                         to try it.
+ *                         Git-ignored: drop a data-model export in to try
+ *                         it.
  * All show up under Settings ▾ → Templates.
  */
 const TEMPLATE_DIRS = {

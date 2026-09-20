@@ -1,0 +1,23 @@
+{
+  "folder": "people/record-types/manager",
+  "kind": "record-type",
+  "parentEntity": {
+    "name": "person",
+    "label": "Person",
+    "folder": "people",
+    "schema": "../../schema.json"
+  },
+  "recordType": {
+    "key": "manager",
+    "name": "Manager",
+    "id": "rt-manager",
+    "active": true,
+    "visible": true,
+    "description": "Runs a building and its staff."
+  },
+  "curated": {
+    "diagramName": "Manager",
+    "diagramType": "record-type"
+  },
+  "notes": []
+}

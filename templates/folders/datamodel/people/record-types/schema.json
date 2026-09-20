@@ -5,19 +5,19 @@
   "childCount": 3,
   "children": [
     {
-      "folder": "people/record-types/chef-individual",
+      "folder": "people/record-types/chef",
       "kind": "record-type",
-      "label": "Chef (individual)"
+      "label": "Chef"
     },
     {
-      "folder": "people/record-types/manager-account",
+      "folder": "people/record-types/manager",
       "kind": "record-type",
-      "label": "Manager account"
+      "label": "Manager"
     },
     {
-      "folder": "people/record-types/person-account",
+      "folder": "people/record-types/customer",
       "kind": "record-type",
-      "label": "Person account"
+      "label": "Customer"
     }
   ]
 }

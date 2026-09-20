@@ -20,16 +20,23 @@ export {
 export { genericDialect, GENERIC_DIALECT_ID, FOLDER_FORMAT, slugFolder } from "./dialects/generic";
 export type { FolderManifest } from "./dialects/generic";
 export {
-  salesforceDialect,
-  createSalesforceDialect,
-  SALESFORCE_DIALECT_ID,
-  SALESFORCE_KINDS,
-  salesforceRegistry,
+  dataModelDialect,
+  createDataModelDialect,
+  DATAMODEL_DIALECT_ID,
+  DATAMODEL_KINDS,
+  dataModelRegistry,
   parseFlatYaml,
   patchFlatYaml,
-  classifySalesforceShape,
-} from "./dialects/salesforce";
-export type { SalesforceDialectOptions, SfShape, SfObjectSchema, SfField, SfForeignKey } from "./dialects/salesforce";
+  classifyDataModelShape,
+} from "./dialects/datamodel";
+export type {
+  DataModelDialectOptions,
+  ModelShape,
+  EntitySchema,
+  EntityField,
+  ForeignKey,
+  RelationshipKind,
+} from "./dialects/datamodel";
 export { OVERRIDES_FORMAT } from "./types";
 export type {
   Dialect,

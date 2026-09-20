@@ -563,6 +563,134 @@ export function edgeGeometryFor(
       : curvedSpecGeometry(p1, startSide, waypoints, p2, endSide, labelT);
 }
 
+// ─── Un-crossing endpoints that share a side ─────────────────────────────────
+
+/** The fraction each end of an edge moved to, for the ends that moved. */
+export interface EndSlots {
+  start?: number;
+  end?: number;
+}
+
+/** One edge as the un-crossing pass sees it: its boxes, its resolved spec, and which ends it may move. */
+export interface SideSlotEdge {
+  id: string;
+  source: string;
+  target: string;
+  /** Anchors already resolved — rows applied — plus any waypoints. */
+  spec: EdgePathSpec;
+  /**
+   * Which ends sit where a ROW put them rather than where a hand did. Only
+   * those are traded: a fraction the user dragged into place is theirs, and
+   * a floating end has no slot of its own to trade.
+   */
+  autoStart?: boolean;
+  autoEnd?: boolean;
+}
+
+/** How many sweeps the pass makes before it stops chasing a moving target. */
+const UNCROSS_SWEEPS = 4;
+
+/**
+ * Trade the slots of endpoints that share a side of a box so their lines
+ * leave it in the order their destinations lie.
+ *
+ * Two foreign keys on neighbouring rows, the upper one pointing at a table
+ * BELOW the one the lower points at, cross each other the moment they leave
+ * the box. Swapping which row each line leaves from removes the crossing
+ * while every line still leaves through the same face — the rows are the
+ * same slots, handed out in a different order. This is that swap, in
+ * general form: per (box, side), the group's slots are sorted along the
+ * face and handed to its lines sorted by where each heads next (the first
+ * waypoint, or the other end's own attachment point), the axis being the
+ * one the face runs along. Ties keep their original order, so a group whose
+ * lines already fan out in destination order is byte-identical.
+ *
+ * A line's destination can itself be a slot the pass is trading, so groups
+ * are visited in document order with LIVE positions — the far end's slot as
+ * already traded, not as stored — and swept again while anything moved.
+ * Every edge links exactly two groups, so a group visited after its
+ * neighbour reads that neighbour's final order and the pair agree; a group
+ * visited before a neighbour that then moved is what the extra sweeps are
+ * for. The sweep count is fixed, so the result is deterministic and a drag
+ * never sees the assignment dither.
+ *
+ * Returns the ends that moved, as the fraction each now sits at. Nothing
+ * else about an anchor changes — never the side.
+ */
+export function uncrossSideSlots(
+  edges: readonly SideSlotEdge[],
+  boxOf: (id: string) => Box | undefined,
+): Map<string, EndSlots> {
+  type End = { edge: SideSlotEdge; which: "start" | "end"; side: EdgeAnchorSpec["side"]; t: number };
+  const groups = new Map<string, End[]>();
+  for (const edge of edges) {
+    if (edge.source === edge.target || !boxOf(edge.source) || !boxOf(edge.target)) continue;
+    const consider = (which: "start" | "end", auto: boolean | undefined) => {
+      const anchor = edge.spec[which];
+      if (!auto || !anchor) return;
+      const node = which === "start" ? edge.source : edge.target;
+      const key = `${node}|${anchor.side}`;
+      const end: End = { edge, which, side: anchor.side, t: anchor.t ?? 0.5 };
+      const group = groups.get(key);
+      if (group) group.push(end);
+      else groups.set(key, [end]);
+    };
+    consider("start", edge.autoStart);
+    consider("end", edge.autoEnd);
+  }
+
+  const moved = new Map<string, EndSlots>();
+  const liveT = (edge: SideSlotEdge, which: "start" | "end") =>
+    moved.get(edge.id)?.[which] ?? edge.spec[which]?.t;
+  const centerOf = (b: Box): Pt => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
+
+  /**
+   * Where this end's line travels to first — the same point `edgeGeometryFor`
+   * aims the launch at: the nearest waypoint, else the other end's attachment,
+   * which for an unanchored end is the centre of whichever face looks back.
+   */
+  const farPoint = (edge: SideSlotEdge, which: "start" | "end"): Pt => {
+    const points = edge.spec.points ?? [];
+    if (points.length) {
+      const [x, y] = which === "start" ? points[0] : points[points.length - 1];
+      return { x, y };
+    }
+    const other = which === "start" ? "end" : "start";
+    const otherBox = boxOf(which === "start" ? edge.target : edge.source)!;
+    const ownBox = boxOf(which === "start" ? edge.source : edge.target)!;
+    const anchor = edge.spec[other];
+    return anchor
+      ? anchorPoint(otherBox, anchor.side, liveT(edge, other) ?? anchor.t)
+      : anchorPoint(otherBox, autoSide(otherBox, centerOf(ownBox)), 0.5);
+  };
+
+  for (let sweep = 0; sweep < UNCROSS_SWEEPS; sweep++) {
+    let changed = false;
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      const axis = isHorizontal(group[0].side) ? "y" : "x";
+      const slots = group.map((end) => end.t).sort((a, b) => a - b);
+      const order = group
+        .map((end, index) => ({ end, index, far: farPoint(end.edge, end.which)[axis] }))
+        // Stable on the original slot order: a tie is not a reason to move.
+        .sort((a, b) => a.far - b.far || a.end.t - b.end.t || a.index - b.index);
+      order.forEach(({ end }, i) => {
+        const t = slots[i];
+        if ((liveT(end.edge, end.which) ?? end.t) === t) return;
+        changed = true;
+        const entry = moved.get(end.edge.id) ?? {};
+        // Back on its own row: no longer a move.
+        if (t === end.t) delete entry[end.which];
+        else entry[end.which] = t;
+        if (entry.start === undefined && entry.end === undefined) moved.delete(end.edge.id);
+        else moved.set(end.edge.id, entry);
+      });
+    }
+    if (!changed) break;
+  }
+  return moved;
+}
+
 // ─── Crow's-foot cardinality markers ─────────────────────────────────────────
 
 /**
@@ -592,8 +720,31 @@ export function cardinalityMarker(text: string | undefined): CardinalityMarker |
   return undefined;
 }
 
+/** Structural twin of the schema's `Notation` — geometry stays import-free. */
+export type NotationSpec = "both" | "uml" | "crowsfoot";
+
+/**
+ * What one END shows under a notation: the crow's-foot symbol to draw at the
+ * box (if any) and the text to print further in (if any). One resolver for
+ * the canvas and the exporters, so a PNG's ends are the screen's.
+ *
+ *   both       symbol when the text reads as a cardinality, and the text
+ *   crowsfoot  the symbol alone for such text; role text still prints
+ *   uml        never a symbol — the text is the multiplicity, and the end
+ *              glyphs (a composition's diamond, a generalization's triangle)
+ *              get their point back
+ */
+export function endNotation(
+  text: string | undefined,
+  notation: NotationSpec = "both",
+): { marker?: CardinalityMarker; text?: string } {
+  const marker = notation === "uml" ? undefined : cardinalityMarker(text);
+  const shown = notation === "crowsfoot" && marker ? undefined : text || undefined;
+  return { ...(marker ? { marker } : {}), ...(shown ? { text: shown } : {}) };
+}
+
 /** Structural twin of the schema's `EdgeHead` — geometry stays import-free. */
-export type EdgeHeadSpec = "arrow" | "open" | "diamond" | "circle" | "bar";
+export type EdgeHeadSpec = "arrow" | "open" | "diamond" | "diamond-filled" | "triangle" | "circle" | "bar";
 
 /**
  * One path for an end glyph at `point`, where `angleIntoBox` is the direction
@@ -629,6 +780,16 @@ export function edgeHeadPath(
         d: `M ${at(0)} L ${at(6, 4.2)} L ${at(12)} L ${at(6, -4.2)} Z`,
         filled: false,
       };
+    case "diamond-filled":
+      // UML composition: the same rhombus, solid — the whole owns the part.
+      return {
+        d: `M ${at(0)} L ${at(6, 4.2)} L ${at(12)} L ${at(6, -4.2)} Z`,
+        filled: true,
+      };
+    case "triangle":
+      // UML generalization: a hollow triangle, apex at the parent. A touch
+      // larger than the arrow so the outline reads as a shape, not a stroke.
+      return { d: `M ${at(0)} L ${at(11, 6)} L ${at(11, -6)} Z`, filled: false };
     case "circle":
       // A hollow ring touching the attachment point.
       return {

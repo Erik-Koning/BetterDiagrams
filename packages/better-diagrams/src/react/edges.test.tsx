@@ -69,6 +69,7 @@ const studioContext = (): StudioContextValue => ({
   mode: "technical",
   tagFilter: [],
   showTeams: true,
+  showLinks: true,
   requestCommit,
   beginZoneResize: () => {},
   endZoneResize: () => {},
@@ -80,8 +81,9 @@ const studioContext = (): StudioContextValue => ({
   setRenamingId: () => {},
   showToast: () => {},
     pinnedFields: new Set<string>(),
-    highlightField: null,
+    highlightFields: new Set<string>(),
     dimmedIds: null,
+  notation: "both",
 });
 
 function mountEdge(
@@ -91,10 +93,11 @@ function mountEdge(
     targetData = {} as Record<string, unknown>,
     extraEdges = [] as Array<Record<string, unknown>>,
     selfLoop = false,
+    ctx = {} as Partial<StudioContextValue>,
   } = {},
 ) {
   const utils = render(
-    <StudioContext.Provider value={studioContext()}>
+    <StudioContext.Provider value={{ ...studioContext(), ...ctx }}>
       <div style={{ width: 800, height: 600 }}>
         <ReactFlow
           defaultNodes={[NODE("a", 0, 0), NODE("b", 300, 0, targetData), NODE("c", 300, 300)]}
@@ -640,6 +643,7 @@ describe("compare overlay", () => {
       mode: "technical",
       tagFilter: [],
       showTeams: true,
+      showLinks: true,
       requestCommit,
       beginZoneResize: () => {},
       endZoneResize: () => {},
@@ -651,8 +655,9 @@ describe("compare overlay", () => {
       setRenamingId: () => {},
       showToast: () => {},
     pinnedFields: new Set<string>(),
-    highlightField: null,
+    highlightFields: new Set<string>(),
     dimmedIds: null,
+  notation: "both",
     };
     const { container } = render(
       <StudioContext.Provider value={ctx}>
@@ -706,6 +711,23 @@ describe("a lit path", () => {
     // The arrowhead reads the path's ink from the edge's root group.
     const root = group.parentElement as HTMLElement;
     expect(root.style.getPropertyValue("--as-path-ink")).toBe("var(--as-edge-violet)");
+    // Not the path that moves: a still halo and a still dash pattern.
+    expect(group.classList.contains("as-edge__pathglow--animate")).toBe(false);
+  });
+
+  it("pulses and flows only on the path marked as the one that moves", async () => {
+    const { container } = mountEdge(
+      edgeData({
+        pathGlow: [
+          { pathId: "still", color: "violet", step: 1, steps: 3 },
+          { pathId: "moving", color: "sky", step: 1, steps: 2, animate: true },
+        ],
+      }),
+      { selected: false },
+    );
+    await waitFor(() => expect(container.querySelectorAll(".as-edge__pathglow")).toHaveLength(2));
+    const groups = [...container.querySelectorAll(".as-edge__pathglow")];
+    expect(groups.map((g) => g.classList.contains("as-edge__pathglow--animate"))).toEqual([false, true]);
   });
 
   it("draws nothing extra on an ordinary edge", async () => {
@@ -713,5 +735,31 @@ describe("a lit path", () => {
     await waitFor(() => expect(container.querySelector(".as-edge__stroke")).not.toBeNull());
     expect(container.querySelector(".as-edge__glow")).toBeNull();
     expect(container.querySelector(".as-edge__flow")).toBeNull();
+  });
+});
+
+describe("notation", () => {
+  // A composition: filled diamond at the part, `*` → `1`.
+  const composition = () => edgeData({ startHead: "diamond-filled", startLabel: "*", endLabel: "1" });
+
+  it("draws both the symbol and the number by default, and the symbol takes the glyph's place", async () => {
+    const { container } = mountEdge(composition());
+    await waitFor(() => expect(container.querySelectorAll(".as-edge__crow")).toHaveLength(2));
+    expect(container.querySelectorAll(".as-edge__arrow")).toHaveLength(0);
+    expect([...container.querySelectorAll(".as-edge__endlabel")].map((t) => t.textContent)).toEqual(["*", "1"]);
+  });
+
+  it("UML: no symbols, the numbers stay, and the end glyphs get their point back", async () => {
+    const { container } = mountEdge(composition(), { ctx: { notation: "uml" } });
+    // The filled diamond at the source and the default arrow at the target — both filled shapes.
+    await waitFor(() => expect(container.querySelectorAll(".as-edge__arrow")).toHaveLength(2));
+    expect(container.querySelectorAll(".as-edge__crow")).toHaveLength(0);
+    expect([...container.querySelectorAll(".as-edge__endlabel")].map((t) => t.textContent)).toEqual(["*", "1"]);
+  });
+
+  it("crow's foot: the symbols alone, while role text still prints", async () => {
+    const { container } = mountEdge(edgeData({ startLabel: "*", endLabel: "owns" }), { ctx: { notation: "crowsfoot" } });
+    await waitFor(() => expect(container.querySelectorAll(".as-edge__crow")).toHaveLength(1));
+    expect([...container.querySelectorAll(".as-edge__endlabel")].map((t) => t.textContent)).toEqual(["owns"]);
   });
 });

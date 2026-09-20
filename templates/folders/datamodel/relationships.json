@@ -1,12 +1,11 @@
 {
   "edgeCount": 9,
-  "masterDetailEdges": 1,
   "edges": [
     {
-      "from": "Person__c",
-      "field": "Building__c",
-      "kind": "lookup",
-      "to": "Building__c",
+      "from": "person",
+      "field": "building_id",
+      "kind": "reference",
+      "to": "building",
       "fromFolders": [
         "people"
       ],
@@ -15,10 +14,10 @@
       ]
     },
     {
-      "from": "Customer__c",
-      "field": "Person__c",
-      "kind": "lookup",
-      "to": "Person__c",
+      "from": "customer",
+      "field": "person_id",
+      "kind": "reference",
+      "to": "person",
       "fromFolders": [
         "customers"
       ],
@@ -27,10 +26,10 @@
       ]
     },
     {
-      "from": "Recipe__c",
-      "field": "Chef__c",
-      "kind": "lookup",
-      "to": "Person__c",
+      "from": "recipe",
+      "field": "chef_id",
+      "kind": "reference",
+      "to": "person",
       "fromFolders": [
         "recipes"
       ],
@@ -39,10 +38,10 @@
       ]
     },
     {
-      "from": "Bread__c",
-      "field": "Recipe__c",
-      "kind": "masterDetail",
-      "to": "Recipe__c",
+      "from": "bread",
+      "field": "recipe_id",
+      "kind": "composition",
+      "to": "recipe",
       "fromFolders": [
         "bread"
       ],
@@ -51,10 +50,10 @@
       ]
     },
     {
-      "from": "Bread__c",
-      "field": "Main_Ingredient__c",
-      "kind": "lookup",
-      "to": "Ingredient__c",
+      "from": "bread",
+      "field": "main_ingredient_id",
+      "kind": "reference",
+      "to": "ingredient",
       "fromFolders": [
         "bread"
       ],
@@ -63,10 +62,10 @@
       ]
     },
     {
-      "from": "Product__c",
-      "field": "Bread__c",
-      "kind": "lookup",
-      "to": "Bread__c",
+      "from": "product",
+      "field": "bread_id",
+      "kind": "reference",
+      "to": "bread",
       "fromFolders": [
         "products"
       ],
@@ -75,10 +74,10 @@
       ]
     },
     {
-      "from": "Coupon__c",
-      "field": "Product__c",
-      "kind": "lookup",
-      "to": "Product__c",
+      "from": "coupon",
+      "field": "product_id",
+      "kind": "reference",
+      "to": "product",
       "fromFolders": [
         "coupons"
       ],
@@ -87,10 +86,10 @@
       ]
     },
     {
-      "from": "Coupon__c",
-      "field": "Customer__c",
-      "kind": "lookup",
-      "to": "Customer__c",
+      "from": "coupon",
+      "field": "customer_id",
+      "kind": "reference",
+      "to": "customer",
       "fromFolders": [
         "coupons"
       ],
@@ -99,10 +98,10 @@
       ]
     },
     {
-      "from": "Cutlery__c",
-      "field": "Building__c",
-      "kind": "lookup",
-      "to": "Building__c",
+      "from": "cutlery",
+      "field": "building_id",
+      "kind": "reference",
+      "to": "building",
       "fromFolders": [
         "cutlery"
       ],

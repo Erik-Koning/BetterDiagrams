@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import type { DiagramNode, DiagramTemplate } from "../contract/schema";
-import { fieldKey, fieldRecords, type FieldRecord, type FieldRef } from "../contract/fields";
+import { fieldKey, fieldRecords, type FieldRecord, type FieldRef, type FieldTarget } from "../contract/fields";
 import { Modal } from "./chrome";
 import { copyText } from "./copy-text";
 import {
@@ -38,8 +38,13 @@ export interface FieldGridModalProps {
   filename: string;
   pins: readonly FieldRef[];
   onTogglePin: (ref: FieldRef) => void;
-  /** Follow a reference: the parent closes the grid and goes to the table. */
-  onNavigate: (nodeId: string) => void;
+  /**
+   * Follow a reference: the parent closes the grid and goes to the table.
+   * `via` names the field followed and the target chosen, for a parent that
+   * marks both halves of the join; a host that only wants the table can
+   * ignore it.
+   */
+  onNavigate: (nodeId: string, via?: { from: FieldRef; target: FieldTarget }) => void;
   /** Hand the reader a file — the editor's download helper. */
   onDownload: (blob: Blob, filename: string) => void;
   onClose: () => void;
@@ -126,7 +131,7 @@ export function FieldGridModal({
         break;
       case "Enter": {
         const target = index >= 0 ? visible[index].fk.find((t) => t.nodeId) : undefined;
-        if (target?.nodeId) onNavigate(target.nodeId);
+        if (target?.nodeId) onNavigate(target.nodeId, { from: { nodeId: node.id, fieldId: visible[index].id }, target });
         else handled = false;
         break;
       }
@@ -255,6 +260,7 @@ export function FieldGridModal({
             {visible.map((record) => (
               <GridRow
                 key={record.id}
+                nodeId={node.id}
                 record={record}
                 active={record.id === activeId}
                 pinned={pinned.has(fieldKey({ nodeId: node.id, fieldId: record.id }))}
@@ -278,6 +284,7 @@ export function FieldGridModal({
 }
 
 function GridRow({
+  nodeId,
   record,
   active,
   pinned,
@@ -285,12 +292,13 @@ function GridRow({
   onTogglePin,
   onNavigate,
 }: {
+  nodeId: string;
   record: FieldRecord;
   active: boolean;
   pinned: boolean;
   onActivate: () => void;
   onTogglePin: () => void;
-  onNavigate: (nodeId: string) => void;
+  onNavigate: FieldGridModalProps["onNavigate"];
 }) {
   return (
     <tr
@@ -334,7 +342,7 @@ function GridRow({
                       aria-label={`Go to ${t.label}`}
                       onClick={(event) => {
                         event.stopPropagation();
-                        onNavigate(t.nodeId!);
+                        onNavigate(t.nodeId!, { from: { nodeId, fieldId: record.id }, target: t });
                       }}
                     >
                       {t.label}

@@ -8,7 +8,7 @@
  * deliberately cover things the cloud packs don't.)
  */
 
-import { FOLDER_EXPORTERS, SALESFORCE_KINDS } from "@mosphere/better-diagrams";
+import { FOLDER_EXPORTERS, DATAMODEL_KINDS } from "@mosphere/better-diagrams";
 
 /** 24x24 viewBox path data, same format as the built-in icons. */
 export const icons = {
@@ -21,9 +21,9 @@ export const icons = {
  * has to state what makes it different.
  */
 export const nodeKinds = {
-  // The Salesforce data-model preset, so a folder imported under Settings ▾
-  // → Templates / folders renders its objects, views and record types.
-  ...SALESFORCE_KINDS,
+  // The data-model preset, so a folder imported under Settings ▾ →
+  // Templates / folders renders its entities, views and record types.
+  ...DATAMODEL_KINDS,
   vault: {
     label: "Vault",
     fill: "#241a04",

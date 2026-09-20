@@ -110,7 +110,8 @@ test.describe("fields", () => {
     // The only route is singled out: bright, with the key on each hop.
     await expect(page.locator(".as-edge__routekeytext")).toHaveCount(2);
     await expect(page.locator(".as-edge__routekeytext").filter({ hasText: "user_id" })).toBeVisible();
-    await expect(studio.pathPanel.getByRole("region", { name: "Keys most routes use" })).toContainText("Orders · user_id");
+    // One route ranks nothing: the hop strip above already names its keys.
+    await expect(studio.pathPanel.getByRole("region", { name: "Keys most routes use" })).toHaveCount(0);
   });
 
   test("key coverage scores a chosen set of keys and finds the smallest", async ({ studio }) => {
@@ -126,6 +127,31 @@ test.describe("fields", () => {
     await expect(panel.getByText(/Smallest set, proven/)).toBeVisible();
     await studio.page.keyboard.press("Escape");
     await expect(panel).toBeHidden();
+  });
+
+  test("show references marks the key's table and the referencing one, fades the rest, and a click on empty canvas lifts it", async ({ studio }) => {
+    const menu = await studio.openFieldMenu("users", "id");
+    await menu.getByRole("menuitem", { name: /Show references \(1\)/ }).click();
+    const card = (id: string) => studio.page.locator(`.react-flow__node[data-id="${id}"] .as-node`);
+    await expect(card("orders")).toHaveClass(/as-node--match/);
+    await expect(card("users")).toHaveClass(/as-node--match/);
+    await expect(card("items")).toHaveClass(/as-node--unmarked/);
+    await expect(card("logs")).toHaveClass(/as-node--unmarked/);
+    // Somewhere on the bare pane — not a card, not a floating panel.
+    const spot = await studio.page.evaluate(() => {
+      const pane = document.querySelector(".react-flow__pane")!;
+      const r = pane.getBoundingClientRect();
+      for (const [fx, fy] of [[0.5, 0.5], [0.1, 0.9], [0.9, 0.1], [0.5, 0.9], [0.1, 0.5], [0.9, 0.5], [0.3, 0.3]]) {
+        const x = r.left + r.width * fx;
+        const y = r.top + r.height * fy;
+        if (document.elementFromPoint(x, y) === pane) return { x, y };
+      }
+      return null;
+    });
+    expect(spot).not.toBeNull();
+    await studio.page.mouse.click(spot!.x, spot!.y);
+    await expect(card("orders")).not.toHaveClass(/as-node--match/);
+    await expect(card("items")).not.toHaveClass(/as-node--unmarked/);
   });
 
   test("search finds a field and marks its row", async ({ studio }) => {

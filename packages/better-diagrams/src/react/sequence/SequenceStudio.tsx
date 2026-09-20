@@ -195,6 +195,12 @@ export interface SequenceStudioProps {
    * is identical in both.
    */
   mode?: StudioMode;
+  /**
+   * Marketing's gradient setting — the same contract as the architecture
+   * editor's: default `true`; `false` paints participant headers flat, on
+   * screen and in every picture export.
+   */
+  gradients?: boolean;
   /** Base name for exported files. */
   filename?: string;
   /**
@@ -274,6 +280,7 @@ function SequenceInner({
   readOnly = false,
   theme,
   mode,
+  gradients = true,
   filename = "sequence",
   welcome = true,
   files,
@@ -1193,8 +1200,9 @@ function SequenceInner({
           filename,
           palette: exportPalette,
           // Picture formats dress the drawing the way the screen is dressing
-          // it; the document formats ignore it.
+          // it; the document formats ignore both.
           mode: resolveStudioMode(mode),
+          gradients,
         });
         if (result) {
           download(result.blob, result.filename);
@@ -1206,7 +1214,7 @@ function SequenceInner({
         showToast(`Export failed: ${(err as Error).message}`);
       }
     },
-    [registry, filename, exportPalette, mode, showToast, timelineActive, timelineAt, timelineFuture],
+    [registry, filename, exportPalette, mode, gradients, showToast, timelineActive, timelineAt, timelineFuture],
   );
 
   const stateAxes = useMemo(() => sequenceStateAxes(template), [template]);
@@ -1243,8 +1251,8 @@ function SequenceInner({
           combos: choice.combos,
           pdfLayout: choice.pdfLayout,
           materialize: (combo) => materializeSequenceCombo(templateRef.current, combo),
-          renderSvg: (doc) => renderSequenceToSvg(doc, exportPalette, { mode }),
-          renderCanvas: (doc) => renderSequenceToCanvas(doc, 2, exportPalette, { mode }),
+          renderSvg: (doc) => renderSequenceToSvg(doc, exportPalette, { mode, gradients }),
+          renderCanvas: (doc) => renderSequenceToCanvas(doc, 2, exportPalette, { mode, gradients }),
         });
         download(result.blob, result.filename);
         showToast(
@@ -1256,7 +1264,7 @@ function SequenceInner({
         showToast(`Export failed: ${(err as Error).message}`);
       }
     },
-    [pendingExport, runDirectExport, filename, stateAxes, exportPalette, mode, showToast],
+    [pendingExport, runDirectExport, filename, stateAxes, exportPalette, mode, gradients, showToast],
   );
 
   const loadFile = useCallback(
@@ -1418,7 +1426,7 @@ function SequenceInner({
 
   const rootStyle = { ...themeToStyle(theme), ...style };
   const studioMode = resolveStudioMode(mode);
-  const modeClass = modeClassName(studioMode);
+  const modeClass = modeClassName(studioMode, gradients);
 
   return (
     <SequenceContext.Provider value={context}>

@@ -195,6 +195,10 @@ export default function App() {
   // "technical" | "marketing" — the editor's presentation mode, independent
   // of light/dark.
   const [studioMode, setStudioMode] = useState("technical");
+  // Marketing's one setting: its gradients, or one flat coat per card. Kept
+  // while the mode is technical (where it is inert) so flipping back to
+  // marketing finds it where it was left.
+  const [gradients, setGradients] = useState(true);
   // null = "use the active theme's accent"; set once the user picks a colour.
   const [accent, setAccent] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
@@ -716,6 +720,14 @@ export default function App() {
             />
             Marketing
           </label>
+          {/* Only meaningful in marketing mode — technical has no gradients
+              to switch off — so it only shows there. */}
+          {studioMode === "marketing" ? (
+            <label className="app__toggle" title="Marketing's gradients, or one flat coat per card — on screen and in every picture export">
+              <input type="checkbox" checked={gradients} onChange={(e) => setGradients(e.target.checked)} />
+              Gradients
+            </label>
+          ) : null}
           <label className="app__toggle">
             <input type="checkbox" checked={showJson} onChange={(e) => setShowJson(e.target.checked)} />
             JSON
@@ -887,6 +899,7 @@ export default function App() {
               registry={registry}
               theme={theme}
               mode={studioMode}
+              gradients={gradients}
               {...fileProps}
             />
           ) : isSequence ? (
@@ -898,6 +911,7 @@ export default function App() {
               readOnly={readOnly}
               theme={theme}
               mode={studioMode}
+              gradients={gradients}
               generate={aiEnabled ? generate : undefined}
               filename={active.name}
               onSelectionChange={setSelection}
@@ -914,6 +928,7 @@ export default function App() {
               registry={registry}
               theme={theme}
               mode={studioMode}
+              gradients={gradients}
               generate={aiEnabled ? generate : undefined}
               filename={active.name}
               onNavigateFile={navigateFile}

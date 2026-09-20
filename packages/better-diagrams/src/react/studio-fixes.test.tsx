@@ -291,6 +291,33 @@ describe("the inspector", () => {
     });
   });
 
+  it("clears every link a multi-selection carries in one step, and offers nothing when none has one", async () => {
+    const onChange = vi.fn();
+    const LINKED = doc({
+      nodes: [
+        { id: "a", label: "A", kind: "table", url: "/entities/a", x: 0, y: 0 },
+        { id: "b", label: "B", kind: "table", url: "/entities/b", x: 300, y: 0 },
+        { id: "c", label: "C", kind: "table", x: 600, y: 0 },
+      ],
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={LINKED} onChange={onChange} />);
+    expect(container.querySelectorAll(".as-node__link")).toHaveLength(2);
+
+    fireEvent.keyDown(window, { key: "a", metaKey: true });
+    // Still no input — a link names ONE place — but the selection can drop the ones it has.
+    const clear = await screen.findByRole("button", { name: "Clear links (2)" });
+    expect(screen.queryByLabelText("Documentation link")).not.toBeInTheDocument();
+    fireEvent.click(clear);
+    await waitFor(() => expect(latest(onChange).nodes.map((n) => n.url)).toEqual([undefined, undefined, undefined]));
+    expect(container.querySelectorAll(".as-node__link")).toHaveLength(0);
+    // Nothing left to clear: the section goes away rather than offering a no-op.
+    expect(screen.queryByRole("button", { name: /^Clear link/ })).not.toBeInTheDocument();
+
+    // One write, one undo entry.
+    fireEvent.keyDown(window, { key: "z", metaKey: true });
+    await waitFor(() => expect(latest(onChange).nodes.map((n) => n.url)).toEqual(["/entities/a", "/entities/b", undefined]));
+  });
+
   it("shows Mixed where a multi-selection disagrees, until one value is set for all", async () => {
     const onChange = vi.fn();
     const MIXED = doc({

@@ -1,0 +1,6 @@
+kind: view
+label: Individuals
+aliasOf: core/account
+filter: type = 'individual'
+diagramType: standard
+diagramName: Individuals

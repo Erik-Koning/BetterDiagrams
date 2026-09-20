@@ -1,13 +1,12 @@
 {
   "$schemaVersion": 1,
   "$generatedAt": "2026-09-17T00:00:00Z",
-  "$source": "https://bakery.my.salesforce.com",
+  "$source": "https://bakery.example",
   "folder": "products",
-  "object": {
-    "apiName": "Product__c",
+  "entity": {
+    "name": "product",
     "label": "Product",
     "labelPlural": "Products",
-    "keyPrefix": "a07",
     "kind": "custom",
     "custom": true,
     "namespace": null,
@@ -21,118 +20,111 @@
     "diagramName": "Product",
     "diagramType": "custom",
     "businessLine": "Bakery",
-    "source": "describe",
+    "source": "export",
     "note": ""
   },
   "recordTypes": [],
   "fieldSummary": {
     "total": 7,
-    "visibleToIntegrationUser": 7,
-    "hiddenFromIntegrationUser": 0
+    "visible": 7,
+    "hidden": 0
   },
   "fields": [
     {
-      "name": "Id",
+      "name": "id",
       "label": "Record ID",
       "type": "id",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "Name",
+      "name": "name",
       "label": "Product name",
       "type": "string",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
       "nameField": true,
       "length": 255
     },
     {
-      "name": "Bread__c",
+      "name": "bread_id",
       "label": "Bread",
       "type": "reference",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "displayType": "Reference",
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "toolingType": "Lookup",
       "relationship": {
-        "kind": "lookup",
+        "kind": "reference",
         "referenceTo": [
-          "Bread__c"
+          "bread"
         ],
-        "relationshipName": "Products"
+        "relationshipName": "products"
       }
     },
     {
-      "name": "Price__c",
+      "name": "price",
       "label": "Price",
       "type": "currency",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
       "precision": 8,
       "scale": 2
     },
     {
-      "name": "Active__c",
+      "name": "active",
       "label": "Active",
       "type": "boolean",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "SKU__c",
+      "name": "sku",
       "label": "SKU",
       "type": "string",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
       "externalId": true,
       "unique": true
     },
     {
-      "name": "OwnerId",
+      "name": "owner_id",
       "label": "Owner ID",
       "type": "reference",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "displayType": "Reference",
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "toolingType": "Lookup",
       "relationship": {
-        "kind": "lookup",
+        "kind": "reference",
         "referenceTo": [
-          "User"
+          "user"
         ],
         "relationshipName": null
       }
@@ -140,42 +132,39 @@
   ],
   "foreignKeys": [
     {
-      "field": "Bread__c",
+      "field": "bread_id",
       "label": "Bread",
-      "kind": "lookup",
+      "kind": "reference",
       "referenceTo": [
-        "Bread__c"
+        "bread"
       ],
-      "relationshipName": "Products",
+      "relationshipName": "products",
       "required": false,
       "cascadeDelete": false,
       "deleteConstraint": "SetNull",
-      "visibleToIntegrationUser": true,
+      "visible": true,
       "targetFolders": [
         "bread"
       ]
     },
     {
-      "field": "OwnerId",
+      "field": "owner_id",
       "label": "Owner ID",
-      "kind": "lookup",
+      "kind": "reference",
       "referenceTo": [
-        "User"
+        "user"
       ],
       "relationshipName": null,
       "required": false,
       "cascadeDelete": false,
       "deleteConstraint": "SetNull",
-      "visibleToIntegrationUser": true,
+      "visible": true,
       "targetFolders": []
     }
   ],
   "referencedBy": [],
   "validationRules": [],
-  "routes": {
-    "lightningList": "/lightning/o/Product__c/list",
-    "describe": "/services/data/v60.0/sobjects/Product__c/describe"
-  },
+  "url": "/entities/product",
   "notes": [
     "What is actually sold, at a price."
   ]

@@ -1,0 +1,9 @@
+kind: custom
+label: Building
+name: building
+recordCount: 4
+fieldsTotal: 7
+fieldsVisible: 7
+diagramType: custom
+diagramName: Building
+url: /entities/building

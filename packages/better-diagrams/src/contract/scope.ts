@@ -43,6 +43,7 @@ import {
   type ViewRecord,
 } from "./schema";
 import { effectiveNodeDates } from "./timeline";
+import { wrapHeight } from "./layout";
 
 /** Inset between the boundary frame and the children it wraps. */
 const BOUNDARY_PAD = 28;
@@ -373,20 +374,37 @@ export function scopedView(
     columns[ghostInbound.get(ghostId) ? "left" : "right"].push(ghost);
   }
 
-  // Stack each column vertically centred on the boundary; overrides win.
+  // Stack each side vertically centred on the boundary; overrides win. A
+  // level with dozens of outside neighbours — the core band every other
+  // band references — would stack them several frames high and fit-zoom to
+  // nothing, so a side taller than what the level's area asks for fans out
+  // into further stacks marching away from the frame, by the rule the
+  // layout wraps a towering rank. A side that fits is placed exactly as it
+  // always was.
+  const stackHeight = (col: readonly DiagramNode[]) =>
+    col.reduce((sum, n) => sum + n.h, 0) + GHOST_STACK_GAP * (col.length - 1);
+  const area =
+    boundaryBox.w * boundaryBox.h +
+    ghostNodes.reduce((sum, n) => sum + (n.w + GHOST_GAP) * (n.h + GHOST_STACK_GAP), 0);
+  const limit = Math.max(boundaryBox.h, wrapHeight(area));
   for (const side of ["left", "right"] as const) {
     const col = columns[side];
     if (!col.length) continue;
-    const totalH =
-      col.reduce((sum, n) => sum + n.h, 0) + GHOST_STACK_GAP * (col.length - 1);
-    let y = boundaryBox.y + Math.max(0, (boundaryBox.h - totalH) / 2);
-    for (const ghost of col) {
-      ghost.x =
-        side === "left"
-          ? boundaryBox.x - GHOST_GAP - ghost.w
-          : boundaryBox.x + boundaryBox.w + GHOST_GAP;
-      ghost.y = y;
-      y += ghost.h + GHOST_STACK_GAP;
+    const parts = Math.min(col.length, Math.ceil(stackHeight(col) / limit));
+    const per = Math.ceil(col.length / parts);
+    let edge = side === "left" ? boundaryBox.x - GHOST_GAP : boundaryBox.x + boundaryBox.w + GHOST_GAP;
+    for (let i = 0; i < col.length; i += per) {
+      const stack = col.slice(i, i + per);
+      const width = Math.max(...stack.map((n) => n.w));
+      let y = boundaryBox.y + Math.max(0, (boundaryBox.h - stackHeight(stack)) / 2);
+      for (const ghost of stack) {
+        // Each stack hugs the frame's side: left ghosts end where the stack
+        // ends, right ghosts start where it starts.
+        ghost.x = side === "left" ? edge - ghost.w : edge;
+        ghost.y = y;
+        y += ghost.h + GHOST_STACK_GAP;
+      }
+      edge += side === "left" ? -(width + GHOST_GAP) : width + GHOST_GAP;
     }
   }
   for (const ghost of ghostNodes) {

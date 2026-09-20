@@ -51,7 +51,7 @@ describe("bright routes", () => {
     const nodes: Node[] = ["a", "b", "c", "d"].map((id) => ({ id, position: { x: 0, y: 0 }, data: {} }));
     const edges: Edge[] = [
       { id: "ab", source: "a", target: "b", data: { startField: "b_id" } },
-      { id: "bc", source: "b", target: "c", data: { data: { sf: { field: "c_ref" } } } },
+      { id: "bc", source: "b", target: "c", data: { data: { model: { field: "c_ref" } } } },
       { id: "cd", source: "c", target: "d", data: {} },
     ];
     const view = applyPathView(nodes, edges, index);

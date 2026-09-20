@@ -90,6 +90,26 @@ describe("key coverage panel", () => {
     expect(await screen.findByRole("region", { name: "Key coverage" })).toBeInTheDocument();
   });
 
+  it("is not offered in the View menu for a document with no tables; the ref still opens it", async () => {
+    const user = userEvent.setup();
+    const ref = { current: null as StudioHandle | null };
+    const services: DiagramTemplate = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "api", label: "API", kind: "service", icon: "none", description: "", parentId: null, x: 100, y: 100, w: 200, h: 100 },
+        { id: "db", label: "DB", kind: "database", icon: "none", description: "", parentId: null, x: 500, y: 100, w: 200, h: 100 },
+      ],
+      edges: [{ id: "a-d", source: "api", target: "db", label: "", style: "solid", color: "slate" }],
+    });
+    mount(<ArchitectureStudio ref={ref} defaultValue={services} />);
+    await user.click(screen.getByRole("button", { name: "View" }));
+    expect(screen.queryByRole("menuitem", { name: /Key coverage/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("Keys")).not.toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    ref.current!.openCoverage();
+    expect(await screen.findByRole("region", { name: "Key coverage" })).toBeInTheDocument();
+  });
+
   it("finds the smallest set and says it is proven; scope from a selected table; keys prune", async () => {
     const ref = { current: null as StudioHandle | null };
     const { container, rerender } = mount(<ArchitectureStudio ref={ref} defaultValue={MODEL} />);

@@ -37,6 +37,7 @@ export {
   kindDef,
   iconPaths,
   providerDef,
+  relationDef,
   zoneInk,
   zoneFill,
   FALLBACK_KIND,

@@ -1,13 +1,12 @@
 {
   "$schemaVersion": 1,
   "$generatedAt": "2026-09-17T00:00:00Z",
-  "$source": "https://bakery.my.salesforce.com",
+  "$source": "https://bakery.example",
   "folder": "coupons",
-  "object": {
-    "apiName": "Coupon__c",
+  "entity": {
+    "name": "coupon",
     "label": "Coupon",
     "labelPlural": "Coupons",
-    "keyPrefix": "a08",
     "kind": "custom",
     "custom": true,
     "namespace": null,
@@ -21,149 +20,142 @@
     "diagramName": "Coupon",
     "diagramType": "custom",
     "businessLine": "Bakery",
-    "source": "describe",
+    "source": "export",
     "note": ""
   },
   "recordTypes": [],
   "fieldSummary": {
     "total": 7,
-    "visibleToIntegrationUser": 7,
-    "hiddenFromIntegrationUser": 0
+    "visible": 7,
+    "hidden": 0
   },
   "fields": [
     {
-      "name": "Id",
+      "name": "id",
       "label": "Record ID",
       "type": "id",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "Code__c",
+      "name": "code",
       "label": "Coupon code",
       "type": "string",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
       "unique": true
     },
     {
-      "name": "Discount_Percent__c",
+      "name": "discount_percent",
       "label": "Discount Percent",
       "type": "percent",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
       "precision": 5,
       "scale": 2
     },
     {
-      "name": "Product__c",
+      "name": "product_id",
       "label": "Product",
       "type": "reference",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "displayType": "Reference",
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "toolingType": "Lookup",
       "relationship": {
-        "kind": "lookup",
+        "kind": "reference",
         "referenceTo": [
-          "Product__c"
+          "product"
         ],
-        "relationshipName": "Coupons"
+        "relationshipName": "coupons"
       }
     },
     {
-      "name": "Customer__c",
+      "name": "customer_id",
       "label": "Customer",
       "type": "reference",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "displayType": "Reference",
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "toolingType": "Lookup",
       "relationship": {
-        "kind": "lookup",
+        "kind": "reference",
         "referenceTo": [
-          "Customer__c"
+          "customer"
         ],
-        "relationshipName": "Coupons"
+        "relationshipName": "coupons"
       }
     },
     {
-      "name": "Expires__c",
+      "name": "expires",
       "label": "Expires",
       "type": "date",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "Redeemed__c",
+      "name": "redeemed",
       "label": "Redeemed",
       "type": "boolean",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     }
   ],
   "foreignKeys": [
     {
-      "field": "Product__c",
+      "field": "product_id",
       "label": "Product",
-      "kind": "lookup",
+      "kind": "reference",
       "referenceTo": [
-        "Product__c"
+        "product"
       ],
-      "relationshipName": "Coupons",
+      "relationshipName": "coupons",
       "required": false,
       "cascadeDelete": false,
       "deleteConstraint": "SetNull",
-      "visibleToIntegrationUser": true,
+      "visible": true,
       "targetFolders": [
         "products"
       ]
     },
     {
-      "field": "Customer__c",
+      "field": "customer_id",
       "label": "Customer",
-      "kind": "lookup",
+      "kind": "reference",
       "referenceTo": [
-        "Customer__c"
+        "customer"
       ],
-      "relationshipName": "Coupons",
+      "relationshipName": "coupons",
       "required": false,
       "cascadeDelete": false,
       "deleteConstraint": "SetNull",
-      "visibleToIntegrationUser": true,
+      "visible": true,
       "targetFolders": [
         "customers"
       ]
@@ -171,10 +163,7 @@
   ],
   "referencedBy": [],
   "validationRules": [],
-  "routes": {
-    "lightningList": "/lightning/o/Coupon__c/list",
-    "describe": "/services/data/v60.0/sobjects/Coupon__c/describe"
-  },
+  "url": "/entities/coupon",
   "notes": [
     "A discount, optionally tied to one customer and one product."
   ]

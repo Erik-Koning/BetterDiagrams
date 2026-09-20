@@ -3,6 +3,7 @@
  * that put a foreign-key line on the column it references.
  */
 import { describe, expect, it } from "vitest";
+import { referencesTo } from "./fields";
 import {
   FIELD_ROW_H,
   MAX_NODE_FIELDS,
@@ -13,7 +14,11 @@ import {
   fieldsBoxHeight,
   fromReactFlow,
   toReactFlow,
+  uncrossFieldAnchors,
   validateTemplate,
+  withEndSlots,
+  type DiagramEdge,
+  type DiagramNode,
   type DiagramTemplate,
 } from "./schema";
 import { mergeTemplate, splitTemplate } from "./presentation";
@@ -233,6 +238,128 @@ describe("row anchors", () => {
   });
 });
 
+describe("un-crossing", () => {
+  /**
+   * The screenshot that asked for this: Coupon's two foreign keys, product_id
+   * on the row ABOVE customer_id, but Product sitting BELOW Customer — so the
+   * two lines cross the moment they leave the table.
+   */
+  const coupon = table("coupon", [
+    { id: "id", name: "Id", key: "pk" },
+    { id: "code", name: "code" },
+    { id: "product", name: "product_id", key: "fk" },
+    { id: "customer", name: "customer_id", key: "fk" },
+  ]);
+  const customer = table("customer", [{ id: "id", name: "Id", key: "pk" }], { x: 900, y: 0 });
+  const product = table("product", [{ id: "id", name: "Id", key: "pk" }], { x: 900, y: 600 });
+  const fk = (id: string, source: string, startField: string, target: string, over: Record<string, unknown> = {}) =>
+    ({ id, source, target, label: "", style: "dashed", color: "slate", startField, endField: "id", ...over }) as unknown as DiagramEdge;
+  const model = (edges: DiagramEdge[], nodes: unknown[] = [coupon, customer, product]) =>
+    validateTemplate({ version: 1, nodes, edges } as unknown as DiagramTemplate);
+  const nodeOf = (doc: DiagramTemplate) => (id: string) => {
+    const n = doc.nodes.find((node) => node.id === id);
+    return n && { fields: n.fields, description: n.description, box: { x: n.x, y: n.y, width: n.w, height: n.h } };
+  };
+  const rowT = (n: DiagramNode, fieldId: string) => fieldRowT(n, fieldId)!;
+
+  it("trades the rows of two lines that would cross leaving the same side", () => {
+    const doc = model([fk("toProduct", "coupon", "product", "product"), fk("toCustomer", "coupon", "customer", "customer")]);
+    const slots = uncrossFieldAnchors(doc.edges, nodeOf(doc));
+    const c = doc.nodes[0];
+    // Each leaves from the OTHER's row; the far ends, alone on their sides, stay.
+    expect(slots.get("toProduct")).toEqual({ start: rowT(c, "customer") });
+    expect(slots.get("toCustomer")).toEqual({ start: rowT(c, "product") });
+  });
+
+  it("leaves lines that already fan out in destination order alone", () => {
+    const doc = model([fk("toCustomer", "coupon", "customer", "customer"), fk("toProduct", "coupon", "product", "product")], [
+      coupon,
+      { ...customer, y: 600 },
+      { ...product, y: 0 },
+    ]);
+    expect(uncrossFieldAnchors(doc.edges, nodeOf(doc)).size).toBe(0);
+  });
+
+  it("never moves an end the user pinned, or a top/bottom pin, or a floating end", () => {
+    const doc = model([
+      // Hand-pinned fraction on the right face, above the FK row — the user's.
+      fk("pinned", "coupon", "product", "product", { startField: undefined, start: { side: "right", t: 0.1 } }),
+      fk("toCustomer", "coupon", "customer", "customer"),
+      // A bottom pin keeps its field but has no row to trade.
+      fk("bottom", "coupon", "product", "product", { start: { side: "bottom", t: 0.9 } }),
+      // No field, no pin: floats through the centre of the face.
+      fk("floating", "coupon", "product", "product", { startField: undefined }),
+    ]);
+    // Only one row-anchored end on coupon's right face: nothing to trade with.
+    expect(uncrossFieldAnchors(doc.edges, nodeOf(doc)).size).toBe(0);
+  });
+
+  it("hands out three rows in destination order, not just a pairwise swap", () => {
+    const three = table("t", [
+      { id: "a", name: "a", key: "fk" },
+      { id: "b", name: "b", key: "fk" },
+      { id: "c", name: "c", key: "fk" },
+    ]);
+    const target = (id: string, y: number) => table(id, [{ id: "id", name: "id", key: "pk" }], { x: 900, y });
+    const doc = model(
+      [fk("ea", "t", "a", "low"), fk("eb", "t", "b", "high"), fk("ec", "t", "c", "mid")],
+      [three, target("low", 800), target("high", 0), target("mid", 400)],
+    );
+    const slots = uncrossFieldAnchors(doc.edges, nodeOf(doc));
+    const t = doc.nodes[0];
+    expect(slots.get("ea")).toEqual({ start: rowT(t, "c") });
+    expect(slots.get("eb")).toEqual({ start: rowT(t, "a") });
+    expect(slots.get("ec")).toEqual({ start: rowT(t, "b") });
+  });
+
+  it("keeps ties in their stored order", () => {
+    // Both lines land on the same row of the same table: no reason to move.
+    const doc = model([fk("one", "coupon", "product", "customer"), fk("two", "coupon", "customer", "customer")]);
+    expect(uncrossFieldAnchors(doc.edges, nodeOf(doc)).size).toBe(0);
+  });
+
+  it("trades one side of a crossed pair between two tables, not both", () => {
+    // Two lines between the same tables, crossed on BOTH faces. Trading both
+    // would cross them again; the second face reads the first's live order.
+    const left = table("l", [{ id: "p", name: "p", key: "fk" }, { id: "q", name: "q", key: "fk" }]);
+    const right = table("r", [{ id: "x", name: "x", key: "pk" }, { id: "y", name: "y", key: "pk" }], { x: 900 });
+    const doc = model(
+      [fk("pToY", "l", "p", "r", { endField: "y" }), fk("qToX", "l", "q", "r", { endField: "x" })],
+      [left, right],
+    );
+    const slots = uncrossFieldAnchors(doc.edges, nodeOf(doc));
+    const [l] = doc.nodes;
+    expect(slots.get("pToY")).toEqual({ start: rowT(l, "q") });
+    expect(slots.get("qToX")).toEqual({ start: rowT(l, "p") });
+  });
+
+  it("aims at the first waypoint, as the router does", () => {
+    // Both target rows would say "no crossing", but the upper line is routed
+    // DOWN through a waypoint first — that is where it heads, so it trades.
+    const doc = model(
+      [fk("toCustomer", "coupon", "product", "customer", { points: [[600, 700]] }), fk("toProduct", "coupon", "customer", "product")],
+    );
+    const slots = uncrossFieldAnchors(doc.edges, nodeOf(doc));
+    const c = doc.nodes[0];
+    expect(slots.get("toCustomer")).toEqual({ start: rowT(c, "customer") });
+    expect(slots.get("toProduct")).toEqual({ start: rowT(c, "product") });
+  });
+
+  it("skips an edge whose box the caller can't place", () => {
+    const doc = model([fk("toProduct", "coupon", "product", "product"), fk("toCustomer", "coupon", "customer", "customer")]);
+    const only = nodeOf(doc);
+    expect(uncrossFieldAnchors(doc.edges, (id) => (id === "product" ? undefined : only(id))).size).toBe(0);
+  });
+
+  it("lays a trade over fieldAnchors, touching only the ends that moved", () => {
+    const anchors = { start: { side: "right", t: 0.3 }, end: { side: "left", t: 0.6 } } as const;
+    expect(withEndSlots(anchors, undefined)).toBe(anchors);
+    expect(withEndSlots(anchors, { start: 0.45 })).toEqual({ start: { side: "right", t: 0.45 }, end: { side: "left", t: 0.6 } });
+    // A trade for an end that resolved to nothing is nothing.
+    expect(withEndSlots({ end: anchors.end }, { start: 0.45 })).toEqual({ end: anchors.end });
+  });
+});
+
 describe("round trips", () => {
   it("survives the canvas: toReactFlow → fromReactFlow", () => {
     const before = validateTemplate(MODEL);
@@ -332,5 +459,41 @@ describe("the prompt", () => {
     // zone's geometry is membership rather than presentation.
     expect(content).not.toContain('"w":170');
     expect(content).toContain('"w":900');
+  });
+});
+
+describe("referencesTo — what points at a key", () => {
+  const t = validateTemplate({
+    version: 1,
+    nodes: [
+      { id: "users", label: "Users", kind: "table", icon: "none", description: "", parentId: null, x: 0, y: 0, w: 230, h: 96, fields: [{ id: "id", name: "id", key: "pk" }, { id: "email", name: "email", unique: true }] },
+      { id: "orders", label: "Orders", kind: "table", icon: "none", description: "", parentId: null, x: 400, y: 0, w: 230, h: 96, fields: [{ id: "user_id", name: "user_id", key: "fk" }] },
+      { id: "notes", label: "Notes", kind: "table", icon: "none", description: "", parentId: null, x: 800, y: 0, w: 230, h: 96, fields: [{ id: "author", name: "author", key: "fk" }, { id: "mail", name: "mail", key: "fk" }] },
+      { id: "logs", label: "Logs", kind: "table", icon: "none", description: "", parentId: null, x: 0, y: 400, w: 230, h: 96, fields: [{ id: "id", name: "id", key: "pk" }] },
+    ],
+    edges: [
+      { id: "o-u", source: "orders", target: "users", label: "", style: "solid", color: "slate", startField: "user_id", endField: "id" },
+      // No landing row named: lands on the table's key, as a followed reference would.
+      { id: "n-u", source: "notes", target: "users", label: "", style: "solid", color: "slate", startField: "author" },
+      // Lands on a unique column, not the key.
+      { id: "n-m", source: "notes", target: "users", label: "", style: "solid", color: "slate", startField: "mail", endField: "email" },
+      // A table pointing at itself.
+      { id: "u-u", source: "users", target: "users", label: "", style: "solid", color: "slate", endField: "id" },
+    ],
+  } as unknown as DiagramTemplate);
+
+  it("lists the foreign keys landing on a key, explicit or implied, self-references included", () => {
+    expect(referencesTo(t, { nodeId: "users", fieldId: "id" })).toEqual([
+      { nodeId: "orders", fieldId: "user_id", edgeId: "o-u" },
+      { nodeId: "notes", fieldId: "author", edgeId: "n-u" },
+      { nodeId: "users", edgeId: "u-u" },
+    ]);
+    expect(referencesTo(t, { nodeId: "users", fieldId: "email" })).toEqual([{ nodeId: "notes", fieldId: "mail", edgeId: "n-m" }]);
+  });
+
+  it("a table pin takes every line in; a key nothing points at, or a node that isn't there, gets none", () => {
+    expect(referencesTo(t, { nodeId: "users" }).map((r) => r.edgeId)).toEqual(["o-u", "n-u", "n-m", "u-u"]);
+    expect(referencesTo(t, { nodeId: "logs", fieldId: "id" })).toEqual([]);
+    expect(referencesTo(t, { nodeId: "ghost", fieldId: "id" })).toEqual([]);
   });
 });

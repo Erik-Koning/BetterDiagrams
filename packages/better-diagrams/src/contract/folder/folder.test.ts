@@ -1,5 +1,5 @@
 /**
- * folder.test.ts — the Salesforce data-model dialect against the synthetic
+ * folder.test.ts — the data-model dialect against the synthetic
  * fixture, and the engine behaviour around it (sidecars, overrides, order).
  */
 import { describe, expect, it } from "vitest";
@@ -10,8 +10,8 @@ import { importFolder, detectDialect, AUTO_FOLD_NODES } from "./import";
 import { exportFolder, treeFiles } from "./export";
 import { LAYOUT_FILE, OVERRIDES_FILE } from "./sidecar";
 import { OVERRIDES_FORMAT } from "./types";
-import { classifySalesforceShape, SALESFORCE_DIALECT_ID } from "./dialects/salesforce";
-import { isForensics } from "./dialects/salesforce/shapes";
+import { classifyDataModelShape, DATAMODEL_DIALECT_ID } from "./dialects/datamodel";
+import { isForensics } from "./dialects/datamodel/shapes";
 import { validateTemplate, type DiagramTemplate } from "../schema";
 import { splitTemplate } from "../presentation";
 import { autoLayout } from "../layout";
@@ -20,7 +20,7 @@ import { drillableIds } from "../scope";
 import { validatePresentation } from "../presentation";
 import type { FileMap, FolderImportOptions } from "./types";
 
-const FIXTURE = fileURLToPath(new URL("./fixtures/sf-datamodel-mini", import.meta.url));
+const FIXTURE = fileURLToPath(new URL("./fixtures/datamodel-mini", import.meta.url));
 
 let cached: FileMap | null = null;
 async function fixture(): Promise<FileMap> {
@@ -37,7 +37,7 @@ describe("the Node adapter", () => {
   it("reads the fixture into a file map, skipping nothing it should keep", async () => {
     const files = await fixture();
     expect(files.has("schema.json")).toBe(true);
-    expect(files.has("core/account/person-account/record-types/person/schema.json")).toBe(true);
+    expect(files.has("core/account/individuals/record-types/person/schema.json")).toBe(true);
     expect(files.has("README.md")).toBe(true);
     expect([...files.keys()].every((p) => !p.startsWith("/"))).toBe(true);
   });
@@ -46,46 +46,46 @@ describe("the Node adapter", () => {
 describe("shape discrimination", () => {
   it("tells the six schema.json shapes apart, in the pinned order", async () => {
     const files = await fixture();
-    const shape = (p: string) => classifySalesforceShape(JSON.parse(files.get(p)!));
+    const shape = (p: string) => classifyDataModelShape(JSON.parse(files.get(p)!));
     expect(shape("schema.json")).toBe("root");
     expect(shape("core/schema.json")).toBe("band");
     expect(shape("ops/support/schema.json")).toBe("group");
-    expect(shape("core/account/schema.json")).toBe("object");
-    expect(shape("core/account/person-account/record-types/person/schema.json")).toBe("record-type");
-    expect(shape("core/account/person-account/schema.json")).toBe("view");
-    expect(classifySalesforceShape({ nope: 1 })).toBe("unknown");
+    expect(shape("core/account/schema.json")).toBe("entity");
+    expect(shape("core/account/individuals/record-types/person/schema.json")).toBe("record-type");
+    expect(shape("core/account/individuals/schema.json")).toBe("view");
+    expect(classifyDataModelShape({ nope: 1 })).toBe("unknown");
     expect(isForensics(JSON.parse(files.get("core/account/forensics.json")!))).toBe(true);
   });
 
   it("detects the dialect and never makes a node of forensics or metadata", async () => {
     const files = await fixture();
     const hit = detectDialect(buildFolderTree(files));
-    expect(hit?.dialect.id).toBe(SALESFORCE_DIALECT_ID);
+    expect(hit?.dialect.id).toBe(DATAMODEL_DIALECT_ID);
     const { template } = await imported();
     expect(template.nodes.some((n) => n.id.startsWith("metadata"))).toBe(false);
     expect(template.nodes.some((n) => /forensics/.test(n.id))).toBe(false);
-    expect(byId(template, "core/account")!.data!.sf).toMatchObject({ forensicsPath: "core/account/forensics.json" });
+    expect(byId(template, "core/account")!.data!.model).toMatchObject({ forensicsPath: "core/account/forensics.json" });
     expect((template.meta as { folderFormat: { crossCutting: string } }).folderFormat.crossCutting).toBe("metadata");
   });
 
   it("re-roots a tree whose paths all start with the dropped directory's name", async () => {
     const wrapped = new Map([...(await fixture())].map(([p, c]) => [`export-2026/${p}`, c]));
     const { template, dialect } = importFolder(wrapped);
-    expect(dialect).toBe(SALESFORCE_DIALECT_ID);
+    expect(dialect).toBe(DATAMODEL_DIALECT_ID);
     expect(byId(template, "core/account")).toBeTruthy();
   });
 });
 
-describe("api name index", () => {
-  it("warns when two folders claim one api name, and resolves references to the first", async () => {
+describe("name index", () => {
+  it("warns when two folders claim one name, and resolves references to the first", async () => {
     const files = new Map(await fixture());
     files.set(
       "ops/twin/schema.json",
-      JSON.stringify({ folder: "ops/twin", object: { apiName: "Contact", label: "Twin" }, fields: [{ name: "Id", type: "id" }] }),
+      JSON.stringify({ folder: "ops/twin", entity: { name: "contact", label: "Twin" }, fields: [{ name: "id", type: "id" }] }),
     );
     const { template, warnings } = importFolder(files);
-    expect(warnings.find((w) => w.code === "duplicate-api-name" && w.path === "ops/twin")).toBeTruthy();
-    expect(template.edges.find((e) => e.id === "ops/support/case::ContactId::core/contact")).toBeTruthy();
+    expect(warnings.find((w) => w.code === "duplicate-name" && w.path === "ops/twin")).toBeTruthy();
+    expect(template.edges.find((e) => e.id === "ops/support/case::contact_id::core/contact")).toBeTruthy();
   });
 });
 
@@ -95,159 +95,225 @@ describe("nesting", () => {
     const parent = (id: string) => byId(template, id)?.parentId;
     expect(parent("core")).toBeNull();
     expect(parent("core/account")).toBe("core");
-    expect(parent("core/account/person-account")).toBe("core/account");
-    expect(parent("core/account/person-account/record-types")).toBe("core/account/person-account");
-    expect(parent("core/account/person-account/record-types/person")).toBe("core/account/person-account/record-types");
+    expect(parent("core/account/individuals")).toBe("core/account");
+    expect(parent("core/account/individuals/record-types")).toBe("core/account/individuals");
+    expect(parent("core/account/individuals/record-types/person")).toBe("core/account/individuals/record-types");
     expect(parent("ops/support/case")).toBe("ops/support");
     expect(parent("ops/support/case/case-comment")).toBe("ops/support/case");
-    expect(byId(template, "core/account/person-account/record-types/person")!.kind).toBe("sf-record-type");
+    expect(byId(template, "core/account/individuals/record-types/person")!.kind).toBe("record-type");
   });
 
-  it("an object under an object is drill-in detail", async () => {
+  it("an entity under an entity is drill-in detail", async () => {
     const { template } = await imported();
     expect(drillableIds(template)).toContain("ops/support/case");
     expect(drillableIds(template)).toContain("core/account");
   });
 
-  it("maps kinds from the curated diagram type, falling back to the object kind", async () => {
+  it("maps kinds from the curated diagram type, falling back to the entity kind", async () => {
     const { template } = await imported();
-    expect(byId(template, "core/account")!.kind).toBe("sf-object-std");
-    expect(byId(template, "core/preference")!.kind).toBe("sf-object");
-    expect(byId(template, "core/account/person-account")!.kind).toBe("sf-view");
+    expect(byId(template, "core/account")!.kind).toBe("entity-standard");
+    expect(byId(template, "core/preference")!.kind).toBe("entity");
+    expect(byId(template, "core/account/individuals")!.kind).toBe("view");
     expect(byId(template, "core")!.kind).toBe("group");
     expect(byId(template, "ops/support")!.kind).toBe("group");
   });
 
-  it("falls back to object.yaml when there is no schema.json, and says so", async () => {
+  it("falls back to entity.yaml when there is no schema.json, and says so", async () => {
     const { template, warnings } = await imported();
     const widget = byId(template, "ops/legacy-widget")!;
     expect(widget.label).toBe("Legacy Widget");
-    expect(widget.kind).toBe("sf-object");
+    expect(widget.kind).toBe("entity");
     expect(widget.tags).toEqual(["custom", "populated"]);
     expect(warnings.some((w) => w.code === "yaml-fallback-used" && w.path === "ops/legacy-widget")).toBe(true);
   });
 });
 
+describe("a plain folder structure", () => {
+  it("reads a folder with no manifest as a group when it holds entities, and skips a leaf that says nothing", async () => {
+    const files = new Map(await fixture());
+    // A schema-less level: `warehouse/` with two entities inside, one of them another level down.
+    files.set("warehouse/bins/schema.json", JSON.stringify({ folder: "warehouse/bins", entity: { name: "bin", label: "Bin" }, fields: [{ name: "id", type: "id" }, { name: "site_id", type: "reference", relationship: { kind: "reference", referenceTo: ["site"] } }], foreignKeys: [{ field: "site_id", kind: "reference", referenceTo: ["site"], relationshipName: null }] }));
+    files.set("warehouse/sites/main/schema.json", JSON.stringify({ folder: "warehouse/sites/main", entity: { name: "site", label: "Site" }, fields: [{ name: "id", type: "id" }] }));
+    files.set("warehouse/notes.txt", "not a node");
+    files.set("warehouse/scratch/readme.txt", "nothing to draw");
+    const { template, warnings } = importFolder(files, { edges: "all" });
+    expect(byId(template, "warehouse")).toMatchObject({ kind: "group", label: "Warehouse", parentId: null });
+    expect(byId(template, "warehouse/sites")).toMatchObject({ kind: "group", label: "Sites", parentId: "warehouse" });
+    expect(byId(template, "warehouse/bins")).toMatchObject({ kind: "entity", parentId: "warehouse" });
+    expect(byId(template, "warehouse/sites/main")).toMatchObject({ kind: "entity", parentId: "warehouse/sites" });
+    expect(template.edges.find((e) => e.id === "warehouse/bins::site_id::warehouse/sites/main")).toMatchObject({ startField: "site_id", endField: "id" });
+    // The group itself is not a warning; the leaf with only a text file is.
+    expect(warnings.filter((w) => w.code === "unknown-shape").map((w) => w.path)).toEqual(["warehouse/scratch"]);
+    expect(byId(template, "warehouse/scratch")).toBeUndefined();
+  });
+
+  it("a bare { fields } schema is an entity named after its folder", async () => {
+    const files = new Map(await fixture());
+    files.set("core/audit_log/schema.json", JSON.stringify({ fields: [{ name: "id", type: "id" }, { name: "actor_id", type: "reference", relationship: { kind: "reference", referenceTo: ["contact"] } }], foreignKeys: [{ field: "actor_id", kind: "reference", referenceTo: ["contact"], relationshipName: null }] }));
+    const { template, warnings } = importFolder(files, { edges: "all" });
+    expect(byId(template, "core/audit_log")).toMatchObject({ kind: "entity", label: "audit_log", parentId: "core" });
+    expect((byId(template, "core/audit_log")!.data!.model as { name: string }).name).toBe("audit_log");
+    expect(template.edges.find((e) => e.id === "core/audit_log::actor_id::core/contact")).toBeTruthy();
+    expect(warnings.filter((w) => w.path === "core/audit_log")).toEqual([]);
+  });
+});
+
 describe("fields", () => {
-  it('"keys" keeps Id, the name field, references, external ids — and derives required from nillable', async () => {
+  it('"keys" keeps the primary key, the name field, references, external ids — and derives required from nullable', async () => {
     const { template } = await imported();
     const account = byId(template, "core/account")!;
-    expect(account.fields!.map((f) => f.id)).toEqual(["Id", "Name", "OwnerId", "ParentId", "External_Key__c"]);
+    expect(account.fields!.map((f) => f.id)).toEqual(["id", "name", "owner_id", "parent_id", "external_key"]);
     const f = Object.fromEntries(account.fields!.map((x) => [x.id, x]));
-    expect(f.Id.key).toBe("pk");
-    expect(f.Id.required).toBeUndefined();
-    expect(f.OwnerId.key).toBe("fk");
-    expect(f.OwnerId.required).toBe(true); // nillable: false
-    expect(f.Name.required).toBe(true);
-    // `required: true` on the field but nillable — the spec says nillable wins.
-    expect(f.External_Key__c.required).toBeUndefined();
-    expect(f.ParentId.type).toBe("→ Account");
-    expect((account.data!.sf as { fieldMeta: Record<string, unknown> }).fieldMeta.External_Key__c).toEqual({
-      label: "External_Key__c",
-      visibleToIntegrationUser: true,
+    expect(f.id.key).toBe("pk");
+    expect(f.id.required).toBeUndefined();
+    expect(f.owner_id.key).toBe("fk");
+    expect(f.owner_id.required).toBe(true); // nullable: false
+    expect(f.name.required).toBe(true);
+    // `required: true` on the field but nullable — the spec says nullable wins.
+    expect(f.external_key.required).toBeUndefined();
+    expect(f.parent_id.type).toBe("→ account");
+    expect((account.data!.model as { fieldMeta: Record<string, unknown> }).fieldMeta.external_key).toEqual({
+      label: "External key",
+      visible: true,
       externalId: true,
       unique: true,
     });
+  });
+
+  it("a reference that is part of the primary key is a pfk row", async () => {
+    const files = new Map(await fixture());
+    const comment = JSON.parse(files.get("ops/support/case/case-comment/schema.json")!);
+    comment.fields = comment.fields.map((f: { name: string }) => (f.name === "parent_id" ? { ...f, primaryKey: true } : f));
+    files.set("ops/support/case/case-comment/schema.json", JSON.stringify(comment));
+    const { template } = importFolder(files);
+    const rows = byId(template, "ops/support/case/case-comment")!.fields!;
+    expect(rows.find((f) => f.id === "parent_id")).toMatchObject({ key: "pfk", type: "→ case" });
+    expect(rows.find((f) => f.id === "id")!.key).toBe("pk");
+    // Still the referencing end of its edge.
+    expect(template.edges.find((e) => e.id === "ops/support/case/case-comment::parent_id::ops/support/case")!.startField).toBe("parent_id");
+  });
+
+  it("a declared primary key is the key, whatever it is called, and references land on it", async () => {
+    const files = new Map(await fixture());
+    const contact = JSON.parse(files.get("core/contact/schema.json")!);
+    contact.fields = contact.fields.map((f: { name: string }) =>
+      f.name === "id" ? { name: "contact_uuid", type: "uuid", nullable: false, primaryKey: true } : f,
+    );
+    files.set("core/contact/schema.json", JSON.stringify(contact));
+    const { template } = importFolder(files);
+    const rows = byId(template, "core/contact")!.fields!;
+    expect(rows[0]).toMatchObject({ id: "contact_uuid", key: "pk", type: "uuid" });
+    expect(rows[0].required).toBeUndefined();
+    const edge = template.edges.find((e) => e.id === "ops/support/case::contact_id::core/contact")!;
+    expect(edge.endField).toBe("contact_uuid");
+    expect((edge.data!.model as { targetField: string }).targetField).toBe("contact_uuid");
   });
 
   it('"visible" and "all" widen the rows; a polymorphic list is counted, not listed', async () => {
     const all = (await imported({ fields: "all" })).template;
     expect(byId(all, "core/account")!.fields).toHaveLength(7);
     const visible = (await imported({ fields: "visible" })).template;
-    expect(byId(visible, "core/account")!.fields!.map((f) => f.id)).not.toContain("Description");
+    expect(byId(visible, "core/account")!.fields!.map((f) => f.id)).not.toContain("description");
     const task = byId(all, "ops/task")!;
-    expect(task.fields!.find((f) => f.id === "WhatId")!.type).toBe("→ 14 types");
-    expect(task.fields!.find((f) => f.id === "WhoId")!.type).toBe("→ Contact|Lead");
+    expect(task.fields!.find((f) => f.id === "related_id")!.type).toBe("→ 14 types");
+    expect(task.fields!.find((f) => f.id === "person_id")!.type).toBe("→ contact|lead");
   });
 
-  it("tags read kind, business line, population and FLS", async () => {
+  it("tags read kind, business line, population and hidden fields", async () => {
     const { template } = await imported();
-    expect(byId(template, "core/account")!.tags).toEqual(["standard", "retail", "populated", "fls-partial"]);
+    expect(byId(template, "core/account")!.tags).toEqual(["standard", "retail", "populated", "hidden-fields"]);
     expect(byId(template, "core/contact")!.tags).toEqual(["standard"]);
-    expect(byId(template, "core/account")!.url).toBe("/lightning/o/Account/list");
+    expect(byId(template, "core/account")!.url).toBe("/entities/account");
     expect(byId(template, "core/account")!.description).toBe("Top of the customer hierarchy.");
   });
 });
 
-describe("the full field list on an object", () => {
-  it("stores every field compactly on data.sf.fields, whatever the row mode", async () => {
+describe("the full field list on an entity", () => {
+  it("stores every field compactly on data.model.fields, whatever the row mode", async () => {
     for (const mode of ["keys", "all"] as const) {
       const { template } = await imported({ fields: mode });
-      const sf = byId(template, "core/account")!.data!.sf as { fields: Array<Record<string, unknown>>; fieldsTruncated?: boolean };
-      expect(sf.fields.map((f) => f.name)).toEqual(["Id", "Name", "OwnerId", "ParentId", "Industry", "External_Key__c", "Description"]);
-      expect(sf.fieldsTruncated).toBeUndefined();
-      const allowed = new Set(["name", "label", "type", "toolingType", "nillable", "nameField", "externalId", "unique", "formula", "visibleToIntegrationUser", "relationship"]);
-      for (const f of sf.fields) for (const key of Object.keys(f)) expect(allowed.has(key)).toBe(true);
-      expect(sf.fields[2]).toEqual({ name: "OwnerId", label: "OwnerId", type: "reference", toolingType: "Lookup", nillable: false, visibleToIntegrationUser: true, relationship: { kind: "lookup", referenceTo: ["User"], relationshipName: null } });
-      expect(JSON.stringify(sf.fields)).not.toContain("picklistValues");
+      const m = byId(template, "core/account")!.data!.model as { fields: Array<Record<string, unknown>>; fieldsTruncated?: boolean };
+      expect(m.fields.map((f) => f.name)).toEqual(["id", "name", "owner_id", "parent_id", "industry", "external_key", "description"]);
+      expect(m.fieldsTruncated).toBeUndefined();
+      const allowed = new Set(["name", "label", "type", "displayType", "primaryKey", "nullable", "nameField", "externalId", "unique", "formula", "visible", "relationship"]);
+      for (const f of m.fields) for (const key of Object.keys(f)) expect(allowed.has(key)).toBe(true);
+      expect(m.fields[0]).toMatchObject({ name: "id", primaryKey: true });
+      expect(m.fields[2]).toEqual({ name: "owner_id", label: "Owner ID", type: "reference", displayType: "Reference", nullable: false, visible: true, relationship: { kind: "reference", referenceTo: ["user"], relationshipName: null } });
+      expect(JSON.stringify(m.fields)).not.toContain("enumValues");
     }
-    expect((byId((await imported()).template, "ops/legacy-widget")!.data!.sf as { fields: unknown[] }).fields).toEqual([]);
+    expect((byId((await imported()).template, "ops/legacy-widget")!.data!.model as { fields: unknown[] }).fields).toEqual([]);
   });
 
   it("keeps the first MAX_NODE_FIELDS and warns past that", async () => {
     const files = new Map(await fixture());
     const big = JSON.parse(files.get("core/contact/schema.json")!);
-    big.fields = Array.from({ length: 501 }, (_, i) => ({ name: `F${i}__c`, type: "string", nillable: true, visibleToIntegrationUser: true }));
+    big.fields = Array.from({ length: 501 }, (_, i) => ({ name: `f${i}`, type: "string", nullable: true, visible: true }));
     files.set("core/contact/schema.json", JSON.stringify(big));
     const { template, warnings } = importFolder(files);
-    const sf = byId(template, "core/contact")!.data!.sf as { fields: unknown[]; fieldsTruncated?: boolean };
-    expect(sf.fields).toHaveLength(500);
-    expect(sf.fieldsTruncated).toBe(true);
+    const m = byId(template, "core/contact")!.data!.model as { fields: unknown[]; fieldsTruncated?: boolean };
+    expect(m.fields).toHaveLength(500);
+    expect(m.fieldsTruncated).toBe(true);
     expect(warnings.find((w) => w.code === "fields-truncated" && w.path === "core/contact")).toBeTruthy();
   });
 });
 
 describe("edges", () => {
-  it("draws master-detail and lookup the way the spec says, anchored to real rows", async () => {
+  it("draws composition and reference the way the spec says, anchored to real rows", async () => {
     const { template } = await imported();
-    const md = template.edges.find((e) => e.id === "core/preference::Account__c::core/account")!;
-    expect(md).toMatchObject({
+    const composition = template.edges.find((e) => e.id === "core/preference::account_id::core/account")!;
+    expect(composition).toMatchObject({
       source: "core/preference",
       target: "core/account",
-      label: "Preferences",
-      tech: "masterDetail",
+      label: "preferences",
+      relation: "composition",
       style: "solid",
       color: "rose",
-      startHead: "diamond",
+      startHead: "diamond-filled",
       startLabel: "*",
       endLabel: "1",
-      startField: "Account__c",
-      endField: "Id",
+      startField: "account_id",
+      endField: "id",
     });
-    expect(md.data!.sf).toMatchObject({ cascadeDelete: true, deleteConstraint: "Cascade", business: true });
-    const lookup = template.edges.find((e) => e.id === "core/contact::AccountId::core/account")!;
-    expect(lookup).toMatchObject({ style: "dashed", color: "slate", endLabel: "0..1", startField: "AccountId", endField: "Id" });
-    expect(lookup.startHead).toBeUndefined();
-    const hierarchy = template.edges.find((e) => e.id === "core/account::ParentId::core/account")!;
-    expect(hierarchy).toMatchObject({ color: "violet", tech: "hierarchy", label: "ChildAccounts" });
+    expect(composition.data!.model).toMatchObject({ cascadeDelete: true, deleteConstraint: "Cascade", business: true, targetField: "id" });
+    const reference = template.edges.find((e) => e.id === "core/contact::account_id::core/account")!;
+    expect(reference).toMatchObject({ relation: "reference", style: "dashed", color: "slate", endLabel: "0..1", startField: "account_id", endField: "id" });
+    expect(reference.startHead).toBeUndefined();
+    const hierarchy = template.edges.find((e) => e.id === "core/account::parent_id::core/account")!;
+    expect(hierarchy).toMatchObject({ color: "violet", relation: "hierarchy", label: "child_accounts" });
+    // A key the row must hold points at exactly one parent: `1`, not the kind's default `0..1`.
+    const all = (await imported({ edges: "all" })).template;
+    const required = all.edges.find((e) => e.id.startsWith("core/contact::owner_id::"))!;
+    expect(required).toMatchObject({ relation: "reference", startLabel: "*", endLabel: "1" });
+    // The kind names the line through the legend, never through `tech` — that slot is a protocol's.
+    expect(template.edges.every((e) => e.tech === undefined)).toBe(true);
   });
 
   it('"business" hides audit FKs; "all" shows them (to a stub)', async () => {
     const business = (await imported()).template;
     expect(edgesFrom(business, "ops/support/case").map((e) => e.id)).toEqual([
-      "ops/support/case::AccountId::core/account",
-      "ops/support/case::ContactId::core/contact",
+      "ops/support/case::account_id::core/account",
+      "ops/support/case::contact_id::core/contact",
     ]);
     const all = (await imported({ edges: "all" })).template;
-    const audit = all.edges.find((e) => e.id === "ops/support/case::CreatedById::_external/user")!;
+    const audit = all.edges.find((e) => e.id === "ops/support/case::created_by_id::_external/user")!;
     expect(audit).toBeTruthy();
-    expect(audit.data!.sf).toMatchObject({ business: false });
+    expect(audit.data!.model).toMatchObject({ business: false });
     // The stub has no rows, so the far end anchors to its box.
     expect(audit.endField).toBeUndefined();
   });
 
   it("a target with no folder and no stub is dropped with a warning", async () => {
     const { template, warnings } = await imported({ externalStubs: false });
-    expect(template.edges.some((e) => e.id.startsWith("core/contact::Region__c"))).toBe(false);
-    expect(warnings.find((w) => w.code === "edge-target-missing" && w.path === "core/contact/Region__c")).toBeTruthy();
+    expect(template.edges.some((e) => e.id.startsWith("core/contact::region_id"))).toBe(false);
+    expect(warnings.find((w) => w.code === "edge-target-missing" && w.path === "core/contact/region_id")).toBeTruthy();
     expect(template.nodes.some((n) => n.id.startsWith("_external"))).toBe(false);
   });
 
   it("stubs an out-of-model target exactly once, under one group", async () => {
     const { template } = await imported({ edges: "all" });
     const stubs = template.nodes.filter((n) => n.id.startsWith("_external/"));
-    expect(stubs.map((n) => n.id).sort()).toEqual(["_external/region__c", "_external/user"]);
-    expect(stubs.every((n) => n.parentId === "_external" && n.kind === "sf-external")).toBe(true);
+    expect(stubs.map((n) => n.id).sort()).toEqual(["_external/region", "_external/user"]);
+    expect(stubs.every((n) => n.parentId === "_external" && n.kind === "entity-external")).toBe(true);
     expect(byId(template, "_external")!.kind).toBe("group");
     // Three audit FKs point at User; one stub.
     expect(template.edges.filter((e) => e.target === "_external/user")).toHaveLength(3);
@@ -258,11 +324,11 @@ describe("polymorphic references", () => {
   it("collapse: one point node and one edge per poly FK, beside the object", async () => {
     const { template } = await imported({ edges: "all" });
     const points = template.nodes.filter((n) => n.kind === "point");
-    expect(points.map((n) => n.id).sort()).toEqual(["ops/task/_poly/WhatId", "ops/task/_poly/WhoId"]);
+    expect(points.map((n) => n.id).sort()).toEqual(["ops/task/_poly/person_id", "ops/task/_poly/related_id"]);
     expect(points.every((n) => n.parentId === "ops")).toBe(true);
-    expect(byId(template, "ops/task/_poly/WhatId")!.label).toBe("WhatId → 14 types");
-    const edge = template.edges.find((e) => e.id === "ops/task::WhatId::ops/task/_poly/WhatId")!;
-    expect(edge).toMatchObject({ style: "dotted", color: "amber", startField: "WhatId" });
+    expect(byId(template, "ops/task/_poly/related_id")!.label).toBe("related_id → 14 types");
+    const edge = template.edges.find((e) => e.id === "ops/task::related_id::ops/task/_poly/related_id")!;
+    expect(edge).toMatchObject({ relation: "polymorphic", style: "dotted", color: "amber", startField: "related_id" });
   });
 
   it("in-model: one edge per target with a folder, capped with a warning", async () => {
@@ -284,27 +350,32 @@ describe("polymorphic references", () => {
 });
 
 describe("views and record types", () => {
-  it("a view aliases its object with one dashed two-way edge and carries no FK lines", async () => {
+  it("a view aliases its entity with one dashed two-way edge and carries no FK lines", async () => {
     const { template } = await imported();
-    const view = byId(template, "core/account/person-account")!;
-    expect(view.label).toBe("Person Account");
-    expect(view.description).toBe("Account WHERE IsPersonAccount = true");
-    expect((view.data!.sf as { aliasOf: string }).aliasOf).toBe("core/account");
+    const view = byId(template, "core/account/individuals")!;
+    expect(view.label).toBe("Individuals");
+    expect(view.description).toBe("account WHERE type = 'individual'");
+    expect((view.data!.model as { aliasOf: string }).aliasOf).toBe("core/account");
     expect(byId(template, "core/account")).toBeTruthy();
-    const out = edgesFrom(template, "core/account/person-account");
+    const out = edgesFrom(template, "core/account/individuals");
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({ target: "core/account", label: "alias", style: "dashed", direction: "none" });
-    // FK lines from other objects go to the canonical folder, never the view.
-    expect(template.edges.some((e) => e.target === "core/account/person-account" && e.label !== "alias")).toBe(false);
+    // FK lines from other entities go to the canonical folder, never the view.
+    expect(template.edges.some((e) => e.target === "core/account/individuals" && e.label !== "alias")).toBe(false);
   });
 
-  it("a record type is a labelled leaf with no edges", async () => {
+  it("a record type is a labelled leaf whose one line is a generalization to its parent entity", async () => {
     const { template } = await imported();
-    const rt = byId(template, "core/account/person-account/record-types/person")!;
+    const rt = byId(template, "core/account/individuals/record-types/person")!;
     expect(rt.label).toBe("Person");
     expect(rt.description).toBe("Individual customers");
-    expect(rt.data!.sf).toMatchObject({ developerName: "PersonAccount", isPersonType: true, parentObject: "core/account" });
-    expect(edgesFrom(template, rt.id)).toEqual([]);
+    expect(rt.data!.model).toMatchObject({ key: "person", active: true, parentEntity: "core/account" });
+    // IS-A, drawn UML's way: solid, a hollow triangle at the parent, no cardinality.
+    const [isa, ...rest] = edgesFrom(template, rt.id);
+    expect(rest).toEqual([]);
+    expect(isa).toMatchObject({ target: "core/account", relation: "generalization", style: "solid", color: "emerald", endHead: "triangle" });
+    expect(isa!.startLabel).toBeUndefined();
+    expect(isa!.endLabel).toBeUndefined();
   });
 });
 
@@ -317,10 +388,10 @@ describe("validation and determinism", () => {
     expect(template.meta).toMatchObject({
       title: "Example Data Model",
       folderFormat: {
-        dialect: SALESFORCE_DIALECT_ID,
+        dialect: DATAMODEL_DIALECT_ID,
         version: 1,
         generatedAt: "2026-09-01T00:00:00Z",
-        source: { organizationId: "00D000000000000AAA" },
+        source: { system: "example", url: "https://example.test" },
         importOptions: { fields: "keys", edges: "business", polymorphic: "collapse", externalStubs: true },
       },
     });
@@ -344,10 +415,10 @@ describe("a big tree opens folded", () => {
     const band = JSON.parse(files.get("core/schema.json")!);
     for (let i = 0; i < count; i++) {
       const folder = `core/filler-${i}`;
-      band.objects.push({ folder, band: "core", apiName: `Filler${i}__c`, label: `Filler ${i}`, kind: "custom" });
+      band.entities.push({ folder, band: "core", name: `filler${i}`, label: `Filler ${i}`, kind: "custom" });
       files.set(
         `${folder}/schema.json`,
-        JSON.stringify({ folder, object: { apiName: `Filler${i}__c`, label: `Filler ${i}`, kind: "custom" }, fields: [{ name: "Id", type: "id", nillable: false }], foreignKeys: [] }),
+        JSON.stringify({ folder, entity: { name: `filler${i}`, label: `Filler ${i}`, kind: "custom" }, fields: [{ name: "id", type: "id", nullable: false }], foreignKeys: [] }),
       );
     }
     files.set("core/schema.json", JSON.stringify(band));
@@ -486,15 +557,15 @@ describe("sidecar round trip", () => {
     const { template, warnings } = importFolder(files);
     expect(byId(template, "core/account")!.data!.notes).toEqual(["curator note"]);
     // Overrides re-validate; the dialect's kinds must come through that too.
-    expect(byId(template, "core/account")!.kind).toBe("sf-object-std");
-    expect(byId(template, "core/account/person-account")!.kind).toBe("sf-view");
+    expect(byId(template, "core/account")!.kind).toBe("entity-standard");
+    expect(byId(template, "core/account/individuals")!.kind).toBe("view");
     expect(warnings.find((w) => w.code === "override-orphan" && w.path === "gone/away")).toBeTruthy();
     // And the note rides back out.
     const out = exportFolder(template, { tree: buildFolderTree(await fixture()) });
     expect(JSON.parse(out.files.get(OVERRIDES_FILE)!).nodes).toEqual({ "core/account": { notes: ["curator note"] } });
   });
 
-  it("writeObjectYaml patches only the two curated keys, only where they differ", async () => {
+  it("writeEntityYaml patches only the two curated keys, only where they differ", async () => {
     const files = await fixture();
     const tree = buildFolderTree(files);
     const first = importFolder(files).template;
@@ -502,13 +573,13 @@ describe("sidecar round trip", () => {
       ...first,
       nodes: first.nodes.map((n) => (n.id === "core/contact" ? { ...n, label: "People" } : n)),
     };
-    const out = exportFolder(edited, { tree, writeObjectYaml: true });
-    const touched = [...out.files.keys()].filter((p) => p.endsWith("object.yaml"));
-    expect(touched).toEqual(["core/contact/object.yaml"]);
-    const before = files.get("core/contact/object.yaml")!;
-    const after = out.files.get("core/contact/object.yaml")!;
+    const out = exportFolder(edited, { tree, writeEntityYaml: true });
+    const touched = [...out.files.keys()].filter((p) => p.endsWith("entity.yaml"));
+    expect(touched).toEqual(["core/contact/entity.yaml"]);
+    const before = files.get("core/contact/entity.yaml")!;
+    const after = out.files.get("core/contact/entity.yaml")!;
     expect(after).toBe(before.replace("diagramName: Contact", "diagramName: People"));
-    expect(exportFolder(first, { tree, writeObjectYaml: true }).files.size).toBe(2);
+    expect(exportFolder(first, { tree, writeEntityYaml: true }).files.size).toBe(2);
   });
 
   it("the layout sidecar is a plain presentation document", async () => {
@@ -525,50 +596,50 @@ describe("sidecar round trip", () => {
 });
 
 describe("budget", () => {
-  /** 8 bands × 25 objects × 40 fields, every object with 3 lookups. */
+  /** 8 bands × 25 entities × 40 fields, every entity with 3 references. */
   function benchmark(): FileMap {
     const files = new Map<string, string>();
     const bands = Array.from({ length: 8 }, (_, i) => `band-${i}`);
-    const objects: Array<{ folder: string; api: string }> = [];
+    const entities: Array<{ folder: string; name: string }> = [];
     for (const band of bands) {
-      for (let j = 0; j < 25; j++) objects.push({ folder: `${band}/obj-${j}`, api: `${band.replace("-", "")}_Obj${j}__c` });
+      for (let j = 0; j < 25; j++) entities.push({ folder: `${band}/obj-${j}`, name: `${band.replace("-", "")}_obj${j}` });
     }
     const relEdges: unknown[] = [];
     files.set("schema.json", JSON.stringify({ bands: bands.map((b) => ({ band: b, folder: b })), title: "Bench" }));
     for (const band of bands) {
-      files.set(`${band}/schema.json`, JSON.stringify({ band, folder: band, objects: [] }));
+      files.set(`${band}/schema.json`, JSON.stringify({ band, folder: band, entities: [] }));
     }
-    objects.forEach((o, i) => {
+    entities.forEach((o, i) => {
       const fields = [
-        { name: "Id", type: "id", nillable: false, visibleToIntegrationUser: true },
-        { name: "Name", type: "string", nameField: true, nillable: false, visibleToIntegrationUser: true },
+        { name: "id", type: "id", nullable: false, visible: true },
+        { name: "name", type: "string", nameField: true, nullable: false, visible: true },
       ];
       const fks: unknown[] = [];
       for (let k = 1; k <= 3; k++) {
-        const target = objects[(i + k * 7) % objects.length];
+        const target = entities[(i + k * 7) % entities.length];
         fields.push({
-          name: `Ref${k}__c`, type: "reference", nillable: true, visibleToIntegrationUser: true,
-          relationship: { kind: "lookup", referenceTo: [target.api] },
+          name: `ref${k}_id`, type: "reference", nullable: true, visible: true,
+          relationship: { kind: "reference", referenceTo: [target.name] },
         } as never);
-        fks.push({ field: `Ref${k}__c`, kind: "lookup", referenceTo: [target.api], relationshipName: null, targetFolders: [target.folder] });
-        relEdges.push({ from: o.api, field: `Ref${k}__c`, kind: "lookup", to: target.api });
+        fks.push({ field: `ref${k}_id`, kind: "reference", referenceTo: [target.name], relationshipName: null, targetFolders: [target.folder] });
+        relEdges.push({ from: o.name, field: `ref${k}_id`, kind: "reference", to: target.name });
       }
       for (let f = 0; f < 35; f++) {
         fields.push({
-          name: `Field${f}__c`, type: "picklist", nillable: true, visibleToIntegrationUser: true,
-          picklistValues: Array.from({ length: 20 }, (_, v) => ({ value: `v${v}`, label: `Value ${v}` })),
+          name: `field${f}`, type: "enum", nullable: true, visible: true,
+          enumValues: Array.from({ length: 20 }, (_, v) => ({ value: `v${v}`, label: `Value ${v}` })),
         } as never);
       }
       files.set(
         `${o.folder}/schema.json`,
-        JSON.stringify({ folder: o.folder, object: { apiName: o.api, label: o.api, kind: "custom" }, fields, foreignKeys: fks }),
+        JSON.stringify({ folder: o.folder, entity: { name: o.name, label: o.name, kind: "custom" }, fields, foreignKeys: fks }),
       );
     });
     files.set("relationships.json", JSON.stringify({ edges: relEdges }));
     return files;
   }
 
-  it("imports 200 objects under the limits", () => {
+  it("imports 200 entities under the limits", () => {
     const files = benchmark();
     const started = performance.now();
     const { template, stats } = importFolder(files);
@@ -614,8 +685,8 @@ describe("a saved layout outranks the auto-fold", () => {
     const band = JSON.parse(files.get("core/schema.json")!);
     for (let i = 0; i < AUTO_FOLD_NODES; i++) {
       const folder = `core/filler-${i}`;
-      band.objects.push({ folder, band: "core", apiName: `F${i}__c`, label: `F${i}`, kind: "custom" });
-      files.set(`${folder}/schema.json`, JSON.stringify({ folder, object: { apiName: `F${i}__c`, label: `F${i}`, kind: "custom" }, fields: [{ name: "Id", type: "id", nillable: false }], foreignKeys: [] }));
+      band.entities.push({ folder, band: "core", name: `f${i}`, label: `F${i}`, kind: "custom" });
+      files.set(`${folder}/schema.json`, JSON.stringify({ folder, entity: { name: `f${i}`, label: `F${i}`, kind: "custom" }, fields: [{ name: "id", type: "id", nullable: false }], foreignKeys: [] }));
     }
     files.set("core/schema.json", JSON.stringify(band));
 
@@ -634,19 +705,19 @@ describe("the shipped datamodel example", () => {
   it("imports clean — it is tracked in git, so it can rot silently", async () => {
     const dir = fileURLToPath(new URL("../../../../../templates/folders/datamodel", import.meta.url));
     const { template, stats, warnings, dialect } = importFolder(await readFolderToFileMap(dir));
-    expect(dialect).toBe(SALESFORCE_DIALECT_ID);
+    expect(dialect).toBe(DATAMODEL_DIALECT_ID);
     expect(warnings).toEqual([]);
-    expect(stats.nodes).toBe(14); // 9 objects + a view + a group + 3 record types
+    expect(stats.nodes).toBe(14); // 9 entities + a view + a group + 3 record types
     // Small enough to open expanded; the README says so.
     expect(template.nodes.filter((n) => n.collapsed)).toEqual([]);
     const kinds = new Set(template.nodes.map((n) => n.kind));
-    expect([...kinds].sort()).toEqual(["group", "sf-object", "sf-record-type", "sf-view"]);
-    // Master-detail against lookups, and the view's alias.
-    const md = template.edges.find((e) => e.tech === "masterDetail")!;
-    expect(md.id).toBe("bread::Recipe__c::recipes");
+    expect([...kinds].sort()).toEqual(["entity", "group", "record-type", "view"]);
+    // Composition against references, and the view's alias.
+    const composition = template.edges.find((e) => e.relation === "composition")!;
+    expect(composition.id).toBe("bread::recipe_id::recipes");
     expect(template.edges.find((e) => e.label === "alias")!.target).toBe("customers");
     // Audit keys are hidden by default and stubbed when asked for.
-    expect(template.edges.some((e) => e.id.includes("OwnerId"))).toBe(false);
+    expect(template.edges.some((e) => e.id.includes("owner_id"))).toBe(false);
     const all = importFolder(await readFolderToFileMap(dir), { edges: "all" });
     expect(all.template.nodes.some((n) => n.id === "_external/user")).toBe(true);
     // Nine tables, all reachable, and a provably smallest key set.

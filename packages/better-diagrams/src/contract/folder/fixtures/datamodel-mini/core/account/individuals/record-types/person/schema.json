@@ -1,0 +1,23 @@
+{
+  "folder": "core/account/individuals/record-types/person",
+  "kind": "record-type",
+  "parentEntity": {
+    "name": "account",
+    "label": "Account",
+    "folder": "core/account",
+    "schema": "../../../schema.json"
+  },
+  "recordType": {
+    "key": "person",
+    "name": "Person",
+    "id": "rt-person",
+    "active": true,
+    "visible": true,
+    "description": "Individual customers"
+  },
+  "curated": {
+    "diagramName": "Person",
+    "diagramType": "record-type"
+  },
+  "notes": []
+}

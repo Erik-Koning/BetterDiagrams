@@ -134,6 +134,7 @@ export function promptForCloudSelection(
     kinds,
     icons: registry.iconNames,
     providers: registry.providerOrder,
+    relations: registry.relationOrder,
     exampleProviders: live,
     extraRules: [
       registry.promptExtraRules,

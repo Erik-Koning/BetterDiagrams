@@ -1,0 +1,9 @@
+kind: custom
+label: Coupon
+name: coupon
+recordCount: 256
+fieldsTotal: 7
+fieldsVisible: 7
+diagramType: custom
+diagramName: Coupon
+url: /entities/coupon

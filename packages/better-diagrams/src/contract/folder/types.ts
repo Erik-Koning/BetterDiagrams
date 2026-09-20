@@ -4,10 +4,10 @@
  * A FOLDER FORMAT is a directory tree where each folder is a node, nesting is
  * arbitrary depth, and the files inside a folder carry the node's content.
  * What those files are called and what they mean is a DIALECT's business:
- * the generic dialect reads `node.json` / `edges.json`, the Salesforce
- * data-model dialect reads the `schema.json` / `object.yaml` a Salesforce
- * org exporter writes. The tree walk, the id scheme, the layout sidecar and
- * the validation are shared.
+ * the generic dialect reads `node.json` / `edges.json`, the data-model
+ * dialect reads the `schema.json` / `entity.yaml` a database or object-model
+ * exporter writes. The tree walk, the id scheme, the layout sidecar and the
+ * validation are shared.
  *
  * Nothing here touches a filesystem: a {@link FileMap} is the whole input,
  * and a browser (a dropped directory, the File System Access API) produces
@@ -45,7 +45,7 @@ export type ImportWarningCode =
   | "too-many-fields"
   | "fields-truncated"
   | "duplicate-node-id"
-  | "duplicate-api-name"
+  | "duplicate-name"
   | "yaml-fallback-used"
   | "sidecar-orphan"
   | "override-orphan"
@@ -82,6 +82,25 @@ export interface DialectRegistry {
     }
   >;
   icons?: Record<string, string[]>;
+  /**
+   * The dialect's names for the relationship kinds (see
+   * `contract/relations.ts`) — a partial over the built-in of the same key,
+   * so a dialect relabels "composition" as what its world calls it and
+   * keeps the line it draws with.
+   */
+  relationKinds?: Record<
+    string,
+    {
+      label?: string;
+      description?: string;
+      style?: string;
+      color?: string;
+      startHead?: string;
+      endHead?: string;
+      startLabel?: string;
+      endLabel?: string;
+    }
+  >;
 }
 
 /**
@@ -95,8 +114,8 @@ export interface FolderImportOptions {
   /** Which dialect to read with. Auto-detected when omitted. */
   dialect?: string | Dialect;
   /**
-   * Which of an object's fields become `NodeField` rows. Dialect-defined;
-   * the Salesforce dialect reads `"keys"` (default), `"visible"`, `"all"`,
+   * Which of an entity's fields become `NodeField` rows. Dialect-defined;
+   * the data-model dialect reads `"keys"` (default), `"visible"`, `"all"`,
    * or a predicate over its own field shape.
    */
   fields?: "keys" | "visible" | "all" | ((field: unknown, node: FolderNode) => boolean);
@@ -156,10 +175,10 @@ export interface FolderExportOptions {
    */
   tree?: FolderTree | null;
   /**
-   * Sidecar mode, Salesforce: also patch `diagramName` / `diagramType` in
-   * existing `object.yaml` files. Off by default.
+   * Sidecar mode, data model: also patch `diagramName` / `diagramType` in
+   * existing `entity.yaml` files. Off by default.
    */
-  writeObjectYaml?: boolean;
+  writeEntityYaml?: boolean;
   validate?: ValidateOptions;
 }
 
@@ -235,7 +254,7 @@ export interface Dialect<TCtx = unknown> {
   baseline?(node: DiagramNode): NodeBaseline | null;
   /**
    * Sidecar mode: files the dialect itself wants to write beside
-   * `.better-diagrams/` — e.g. patched `object.yaml`s. Optional; most
+   * `.better-diagrams/` — e.g. patched `entity.yaml`s. Optional; most
    * dialects write nothing of their own.
    */
   sidecarFiles?(

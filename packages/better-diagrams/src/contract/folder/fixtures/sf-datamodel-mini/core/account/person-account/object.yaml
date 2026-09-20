@@ -1,6 +1,0 @@
-type: view
-displayName: Person Account
-aliasOf: core/account
-soqlFilter: IsPersonAccount = true
-diagramType: standard
-diagramName: Person Account

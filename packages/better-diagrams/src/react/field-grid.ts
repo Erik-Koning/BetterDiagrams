@@ -11,7 +11,7 @@ export type GridColumn =
   | "type"
   | "required"
   | "fk"
-  | "fls"
+  | "visible"
   | "externalId"
   | "unique"
   | "formula";
@@ -33,7 +33,7 @@ export const GRID_COLUMNS: readonly GridColumnDef[] = [
   { id: "type", title: "Type", width: 150, mono: true },
   { id: "required", title: "Req.", width: 56, align: "center" },
   { id: "fk", title: "References", width: 200 },
-  { id: "fls", title: "FLS", width: 60, align: "center" },
+  { id: "visible", title: "Visible", width: 64, align: "center" },
   { id: "externalId", title: "Ext. id", width: 64, align: "center" },
   { id: "unique", title: "Unique", width: 64, align: "center" },
   { id: "formula", title: "Formula", width: 260, mono: true },
@@ -59,12 +59,8 @@ export function cellText(record: FieldRecord, col: GridColumn): string {
       return record.required ? CHECK : "";
     case "fk":
       return record.fk.length ? `→ ${record.fk.map((t) => t.label).join(" | ")}` : "";
-    case "fls":
-      return record.visibleToIntegrationUser === false
-        ? "hidden"
-        : record.visibleToIntegrationUser === true
-          ? CHECK
-          : "";
+    case "visible":
+      return record.visible === false ? "hidden" : record.visible === true ? CHECK : "";
     case "externalId":
       return record.externalId ? CHECK : "";
     case "unique":
@@ -95,8 +91,8 @@ function sortKey(record: FieldRecord, col: GridColumn): number | string {
       return record.externalId ? 1 : 0;
     case "unique":
       return record.unique ? 1 : 0;
-    case "fls":
-      return record.visibleToIntegrationUser === true ? 2 : record.visibleToIntegrationUser === false ? 0 : 1;
+    case "visible":
+      return record.visible === true ? 2 : record.visible === false ? 0 : 1;
     case "key":
       // Ranks, larger first: pk, then pfk, then fk, then none.
       return record.key ? { pk: 3, pfk: 2, fk: 1 }[record.key] : 0;

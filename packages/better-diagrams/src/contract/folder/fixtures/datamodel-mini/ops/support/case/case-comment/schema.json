@@ -1,0 +1,86 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-01T00:00:00Z",
+  "$source": "https://example.test",
+  "folder": "ops/support/case/case-comment",
+  "entity": {
+    "name": "case_comment",
+    "label": "Case Comment",
+    "labelPlural": "Case Comments",
+    "kind": "standard",
+    "custom": false,
+    "namespace": null,
+    "queryable": true,
+    "createable": true,
+    "updateable": true,
+    "deletable": true,
+    "recordCount": 0
+  },
+  "curated": {
+    "diagramName": "Case Comment",
+    "diagramType": "standard",
+    "businessLine": null,
+    "source": "export",
+    "note": ""
+  },
+  "recordTypes": [],
+  "fieldSummary": {
+    "total": 3,
+    "visible": 3,
+    "hidden": 0
+  },
+  "fields": [
+    {
+      "name": "id",
+      "label": "ID",
+      "type": "id",
+      "nullable": false,
+      "visible": true
+    },
+    {
+      "name": "parent_id",
+      "label": "Parent ID",
+      "type": "reference",
+      "displayType": "Composition",
+      "nullable": false,
+      "visible": true,
+      "relationship": {
+        "kind": "composition",
+        "referenceTo": [
+          "case"
+        ],
+        "relationshipName": "case_comments",
+        "cascadeDelete": true
+      }
+    },
+    {
+      "name": "comment_body",
+      "label": "Comment body",
+      "type": "textarea",
+      "nullable": true,
+      "visible": true
+    }
+  ],
+  "foreignKeys": [
+    {
+      "field": "parent_id",
+      "label": "Parent ID",
+      "kind": "composition",
+      "referenceTo": [
+        "case"
+      ],
+      "relationshipName": "case_comments",
+      "required": true,
+      "cascadeDelete": true,
+      "deleteConstraint": "Cascade",
+      "visible": true,
+      "targetFolders": [
+        "ops/support/case"
+      ]
+    }
+  ],
+  "referencedBy": [],
+  "validationRules": [],
+  "url": "/entities/case_comment",
+  "notes": []
+}

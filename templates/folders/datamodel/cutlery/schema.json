@@ -1,13 +1,12 @@
 {
   "$schemaVersion": 1,
   "$generatedAt": "2026-09-17T00:00:00Z",
-  "$source": "https://bakery.my.salesforce.com",
+  "$source": "https://bakery.example",
   "folder": "cutlery",
-  "object": {
-    "apiName": "Cutlery__c",
+  "entity": {
+    "name": "cutlery",
     "label": "Cutlery",
     "labelPlural": "Cutlerys",
-    "keyPrefix": "a09",
     "kind": "custom",
     "custom": true,
     "namespace": null,
@@ -21,54 +20,51 @@
     "diagramName": "Cutlery",
     "diagramType": "custom",
     "businessLine": "Bakery",
-    "source": "describe",
+    "source": "export",
     "note": ""
   },
   "recordTypes": [],
   "fieldSummary": {
     "total": 5,
-    "visibleToIntegrationUser": 5,
-    "hiddenFromIntegrationUser": 0
+    "visible": 5,
+    "hidden": 0
   },
   "fields": [
     {
-      "name": "Id",
+      "name": "id",
       "label": "Record ID",
       "type": "id",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "Name",
+      "name": "name",
       "label": "Item name",
       "type": "string",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
       "nameField": true,
       "length": 255
     },
     {
-      "name": "Material__c",
+      "name": "material",
       "label": "Material",
-      "type": "picklist",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "type": "enum",
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "picklistValues": [
+      "enumValues": [
         {
           "value": "Steel",
           "label": "Steel",
@@ -87,51 +83,49 @@
       ]
     },
     {
-      "name": "Building__c",
+      "name": "building_id",
       "label": "Building",
       "type": "reference",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "displayType": "Reference",
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "toolingType": "Lookup",
       "relationship": {
-        "kind": "lookup",
+        "kind": "reference",
         "referenceTo": [
-          "Building__c"
+          "building"
         ],
-        "relationshipName": "Cutlery"
+        "relationshipName": "cutlery"
       }
     },
     {
-      "name": "Quantity__c",
+      "name": "quantity",
       "label": "Quantity",
       "type": "int",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     }
   ],
   "foreignKeys": [
     {
-      "field": "Building__c",
+      "field": "building_id",
       "label": "Building",
-      "kind": "lookup",
+      "kind": "reference",
       "referenceTo": [
-        "Building__c"
+        "building"
       ],
-      "relationshipName": "Cutlery",
+      "relationshipName": "cutlery",
       "required": false,
       "cascadeDelete": false,
       "deleteConstraint": "SetNull",
-      "visibleToIntegrationUser": true,
+      "visible": true,
       "targetFolders": [
         "buildings"
       ]
@@ -139,10 +133,7 @@
   ],
   "referencedBy": [],
   "validationRules": [],
-  "routes": {
-    "lightningList": "/lightning/o/Cutlery__c/list",
-    "describe": "/services/data/v60.0/sobjects/Cutlery__c/describe"
-  },
+  "url": "/entities/cutlery",
   "notes": [
     "Knives and boards, counted per building."
   ]

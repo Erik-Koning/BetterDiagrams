@@ -27,10 +27,14 @@ export interface FieldPathPanelProps {
   /** The route the reader clicked (kept lit alone until another click). */
   stickyRoute: number | null;
   onPickRoute: (index: number) => void;
-  /** The key under the pointer: every route through it lights, the rest don't. */
+  /**
+   * The key under the pointer, and the one clicked: every route through it
+   * lights, the rest don't — hover previews, click keeps, as with a route.
+   */
   hoverKey: string | null;
   onHoverKey: (fieldKey: string | null) => void;
-  onPinKey: (ref: { nodeId: string; fieldId: string }) => void;
+  stickyKey: string | null;
+  onPickKey: (fieldKey: string) => void;
   onNavigate: (nodeId: string) => void;
   onClose: () => void;
 }
@@ -53,7 +57,8 @@ export function FieldPathPanel({
   onPickRoute,
   hoverKey,
   onHoverKey,
-  onPinKey,
+  stickyKey,
+  onPickKey,
   onNavigate,
   onClose,
 }: FieldPathPanelProps) {
@@ -155,13 +160,16 @@ export function FieldPathPanel({
           ) : (
             <p className="as-paths__empty">No route between these fields within 10 hops{undirected ? "" : " in the arrows' direction"}.</p>
           )}
-          {hoverRoute === null && stickyRoute === null && view.routes.length > 1 ? (
+          {hoverRoute === null && stickyRoute === null && hoverKey === null && stickyKey === null && view.routes.length > 1 ? (
             <p className="as-paths__hint">All routes are lit; hover one to see it alone.</p>
           ) : null}
         </section>
       ) : null}
 
-      {pair && view.keyUse?.keys.length ? (
+      {/* A ranking needs something to rank: with one route every key on it
+          is trivially "1 of 1", and the route's own hop strip already names
+          them in order. */}
+      {pair && view.routes.length > 1 && view.keyUse?.keys.length ? (
         <section className="as-paths__section" aria-label="Keys most routes use">
           <h3 className="as-paths__caption">
             Keys most routes use <span className="as-paths__count">{view.keyUse.keys.length}</span>
@@ -173,13 +181,14 @@ export function FieldPathPanel({
                 <li key={key}>
                   <button
                     type="button"
-                    className={`as-paths__item as-paths__keyuse${hoverKey === key ? " as-paths__item--hover" : ""}`}
-                    title="Hover to light every route through this key; click to pin it"
+                    className={`as-paths__item as-paths__keyuse${hoverKey === key ? " as-paths__item--hover" : ""}${stickyKey === key ? " as-paths__item--sticky" : ""}`}
+                    aria-pressed={stickyKey === key}
+                    title="Hover to light every route through this key; click to keep them lit"
                     onMouseEnter={() => onHoverKey(key)}
                     onMouseLeave={() => onHoverKey(null)}
                     onFocus={() => onHoverKey(key)}
                     onBlur={() => onHoverKey(null)}
-                    onClick={() => onPinKey(use.ref)}
+                    onClick={() => onPickKey(key)}
                   >
                     <span className="as-paths__itemlabel">
                       {labelOf(use.ref)}

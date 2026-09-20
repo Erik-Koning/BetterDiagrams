@@ -1,0 +1,6 @@
+kind: view
+label: Loyalty members
+aliasOf: customers
+filter: loyalty_points > 100
+diagramType: custom
+diagramName: Loyalty members

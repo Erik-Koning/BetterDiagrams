@@ -1,13 +1,12 @@
 {
   "$schemaVersion": 1,
   "$generatedAt": "2026-09-17T00:00:00Z",
-  "$source": "https://bakery.my.salesforce.com",
+  "$source": "https://bakery.example",
   "folder": "bread",
-  "object": {
-    "apiName": "Bread__c",
+  "entity": {
+    "name": "bread",
     "label": "Bread",
     "labelPlural": "Breads",
-    "keyPrefix": "a06",
     "kind": "custom",
     "custom": true,
     "namespace": null,
@@ -21,96 +20,91 @@
     "diagramName": "Bread",
     "diagramType": "custom",
     "businessLine": "Bakery",
-    "source": "describe",
+    "source": "export",
     "note": ""
   },
   "recordTypes": [],
   "fieldSummary": {
     "total": 6,
-    "visibleToIntegrationUser": 6,
-    "hiddenFromIntegrationUser": 0
+    "visible": 6,
+    "hidden": 0
   },
   "fields": [
     {
-      "name": "Id",
+      "name": "id",
       "label": "Record ID",
       "type": "id",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "Name",
+      "name": "name",
       "label": "Bread name",
       "type": "string",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
       "nameField": true,
       "length": 255
     },
     {
-      "name": "Recipe__c",
+      "name": "recipe_id",
       "label": "Recipe",
       "type": "reference",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "displayType": "Composition",
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "toolingType": "MasterDetail",
       "relationship": {
-        "kind": "masterDetail",
+        "kind": "composition",
         "referenceTo": [
-          "Recipe__c"
+          "recipe"
         ],
-        "relationshipName": "Breads",
+        "relationshipName": "breads",
         "cascadeDelete": true,
         "deleteConstraint": "Cascade"
       }
     },
     {
-      "name": "Main_Ingredient__c",
+      "name": "main_ingredient_id",
       "label": "Main ingredient",
       "type": "reference",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "displayType": "Reference",
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "toolingType": "Lookup",
       "relationship": {
-        "kind": "lookup",
+        "kind": "reference",
         "referenceTo": [
-          "Ingredient__c"
+          "ingredient"
         ],
-        "relationshipName": "Breads"
+        "relationshipName": "breads"
       }
     },
     {
-      "name": "Crust__c",
+      "name": "crust",
       "label": "Crust",
-      "type": "picklist",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "type": "enum",
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "picklistValues": [
+      "enumValues": [
         {
           "value": "Soft",
           "label": "Soft",
@@ -129,47 +123,46 @@
       ]
     },
     {
-      "name": "Weight_Grams__c",
+      "name": "weight_grams",
       "label": "Weight Grams",
       "type": "int",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     }
   ],
   "foreignKeys": [
     {
-      "field": "Recipe__c",
+      "field": "recipe_id",
       "label": "Recipe",
-      "kind": "masterDetail",
+      "kind": "composition",
       "referenceTo": [
-        "Recipe__c"
+        "recipe"
       ],
-      "relationshipName": "Breads",
+      "relationshipName": "breads",
       "required": true,
       "cascadeDelete": true,
       "deleteConstraint": "Cascade",
-      "visibleToIntegrationUser": true,
+      "visible": true,
       "targetFolders": [
         "recipes"
       ]
     },
     {
-      "field": "Main_Ingredient__c",
+      "field": "main_ingredient_id",
       "label": "Main ingredient",
-      "kind": "lookup",
+      "kind": "reference",
       "referenceTo": [
-        "Ingredient__c"
+        "ingredient"
       ],
-      "relationshipName": "Breads",
+      "relationshipName": "breads",
       "required": false,
       "cascadeDelete": false,
       "deleteConstraint": "SetNull",
-      "visibleToIntegrationUser": true,
+      "visible": true,
       "targetFolders": [
         "ingredients"
       ]
@@ -177,11 +170,8 @@
   ],
   "referencedBy": [],
   "validationRules": [],
-  "routes": {
-    "lightningList": "/lightning/o/Bread__c/list",
-    "describe": "/services/data/v60.0/sobjects/Bread__c/describe"
-  },
+  "url": "/entities/bread",
   "notes": [
-    "A baked loaf. Master-detail: deleting a recipe deletes its breads."
+    "A baked loaf. Composition: deleting a recipe deletes its breads."
   ]
 }

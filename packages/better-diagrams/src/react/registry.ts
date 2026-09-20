@@ -27,6 +27,7 @@ import { BUILTIN_ICON_PATHS } from "./icons";
 import { CLOUD_KIND_ORDER, CLOUD_NODE_KINDS } from "./cloud-kinds";
 import { BUILTIN_LINT_RULES } from "../contract/lint";
 import type { LintRuleDef } from "../contract/lint";
+import { resolveRelationKinds } from "../contract/relations";
 import {
   FALLBACK_KIND,
   FALLBACK_PROVIDER,
@@ -48,7 +49,7 @@ export type {
   ExportResult,
   ExporterDef,
 } from "./registry-types";
-export { kindDef, iconPaths, providerDef, zoneInk, zoneFill, FALLBACK_KIND, FALLBACK_PROVIDER } from "./registry-types";
+export { kindDef, iconPaths, providerDef, relationDef, zoneInk, zoneFill, FALLBACK_KIND, FALLBACK_PROVIDER } from "./registry-types";
 
 /**
  * Infra providers a zone can be switched between.
@@ -87,6 +88,9 @@ export const BUILTIN_NODE_KINDS: Record<string, NodeKindDef> = {
   client: { label: "Client", fill: "#1e293b", accent: "#94a3b8", text: "#e2e8f0", icon: "user" },
   external: { label: "External", fill: "#0f172a", accent: "#64748b", text: "#cbd5e1", icon: "globe" },
   table: { label: "Table", fill: "#042f2e", accent: "#2dd4bf", text: "#99f6e4", icon: "none", record: true },
+  // UML's «enumeration»: a record whose rows are the allowed values. Lime,
+  // so a picklist never reads as one more table.
+  enum: { label: "Enumeration", fill: "#1a2e05", accent: "#a3e635", text: "#d9f99d", icon: "none", record: true },
   group: { label: "Group", fill: "transparent", accent: "#475569", text: "#94a3b8", icon: "none", container: true },
   text: { label: "Text", fill: "transparent", accent: "#38bdf8", text: "#e2e8f0", icon: "none", annotation: true },
   decision: { label: "Decision", fill: "#431407", accent: "#fb923c", text: "#fed7aa", icon: "none", shape: "diamond" },
@@ -110,6 +114,7 @@ const BUILTIN_KIND_ORDER = [
   "client",
   "external",
   "table",
+  "enum",
   "group",
   "text",
   "decision",
@@ -216,6 +221,11 @@ export function resolveRegistry(
     else lintRules[key] = value;
   }
 
+  // -- relationship kinds ----------------------------------------------------
+  // The same resolver a dialect's registry goes through, so a host and a
+  // dialect relabel the same way.
+  const { kinds: relationKinds, order: relationOrder } = resolveRelationKinds(extensions.relationKinds);
+
   return {
     nodeKinds,
     kindOrder,
@@ -226,6 +236,8 @@ export function resolveRegistry(
     providers,
     providerOrder,
     lintRules,
+    relationKinds,
+    relationOrder,
     containerKinds: kindOrder.filter((k) => nodeKinds[k]?.container),
     annotationKinds: kindOrder.filter((k) => nodeKinds[k]?.annotation),
     pointKinds: kindOrder.filter((k) => nodeKinds[k]?.point),

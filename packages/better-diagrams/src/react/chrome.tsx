@@ -7,7 +7,9 @@
  * so the two stay pixel-identical without either importing the other.
  */
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { VERSION_TAG_POSITIONS, type VersionTagPosition } from "../contract/schema";
+import { EDGE_DASH, VERSION_TAG_POSITIONS, type VersionTagPosition } from "../contract/schema";
+import { edgeHeadPath } from "../contract/geometry";
+import type { RelationKindDef } from "../contract/relations";
 import { SvgIcon } from "./icons";
 import { UiIcon, type UiIconName } from "./ui-icons";
 import { isMac } from "./keys";
@@ -1253,6 +1255,37 @@ export function FileMenu({
  * behind one tiny uppercase caption and a hairline divider, so the bar reads
  * as labelled sections instead of an unbroken run of inputs.
  */
+/**
+ * A legend row's sample of a relationship kind's line: its dash, its colour
+ * and its end glyphs, drawn through the same head-path maths the canvas
+ * draws the real line with, so the key IS the thing it explains. Colour
+ * comes through the theme's `--as-edge-*` variables, exactly as the line's.
+ */
+export function RelationSwatch({ def }: { def: RelationKindDef }) {
+  const ink = `var(--as-edge-${def.color})`;
+  const dash = EDGE_DASH[def.style]?.join(" ") || undefined;
+  const heads = [
+    def.startHead ? edgeHeadPath(def.startHead, { x: 1, y: 6 }, Math.PI) : null,
+    def.endHead ? edgeHeadPath(def.endHead, { x: 31, y: 6 }, 0) : null,
+  ];
+  return (
+    <svg className="as-legend__line" width="32" height="12" viewBox="0 0 32 12" aria-hidden="true">
+      <path d="M 1 6 H 31" fill="none" stroke={ink} strokeWidth="1.8" strokeDasharray={dash} />
+      {heads.map((glyph, i) =>
+        glyph ? (
+          <path
+            key={i}
+            d={glyph.d}
+            fill={glyph.filled ? ink : "var(--as-surface)"}
+            stroke={glyph.filled ? undefined : ink}
+            strokeWidth={glyph.filled ? undefined : 1.5}
+          />
+        ) : null,
+      )}
+    </svg>
+  );
+}
+
 export function InspectorSection({ caption, children }: { caption: string; children: ReactNode }) {
   return (
     <span className="as-inspector__section" role="group" aria-label={caption}>

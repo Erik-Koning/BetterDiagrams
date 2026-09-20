@@ -1,0 +1,9 @@
+kind: custom
+label: Cutlery
+name: cutlery
+recordCount: 310
+fieldsTotal: 5
+fieldsVisible: 5
+diagramType: custom
+diagramName: Cutlery
+url: /entities/cutlery

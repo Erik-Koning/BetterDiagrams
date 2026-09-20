@@ -29,15 +29,17 @@ import {
   ViewportPortal,
   useInternalNode,
   useReactFlow,
+  useStore,
   type Edge,
   type EdgeProps,
+  type ReactFlowState,
 } from "@xyflow/react";
 import {
   anchorFromPoint,
-  cardinalityMarker,
   crowsFootPath,
   edgeGeometryFor,
   edgeHeadPath,
+  endNotation,
   endLabelInset,
   nearestTOnCurve,
   startAngle,
@@ -53,8 +55,11 @@ import {
   isCollapsedEdgeId,
   isGhostEdgeId,
   MAX_EDGE_POINTS,
+  uncrossFieldAnchors,
+  withEndSlots,
   type DiagramEdgeData,
   type DiagramNodeData,
+  type EndSlots,
 } from "../contract/schema";
 import { topDropTarget } from "./dangling";
 import { formatDiagramDate } from "../contract/timeline";
@@ -132,6 +137,58 @@ const LABEL_LAYER_STYLE: CSSProperties = {
   pointerEvents: "none",
 };
 
+/**
+ * The un-crossing pass over the whole canvas (`uncrossFieldAnchors`): which
+ * row-anchored ends trade rows so lines leaving one side of a table don't
+ * cross. An edge knows only its own two boxes, and this needs every edge on
+ * every side — so it runs over React Flow's store, once per change of the
+ * node or edge arrays (a drag frame, a measure, an edit), and every edge
+ * reads its own two numbers from the shared result. Keyed on the arrays'
+ * identity: nothing an edge draws with changes without one of them changing.
+ *
+ * The boxes are the same ones the edge component draws with — the store's
+ * absolute positions and measured sizes — so the trade and the line it moves
+ * can never disagree about where a row is.
+ */
+const endSlotsCache = new WeakMap<ReactFlowState["nodes"], { edges: ReactFlowState["edges"]; slots: Map<string, EndSlots> }>();
+function endSlotsOf(state: ReactFlowState): Map<string, EndSlots> {
+  const hit = endSlotsCache.get(state.nodes);
+  if (hit && hit.edges === state.edges) return hit.slots;
+  const nodeOf = (id: string) => {
+    const node = state.nodeLookup.get(id);
+    if (!node || node.hidden) return undefined;
+    const data = node.data as DiagramNodeData | undefined;
+    const { x, y } = node.internals.positionAbsolute;
+    return {
+      fields: data?.fields,
+      description: data?.description,
+      box: { x, y, width: node.measured?.width ?? 0, height: node.measured?.height ?? 0 },
+    };
+  };
+  const slots = uncrossFieldAnchors(
+    state.edges.flatMap((e) => {
+      const data = e.data as DiagramEdgeData | undefined;
+      return e.hidden
+        ? []
+        : [
+            {
+              id: e.id,
+              source: e.source,
+              target: e.target,
+              start: data?.start,
+              end: data?.end,
+              startField: data?.startField,
+              endField: data?.endField,
+              points: data?.points,
+            },
+          ];
+    }),
+    nodeOf,
+  );
+  endSlotsCache.set(state.nodes, { edges: state.edges, slots });
+  return slots;
+}
+
 /** The nearest reference within snapping distance, or nothing. */
 function snapAxis(v: number, refs: readonly number[]): number | null {
   let best: number | null = null;
@@ -150,11 +207,16 @@ export const LabeledEdge = memo(function LabeledEdge({
   data,
   selected,
 }: EdgeProps<LabeledEdgeType>) {
-  const { readOnly, requestCommit, registry, showToast } = useStudio();
+  const { readOnly, requestCommit, registry, showToast, notation } = useStudio();
   const { screenToFlowPosition, setEdges, setNodes, getEdges, getNodes, getInternalNode } =
     useReactFlow();
   const sourceNode = useInternalNode(source);
   const targetNode = useInternalNode(target);
+  // The rows this edge's ends trade to, if the un-crossing pass moved them.
+  // Selected as two numbers rather than the pair: a primitive compares by
+  // value, so an edge the pass left alone never re-renders for it.
+  const startSlot = useStore((state) => endSlotsOf(state).get(id)?.start);
+  const endSlot = useStore((state) => endSlotsOf(state).get(id)?.end);
   const draggingRef = useRef(false);
   /**
    * An endpoint mid-drag: its end of the line follows the pointer instead of
@@ -205,9 +267,10 @@ export const LabeledEdge = memo(function LabeledEdge({
 
   /**
    * The stored route with field references resolved: a foreign key lands on
-   * the row it names rather than on the middle of the table. Recomputed from
-   * the live boxes each time, because which face the line leaves through
-   * follows the nodes as they are dragged.
+   * the row it names rather than on the middle of the table — or on the row
+   * the un-crossing pass traded it to. Recomputed from the live boxes each
+   * time, because which face the line leaves through follows the nodes as
+   * they are dragged.
    */
   const specOf = (sBox: Box, tBox: Box): EdgePathSpec => {
     const side = (node: typeof sourceNode, b: Box) => {
@@ -220,15 +283,18 @@ export const LabeledEdge = memo(function LabeledEdge({
       };
     };
     return {
-      ...fieldAnchors(
-        {
-          start: data?.start,
-          end: data?.end,
-          startField: data?.startField,
-          endField: data?.endField,
-        },
-        side(sourceNode, sBox),
-        side(targetNode, tBox),
+      ...withEndSlots(
+        fieldAnchors(
+          {
+            start: data?.start,
+            end: data?.end,
+            startField: data?.startField,
+            endField: data?.endField,
+          },
+          side(sourceNode, sBox),
+          side(targetNode, tBox),
+        ),
+        { start: startSlot, end: endSlot },
       ),
       points: data?.points,
     };
@@ -542,16 +608,19 @@ export const LabeledEdge = memo(function LabeledEdge({
   // that lands later says so without displacing its own name.
   const dateY = (data?.label ? 8 : -5) + (data?.tech ? 11 : 0);
   const origin = geo.at(0);
-  // A recognisable cardinality draws its crow's-foot symbol at the box; the
-  // text still renders further in, for readers who don't speak the notation.
-  const startMarker = cardinalityMarker(data?.startLabel);
-  const endMarker = cardinalityMarker(data?.endLabel);
+  // A recognisable cardinality draws its crow's-foot symbol at the box and
+  // the text further in — or one of the two, as the document's notation
+  // says (see `endNotation`): UML keeps the numbers, crow's foot the symbol.
+  const startEnd = endNotation(data?.startLabel, notation);
+  const endEnd = endNotation(data?.endLabel, notation);
+  const startMarker = startEnd.marker;
+  const endMarker = endEnd.marker;
   // Cardinality sits a fixed distance in from each box — near the end it
   // describes, wherever the middle label happens to be.
-  const startLabelAt = data?.startLabel
+  const startLabelAt = startEnd.text
     ? geo.at(tAtDistance(geo, endLabelInset(startMarker)))
     : null;
-  const endLabelAt = data?.endLabel
+  const endLabelAt = endEnd.text
     ? geo.at(tAtDistance(geo, endLabelInset(endMarker), true))
     : null;
 
@@ -761,7 +830,9 @@ export const LabeledEdge = memo(function LabeledEdge({
       {glows.map((glow) => (
         <g
           key={glow.pathId}
-          className="as-edge__pathglow"
+          // Only the path that moves (see PathGlow.animate) pulses and flows;
+          // the rest keep a still halo and a still dash pattern.
+          className={`as-edge__pathglow${glow.animate ? " as-edge__pathglow--animate" : ""}`}
           style={{ "--as-path-step": glow.step, "--as-path-steps": glow.steps } as CSSProperties}
         >
           <path
@@ -1018,7 +1089,7 @@ export const LabeledEdge = memo(function LabeledEdge({
                 textAnchor="middle"
                 style={{ pointerEvents: "none" }}
               >
-                {data!.startLabel}
+                {startEnd.text}
               </text>
             ) : null}
             {endLabelAt ? (
@@ -1029,7 +1100,7 @@ export const LabeledEdge = memo(function LabeledEdge({
                 textAnchor="middle"
                 style={{ pointerEvents: "none" }}
               >
-                {data!.endLabel}
+                {endEnd.text}
               </text>
             ) : null}
             {hasLabel && !editingLabel ? (

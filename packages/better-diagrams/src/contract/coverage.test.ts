@@ -27,7 +27,7 @@ const DOC = {
     structural("_external/stub"),
   ],
   edges: [
-    fk("c-x", "contact", "_external/stub", "StubRef__c"),
+    fk("c-x", "contact", "_external/stub", "stub_ref_id"),
     fk("c-a", "contact", "account", "AccountId"),
     fk("c-u", "contact", "user", "OwnerId"),
     fk("k-a", "case", "account", "AccountId"),
@@ -46,10 +46,10 @@ describe("what counts as a table", () => {
     expect(all.reached.has("_external/stub")).toBe(false);
     expect(all.reached.has("crm-band")).toBe(false);
     // The key that only reaches the stand-in adds nothing anyone asked for.
-    const stubKey = { nodeId: "contact", fieldId: "StubRef__c" };
+    const stubKey = { nodeId: "contact", fieldId: "stub_ref_id" };
     expect(keyCoverage(DOC, [stubKey]).reached).toEqual(new Set(["contact"]));
-    expect(marginalGains(DOC, []).find((g) => g.ref.fieldId === "StubRef__c")!.adds).toEqual(["contact"]);
-    expect(minimalKeyCover(DOC).keys.some((k) => k.fieldId === "StubRef__c")).toBe(false);
+    expect(marginalGains(DOC, []).find((g) => g.ref.fieldId === "stub_ref_id")!.adds).toEqual(["contact"]);
+    expect(minimalKeyCover(DOC).keys.some((k) => k.fieldId === "stub_ref_id")).toBe(false);
   });
 
   it("a host can say what a table is", () => {
@@ -57,7 +57,7 @@ describe("what counts as a table", () => {
     expect(onlyAccount.total).toBe(1);
     expect(onlyAccount.fraction).toBe(1);
     expect(storesFields({ id: "x" })).toBe(false);
-    expect(storesFields({ id: "x", data: { sf: { fields: [{ name: "A" }] } } })).toBe(true);
+    expect(storesFields({ id: "x", data: { model: { fields: [{ name: "a" }] } } })).toBe(true);
   });
 });
 
@@ -99,7 +99,7 @@ describe("marginalGains", () => {
       ["WhatId", 1],
       ["WhoId", 1],
       // Reaches only the stand-in, and contact is already covered: nothing.
-      ["StubRef__c", 0],
+      ["stub_ref_id", 0],
     ]);
     expect(gains.find((g) => g.ref.fieldId === "AccountId" && g.ref.nodeId === "contact")).toBeUndefined();
     expect(gains[0].fraction).toBeCloseTo(2 / 7);
@@ -138,7 +138,7 @@ describe("minimalKeyCover", () => {
     const objects = 200;
     const nodes = Array.from({ length: objects }, (_, i) => node(`t${i}`));
     const edges = nodes.flatMap((n, i) =>
-      Array.from({ length: 3 }, (_, k) => fk(`${n.id}-${k}`, n.id, `t${(i + 1 + k * 7) % objects}`, `Ref${k}__c`)),
+      Array.from({ length: 3 }, (_, k) => fk(`${n.id}-${k}`, n.id, `t${(i + 1 + k * 7) % objects}`, `ref${k}_id`)),
     );
     const big = { nodes, edges };
     const started = performance.now();

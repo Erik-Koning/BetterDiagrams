@@ -11,9 +11,10 @@
  *   sidecar  ONLY `.better-diagrams/` — the layout and the curator's
  *            overrides — beside a source tree some other tool generates.
  *            Nothing the source owns is written; the diagram never becomes a
- *            second writer of an org's fields. A dialect may add files of
- *            its own (`sidecarFiles`), which is how the Salesforce dialect
- *            patches the two curated keys of an `object.yaml` when asked.
+ *            second writer of a system's fields. A dialect may add files
+ *            of its own (`sidecarFiles`), which is how the data-model
+ *            dialect patches the two curated keys of an `entity.yaml` when
+ *            asked.
  *
  * Output is a file map plus a deletions list; the caller does the I/O.
  */

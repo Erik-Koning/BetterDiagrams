@@ -1,0 +1,6 @@
+kind: record-type
+label: Person
+key: person
+id: rt-person
+diagramType: record-type
+diagramName: Person

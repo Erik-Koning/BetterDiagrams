@@ -109,6 +109,8 @@ import {
   type EdgeRouting,
   type EdgeStyle,
   type FieldKey,
+  type ArrangeMode,
+  type Notation,
   type GroupContents,
   type NodeField,
   type NodeStatus,
@@ -155,6 +157,7 @@ import {
   Modal,
   ShortcutsModal,
   InspectorSection,
+  RelationSwatch,
   TimelineScrubber,
   levelLabel,
   ToolbarMenu,
@@ -177,8 +180,8 @@ import { fanOutResize } from "./resize";
 import { NestingModal } from "./NestingModal";
 import { inlineContents, nestContents } from "../contract/nesting";
 import { importFolder } from "../contract/folder";
-import { buildFieldIndex, fieldKey, fieldRecords, hasField, keyFields, sameFieldRef, searchFields, type FieldRef, type Pin } from "../contract/fields";
-import { keyCoverage, marginalGains, minimalKeyCover, type CoverageScope } from "../contract/coverage";
+import { buildFieldIndex, fieldKey, fieldRecords, hasField, keyFields, referencedKey, referencesTo, sameFieldRef, searchFields, type FieldRef, type FieldTarget, type Pin } from "../contract/fields";
+import { keyCoverage, marginalGains, minimalKeyCover, storesFields, type CoverageScope } from "../contract/coverage";
 import { CoveragePanel } from "./CoveragePanel";
 import { FieldGridModal } from "./FieldGridModal";
 import { copyText } from "./copy-text";
@@ -193,7 +196,8 @@ import {
   usedCloudResources,
   type PromptScopeOptions,
 } from "./template-prompt";
-import { autoLayout, hasOverlaps } from "../contract/layout";
+import { autoLayout, hasOverlaps, type LayoutOptions } from "../contract/layout";
+import { collapseJunctions, junctionTables } from "../contract/junctions";
 import {
   PRESENTATION_FORMAT,
   mergeTemplate,
@@ -213,7 +217,8 @@ import { BUILTIN_EXPORTERS, renderTemplateToCanvas, renderTemplateToSvg } from "
 import { ExportStatesModal, type ExportStatesChoice } from "./ExportStatesModal";
 import { runStateExport, type StateExportFormat } from "./state-export";
 import type { RegistryExtensions, ResolvedRegistry } from "./registry-types";
-import { kindDef, providerDef, zoneInk } from "./registry-types";
+import { kindDef, providerDef, relationDef, zoneInk } from "./registry-types";
+import { relationDressing } from "../contract/relations";
 import { NODE_TYPES } from "./nodes";
 import { EDGE_TYPES } from "./edges";
 import { topDropTarget } from "./dangling";
@@ -257,6 +262,9 @@ const SELECTED_EDGE_ELEVATION = SELECT_ELEVATION * 2;
 
 /** How close an edge has to come to a neighbour's before the guide catches. */
 const ALIGN_TOL = 6;
+
+/** No row marked — one shared empty set, so an unchanged "nothing" never re-renders the rows. */
+const NO_FIELDS: ReadonlySet<string> = new Set();
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -371,6 +379,15 @@ export interface ArchitectureStudioProps {
    * technical.
    */
   mode?: StudioMode;
+  /**
+   * Marketing's one setting: whether its cards wear their gradients. Default
+   * `true`. `false` paints every fade the mode draws — cards, icon chips,
+   * silhouettes, collapsed groups — as one flat coat at the fade's midpoint,
+   * on screen and in every picture export (PNG, PDF, SVG, HTML), which then
+   * carry no gradient at all. Shadows, type, corners and spacing stay.
+   * Ignored in technical, which has none to switch off.
+   */
+  gradients?: boolean;
   /** Supply to enable the AI panel. Omit and no network code runs. */
   generate?: DiagramGenerator;
   /** Base name for exported files. Defaults to "architecture". */
@@ -680,6 +697,7 @@ function StudioInner({
   registry: registryExtensions,
   theme,
   mode,
+  gradients = true,
   generate,
   filename = "architecture",
   minimap = true,
@@ -878,8 +896,12 @@ function StudioInner({
    */
   const [pins, setPinsState] = useState<Pin[]>([]);
   const pinsRef = useRef<Pin[]>([]);
-  /** The row the search or a pin chip just jumped to — `fieldKey`, or null. */
-  const [highlightField, setHighlightField] = useState<string | null>(null);
+  /**
+   * The rows the reader was just taken to, as `fieldKey`s: the one a search
+   * or a pin chip jumped to, or both halves of a followed reference — the
+   * foreign key here and the key it points at there.
+   */
+  const [highlightFields, setHighlightFields] = useState<ReadonlySet<string>>(NO_FIELDS);
   /** The node whose field grid is open, and the row to scroll to. */
   const [fieldGrid, setFieldGrid] = useState<{ nodeId: string; fieldId?: string } | null>(null);
   /** The row the inspector should put its cursor in — the field menu's Edit…. */
@@ -893,8 +915,13 @@ function StudioInner({
   /** The route under the pointer (lit alone) and the one clicked (kept lit alone). */
   const [hoverRoute, setHoverRoute] = useState<number | null>(null);
   const [stickyRoute, setStickyRoute] = useState<number | null>(null);
-  /** The key under the pointer in "Keys most routes use": every route through it lights. */
+  /**
+   * The key under the pointer in "Keys most routes use", and the one clicked:
+   * every route through it lights. A kept key and a kept route are two
+   * answers to "what stays lit", so keeping one lets go of the other.
+   */
   const [hoverKey, setHoverKey] = useState<string | null>(null);
+  const [stickyKey, setStickyKey] = useState<string | null>(null);
   /** The key-coverage panel: which keys are chosen, how coverage is scoped, what is hovered. */
   const [coverageOpen, setCoverageOpen] = useState(false);
   const [coverageKeys, setCoverageKeysState] = useState<FieldRef[]>([]);
@@ -904,6 +931,7 @@ function StudioInner({
   /** What the last "Find smallest set" said about its answer; cleared when the keys change by hand. */
   const [smallest, setSmallest] = useState<{ optimal: boolean; truncated: boolean } | null>(null);
   const [showTeams, setShowTeams] = useState(true);
+  const [showLinks, setShowLinks] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   /** The match the canvas is centred on. -1 = a query typed but not yet jumped to. */
@@ -1665,7 +1693,7 @@ function StudioInner({
       // on it instead (after the level has had its moment to materialise).
       const land = () => {
         if (match.kind !== "field") return;
-        setHighlightField(fieldKey({ nodeId: match.id, fieldId: match.field.fieldId }));
+        setHighlightFields(new Set([fieldKey({ nodeId: match.id, fieldId: match.field.fieldId })]));
         if (!match.field.row) {
           window.setTimeout(() => setFieldGrid({ nodeId: match.id, fieldId: match.field.fieldId }), 80);
         }
@@ -1824,9 +1852,11 @@ function StudioInner({
   const transientPaths = useMemo(() => {
     if (!routeView || routeView.kind !== "pair") return [];
     const only = hoverRoute ?? stickyRoute;
-    const throughKey = hoverKey
-      ? new Set(routeView.keyUse?.keys.find((k) => fieldKey(k.ref) === hoverKey)?.edges ?? [])
-      : null;
+    // A key the current routes don't use (kept, then the direction toggled)
+    // lights nothing through it — it falls through to the routes instead.
+    const litKey = hoverKey ?? stickyKey;
+    const keyEdges = litKey ? routeView.keyUse?.keys.find((k) => fieldKey(k.ref) === litKey)?.edges : undefined;
+    const throughKey = keyEdges ? new Set(keyEdges) : null;
     return routeView.routes
       .map((route, i) => ({ route, i }))
       .filter(({ route, i }) =>
@@ -1837,7 +1867,7 @@ function StudioInner({
       .map(({ route, i }) =>
         walkToPath(templateRef.current, route.walk, { id: `~route:${i}`, title: route.title, color: route.color }),
       );
-  }, [routeView, hoverRoute, stickyRoute, hoverKey]);
+  }, [routeView, hoverRoute, stickyRoute, hoverKey, stickyKey]);
   // Several routes lit at once keep their palette colours so they stay
   // distinguishable; one route singled out (hovered or kept) goes bright.
   const pathGlowIndex = useMemo(
@@ -1895,6 +1925,18 @@ function StudioInner({
   }, [template]);
 
   const anyTeams = useMemo(() => template.nodes.some((n) => n.team), [template]);
+  const anyLinks = useMemo(() => template.nodes.some((n) => n.url), [template]);
+  /** Whether any line states a cardinality or a kind — what the notation choice acts on. */
+  const anyCardinality = useMemo(
+    () => template.edges.some((e) => e.startLabel || e.endLabel || e.relation),
+    [template],
+  );
+  /** Many-to-many spelled as tables — what *Collapse junction tables* folds into one line each. */
+  const junctions = useMemo(() => junctionTables(template), [template]);
+  // Key coverage scores tables; a document with none has nothing for it to
+  // say, so the View menu does not offer it — as *Paths* is only offered
+  // when the document names one. `openCoverage()` on the ref still works.
+  const anyTables = useMemo(() => template.nodes.some(storesFields), [template]);
 
   // Architecture lint — pure over the document, so it re-runs per committed
   // edit and can never touch what persists.
@@ -2153,6 +2195,49 @@ function StudioInner({
     [readOnly, applyTemplate, showToast],
   );
 
+  // ── Notation: how a line's ends draw their cardinality ────────────────────
+
+  /** The document's `settings.notation`, "both" when it says nothing. */
+  const notation: Notation = template.settings?.notation ?? "both";
+
+  /**
+   * A document setting, like the default routing: through applyTemplate so
+   * it is validated, committed, undoable, and emitted, and every line on
+   * the canvas re-reads it through the studio context.
+   */
+  const setNotation = useCallback(
+    (next: Notation) => {
+      if (readOnly) return;
+      applyTemplate(
+        { ...templateRef.current, settings: { ...templateRef.current.settings, notation: next } },
+        { fit: false },
+      );
+      showToast(
+        next === "uml"
+          ? "UML notation: multiplicities as numbers, glyphs at the ends"
+          : next === "crowsfoot"
+            ? "Crow's-foot notation: symbols at the boxes"
+            : "Symbols at the boxes, numbers beside them",
+      );
+    },
+    [readOnly, applyTemplate, showToast],
+  );
+
+  /**
+   * Fold every junction table into the many-to-many line it stands for —
+   * one document edit, so one ⌘Z brings the tables back.
+   */
+  const collapseJunctionTables = useCallback(() => {
+    if (readOnly) return;
+    const found = junctionTables(templateRef.current);
+    if (!found.length) return;
+    applyTemplate(collapseJunctions(templateRef.current), { fit: false });
+    const mod = isMac() ? "⌘" : "Ctrl+";
+    showToast(
+      `${found.length} junction table${found.length === 1 ? "" : "s"} folded into a many-to-many line · ${mod}Z to undo`,
+    );
+  }, [readOnly, applyTemplate, showToast]);
+
   // ── Group contents: the document-wide fold ────────────────────────────────
 
   const groupContents = template.settings?.groupContents;
@@ -2201,22 +2286,60 @@ function StudioInner({
     [readOnly, applyTemplate, showToast],
   );
 
+  /**
+   * What a Tidy of the level you are looking at tells the layout: the
+   * focused component's own canvas while drilled in, the root canvas
+   * otherwise. Either way the levels you can't see are left exactly as you
+   * left them. The arrange MODE is not in here on purpose — the layout reads
+   * it off the document's `settings.arrange`, so a Tidy keeps arranging the
+   * way the document was last set.
+   */
+  const levelLayoutOptions = useCallback((): LayoutOptions => {
+    const focus = rfFocusRef.current;
+    return {
+      containerKinds: registry.containerKinds,
+      ...modeLayoutOptions(studioMode),
+      ...(focus ? { frames: { drill: focus } } : {}),
+    };
+  }, [registry, studioMode]);
+
   const tidy = useCallback(() => {
     if (readOnly) return;
-    // Tidy arranges the level you are looking at — the focused component's
-    // own canvas while drilled in, the root canvas otherwise. Either way the
-    // levels you can't see are left exactly as you left them.
-    const focus = rfFocusRef.current;
-    applyTemplate(
-      autoLayout(templateRef.current, {
-        containerKinds: registry.containerKinds,
-        ...modeLayoutOptions(studioMode),
-        ...(focus ? { frames: { drill: focus } } : {}),
-      }),
-      { fit: true },
-    );
-    showToast(focus ? "Tidied this level" : "Tidied");
-  }, [readOnly, applyTemplate, showToast, registry, studioMode]);
+    applyTemplate(autoLayout(templateRef.current, levelLayoutOptions()), { fit: true });
+    showToast(rfFocusRef.current ? "Tidied this level" : "Tidied");
+  }, [readOnly, applyTemplate, showToast, levelLayoutOptions]);
+
+  /** What Tidy optimises for, read off the live document. Absent means "flow". */
+  const arrangeMode: ArrangeMode = template.settings?.arrange ?? "flow";
+
+  /**
+   * Pick what Tidy optimises for — and tidy, right there, so the choice is
+   * seen rather than remembered. The setting and the new arrangement travel
+   * in ONE applyTemplate, so they are one undo entry: ⌘Z puts every box back
+   * AND forgets the choice, and redo restores both. The setting lives in the
+   * document, so every later Tidy — and the auto-tidy after a generation —
+   * keeps arranging the same way.
+   */
+  const setArrangeMode = useCallback(
+    (next: ArrangeMode) => {
+      if (readOnly) return;
+      const current = templateRef.current;
+      applyTemplate(
+        autoLayout(
+          { ...current, settings: { ...current.settings, arrange: next } },
+          levelLayoutOptions(),
+        ),
+        { fit: true },
+      );
+      const mod = isMac() ? "⌘" : "Ctrl+";
+      showToast(
+        next === "untangle"
+          ? `Untangled the lines · ${mod}Z to undo`
+          : `Arranged left to right · ${mod}Z to undo`,
+      );
+    },
+    [readOnly, applyTemplate, showToast, levelLayoutOptions],
+  );
 
   const addZone = useCallback(() => {
     if (readOnly) return;
@@ -2639,7 +2762,7 @@ function StudioInner({
           // A spread keeps keys explicitly set to undefined; delete them so
           // "routing: default" and a cleared seq, date, anchor, or route
           // genuinely unset the field.
-          for (const key of ["routing", "seq", "direction", "startHead", "endHead", "date", "start", "end", "points", "providers", "startLabel", "endLabel", "startField", "endField", "tech"] as const) {
+          for (const key of ["routing", "seq", "direction", "startHead", "endHead", "date", "start", "end", "points", "providers", "startLabel", "endLabel", "startField", "endField", "tech", "relation"] as const) {
             if (key in own && own[key] === undefined) delete data[key];
           }
           // The edge's own routing changed (or was cleared) — recompute what
@@ -3206,6 +3329,10 @@ function StudioInner({
         // The document may have changed mid-tween (an AI reply landing) —
         // a vanished target must not throw inside a timer callback.
         if (!templateRef.current.nodes.some((n) => n.id === id)) return;
+        // A double-click on the drill badge is click, click, dblclick: three
+        // drills into the same node, each queued behind its own tween. The
+        // first lands; the rest would stack the focus on itself.
+        if (focusStackRef.current[focusStackRef.current.length - 1] === id) return;
         drillTo([...focusStackRef.current, id]);
         canvasRef.current?.classList.remove("as-canvas--refocus");
         window.setTimeout(
@@ -3355,9 +3482,49 @@ function StudioInner({
   const navigateToField = useCallback(
     (ref: FieldRef) => {
       navigateToNode(ref.nodeId);
-      setHighlightField(fieldKey(ref));
+      setHighlightFields(new Set([fieldKey(ref)]));
     },
     [navigateToNode],
+  );
+  /**
+   * Follow a reference: go to the table it points at with BOTH rows marked —
+   * the referencing field left behind and the key it lands on. A foreign key
+   * is a pair, and a reader who followed one wants to see the join, not just
+   * arrive at a table.
+   */
+  const followReference = useCallback(
+    (from: FieldRef, target: FieldTarget) => {
+      if (!target.nodeId) return;
+      navigateToNode(target.nodeId);
+      const key = referencedKey(templateRef.current, target);
+      setHighlightFields(new Set([fieldKey(from), ...(key ? [fieldKey(key)] : [])]));
+    },
+    [navigateToNode],
+  );
+  /**
+   * The other direction: light everything that points AT a key — its own
+   * row, every foreign-key row landing on it, and the tables those rows sit
+   * in, so a reference from across the canvas still shows. A table (no
+   * field) lights every reference into it. The marks are the transient kind
+   * a followed reference leaves, and clear the same way.
+   */
+  const showReferences = useCallback(
+    (ref: Pin) => {
+      const refs = referencesTo(templateRef.current, ref);
+      const marks = new Set<string>([fieldKey(ref), fieldKey({ nodeId: ref.nodeId })]);
+      for (const r of refs) {
+        marks.add(fieldKey({ nodeId: r.nodeId }));
+        if (r.fieldId) marks.add(fieldKey(r));
+      }
+      setHighlightFields(marks);
+      const tables = new Set(refs.map((r) => r.nodeId)).size;
+      showToast(
+        refs.length
+          ? `${refs.length} reference${refs.length === 1 ? "" : "s"} from ${tables} table${tables === 1 ? "" : "s"} marked`
+          : "Nothing points at it",
+      );
+    },
+    [showToast],
   );
   const pinnedFields = useMemo(() => new Set(pins.map(fieldKey)), [pins]);
   /** "Account · AccountId" — what a chip and a menu caption call a field; a table pin is the label alone. */
@@ -3365,20 +3532,21 @@ function StudioInner({
     const label = templateRef.current.nodes.find((n) => n.id === ref.nodeId)?.label ?? ref.nodeId;
     return ref.fieldId ? `${label} · ${ref.fieldId}` : label;
   }, []);
-  // The row mark is transient: it goes when the reader selects something
+  // The row marks are transient: they go when the reader selects something
   // else (a click elsewhere, not the jump's own selection — a drill clears
-  // the selection on the way, which must not take the mark with it) or
-  // starts a new search.
-  const highlightFieldRef = useRef<string | null>(null);
-  highlightFieldRef.current = highlightField;
+  // the selection on the way, which must not take the marks with it; and
+  // either table of a followed reference keeps the pair) or starts a new
+  // search.
+  const highlightFieldsRef = useRef<ReadonlySet<string>>(NO_FIELDS);
+  highlightFieldsRef.current = highlightFields;
   useEffect(() => {
-    const mark = highlightFieldRef.current;
-    if (!mark || !selectedNodeIds.length) return;
-    const nodeId = mark.slice(0, mark.indexOf("\u0000"));
-    if (!selectedNodeIds.includes(nodeId)) setHighlightField(null);
+    const marks = highlightFieldsRef.current;
+    if (!marks.size || !selectedNodeIds.length) return;
+    const marked = new Set([...marks].map((mark) => mark.slice(0, mark.indexOf("\u0000"))));
+    if (!selectedNodeIds.some((id) => marked.has(id))) setHighlightFields(NO_FIELDS);
   }, [selectedNodeIds]);
   useEffect(() => {
-    setHighlightField(null);
+    setHighlightFields(NO_FIELDS);
   }, [searchQuery]);
   const togglePathPanel = useCallback(() => {
     setPathPanelOpen((open) => !open);
@@ -3391,11 +3559,18 @@ function StudioInner({
     setStickyRoute(null);
     setHoverRoute(null);
     setHoverKey(null);
+    setStickyKey(null);
   }, [pins]);
+  /** Keep every route through a key lit — or let it go, clicked again. */
+  const pickKey = useCallback((key: string) => {
+    setStickyKey((current) => (current === key ? null : key));
+    setStickyRoute(null);
+  }, []);
   /** Keep a route lit alone and frame it — or, when it crosses levels, go to it. */
   const pickRoute = useCallback(
     (index: number) => {
       setStickyRoute((current) => (current === index ? null : index));
+      setStickyKey(null);
       const route = routeView?.routes[index];
       if (!route) return;
       const boxes = route.walk.nodes.map((id) => flow.getInternalNode(id));
@@ -3696,9 +3871,10 @@ function StudioInner({
             );
           }
         }
-        // The mode goes with it: a picture exported out of marketing mode has
-        // to come back dressed the way the screen was dressing it.
-        const result = await exporter.run({ template: subject, registry, filename, palette: exportPalette, mode: studioMode });
+        // The mode goes with it, and its gradient setting: a picture exported
+        // out of marketing mode has to come back dressed the way the screen
+        // was dressing it.
+        const result = await exporter.run({ template: subject, registry, filename, palette: exportPalette, mode: studioMode, gradients });
         if (result) {
           download(result.blob, result.filename);
           showToast(`Exported ${result.filename}`);
@@ -3708,7 +3884,7 @@ function StudioInner({
         setPanelOpen(true);
       }
     },
-    [registry, template, filename, exportPalette, studioMode, showToast, timelineActive, timelineAt, timelineFuture, focusId, exportSelectionOnly, selectedDocNodeIds, selectedZoneIds],
+    [registry, template, filename, exportPalette, studioMode, gradients, showToast, timelineActive, timelineAt, timelineFuture, focusId, exportSelectionOnly, selectedDocNodeIds, selectedZoneIds],
   );
 
   const stateAxes = useMemo(() => templateStateAxes(template), [template]);
@@ -3760,8 +3936,8 @@ function StudioInner({
               ? scopedView(doc, focusId, { containerKinds: registry.containerKinds })
               : doc;
           },
-          renderSvg: (doc) => renderTemplateToSvg(doc, registry, exportPalette, { mode: studioMode }),
-          renderCanvas: (doc) => renderTemplateToCanvas(doc, registry, 2, exportPalette, { mode: studioMode }),
+          renderSvg: (doc) => renderTemplateToSvg(doc, registry, exportPalette, { mode: studioMode, gradients }),
+          renderCanvas: (doc) => renderTemplateToCanvas(doc, registry, 2, exportPalette, { mode: studioMode, gradients }),
         });
         download(result.blob, result.filename);
         showToast(
@@ -3774,7 +3950,7 @@ function StudioInner({
         setPanelOpen(true);
       }
     },
-    [pendingExport, runDirectExport, filename, stateAxes, template, registry, exportPalette, studioMode, showToast, focusId],
+    [pendingExport, runDirectExport, filename, stateAxes, template, registry, exportPalette, studioMode, gradients, showToast, focusId],
   );
 
   const loadFile = useCallback(
@@ -4526,6 +4702,29 @@ function StudioInner({
       def: providerDef(registry, id),
     }));
   }, [zones, registry]);
+  /**
+   * The relationship kinds the DRAWN lines carry, with how many of each —
+   * a data model's key, so a solid rose line with a diamond reads as
+   * "composition" rather than as someone's colour choice. Counted over the
+   * canvas's own edges rather than the document's: a folded group's inner
+   * wiring is not on screen, and a chip's summarising re-route carries no
+   * kind, so the key says what the eye can check — and what the export's
+   * key says, which counts the same way. Registry order first, then any
+   * kind the document names that nobody registered.
+   */
+  const relationRows = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const edge of viewEdges) {
+      const relation = (edge.data as DiagramEdgeData | undefined)?.relation;
+      if (!relation || edge.hidden) continue;
+      counts.set(relation, (counts.get(relation) ?? 0) + 1);
+    }
+    const ids = [
+      ...registry.relationOrder.filter((id) => counts.has(id)),
+      ...[...counts.keys()].filter((id) => !registry.relationOrder.includes(id)),
+    ];
+    return ids.map((id) => ({ id, count: counts.get(id)!, def: relationDef(registry, id) }));
+  }, [viewEdges, registry]);
 
   const patchZone = useCallback(
     (zoneId: string, patch: Partial<DiagramZone>) => {
@@ -5199,6 +5398,14 @@ function StudioInner({
           setTool("cursor");
           return;
         }
+        // Row and table marks — a shown reference, a followed one, a search
+        // hit — are a mode of the canvas too, and the one a reader most
+        // wants a way out of: Escape lifts them before it touches the
+        // selection they were left around.
+        if (highlightFieldsRef.current.size) {
+          setHighlightFields(NO_FIELDS);
+          return;
+        }
         if (selectedNodeIds.length || selectedEdgeIds.length) {
           clearSelection();
           return;
@@ -5339,6 +5546,7 @@ function StudioInner({
       mode: studioMode,
       tagFilter,
       showTeams,
+      showLinks,
       requestCommit: commitLater,
       beginZoneResize,
       endZoneResize,
@@ -5352,13 +5560,14 @@ function StudioInner({
       showToast,
       onFieldClick: openFieldMenu,
       pinnedFields,
-      highlightField,
+      highlightFields,
       dimmedIds,
+      notation,
     }),
-    [registry, readOnly, studioMode, tagFilter, showTeams, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast, openFieldMenu, pinnedFields, highlightField, dimmedIds],
+    [registry, readOnly, studioMode, tagFilter, showTeams, showLinks, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast, openFieldMenu, pinnedFields, highlightFields, dimmedIds, notation],
   );
   const rootStyle = { ...themeToStyle(theme), ...style };
-  const modeClass = modeClassName(studioMode);
+  const modeClass = modeClassName(studioMode, gradients);
 
   return (
     <StudioContext.Provider value={studioContext}>
@@ -5447,6 +5656,18 @@ function StudioInner({
                 >
                   <div className="as-menu__label">Table</div>
                   <div className="as-menu__hint">An entity with columns — for data models</div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  onClick={() => {
+                    addNode("enum");
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">Enumeration</div>
+                  <div className="as-menu__hint">A picklist or enum — its rows are the allowed values</div>
                 </button>
                 <button
                   type="button"
@@ -5562,8 +5783,44 @@ function StudioInner({
                   }}
                 >
                   <div className="as-menu__label">Tidy</div>
-                  <div className="as-menu__hint">Arrange nodes within their zones and groups</div>
+                  <div className="as-menu__hint">
+                    Arrange nodes within their zones and groups
+                    {arrangeMode === "untangle" ? ", untangling the lines" : ", left to right"}
+                  </div>
                 </button>
+                {/* What Tidy optimises for. Unnamed radios, like the connector
+                    picker below: checked state comes from the document, and
+                    choosing one re-arranges the canvas in the same undoable
+                    edit that stores the choice. */}
+                <label
+                  className="as-menu__check"
+                  title="Left to right by proximity: each node one rank past what feeds it, rank-mates next to what they connect to — compact and quick"
+                >
+                  <input
+                    type="radio"
+                    checked={arrangeMode === "flow"}
+                    onChange={() => {
+                      setArrangeMode("flow");
+                      setOpenMenu(null);
+                    }}
+                  />
+                  Left to right
+                </label>
+                <label
+                  className="as-menu__check"
+                  title="Fewest crossing lines: ranks are re-ordered until lines stop crossing, a line that skips a rank gets a lane of its own, and nodes sit level with what they connect to"
+                >
+                  <input
+                    type="radio"
+                    checked={arrangeMode === "untangle"}
+                    onChange={() => {
+                      setArrangeMode("untangle");
+                      setOpenMenu(null);
+                    }}
+                  />
+                  Untangle lines
+                </label>
+                <div className="as-menu__sep" role="separator" />
                 <button
                   type="button"
                   role="menuitem"
@@ -5615,6 +5872,28 @@ function StudioInner({
                   <div className="as-menu__label">Nest contents a level deeper</div>
                   <div className="as-menu__hint">
                     The frame becomes one card; its contents move to their own C4 level
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  disabled={!junctions.length}
+                  title={
+                    junctions.length
+                      ? undefined
+                      : "No table whose key is two foreign keys — nothing spells a many-to-many"
+                  }
+                  onClick={() => {
+                    collapseJunctionTables();
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">
+                    Collapse junction tables{junctions.length ? ` (${junctions.length})` : ""}
+                  </div>
+                  <div className="as-menu__hint">
+                    Each table keyed by two foreign keys becomes one many-to-many line named after it
                   </div>
                 </button>
                 <button
@@ -5759,6 +6038,39 @@ function StudioInner({
                     Show hidden nodes{hiddenCount ? ` (${hiddenCount})` : ""}
                   </label>
                 ) : null}
+                {/* How a relationship's ends draw their cardinality. Unnamed
+                    radios, checked from the document; offered once a line
+                    says something a notation could draw. */}
+                {anyCardinality ? (
+                  <>
+                    <label
+                      className="as-menu__check"
+                      title="The crow's-foot symbol at each box and the multiplicity beside it"
+                    >
+                      <input type="radio" checked={notation === "both"} onChange={() => setNotation("both")} />
+                      Symbols and numbers
+                    </label>
+                    <label
+                      className="as-menu__check"
+                      title="Crow's-foot symbols alone — one bar for exactly one, a ring for optional, three prongs for many"
+                    >
+                      <input
+                        type="radio"
+                        checked={notation === "crowsfoot"}
+                        onChange={() => setNotation("crowsfoot")}
+                      />
+                      Crow's-foot symbols
+                    </label>
+                    <label
+                      className="as-menu__check"
+                      title="UML multiplicities as numbers, and the UML glyphs at the ends — a composition's filled diamond, a generalization's triangle"
+                    >
+                      <input type="radio" checked={notation === "uml"} onChange={() => setNotation("uml")} />
+                      UML numbers
+                    </label>
+                    <div className="as-menu__sep" role="separator" />
+                  </>
+                ) : null}
                 {anyTeams ? (
                   <label className="as-menu__check" title="Show each node's owning-team tag">
                     <input
@@ -5767,6 +6079,22 @@ function StudioInner({
                       onChange={() => setShowTeams((on) => !on)}
                     />
                     Show team badges
+                  </label>
+                ) : null}
+                {/* Offered while the document has a link to show — and while
+                    it is off, so turning it back on never needs a link to
+                    exist first. */}
+                {anyLinks || !showLinks ? (
+                  <label
+                    className="as-menu__check"
+                    title="Show the ↗ link button on nodes that carry a link — hiding it changes nothing in the document"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={showLinks}
+                      onChange={() => setShowLinks((on) => !on)}
+                    />
+                    Show link buttons
                   </label>
                 ) : null}
                 <button
@@ -5833,19 +6161,23 @@ function StudioInner({
                     ) : null}
                   </>
                 ) : null}
-                <div className="as-menu__caption">Keys</div>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="as-menu__item"
-                  onClick={() => {
-                    setCoverageOpen((open) => !open);
-                    setOpenMenu(null);
-                  }}
-                >
-                  <div className="as-menu__label">{coverageOpen ? "Hide key coverage" : "Key coverage"}</div>
-                  <div className="as-menu__hint">How much of the model a set of keys reaches</div>
-                </button>
+                {anyTables ? (
+                  <>
+                    <div className="as-menu__caption">Keys</div>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="as-menu__item"
+                      onClick={() => {
+                        setCoverageOpen((open) => !open);
+                        setOpenMenu(null);
+                      }}
+                    >
+                      <div className="as-menu__label">{coverageOpen ? "Hide key coverage" : "Key coverage"}</div>
+                      <div className="as-menu__hint">How much of the model a set of keys reaches</div>
+                    </button>
+                  </>
+                ) : null}
               </ToolbarMenu>
             </div>
           ) : null}
@@ -6154,7 +6486,7 @@ function StudioInner({
                 <button
                   type="button"
                   className="as-btn"
-                  title="Import a folder-format tree — a Salesforce data-model export, or a Folder (.zip) export unzipped"
+                  title="Import a folder-format tree — a data-model export, or a Folder (.zip) export unzipped"
                   onClick={() => folderInputRef.current?.click()}
                 >
                   Import folder
@@ -6334,7 +6666,8 @@ function StudioInner({
               onPickRoute={pickRoute}
               hoverKey={hoverKey}
               onHoverKey={setHoverKey}
-              onPinKey={togglePin}
+              stickyKey={stickyKey}
+              onPickKey={pickKey}
               onNavigate={navigateToNode}
               onClose={() => setPathPanelOpen(false)}
             />
@@ -6455,6 +6788,11 @@ function StudioInner({
             onPaneClick={() => {
               setOpenMenu(null);
               setContextMenu(null);
+              // A click on empty canvas is "done looking": it lifts the row
+              // and table marks along with the menus. (Selection is cleared
+              // by React Flow itself; the marks effect deliberately ignores
+              // an EMPTY selection, since a drill empties it on the way.)
+              setHighlightFields(NO_FIELDS);
             }}
             onNodeContextMenu={(event, node) => openContextMenu(event, node.id)}
             onEdgeContextMenu={(event, edge) => openContextMenu(event, undefined, edge.id)}
@@ -6563,7 +6901,7 @@ function StudioInner({
                 both — React Flow stacks nothing, so a second top-right panel
                 would sit on top of the first. Corner-anchored so it reads as
                 a map key. */}
-            {legend && (legendRows.length || activePaths.length || transientPaths.length) ? (
+            {legend && (legendRows.length || relationRows.length || activePaths.length || transientPaths.length) ? (
               <Panel position="top-right" className="as-legend">
                 {legendRows.length ? (
                   <>
@@ -6589,8 +6927,22 @@ function StudioInner({
                     ) : null}
                   </>
                 ) : null}
+                {relationRows.length ? (
+                  <div className={legendRows.length ? "as-legend__section" : undefined} role="list" aria-label="Relationships">
+                    <p className="as-legend__title">Relationships</p>
+                    {relationRows.map((row) => (
+                      <div key={row.id} className="as-legend__row" role="listitem" title={row.def.description || undefined}>
+                        <RelationSwatch def={row.def} />
+                        {row.def.label}
+                        {relationRows.length > 1 || row.count > 1 ? (
+                          <span className="as-legend__count">{row.count}</span>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 {activePaths.length ? (
-                  <div className={legendRows.length ? "as-legend__section" : undefined}>
+                  <div className={legendRows.length || relationRows.length ? "as-legend__section" : undefined}>
                     <p className="as-legend__title">Paths</p>
                     {activePaths.map((path) => (
                       <div key={path.id} className="as-legend__row">
@@ -6604,7 +6956,7 @@ function StudioInner({
                   </div>
                 ) : null}
                 {transientPaths.length ? (
-                  <div className={legendRows.length || activePaths.length ? "as-legend__section" : undefined}>
+                  <div className={legendRows.length || relationRows.length || activePaths.length ? "as-legend__section" : undefined}>
                     <p className="as-legend__title">Routes</p>
                     {transientPaths.map((path) => (
                       <div key={path.id} className="as-legend__row">
@@ -6932,9 +7284,10 @@ function StudioInner({
                   filename={filename}
                   pins={pins.filter((p): p is FieldRef => !!p.fieldId)}
                   onTogglePin={togglePin}
-                  onNavigate={(id) => {
+                  onNavigate={(id, via) => {
                     setFieldGrid(null);
-                    navigateToNode(id);
+                    if (via) followReference(via.from, via.target);
+                    else navigateToNode(id);
                   }}
                   onDownload={download}
                   onClose={() => setFieldGrid(null)}
@@ -6970,6 +7323,11 @@ function StudioInner({
                 // Rows are the source folder's when the document came from one.
                 const editable = !readOnly && !template.meta?.folderFormat && !!record?.row;
                 const targets = (record?.fk ?? []).filter((t) => t.nodeId);
+                // What points at this row — a key's other direction.
+                const referencers = referencesTo(template, ref);
+                const referencingTables = [...new Set(referencers.map((r) => r.nodeId))].map(
+                  (id) => template.nodes.find((n) => n.id === id)?.label ?? id,
+                );
                 return (
                   <>
                     <div className="as-context__caption">{fieldLabel(ref)}</div>
@@ -6985,10 +7343,18 @@ function StudioInner({
                         key={t.nodeId}
                         label={targets.length > 1 ? `Follow reference → ${t.label}` : "Follow reference"}
                         hint={targets.length > 1 ? undefined : t.label}
-                        onPick={() => navigateToNode(t.nodeId!)}
+                        onPick={() => followReference(ref, t)}
                         close={closeContext}
                       />
                     ))}
+                    {referencers.length ? (
+                      <ContextItem
+                        label={`Show references (${referencers.length})`}
+                        hint={`${referencingTables.slice(0, 3).join(", ")}${referencingTables.length > 3 ? "…" : ""}`}
+                        onPick={() => showReferences(ref)}
+                        close={closeContext}
+                      />
+                    ) : null}
                     {editable ? <ContextItem label="Edit…" onPick={() => setEditField(ref)} close={closeContext} /> : null}
                     <hr className="as-context__rule" />
                     <ContextItem label="Copy name" onPick={() => void copyText(record?.name ?? ref.fieldId)} close={closeContext} />
@@ -7041,6 +7407,19 @@ function StudioInner({
                     close={closeContext}
                   />
                 ) : null}
+                {contextMenu.kind === "node" && selectedFieldCount
+                  ? (() => {
+                      const count = referencesTo(template, { nodeId: selectedNodeIds[0]! }).length;
+                      return count ? (
+                        <ContextItem
+                          label={`Show references (${count})`}
+                          hint="Every foreign key pointing here"
+                          onPick={() => showReferences({ nodeId: selectedNodeIds[0]! })}
+                          close={closeContext}
+                        />
+                      ) : null;
+                    })()
+                  : null}
                 {contextMenu.kind !== "edge" ? (
                   <>
                     <ContextItem
@@ -7913,6 +8292,7 @@ function NodeInspector({
   const providerOn = (p: string) => datas.every((d) => !d.providers?.length || d.providers.includes(p));
 
   const kind = read((d) => d.kind as string);
+  const linked = datas.filter((d) => !!d.url);
   const status = read((d) => d.status ?? "active");
   const icon = read((d) => d.icon as string);
   const fontSize = read((d) => d.fontSize ?? DEFAULT_FONT_SIZE);
@@ -8290,6 +8670,20 @@ function NodeInspector({
             </a>
           ) : null}
         </InspectorSection>
+      ) : !single && noAnnotations && linked.length ? (
+        // A link names ONE place, so a selection gets no input for it — but
+        // it can drop the ones it has, which is what a hundred imported
+        // tables all wearing their source's ↗ actually want.
+        <InspectorSection caption="Link">
+          <button
+            type="button"
+            className="as-btn"
+            onClick={() => patch({ url: undefined })}
+            title={`${linked.length} of ${ids.length} selected nodes carry a ↗ link — remove them all; ⌘Z restores them`}
+          >
+            Clear link{linked.length > 1 ? "s" : ""} ({linked.length})
+          </button>
+        </InspectorSection>
       ) : null}
 
       {lock ? (
@@ -8510,9 +8904,11 @@ function EdgeInspector({
   // or a line already carries end labels. Across a selection, "any" of them.
   const anyEndRows = edges.some((e) => fieldsOf(e.source).length || fieldsOf(e.target).length);
   const anyEndLabels = datas.some((d) => d.startLabel || d.endLabel);
+  const anyRelation = datas.some((d) => d.relation);
   const routed = edges.filter((e) => (e.data as DiagramEdgeData | undefined)?.points?.length);
 
   const tech = read((d) => d.tech ?? "");
+  const relation = read((d) => d.relation ?? "");
   const direction = read((d) => d.direction ?? "forward");
   const startHead = read((d) => d.startHead ?? "default");
   const endHead = read((d) => d.endHead ?? "default");
@@ -8676,8 +9072,34 @@ function EdgeInspector({
       {/* Cardinality and the rows each end attaches to. Offered where it means
           something — either endpoint has rows, or this edge already carries
           end labels — rather than on every architecture connection. */}
-      {anyEndRows || anyEndLabels ? (
+      {anyEndRows || anyEndLabels || anyRelation ? (
         <InspectorSection caption="Ends">
+          {/* What kind of relationship the line is. Choosing one dresses the
+              line the way the legend shows that kind — style, colour, end
+              glyphs, cardinality — as one edit; clearing it leaves the
+              dressing alone, so a line keeps looking as it did. */}
+          <select
+            className="as-select"
+            value={relation.mixed ? "" : relation.value}
+            onChange={(event) => {
+              const id = event.target.value;
+              patch(id ? { relation: id, ...relationDressing(relationDef(registry, id)) } : { relation: undefined });
+            }}
+            aria-label="Relationship kind"
+            title="What kind of relationship this is — picking one dresses the line to match"
+          >
+            <MixedOption when={relation.mixed} />
+            <option value="">relation: none</option>
+            {registry.relationOrder.map((id) => (
+              <option key={id} value={id} title={registry.relationKinds[id]?.description}>
+                {registry.relationKinds[id]?.label ?? id}
+              </option>
+            ))}
+            {/* A kind the document names that nobody registered stays pickable rather than reading as "none". */}
+            {!relation.mixed && relation.value && !registry.relationKinds[relation.value] ? (
+              <option value={relation.value}>{relationDef(registry, relation.value).label}</option>
+            ) : null}
+          </select>
           <input
             className="as-input as-inspector__end"
             value={startLabel.mixed ? "" : startLabel.value}

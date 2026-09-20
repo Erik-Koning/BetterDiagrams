@@ -1,0 +1,29 @@
+{
+  "band": "ops",
+  "folder": "ops",
+  "description": "Service operations",
+  "entityCount": 3,
+  "entities": [
+    {
+      "folder": "ops/support/case",
+      "band": "ops",
+      "name": "case",
+      "label": "Case",
+      "kind": "standard"
+    },
+    {
+      "folder": "ops/support/case/case-comment",
+      "band": "ops",
+      "name": "case_comment",
+      "label": "Case Comment",
+      "kind": "standard"
+    },
+    {
+      "folder": "ops/task",
+      "band": "ops",
+      "name": "task",
+      "label": "Task",
+      "kind": "standard"
+    }
+  ]
+}

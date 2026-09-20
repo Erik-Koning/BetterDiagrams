@@ -1,13 +1,12 @@
 {
   "$schemaVersion": 1,
   "$generatedAt": "2026-09-17T00:00:00Z",
-  "$source": "https://bakery.my.salesforce.com",
+  "$source": "https://bakery.example",
   "folder": "people",
-  "object": {
-    "apiName": "Person__c",
+  "entity": {
+    "name": "person",
     "label": "Person",
     "labelPlural": "Persons",
-    "keyPrefix": "a02",
     "kind": "custom",
     "custom": true,
     "namespace": null,
@@ -21,78 +20,73 @@
     "diagramName": "Person",
     "diagramType": "custom",
     "businessLine": "Bakery",
-    "source": "describe",
+    "source": "export",
     "note": ""
   },
   "recordTypes": [],
   "fieldSummary": {
     "total": 8,
-    "visibleToIntegrationUser": 7,
-    "hiddenFromIntegrationUser": 1
+    "visible": 7,
+    "hidden": 1
   },
   "fields": [
     {
-      "name": "Id",
+      "name": "id",
       "label": "Record ID",
       "type": "id",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "Name",
+      "name": "name",
       "label": "Full name",
       "type": "string",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
       "nameField": true,
       "length": 255
     },
     {
-      "name": "Email__c",
+      "name": "email",
       "label": "Email",
       "type": "email",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "Phone__c",
+      "name": "phone",
       "label": "Phone",
       "type": "phone",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "Role__c",
+      "name": "role",
       "label": "Role",
-      "type": "picklist",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "type": "enum",
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "picklistValues": [
+      "enumValues": [
         {
           "value": "Chef",
           "label": "Chef",
@@ -116,53 +110,50 @@
       ]
     },
     {
-      "name": "Building__c",
+      "name": "building_id",
       "label": "Home building",
       "type": "reference",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "displayType": "Reference",
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "toolingType": "Lookup",
       "relationship": {
-        "kind": "lookup",
+        "kind": "reference",
         "referenceTo": [
-          "Building__c"
+          "building"
         ],
-        "relationshipName": "People"
+        "relationshipName": "people"
       }
     },
     {
-      "name": "Notes__c",
+      "name": "notes",
       "label": "Notes",
       "type": "textarea",
-      "nillable": true,
-      "visibleToIntegrationUser": false,
+      "nullable": true,
+      "visible": false,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "OwnerId",
+      "name": "owner_id",
       "label": "Owner ID",
       "type": "reference",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "displayType": "Reference",
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "toolingType": "Lookup",
       "relationship": {
-        "kind": "lookup",
+        "kind": "reference",
         "referenceTo": [
-          "User"
+          "user"
         ],
         "relationshipName": null
       }
@@ -170,42 +161,39 @@
   ],
   "foreignKeys": [
     {
-      "field": "Building__c",
+      "field": "building_id",
       "label": "Home building",
-      "kind": "lookup",
+      "kind": "reference",
       "referenceTo": [
-        "Building__c"
+        "building"
       ],
-      "relationshipName": "People",
+      "relationshipName": "people",
       "required": false,
       "cascadeDelete": false,
       "deleteConstraint": "SetNull",
-      "visibleToIntegrationUser": true,
+      "visible": true,
       "targetFolders": [
         "buildings"
       ]
     },
     {
-      "field": "OwnerId",
+      "field": "owner_id",
       "label": "Owner ID",
-      "kind": "lookup",
+      "kind": "reference",
       "referenceTo": [
-        "User"
+        "user"
       ],
       "relationshipName": null,
       "required": false,
       "cascadeDelete": false,
       "deleteConstraint": "SetNull",
-      "visibleToIntegrationUser": true,
+      "visible": true,
       "targetFolders": []
     }
   ],
   "referencedBy": [],
   "validationRules": [],
-  "routes": {
-    "lightningList": "/lightning/o/Person__c/list",
-    "describe": "/services/data/v60.0/sobjects/Person__c/describe"
-  },
+  "url": "/entities/person",
   "notes": [
     "Everyone who works for or buys from the bakery.",
     "Record types split chefs from account holders."

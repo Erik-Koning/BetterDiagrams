@@ -1,0 +1,23 @@
+{
+  "$schemaVersion": 1,
+  "$generatedAt": "2026-09-01T00:00:00Z",
+  "$source": {
+    "system": "example",
+    "url": "https://example.test",
+    "version": "1"
+  },
+  "title": "Example Data Model",
+  "bands": [
+    {
+      "band": "core",
+      "folder": "core",
+      "description": "Customer master"
+    },
+    {
+      "band": "ops",
+      "folder": "ops",
+      "description": "Service operations"
+    }
+  ],
+  "crossCutting": "metadata"
+}

@@ -4,8 +4,8 @@
  *
  *   bd-folder import <dir> [--out template.json] [--fields keys|visible|all]
  *                          [--edges business|all] [--poly collapse|in-model|none]
- *                          [--dialect salesforce-datamodel|generic]
- *   bd-folder export <template.json> <dir> [--mode sidecar|full] [--write-object-yaml]
+ *                          [--dialect datamodel|generic]
+ *   bd-folder export <template.json> <dir> [--mode sidecar|full] [--write-entity-yaml]
  *   bd-folder check <dir>      import, re-export the sidecar, diff against what
  *                              is on disk; exit 1 on drift
  *
@@ -53,7 +53,7 @@ const usage = () => {
     [
       "usage:",
       "  bd-folder import <dir> [--out template.json] [--fields keys|visible|all] [--edges business|all] [--poly collapse|in-model|none] [--dialect id]",
-      "  bd-folder export <template.json> <dir> [--mode sidecar|full] [--write-object-yaml]",
+      "  bd-folder export <template.json> <dir> [--mode sidecar|full] [--write-entity-yaml]",
       "  bd-folder check <dir>",
     ].join("\n"),
   );
@@ -105,7 +105,7 @@ if (command === "import") {
   const out = exportFolder(template, {
     ...(mode ? { mode } : {}),
     tree,
-    writeObjectYaml: flags["write-object-yaml"] === true,
+    writeEntityYaml: flags["write-entity-yaml"] === true,
   });
   await writeFileMap(resolve(dir), out.files, out.deletions);
   console.error(`bd-folder: wrote ${out.files.size} file${out.files.size === 1 ? "" : "s"} (${out.mode}, ${out.dialect}) to ${dir}`);

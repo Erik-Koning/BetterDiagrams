@@ -1808,6 +1808,32 @@ describe("ArchitectureStudio", () => {
     expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
   });
 
+  it("hides the ↗ link buttons via the View menu, without touching the document", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const doc: DiagramTemplate = {
+      version: 1,
+      nodes: [
+        { id: "a", label: "Orders", kind: "service", icon: "box", description: "", parentId: null, url: "https://example.com/orders", x: 0, y: 0, w: 170, h: 76 },
+        { id: "b", label: "Plain", kind: "service", icon: "box", description: "", parentId: null, x: 300, y: 0, w: 170, h: 76 },
+      ],
+      edges: [],
+    };
+    const { container } = mount(<ArchitectureStudio defaultValue={doc} onChange={onChange} />);
+    expect(container.querySelectorAll(".as-node__link")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: /^View/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Show link buttons" }));
+    expect(container.querySelectorAll(".as-node__link")).toHaveLength(0);
+    // A view preference: the url is still in the document, and there is nothing to undo.
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+
+    // The toggle stays offered while it is off, so it can be turned back on.
+    await user.click(screen.getByRole("checkbox", { name: "Show link buttons" }));
+    expect(container.querySelectorAll(".as-node__link")).toHaveLength(1);
+  });
+
   it("sets a node's owning team from the inspector", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -3441,6 +3467,22 @@ describe("drill-down (C4 levels)", () => {
     );
   });
 
+  it("a double-click on the drill badge lands on the level once, not three times", async () => {
+    const ref = { current: null as StudioHandle | null };
+    mount(<ArchitectureStudio ref={ref} defaultValue={DRILL_DOC} />);
+    const badge = screen.getByRole("button", { name: "Open Payments Core — 3 inside" });
+    // What a browser sends for a double-click on the badge.
+    fireEvent.click(badge);
+    fireEvent.click(badge);
+    fireEvent.doubleClick(badge);
+    await waitFor(() => expect(ref.current!.getFocus()).toEqual(["pay"]), { timeout: 2000 });
+    // Give any queued swap its turn, then the stack must still be one deep.
+    await new Promise((r) => setTimeout(r, 400));
+    expect(ref.current!.getFocus()).toEqual(["pay"]);
+    const bar = screen.getByRole("navigation", { name: "Diagram level" });
+    expect(within(bar).getAllByText("Payments Core")).toHaveLength(1);
+  });
+
   it("readOnly can drill into detail but not into empty leaves", async () => {
     mount(<ArchitectureStudio defaultValue={DRILL_DOC} readOnly />);
     await drillIntoLabel("Payments Core");
@@ -3533,7 +3575,7 @@ describe("host access to view state (ref + callbacks)", () => {
     };
 
     // Nothing readable at all, and a tree a dialect claims but that holds no
-    // nodes (a Salesforce root manifest with no band folders): both leave
+    // nodes (a data-model root manifest with no band folders): both leave
     // the canvas alone and say why.
     await pickAndReplace([["shots/photo.png", "…"]]);
     await waitFor(() => expect(screen.getByText(/no JSON, YAML or Markdown files/)).toBeInTheDocument());
@@ -3768,5 +3810,153 @@ describe("Tidy respects the level you are looking at", () => {
     });
     // …and nothing on the visible canvas moved.
     expect(emitted.nodes.find((n) => n.id === "web")).toMatchObject({ x: 100, y: 100 });
+  });
+});
+
+describe("Arrange modes", () => {
+  // a→b→c plus a→c: left to right puts all three on one spine, so the long
+  // line runs through b; untangling gives it a lane of its own.
+  const DOC: DiagramTemplate = validateTemplate({
+    version: 1,
+    meta: { title: "Chain" },
+    nodes: [
+      { id: "a", label: "Alpha", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76 },
+      { id: "b", label: "Bravo", kind: "service", icon: "box", description: "", parentId: null, x: 260, y: 0, w: 170, h: 76 },
+      { id: "c", label: "Charlie", kind: "service", icon: "box", description: "", parentId: null, x: 520, y: 0, w: 170, h: 76 },
+    ],
+    edges: [
+      { id: "ab", source: "a", target: "b", label: "", style: "solid", color: "slate" },
+      { id: "bc", source: "b", target: "c", label: "", style: "solid", color: "slate" },
+      { id: "ac", source: "a", target: "c", label: "", style: "solid", color: "slate" },
+    ],
+  });
+
+  it("picking a mode re-arranges and stores the choice, and one undo takes both back", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={DOC} onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    expect(screen.getByRole("radio", { name: "Left to right" })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: "Untangle lines" }));
+    await screen.findByText(/Untangled the lines/);
+
+    const untangled = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(untangled.settings).toEqual({ arrange: "untangle" });
+    // Bravo left the spine the long line runs along.
+    const b = untangled.nodes.find((n) => n.id === "b")!;
+    const a = untangled.nodes.find((n) => n.id === "a")!;
+    expect(b.y).not.toBe(a.y);
+
+    // The menu closed on the pick, and re-opening it shows the stored mode.
+    expect(screen.queryByRole("radio", { name: "Untangle lines" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    expect(screen.getByRole("radio", { name: "Untangle lines" })).toBeChecked();
+    await user.keyboard("{Escape}");
+
+    // One undo: the boxes are back where they were AND the mode is forgotten.
+    const before = onChange.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(onChange.mock.calls.length).toBeGreaterThan(before));
+    const restored = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(restored.settings).toBeUndefined();
+    expect(restored.nodes.map((n) => [n.id, n.x, n.y])).toEqual(DOC.nodes.map((n) => [n.id, n.x, n.y]));
+    // …and redo brings both back.
+    await user.click(screen.getByRole("button", { name: "Redo" }));
+    await waitFor(() =>
+      expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toEqual({ arrange: "untangle" }),
+    );
+  });
+
+  it("a later Tidy keeps arranging the way the document says", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(
+      <ArchitectureStudio
+        defaultValue={{ ...DOC, settings: { arrange: "untangle" } }}
+        onChange={onChange}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    expect(screen.getByRole("radio", { name: "Untangle lines" })).toBeChecked();
+    expect(screen.getByRole("menuitem", { name: /^Tidy/ })).toHaveTextContent("untangling the lines");
+    await user.click(screen.getByRole("menuitem", { name: /^Tidy/ }));
+    await screen.findByText("Tidied");
+    const tidied = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(tidied.settings).toEqual({ arrange: "untangle" });
+    const b = tidied.nodes.find((n) => n.id === "b")!;
+    const a = tidied.nodes.find((n) => n.id === "a")!;
+    expect(b.y).not.toBe(a.y);
+  });
+});
+
+describe("UML notation and structure", () => {
+  const table = (id: string, x: number, fields: unknown[]) => ({
+    id, label: id, kind: "table", icon: "none", description: "", parentId: null, x, y: 0, w: 230, h: 96, fields,
+  });
+  const MODEL: DiagramTemplate = validateTemplate({
+    version: 1,
+    meta: { title: "Shop" },
+    nodes: [
+      table("users", 0, [{ id: "id", name: "id", type: "uuid", key: "pk" }]),
+      table("products", 600, [{ id: "id", name: "id", type: "uuid", key: "pk" }]),
+      table("order_items", 300, [
+        { id: "user_id", name: "user_id", type: "uuid", key: "pfk" },
+        { id: "product_id", name: "product_id", type: "uuid", key: "pfk" },
+      ]),
+    ],
+    edges: [
+      { id: "j1", source: "order_items", target: "users", label: "", style: "dashed", color: "slate", startField: "user_id", endField: "id", relation: "reference", startLabel: "*", endLabel: "1" },
+      { id: "j2", source: "order_items", target: "products", label: "", style: "dashed", color: "slate", startField: "product_id", endField: "id", relation: "reference", startLabel: "*", endLabel: "1" },
+    ],
+  });
+
+  it("the notation is a document setting picked in the View menu, and one undo forgets it", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={MODEL} onChange={onChange} />);
+    await user.click(screen.getByRole("button", { name: "View" }));
+    expect(screen.getByRole("radio", { name: "Symbols and numbers" })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: "UML numbers" }));
+    await screen.findByText(/UML notation/);
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toEqual({ notation: "uml" });
+    expect(screen.getByRole("radio", { name: "UML numbers" })).toBeChecked();
+    await user.keyboard("{Escape}");
+    const before = onChange.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(onChange.mock.calls.length).toBeGreaterThan(before));
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toBeUndefined();
+  });
+
+  it("Insert offers an enumeration — a record whose rows are its values", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={MODEL} onChange={onChange} />);
+    await fromMenu(user, "Insert", /^Enumeration/);
+    await waitFor(() =>
+      expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).nodes.some((n) => n.kind === "enum")).toBe(true),
+    );
+  });
+
+  it("Arrange folds a junction table into one many-to-many line, and undo brings the table back", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={MODEL} onChange={onChange} />);
+    await fromMenu(user, "Arrange", /^Collapse junction tables \(1\)/);
+    await screen.findByText(/1 junction table folded/);
+    const folded = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(folded.nodes.map((n) => n.id).sort()).toEqual(["products", "users"]);
+    expect(folded.edges).toHaveLength(1);
+    expect(folded.edges[0]).toMatchObject({ source: "users", target: "products", label: "order_items", startLabel: "*", endLabel: "*" });
+    // Nothing left to fold: the item disables itself.
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    expect(screen.getByRole("menuitem", { name: /^Collapse junction tables/ })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    const before = onChange.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(onChange.mock.calls.length).toBeGreaterThan(before));
+    const restored = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(restored.nodes.map((n) => n.id).sort()).toEqual(["order_items", "products", "users"]);
+    expect(restored.edges.map((e) => e.id).sort()).toEqual(["j1", "j2"]);
   });
 });

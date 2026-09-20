@@ -1,0 +1,23 @@
+{
+  "folder": "people/record-types/chef",
+  "kind": "record-type",
+  "parentEntity": {
+    "name": "person",
+    "label": "Person",
+    "folder": "people",
+    "schema": "../../schema.json"
+  },
+  "recordType": {
+    "key": "chef",
+    "name": "Chef",
+    "id": "rt-chef",
+    "active": true,
+    "visible": true,
+    "description": "A chef who owns recipes."
+  },
+  "curated": {
+    "diagramName": "Chef",
+    "diagramType": "record-type"
+  },
+  "notes": []
+}

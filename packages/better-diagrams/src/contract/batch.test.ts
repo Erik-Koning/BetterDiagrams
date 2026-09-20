@@ -672,7 +672,7 @@ describe("settings.groupContents — the document-wide fold", () => {
     expect("settings" in validateTemplate({ nodes: [], settings: "hide" })).toBe(false);
     // Strict, so the JSON editor can lint it.
     expect(TEMPLATE_KEYS).toContain("settings");
-    expect(SETTINGS_KEYS).toEqual(["groupContents"]);
+    expect(SETTINGS_KEYS).toEqual(["groupContents", "arrange", "notation"]);
   });
 
   it("folds every group with contents, never an empty frame", () => {

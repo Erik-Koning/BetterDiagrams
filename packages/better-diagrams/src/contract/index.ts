@@ -33,6 +33,8 @@ export {
   NODE_STATUSES,
   VERSION_TAG_POSITIONS,
   GROUP_CONTENTS,
+  ARRANGE_MODES,
+  NOTATIONS,
   EDGE_COLOR_HEX,
   EDGE_DASH,
   KIND_DEFAULT_SIZE,
@@ -61,14 +63,17 @@ export {
   FILE_LINK_PREFIX,
   toReactFlow,
   fromReactFlow,
-  // Data-model rows: the metrics, the row→anchor maths, and the resolver both
-  // the canvas and the exporters route field-anchored edges through.
+  // Data-model rows: the metrics, the row→anchor maths, and the resolvers
+  // both the canvas and the exporters route field-anchored edges through —
+  // one edge's rows, and the document-wide pass that un-crosses them.
   FIELD_ROW_H,
   MAX_NODE_FIELDS,
   fieldListTop,
   fieldsBoxHeight,
   fieldRowT,
   fieldAnchors,
+  uncrossFieldAnchors,
+  withEndSlots,
   // Node text layout and container frame styling — the vocabularies a host
   // building its own inspector needs, plus the height a wrapped label demands.
   NODE_TEXT_ALIGNS,
@@ -96,12 +101,16 @@ export type {
   NodeField,
   FieldKey,
   FieldAnchorNode,
+  UncrossNode,
+  EndSlots,
   NodeStatus,
   NodeTextAlign,
   NodeTextVAlign,
   NodeOutline,
   VersionTagPosition,
   GroupContents,
+  ArrangeMode,
+  Notation,
   DiagramNode,
   DiagramEdge,
   DiagramTemplate,
@@ -125,16 +134,29 @@ export type {
 export { ZONE_SHAPES, ZONE_OUTLINES } from "./zones";
 export type { DiagramZone, ZoneOutline, ZoneShape, ZonePoint } from "./zones";
 
+// ── Relationship kinds (what a data model's lines mean, and how they dress) ─
+export {
+  RELATION_KINDS,
+  RELATION_KIND_ORDER,
+  FALLBACK_RELATION,
+  relationDressing,
+  resolveRelationKinds,
+} from "./relations";
+export type { RelationKindDef } from "./relations";
+export { junctionTables, collapseJunctions } from "./junctions";
+export type { JunctionTable } from "./junctions";
+
 // ── Fields (rows plus what the data bag knows about them) ───────────────────
 export {
   fieldKey,
   sameFieldRef,
   edgeFieldIds,
   dataFields,
-  apiNameIndex,
+  nameIndex,
   fieldRecords,
   fieldOutEdges,
   fieldInEdges,
+  referencedKey,
   hasField,
   buildFieldIndex,
   searchFields,
@@ -206,10 +228,10 @@ export {
   buildFolderTree,
   treeFiles,
   genericDialect,
-  salesforceDialect,
-  createSalesforceDialect,
-  SALESFORCE_KINDS,
-  salesforceRegistry,
+  dataModelDialect,
+  createDataModelDialect,
+  DATAMODEL_KINDS,
+  dataModelRegistry,
   SIDECAR_DIR,
   LAYOUT_FILE,
   OVERRIDES_FILE,
@@ -238,7 +260,11 @@ export type {
   ImportWarningCode,
   NodeBaseline,
   NodeOverride,
-  SalesforceDialectOptions,
+  DataModelDialectOptions,
+  EntitySchema,
+  EntityField,
+  ForeignKey,
+  RelationshipKind,
 } from "./folder";
 
 // ── Auto-layout ──────────────────────────────────────────────────────────────

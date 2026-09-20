@@ -62,9 +62,12 @@ export function buildPathGlowIndex(
   const active = new Set(activeIds);
   const index: PathGlowIndex = { nodes: new Map(), edges: new Map() };
   let any = false;
+  /** Each lit path's hop count, in lighting order — what picks the one that moves. */
+  const lit: Array<{ id: string; steps: number; bright: boolean }> = [];
   const light = (path: DiagramPath, color: EdgeColor, bright: boolean) => {
     const resolved = resolvePath(template, path);
     const steps = resolved.steps.length;
+    if (steps) lit.push({ id: path.id, steps, bright });
     for (const step of resolved.steps) {
       const glow: PathGlow = {
         pathId: path.id,
@@ -85,7 +88,21 @@ export function buildPathGlowIndex(
     if (active.has(path.id)) light(path, pathColor(path, i), false);
   });
   for (const path of extra) light(path, path.color ?? PATH_COLOR_CYCLE[0], opts.bright === true);
-  return any ? index : null;
+  if (!any) return null;
+  // One path moves: the route singled out, else the shortest lit one (the
+  // first of equals). Several pulses at once were a canvas full of blinking
+  // and said nothing about which walk to follow.
+  const moving =
+    lit.find((p) => p.bright) ??
+    lit.reduce<{ id: string; steps: number } | null>((best, p) => (best && best.steps <= p.steps ? best : p), null);
+  if (moving) {
+    for (const bucket of [index.nodes, index.edges]) {
+      for (const glows of bucket.values()) {
+        for (const glow of glows) if (glow.pathId === moving.id) glow.animate = true;
+      }
+    }
+  }
+  return index;
 }
 
 /** The ink a glow paints with: the route colour when bright, else its palette colour. */

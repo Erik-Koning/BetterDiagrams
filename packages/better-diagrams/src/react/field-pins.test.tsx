@@ -126,6 +126,37 @@ describe("field rows and pins", () => {
     await waitFor(() => expect(onSelectionChange).toHaveBeenLastCalledWith({ nodes: ["users"], edges: [], zones: [] }));
   });
 
+  it("Follow reference marks both halves of the join — the foreign key and the key it points at", async () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={MODEL} />);
+    const marked = (nodeId: string, fieldId: string) => row(container, nodeId, fieldId).classList.contains("as-node__field--match");
+    fireEvent.click(row(container, "orders", "user_id"));
+    const menu = await screen.findByRole("menu", { name: "Actions" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Follow reference/ }));
+    await waitFor(() => expect(marked("users", "id")).toBe(true));
+    expect(marked("orders", "user_id")).toBe(true);
+    expect(marked("users", "email")).toBe(false);
+    // Either table of the pair keeps the marks; anything else lets them go.
+    fireEvent.click(container.querySelector('.react-flow__node[data-id="orders"]')!);
+    await waitFor(() => expect(container.querySelector('.react-flow__node[data-id="orders"]')!.classList.contains("selected")).toBe(true));
+    expect(marked("users", "id")).toBe(true);
+    expect(marked("orders", "user_id")).toBe(true);
+    fireEvent.click(row(container, "items", "id"));
+    await waitFor(() => expect(marked("users", "id")).toBe(false));
+    expect(marked("orders", "user_id")).toBe(false);
+  });
+
+  it("the grid's Follow reference marks the same pair", async () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={MODEL} />);
+    const marked = (nodeId: string, fieldId: string) => row(container, nodeId, fieldId).classList.contains("as-node__field--match");
+    fireEvent.click(row(container, "orders", "user_id"));
+    fireEvent.click(within(await screen.findByRole("menu", { name: "Actions" })).getByRole("menuitem", { name: "View all fields" }));
+    const grid = await screen.findByRole("dialog");
+    fireEvent.click(within(grid).getByRole("button", { name: "Go to Users" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(marked("users", "id")).toBe(true));
+    expect(marked("orders", "user_id")).toBe(true);
+  });
+
   it("navigateToField from the ref highlights the row; the highlight clears on a new selection", async () => {
     const ref = { current: null as StudioHandle | null };
     const { container } = mount(<ArchitectureStudio ref={ref} defaultValue={MODEL} />);
@@ -224,6 +255,73 @@ describe("paths between pins", () => {
     expect(within(strip).getByRole("button", { name: "Show paths" })).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("hides the key ranking with one route — its hop strip already names the keys", async () => {
+    const ref = { current: null as StudioHandle | null };
+    mount(<ArchitectureStudio ref={ref} defaultValue={MODEL} />);
+    ref.current!.setPins([{ nodeId: "items", fieldId: "order_id" }, { nodeId: "users", fieldId: "id" }]);
+    const strip = await screen.findByRole("toolbar", { name: "Pinned fields" });
+    fireEvent.click(within(strip).getByRole("button", { name: "Show paths" }));
+    const panel = await screen.findByRole("region", { name: "Paths between pinned fields" });
+    expect(within(panel).getByRole("region", { name: "Routes" }).querySelectorAll(".as-routes__row")).toHaveLength(1);
+    expect(within(panel).queryByRole("region", { name: "Keys most routes use" })).not.toBeInTheDocument();
+  });
+
+  it("ranks the keys across routes; hover previews the routes through one, click keeps them, never pins", async () => {
+    // comment → case → account, and comment → case → contact → account: two
+    // routes, ParentId on both, Case.AccountId on the short one alone.
+    const t = (id: string, label: string, fields: string[], x: number) =>
+      table(id, label, fields.map((f) => ({ id: f, name: f })), x);
+    const fk = (id: string, source: string, target: string, field: string) =>
+      ({ id, source, target, label: "", style: "solid", color: "slate", startField: field, endField: "Id" });
+    const DIAMOND = validateTemplate({
+      version: 1,
+      nodes: [t("comment", "Comment", ["Id", "ParentId"], 100), t("case", "Case", ["Id", "AccountId", "ContactId"], 500), t("contact", "Contact", ["Id", "AccountId"], 900), t("account", "Account", ["Id"], 1300)],
+      edges: [fk("m-k", "comment", "case", "ParentId"), fk("k-a", "case", "account", "AccountId"), fk("k-c", "case", "contact", "ContactId"), fk("c-a", "contact", "account", "AccountId")],
+    });
+    const ref = { current: null as StudioHandle | null };
+    const onPinsChange = vi.fn();
+    const { container } = mount(<ArchitectureStudio ref={ref} defaultValue={DIAMOND} onPinsChange={onPinsChange} />);
+    ref.current!.setPins([{ nodeId: "comment", fieldId: "ParentId" }, { nodeId: "account", fieldId: "Id" }]);
+    const strip = await screen.findByRole("toolbar", { name: "Pinned fields" });
+    fireEvent.click(within(strip).getByRole("button", { name: "Show paths" }));
+    const panel = await screen.findByRole("region", { name: "Paths between pinned fields" });
+    expect(within(panel).getByRole("region", { name: "Routes" }).querySelectorAll(".as-routes__row")).toHaveLength(2);
+    const keys = within(panel).getByRole("region", { name: "Keys most routes use" });
+    expect(within(keys).getByRole("button", { name: /Comment · ParentId/ })).toHaveTextContent("2 of 2");
+    const caseKey = within(keys).getByRole("button", { name: /Case · AccountId/ });
+    expect(caseKey).toHaveTextContent("1 of 2");
+    // Both routes lit: contact is on the long one.
+    await waitFor(() => expect(nodeEl(container, "contact").classList.contains("as-path-node")).toBe(true));
+
+    // Hover: only the short route, through Case.AccountId, stays lit.
+    fireEvent.mouseEnter(caseKey);
+    await waitFor(() => expect(nodeEl(container, "contact").classList.contains("as-path-node")).toBe(false));
+    expect(nodeEl(container, "case").classList.contains("as-path-node")).toBe(true);
+    fireEvent.mouseLeave(caseKey);
+    await waitFor(() => expect(nodeEl(container, "contact").classList.contains("as-path-node")).toBe(true));
+
+    // Click keeps it — and adds no pin: the pair view stays.
+    fireEvent.click(caseKey);
+    expect(caseKey).toHaveAttribute("aria-pressed", "true");
+    fireEvent.mouseLeave(caseKey);
+    await waitFor(() => expect(nodeEl(container, "contact").classList.contains("as-path-node")).toBe(false));
+    expect(ref.current!.getPins()).toHaveLength(2);
+    expect(within(panel).getByRole("heading", { name: "Paths between pins" })).toBeInTheDocument();
+
+    // Keeping a route lets the key go, and the other way round.
+    const longRoute = within(panel).getByRole("button", { name: /Comment\.ParentId → Case → Contact → Account\.Id/ });
+    fireEvent.click(longRoute);
+    expect(caseKey).toHaveAttribute("aria-pressed", "false");
+    expect(longRoute).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(caseKey);
+    expect(longRoute).toHaveAttribute("aria-pressed", "false");
+    expect(caseKey).toHaveAttribute("aria-pressed", "true");
+    // Clicked again, it lets go: every route lights.
+    fireEvent.click(caseKey);
+    expect(caseKey).toHaveAttribute("aria-pressed", "false");
+    await waitFor(() => expect(nodeEl(container, "contact").classList.contains("as-path-node")).toBe(true));
+  });
+
   it("three pins dim everything outside the kept set, in either mode", async () => {
     const ref = { current: null as StudioHandle | null };
     const { container } = mount(<ArchitectureStudio ref={ref} defaultValue={MODEL} />);
@@ -281,5 +379,68 @@ describe("table pins and hop keys", () => {
     const menu2 = await screen.findByRole("menu", { name: "Actions" });
     fireEvent.click(await within(menu2).findByRole("menuitem", { name: /Unpin table/ }));
     await waitFor(() => expect(ref.current!.getPins()).toEqual([{ nodeId: "items", fieldId: "order_id" }]));
+  });
+});
+
+describe("show references — a key's other direction", () => {
+  it("marks the key, every foreign-key row pointing at it, and the tables they sit in", async () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={MODEL} />);
+    const marked = (nodeId: string, fieldId: string) => row(container, nodeId, fieldId).classList.contains("as-node__field--match");
+    const card = (nodeId: string) => container.querySelector(`.react-flow__node[data-id="${nodeId}"] .as-node`)!;
+    fireEvent.click(row(container, "users", "id"));
+    const menu = await screen.findByRole("menu", { name: "Actions" });
+    // A key points nowhere, so there is nothing to follow — but something points at it.
+    expect(within(menu).queryByRole("menuitem", { name: /Follow reference/ })).not.toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Show references \(1\)/ }));
+    await waitFor(() => expect(marked("orders", "user_id")).toBe(true));
+    expect(marked("users", "id")).toBe(true);
+    expect(marked("users", "email")).toBe(false);
+    expect(card("orders").classList.contains("as-node--match")).toBe(true);
+    expect(card("users").classList.contains("as-node--match")).toBe(true);
+    expect(card("items").classList.contains("as-node--match")).toBe(false);
+    await screen.findByText("1 reference from 1 table marked");
+  });
+
+  it("is withheld on a key nothing points at", async () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={MODEL} />);
+    fireEvent.click(row(container, "logs", "id"));
+    const menu = await screen.findByRole("menu", { name: "Actions" });
+    expect(within(menu).queryByRole("menuitem", { name: /Show references/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("lifting the marks", () => {
+  const show = async (container: HTMLElement) => {
+    fireEvent.click(row(container, "users", "id"));
+    const menu = await screen.findByRole("menu", { name: "Actions" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Show references/ }));
+    await waitFor(() => expect(row(container, "orders", "user_id").classList.contains("as-node__field--match")).toBe(true));
+  };
+  const card = (container: HTMLElement, nodeId: string) => container.querySelector(`.react-flow__node[data-id="${nodeId}"] .as-node`)!;
+
+  it("every card a shown reference did not touch steps back, and comes forward again with the marks", async () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={MODEL} />);
+    await show(container);
+    expect(card(container, "items").classList.contains("as-node--unmarked")).toBe(true);
+    expect(card(container, "logs").classList.contains("as-node--unmarked")).toBe(true);
+    expect(card(container, "orders").classList.contains("as-node--unmarked")).toBe(false);
+    expect(card(container, "users").classList.contains("as-node--unmarked")).toBe(false);
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(row(container, "orders", "user_id").classList.contains("as-node__field--match")).toBe(false));
+    expect(card(container, "items").classList.contains("as-node--unmarked")).toBe(false);
+    expect(card(container, "users").classList.contains("as-node--match")).toBe(false);
+  });
+
+  it("Escape lifts the marks before it drops the selection", async () => {
+    const onSelectionChange = vi.fn();
+    const { container } = mount(<ArchitectureStudio defaultValue={MODEL} onSelectionChange={onSelectionChange} />);
+    await show(container);
+    // The row click selected Users; the first Escape takes the marks only.
+    await waitFor(() => expect(onSelectionChange).toHaveBeenLastCalledWith({ nodes: ["users"], edges: [], zones: [] }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(row(container, "users", "id").classList.contains("as-node__field--match")).toBe(false));
+    expect(onSelectionChange).toHaveBeenLastCalledWith({ nodes: ["users"], edges: [], zones: [] });
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(onSelectionChange).toHaveBeenLastCalledWith({ nodes: [], edges: [], zones: [] }));
   });
 });

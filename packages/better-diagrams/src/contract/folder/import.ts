@@ -26,7 +26,7 @@ import { validateTemplate } from "../schema";
 import { buildFolderTree, rerootTree } from "./tree";
 import { applyOverrides, readSidecar, sidecarOrphans } from "./sidecar";
 import { genericDialect, applyManifestOrder, type GenericCtx } from "./dialects/generic";
-import { salesforceDialect } from "./dialects/salesforce";
+import { dataModelDialect } from "./dialects/datamodel";
 import type {
   Dialect,
   FileMap,
@@ -41,13 +41,13 @@ import type {
 /**
  * A tree bigger than this opens folded (see `FolderImportOptions.foldGroups`).
  * Forty is about where a root canvas stops being readable at fit-zoom: the
- * example models are far under it, a real org model far over.
+ * example models are far under it, a real system's model far over.
  */
 export const AUTO_FOLD_NODES = 40;
 
 /** Every dialect this build knows, most specific first. */
 export const DIALECTS: readonly Dialect<unknown>[] = [
-  salesforceDialect as Dialect<unknown>,
+  dataModelDialect as Dialect<unknown>,
   genericDialect as Dialect<unknown>,
 ];
 
@@ -222,7 +222,7 @@ export function importFolder(files: FileMap, opts: FolderImportOptions = {}): Fo
   });
   let template = mergeTemplate(content, layout, validate);
 
-  // A big tree laid out flat is unreadable — 137 objects fit-zoom to about 3%.
+  // A big tree laid out flat is unreadable — 137 entities fit-zoom to about 3%.
   // Collapse its TOP-LEVEL containers so it opens as a map of chips to drill
   // into, and lay it out again: `collapsed` is the flag the layout sizes a
   // chip by (`settings.groupContents` is a render-time fold the layout never

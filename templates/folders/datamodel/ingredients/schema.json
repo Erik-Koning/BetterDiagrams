@@ -1,13 +1,12 @@
 {
   "$schemaVersion": 1,
   "$generatedAt": "2026-09-17T00:00:00Z",
-  "$source": "https://bakery.my.salesforce.com",
+  "$source": "https://bakery.example",
   "folder": "ingredients",
-  "object": {
-    "apiName": "Ingredient__c",
+  "entity": {
+    "name": "ingredient",
     "label": "Ingredient",
     "labelPlural": "Ingredients",
-    "keyPrefix": "a04",
     "kind": "custom",
     "custom": true,
     "namespace": null,
@@ -21,54 +20,51 @@
     "diagramName": "Ingredient",
     "diagramType": "custom",
     "businessLine": "Bakery",
-    "source": "describe",
+    "source": "export",
     "note": ""
   },
   "recordTypes": [],
   "fieldSummary": {
     "total": 6,
-    "visibleToIntegrationUser": 6,
-    "hiddenFromIntegrationUser": 0
+    "visible": 6,
+    "hidden": 0
   },
   "fields": [
     {
-      "name": "Id",
+      "name": "id",
       "label": "Record ID",
       "type": "id",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "Name",
+      "name": "name",
       "label": "Ingredient name",
       "type": "string",
-      "nillable": false,
-      "visibleToIntegrationUser": true,
+      "nullable": false,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
       "nameField": true,
       "length": 255
     },
     {
-      "name": "Unit__c",
+      "name": "unit",
       "label": "Unit",
-      "type": "picklist",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "type": "enum",
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
-      "picklistValues": [
+      "enumValues": [
         {
           "value": "g",
           "label": "g",
@@ -97,51 +93,45 @@
       ]
     },
     {
-      "name": "Unit_Cost__c",
+      "name": "unit_cost",
       "label": "Unit Cost",
       "type": "currency",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
       "sortable": true,
-      "source": "describe",
       "precision": 8,
       "scale": 2
     },
     {
-      "name": "Allergen__c",
+      "name": "allergen",
       "label": "Allergen",
       "type": "boolean",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     },
     {
-      "name": "Supplier__c",
+      "name": "supplier",
       "label": "Supplier",
       "type": "string",
-      "nillable": true,
-      "visibleToIntegrationUser": true,
+      "nullable": true,
+      "visible": true,
       "createable": true,
       "updateable": true,
       "filterable": true,
-      "sortable": true,
-      "source": "describe"
+      "sortable": true
     }
   ],
   "foreignKeys": [],
   "referencedBy": [],
   "validationRules": [],
-  "routes": {
-    "lightningList": "/lightning/o/Ingredient__c/list",
-    "describe": "/services/data/v60.0/sobjects/Ingredient__c/describe"
-  },
+  "url": "/entities/ingredient",
   "notes": [
     "Raw materials. Costed per unit for recipe pricing."
   ]

@@ -1,7 +1,7 @@
 /**
  * field-graph.test.ts — routes between FIELDS: `fieldPaths`, the two-tier
  * `between`, and `reachableFrom`, on a hand-built model and on the imported
- * Salesforce fixture.
+ * data-model fixture.
  */
 import { describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
@@ -224,30 +224,30 @@ describe("reachableFrom", () => {
   });
 });
 
-describe("on the imported Salesforce fixture", () => {
+describe("on the imported data-model fixture", () => {
   let template: DiagramTemplate;
   const load = async () => {
     template ??= importFolder(
-      await readFolderToFileMap(fileURLToPath(new URL("./folder/fixtures/sf-datamodel-mini", import.meta.url))),
+      await readFolderToFileMap(fileURLToPath(new URL("./folder/fixtures/datamodel-mini", import.meta.url))),
     ).template;
     return template;
   };
 
-  it("Contact.AccountId → Account.Id is one hop; Case.ContactId → Account.Id is two", async () => {
+  it("contact.account_id → account.id is one hop; case.contact_id → account.id is two", async () => {
     const t = await load();
-    const one = fieldPaths(t, { nodeId: "core/contact", fieldId: "AccountId" }, { nodeId: "core/account", fieldId: "Id" }, U);
-    expect(one.walks[0].edges).toEqual(["core/contact::AccountId::core/account"]);
-    const two = fieldPaths(t, { nodeId: "ops/support/case", fieldId: "ContactId" }, { nodeId: "core/account", fieldId: "Id" }, U);
-    expect(two.walks[0].edges).toEqual(["ops/support/case::ContactId::core/contact", "core/contact::AccountId::core/account"]);
+    const one = fieldPaths(t, { nodeId: "core/contact", fieldId: "account_id" }, { nodeId: "core/account", fieldId: "id" }, U);
+    expect(one.walks[0].edges).toEqual(["core/contact::account_id::core/account"]);
+    const two = fieldPaths(t, { nodeId: "ops/support/case", fieldId: "contact_id" }, { nodeId: "core/account", fieldId: "id" }, U);
+    expect(two.walks[0].edges).toEqual(["ops/support/case::contact_id::core/contact", "core/contact::account_id::core/account"]);
     expect(two.constrained).toEqual({ from: true, to: true });
   });
 
   it("the hierarchy self-loop never advances a walk", async () => {
     const t = await load();
-    const r = fieldPaths(t, { nodeId: "core/account", fieldId: "ParentId" }, { nodeId: "core/account", fieldId: "Id" }, U);
+    const r = fieldPaths(t, { nodeId: "core/account", fieldId: "parent_id" }, { nodeId: "core/account", fieldId: "id" }, U);
     expect(r.walks).toEqual([]);
-    const b = between(t, { nodeId: "core/preference", fieldId: "Account__c" }, { nodeId: "ops/support/case/case-comment", fieldId: "ParentId" }, U);
-    expect(b.onRoutes.edges.has("core/account::ParentId::core/account")).toBe(false);
+    const b = between(t, { nodeId: "core/preference", fieldId: "account_id" }, { nodeId: "ops/support/case/case-comment", fieldId: "parent_id" }, U);
+    expect(b.onRoutes.edges.has("core/account::parent_id::core/account")).toBe(false);
     // Two routes: Account → Case directly, and Account → Contact → Case.
     expect([...b.onRoutes.nodes].sort()).toEqual(
       ["core/account", "core/contact", "core/preference", "ops/support/case", "ops/support/case/case-comment"].sort(),

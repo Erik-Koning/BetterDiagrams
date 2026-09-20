@@ -2,17 +2,18 @@
  * fields.ts — a field as the reader sees it, whatever the document knows.
  *
  * A record node draws its `fields[]` ROWS. The rest of what a field is — its
- * label, the objects a reference points at, whether an integration user may
- * see it, an external-id or unique mark, a formula — and the fields an import
- * chose not to draw at all live in the node's `data` bag (`data.sf.fields`
- * for a Salesforce import; a host may put the same shape under `data.fields`).
+ * label, the entities a reference points at, whether the reader may see it,
+ * an external-id or unique mark, a formula — and the fields an import chose
+ * not to draw at all live in the node's `data` bag (`data.model.fields` for
+ * a data-model import; a host may put the same shape under `data.fields`).
  * This module merges the two into one {@link FieldRecord} per field so the
  * grid, the search and the row menu never read a dialect's internals.
  *
  * It is also the ONE place "an edge is anchored at a field" is defined
  * (`edgeFieldIds`): the row anchors `startField`/`endField` first, and a
- * dialect's own record of the field (`data.sf.field`) when validation had
- * to drop the anchor because the row wasn't drawn.
+ * dialect's own record of the field (`data.model.field`, landing on
+ * `data.model.targetField`) when validation had to drop the anchor because
+ * the row wasn't drawn.
  *
  * Zero dependencies, like every contract module.
  */
@@ -52,7 +53,7 @@ export function edgeKeyOf(edge: {
   return edgeFieldIds({ id: "", source: "", target: "", ...edge }).start;
 }
 
-/** One object a reference points at. `nodeId` absent = outside the document. */
+/** One entity a reference points at. `nodeId` absent = outside the document. */
 export interface FieldTarget {
   label: string;
   nodeId?: string;
@@ -72,9 +73,12 @@ export interface FieldRecord {
   row: boolean;
   /** Empty for anything that isn't a reference. */
   fk: FieldTarget[];
-  visibleToIntegrationUser?: boolean;
+  /** Whether the reading principal may see the field; absent when the source didn't say. */
+  visible?: boolean;
   externalId?: boolean;
   unique?: boolean;
+  /** Computed rather than stored — the row's own flag, or a formula the data carries. */
+  derived?: boolean;
   formula?: string;
 }
 
@@ -105,38 +109,43 @@ export interface DataField {
   name: string;
   label?: string;
   type?: string;
-  toolingType?: string;
-  nillable?: boolean;
+  /** The type as the source shows it, when that reads better than `type`. */
+  displayType?: string;
+  primaryKey?: boolean;
+  nullable?: boolean;
   nameField?: boolean;
   externalId?: boolean;
   unique?: boolean;
   formula?: string;
-  visibleToIntegrationUser?: boolean;
+  visible?: boolean;
   relationship?: { kind?: string; referenceTo?: string[]; relationshipName?: string | null };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v);
 
-const sfOf = (bag: Record<string, unknown> | undefined): Record<string, unknown> | undefined =>
-  isRecord(bag?.sf) ? (bag!.sf as Record<string, unknown>) : undefined;
+const modelOf = (bag: Record<string, unknown> | undefined): Record<string, unknown> | undefined =>
+  isRecord(bag?.model) ? (bag!.model as Record<string, unknown>) : undefined;
 
-/** The field a dialect recorded on an edge, when the row anchor was dropped. */
-function dialectEdgeField(edge: FieldDocEdge): string | undefined {
-  const sf = sfOf(edge.data);
-  return typeof sf?.field === "string" ? sf.field : undefined;
+/** The fields a dialect recorded on an edge, for when the row anchors were dropped. */
+function dialectEdgeFields(edge: FieldDocEdge): { field?: string; targetField?: string } {
+  const m = modelOf(edge.data);
+  return {
+    ...(typeof m?.field === "string" ? { field: m.field } : {}),
+    ...(typeof m?.targetField === "string" ? { targetField: m.targetField } : {}),
+  };
 }
 
 /**
  * Which field each end of an edge is anchored at. The row anchors win; a
  * dialect's own record of the referencing field stands in when the row was
- * not drawn (and its far end is the target's `Id`, the only thing a foreign
- * key ever points at).
+ * not drawn, and its far end is the key the dialect said it lands on — the
+ * target's primary key, for a foreign key.
  */
 export function edgeFieldIds(edge: FieldDocEdge): { start?: string; end?: string } {
-  const recorded = dialectEdgeField(edge);
-  const start = edge.startField ?? recorded;
-  const end = edge.endField ?? (recorded !== undefined ? "Id" : undefined);
+  const recorded = dialectEdgeFields(edge);
+  const start = edge.startField ?? recorded.field;
+  const end = edge.endField ?? recorded.targetField;
   return { ...(start !== undefined ? { start } : {}), ...(end !== undefined ? { end } : {}) };
 }
 
@@ -145,13 +154,14 @@ function coerceDataField(raw: unknown): DataField | null {
   const out: DataField = { name: raw.name };
   if (typeof raw.label === "string") out.label = raw.label;
   if (typeof raw.type === "string") out.type = raw.type;
-  if (typeof raw.toolingType === "string") out.toolingType = raw.toolingType;
-  if (typeof raw.nillable === "boolean") out.nillable = raw.nillable;
+  if (typeof raw.displayType === "string") out.displayType = raw.displayType;
+  if (raw.primaryKey === true) out.primaryKey = true;
+  if (typeof raw.nullable === "boolean") out.nullable = raw.nullable;
   if (raw.nameField === true) out.nameField = true;
   if (raw.externalId === true) out.externalId = true;
   if (raw.unique === true) out.unique = true;
   if (typeof raw.formula === "string") out.formula = raw.formula;
-  if (typeof raw.visibleToIntegrationUser === "boolean") out.visibleToIntegrationUser = raw.visibleToIntegrationUser;
+  if (typeof raw.visible === "boolean") out.visible = raw.visible;
   if (isRecord(raw.relationship)) {
     const r = raw.relationship;
     out.relationship = {
@@ -168,36 +178,36 @@ function coerceDataField(raw: unknown): DataField | null {
 }
 
 /**
- * Every field the node's `data` describes: `data.sf.fields` (a Salesforce
+ * Every field the node's `data` describes: `data.model.fields` (a data-model
  * import), else a host's `data.fields` of the same shape, else — for a
- * document written before the full list was stored — `data.sf.fieldMeta`
+ * document written before the full list was stored — `data.model.fieldMeta`
  * laid over the rows. Empty for a node whose bag says nothing about fields.
  */
 export function dataFields(node: FieldDocNode): DataField[] {
-  const sf = sfOf(node.data);
-  const list = Array.isArray(sf?.fields)
-    ? sf!.fields
+  const m = modelOf(node.data);
+  const list = Array.isArray(m?.fields)
+    ? m!.fields
     : Array.isArray(node.data?.fields)
       ? (node.data!.fields as unknown[])
       : null;
   if (list) return list.map(coerceDataField).filter((f): f is DataField => f !== null);
-  if (isRecord(sf?.fieldMeta)) {
+  if (isRecord(m?.fieldMeta)) {
     return (node.fields ?? []).map((row) => {
-      const meta = sf!.fieldMeta as Record<string, unknown>;
-      const m = isRecord(meta[row.name]) ? (meta[row.name] as Record<string, unknown>) : {};
-      return coerceDataField({ name: row.name, ...m }) ?? { name: row.name };
+      const meta = m!.fieldMeta as Record<string, unknown>;
+      const own = isRecord(meta[row.name]) ? (meta[row.name] as Record<string, unknown>) : {};
+      return coerceDataField({ name: row.name, ...own }) ?? { name: row.name };
     });
   }
   return [];
 }
 
-/** `data.sf.apiName` → node id, for the objects and stubs a reference can resolve to. */
-export function apiNameIndex(doc: FieldDocument): Map<string, string> {
+/** `data.model.name` → node id, for the entities and stubs a reference can resolve to. */
+export function nameIndex(doc: FieldDocument): Map<string, string> {
   const out = new Map<string, string>();
   for (const n of doc.nodes) {
-    const sf = sfOf(n.data);
-    if (!sf || (sf.shape !== "object" && sf.shape !== "external")) continue;
-    if (typeof sf.apiName === "string" && !out.has(sf.apiName)) out.set(sf.apiName, n.id);
+    const m = modelOf(n.data);
+    if (!m || (m.shape !== "entity" && m.shape !== "external")) continue;
+    if (typeof m.name === "string" && !out.has(m.name)) out.set(m.name, n.id);
   }
   return out;
 }
@@ -213,7 +223,7 @@ function referenceType(d: DataField): string {
  * The node's fields as one list: rows first, in row order, then every data
  * field the rows don't already show. Reference targets come from the edges
  * the row anchors (with the edge id) and from the data field's own target
- * list, resolved to nodes through {@link apiNameIndex} when `doc` is given.
+ * list, resolved to nodes through {@link nameIndex} when `doc` is given.
  */
 export function fieldRecords(node: FieldDocNode, doc?: FieldDocument): FieldRecord[] {
   const rows = node.fields ?? [];
@@ -229,7 +239,7 @@ export function fieldRecords(node: FieldDocNode, doc?: FieldDocument): FieldReco
   const labelById = new Map<string, string>();
   if (doc) for (const n of doc.nodes) labelById.set(n.id, n.label ?? n.id);
   const outEdges = doc ? doc.edges.filter((e) => e.source === node.id) : [];
-  const index = doc ? apiNameIndex(doc) : null;
+  const index = doc ? nameIndex(doc) : null;
 
   const targetsOf = (id: string, d: DataField | undefined): FieldTarget[] => {
     const out: FieldTarget[] = [];
@@ -239,12 +249,12 @@ export function fieldRecords(node: FieldDocNode, doc?: FieldDocument): FieldReco
       seen.add(e.target);
       out.push({ label: labelById.get(e.target) ?? e.target, nodeId: e.target, edgeId: e.id });
     }
-    for (const api of d?.relationship?.referenceTo ?? []) {
-      const nodeId = index?.get(api);
-      const label = nodeId ? (labelById.get(nodeId) ?? api) : api;
+    for (const name of d?.relationship?.referenceTo ?? []) {
+      const nodeId = index?.get(name);
+      const label = nodeId ? (labelById.get(nodeId) ?? name) : name;
       // An edge may already have named this target — by node, or by a label
-      // that happens to be the api name — so the same table is listed once.
-      if ((nodeId && seen.has(nodeId)) || out.some((t) => t.label === label || t.label === api)) continue;
+      // that happens to be the entity name — so the same table is listed once.
+      if ((nodeId && seen.has(nodeId)) || out.some((t) => t.label === label || t.label === name)) continue;
       if (nodeId) seen.add(nodeId);
       out.push({ label, ...(nodeId ? { nodeId } : {}) });
     }
@@ -254,10 +264,11 @@ export function fieldRecords(node: FieldDocNode, doc?: FieldDocument): FieldReco
   const make = (row: NodeField | undefined, d: DataField | undefined): FieldRecord => {
     const id = row?.id ?? d!.name;
     const name = row?.name ?? d!.name;
-    const type = row?.type ?? (d?.relationship ? referenceType(d) : (d?.toolingType ?? d?.type));
+    const type = row?.type ?? (d?.relationship ? referenceType(d) : (d?.displayType ?? d?.type));
     const key: FieldKey | undefined =
-      row?.key ?? (d ? (name === "Id" ? "pk" : d.relationship ? "fk" : undefined) : undefined);
-    const required = row?.required ?? (d?.nillable === false && name !== "Id" ? true : undefined);
+      row?.key ??
+      (d ? (d.primaryKey && d.relationship ? "pfk" : d.primaryKey ? "pk" : d.relationship ? "fk" : undefined) : undefined);
+    const required = row?.required ?? (d?.nullable === false && !d.primaryKey ? true : undefined);
     return {
       id,
       name,
@@ -267,11 +278,10 @@ export function fieldRecords(node: FieldDocNode, doc?: FieldDocument): FieldReco
       ...(required ? { required: true } : {}),
       row: !!row,
       fk: targetsOf(id, d),
-      ...(d?.visibleToIntegrationUser !== undefined
-        ? { visibleToIntegrationUser: d.visibleToIntegrationUser }
-        : {}),
+      ...(d?.visible !== undefined ? { visible: d.visible } : {}),
       ...(d?.externalId ? { externalId: true } : {}),
-      ...(d?.unique ? { unique: true } : {}),
+      ...(row?.unique || d?.unique ? { unique: true } : {}),
+      ...(row?.derived || d?.formula ? { derived: true } : {}),
       ...(d?.formula !== undefined ? { formula: d.formula } : {}),
     };
   };
@@ -289,6 +299,54 @@ export function fieldOutEdges<E extends FieldDocEdge>(doc: { edges: ReadonlyArra
 /** Edges arriving at the node on this field. */
 export function fieldInEdges<E extends FieldDocEdge>(doc: { edges: ReadonlyArray<E> }, ref: FieldRef): E[] {
   return doc.edges.filter((e) => e.target === ref.nodeId && edgeFieldIds(e).end === ref.fieldId);
+}
+
+/**
+ * The key a reference points at on its target table — the other half of a
+ * foreign key, for a reader following it: the row the reference's edge lands
+ * on, or, with no edge to say, the target's primary key (a row simply called
+ * `id` failing a `pk` badge — the only thing a foreign key ever points at).
+ * Null when the target isn't a node, or draws no such row.
+ */
+export function referencedKey(doc: FieldDocument, target: FieldTarget): FieldRef | null {
+  if (!target.nodeId) return null;
+  const edge = target.edgeId ? doc.edges.find((e) => e.id === target.edgeId) : undefined;
+  const landed = edge ? edgeFieldIds(edge).end : undefined;
+  const node = doc.nodes.find((n) => n.id === target.nodeId);
+  const rows = node?.fields ?? [];
+  const row =
+    (landed !== undefined ? rows.find((f) => f.id === landed) : undefined) ??
+    rows.find((f) => f.key === "pk" || f.key === "pfk") ??
+    rows.find((f) => /^id$/i.test(f.id) || /^id$/i.test(f.name));
+  return row ? { nodeId: target.nodeId, fieldId: row.id } : null;
+}
+
+/** One foreign key pointing at a key: the referencing table, its row (when drawn or recorded), and the line. */
+export interface Referencer {
+  nodeId: string;
+  fieldId?: string;
+  edgeId: string;
+}
+
+/**
+ * Everything that points AT a key — the other direction from `referencedKey`.
+ * A line lands on the row its `endField` (or the dialect's record) names, or,
+ * saying nothing, on the table's key: the same rule a followed reference
+ * uses to find its far end, so the two directions agree. For a table pin
+ * (no `fieldId`) every line into the table counts. A table pointing at
+ * itself — a hierarchy — is a reference like any other.
+ */
+export function referencesTo(doc: FieldDocument, ref: Pin): Referencer[] {
+  if (!doc.nodes.some((n) => n.id === ref.nodeId)) return [];
+  const implicit = referencedKey(doc, { label: "", nodeId: ref.nodeId })?.fieldId;
+  const out: Referencer[] = [];
+  for (const e of doc.edges) {
+    if (e.target !== ref.nodeId) continue;
+    const ends = edgeFieldIds(e);
+    if (ref.fieldId !== undefined && (ends.end ?? implicit) !== ref.fieldId) continue;
+    out.push({ nodeId: e.source, ...(ends.start !== undefined ? { fieldId: ends.start } : {}), edgeId: e.id });
+  }
+  return out;
 }
 
 /** Whether the document has this field — as a row or in the node's data — or, for a table pin, the table. */

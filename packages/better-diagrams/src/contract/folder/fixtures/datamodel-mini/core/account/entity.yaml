@@ -1,0 +1,7 @@
+kind: standard
+label: Account
+name: account
+recordCount: 120
+diagramType: standard
+diagramName: Account
+url: /entities/account

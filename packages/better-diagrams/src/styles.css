@@ -1500,6 +1500,34 @@
   background: color-mix(in srgb, var(--as-accent) 18%, transparent);
   box-shadow: inset 2px 0 0 var(--as-accent);
 }
+/* A marked TABLE — one end of a shown reference. The pinned card's bar, the
+   accent on the frame, a ring, and a soft glow, so a referencing table
+   reads from across the canvas even at a zoom where its rows do not. */
+.as-node--match {
+  border-color: var(--as-accent);
+  box-shadow:
+    inset 3px 0 0 var(--as-accent),
+    0 0 0 2px color-mix(in srgb, var(--as-accent) 45%, transparent),
+    0 0 18px color-mix(in srgb, var(--as-accent) 35%, transparent);
+}
+.as-node--selected.as-node--match {
+  box-shadow:
+    inset 3px 0 0 var(--as-accent),
+    0 0 0 3px color-mix(in srgb, var(--as-accent) 30%, transparent),
+    0 0 18px color-mix(in srgb, var(--as-accent) 35%, transparent);
+}
+/* While a reference is shown, every card it did not touch steps back — a
+   lighter fade than the tag filter's, and one that lifts under the cursor.
+   Plain opacity on the card, not the dimmed machinery: this is a moment, not
+   a state the reader works in, so legibility tiers do not apply. */
+.as-node--unmarked {
+  opacity: 0.55;
+  transition: opacity 150ms;
+}
+.as-node--unmarked:hover,
+.as-node--selected.as-node--unmarked {
+  opacity: 1;
+}
 
 .as-node__fieldkey {
   flex: 0 0 auto;
@@ -1538,6 +1566,25 @@
 
 .as-node__fieldreq {
   color: var(--as-node-ink);
+}
+
+/* UML's derived-attribute slash: part of the name, a shade quieter. */
+.as-node__fieldderived {
+  color: var(--as-text-dim);
+}
+
+/* A unique column's badge: the key badge's outline, after the name. */
+.as-node__fieldflag {
+  flex: 0 0 auto;
+  font-family: var(--as-mono);
+  font-size: 0.5625rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--as-node-ink);
+  border: 1px solid color-mix(in srgb, var(--as-node-accent) 45%, transparent);
+  border-radius: 3px;
+  padding: 0 3px;
+  line-height: 12px;
 }
 
 .as-node__fieldtype {
@@ -1947,6 +1994,12 @@
   border: 1px solid color-mix(in srgb, var(--as-legend-color) 70%, transparent);
   border-radius: 3px;
   background: color-mix(in srgb, var(--as-legend-color) 30%, transparent);
+}
+
+/* A relationship kind's line sample, in place of the colour square. */
+.as-legend__line {
+  flex-shrink: 0;
+  overflow: visible;
 }
 
 .as-legend__count {
@@ -3511,14 +3564,19 @@
  * edge on it draws two extra strokes of its own line underneath the real one.
  * No renderer learns about paths, and nothing here touches what persists.
  *
- * Two clocks. The PULSE is one cycle per path, divided into one slot per
- * step; each element brightens in its own slot, so a bright spot travels the
- * walk from the first node to the last and starts over. The delay is
- * negative — every element starts mid-cycle, already in phase — so nothing
- * sits waiting for its turn when a path is switched on. The FLOW is a dash
- * pattern sliding along each edge the way the walk takes it, reversed when
- * the walk runs against the arrow. Both stop under prefers-reduced-motion;
- * the halo stays.
+ * Two clocks, and only the LINES of one path keep time. The PULSE is one
+ * cycle per path, divided into one slot per hop; each line brightens in its
+ * own slot, so a bright spot travels the walk from its first hop to its last
+ * and starts over. The delay is negative — every line starts mid-cycle,
+ * already in phase — so nothing sits waiting for its turn when a path is
+ * switched on. The FLOW is a dash pattern sliding along each line the way the
+ * walk takes it, reversed when the walk runs against the arrow. Nodes wear a
+ * still halo: a card blinking in sequence with its lines was a second thing
+ * moving, and it said nothing the lines did not. And only ONE path moves at
+ * a time — the route singled out, else the shortest one lit (`PathGlow.
+ * animate`, `.as-edge__pathglow--animate`); every other lit path keeps a
+ * still halo and a still dash pattern. Both clocks stop under
+ * prefers-reduced-motion; the halo stays.
  */
 @keyframes as-path-pulse {
   0%,
@@ -3557,9 +3615,8 @@
   inset: -2px;
   border-radius: calc(var(--as-radius) + 2px);
   box-shadow: var(--as-path-shadow);
-  opacity: 0.45;
+  opacity: 0.7;
   pointer-events: none;
-  animation: as-path-pulse var(--as-path-cycle) ease-in-out var(--as-path-delay) infinite;
 }
 
 /* Silhouettes (person, cylinder, pipe…) glow along their outline instead: a
@@ -3584,34 +3641,44 @@
   stroke-linejoin: round;
   stroke-opacity: var(--as-glow-alpha);
   filter: blur(3px);
-  opacity: 0.45;
-  animation: as-path-pulse var(--as-path-cycle) ease-in-out var(--as-path-delay) infinite;
+  opacity: 0.7;
 }
 
-/* An edge's halo: a wide, soft stroke of the same line, under it. */
+/* An edge's halo: a wide, soft stroke of the same line, under it. Still on
+   a path that is not the one moving. */
 .as-edge__glow {
   stroke-width: 9;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-opacity: var(--as-glow-alpha);
-  opacity: 0.45;
+  opacity: 0.6;
   filter: blur(2px);
+}
+
+.as-edge__pathglow--animate .as-edge__glow {
+  opacity: 0.45;
   animation: as-path-pulse var(--as-path-cycle) ease-in-out var(--as-path-delay) infinite;
 }
 
 /* The dash flow: 7 on, 15 off — one 22px period per cycle, so the pattern
    rejoins itself seamlessly. Two animations, and the second keeps its
-   direction when the first is reversed (see --reverse). */
+   direction when the first is reversed (see --reverse). A path that is not
+   the one moving keeps the dashes as a still pattern. */
 .as-edge__flow {
   stroke-width: 2.4;
   stroke-linecap: round;
   stroke-dasharray: 7 15;
+  opacity: 0.7;
+}
+
+.as-edge__pathglow--animate .as-edge__flow {
+  opacity: 1;
   animation:
     as-path-flow var(--as-path-flow-dur) linear infinite,
     as-path-pulse var(--as-path-cycle) ease-in-out var(--as-path-delay) infinite;
 }
 
-.as-edge__flow--reverse {
+.as-edge__pathglow--animate .as-edge__flow--reverse {
   animation-direction: reverse, normal;
 }
 
@@ -5545,6 +5612,10 @@
  *   3. More air. Tidy and the AI layout spread ranks wider — that part is
  *      `modeLayoutOptions` in theme.ts, not CSS.
  *
+ * The mode has one setting, `gradients={false}` (`.as-root--no-gradients`
+ * beside the mode class): every fade above becomes a flat coat. That block
+ * closes this section.
+ *
  * Every selector is two-class (`.as-root--marketing .x`), so it beats the
  * single-class defaults regardless of source order. That also means it
  * would beat the single-class STATES (hover, selected, shaped, a lifecycle
@@ -5603,6 +5674,12 @@
     color-mix(in srgb, var(--as-mk-accent) 7%, var(--as-surface)),
     color-mix(in srgb, var(--as-mk-accent) 4%, var(--as-surface))
   );
+  /* The one coat `gradients={false}` paints instead of the fade. Not the
+     fade's midpoint: a whole card at the average tint reads heavier than a
+     fade that fell away to almost nothing, so the coat sits a quarter of the
+     way from the pale end — a wash of the kind's hue, the card still paper.
+     `makeSkin` mixes the export's from the same two ends at the same 25%. */
+  --as-mk-flat: color-mix(in srgb, var(--as-mk-grad-from) 25%, var(--as-mk-grad-to));
   --as-mk-edge: light-dark(
     color-mix(in srgb, var(--as-mk-accent) 48%, var(--as-border)),
     color-mix(in srgb, var(--as-mk-accent) 34%, var(--as-border))
@@ -5894,7 +5971,8 @@
 }
 
 .as-root--marketing .as-node__fieldtype,
-.as-root--marketing .as-node__fieldreq {
+.as-root--marketing .as-node__fieldreq,
+.as-root--marketing .as-node__fieldflag {
   display: none;
 }
 
@@ -6082,6 +6160,55 @@
 
 .as-root--marketing .as-seq-msg__tech {
   display: none;
+}
+
+/* ── Without gradients ── */
+
+/*
+ * `gradients={false}`: marketing with every fade replaced by its own
+ * midpoint (`--as-mk-flat`, and the same midpoint written out where a fade
+ * had ends of its own). Shadows, type, corners, spacing and the tucked-away
+ * labels are untouched — a brand that wants flat colour still wants the
+ * slide dress, and a consumer that mangles gradient defs (an SVG pasted
+ * into a deck) is spared them. `makeSkin` flattens the exports the same way.
+ *
+ * `:where()` holds each selector at the base rule's own strength (0-2-0), so
+ * it beats the base card and the record band by source order alone and LOSES
+ * to every three-class state above — a shaped node keeps its `background:
+ * none`, a dark one its hazard tape — without restating them. The stubbed
+ * hatch is the one state that painted the fade under itself, so its image
+ * layer is restated over the flat coat.
+ */
+.as-root--marketing:where(.as-root--no-gradients) .as-node,
+.as-root--marketing:where(.as-root--no-gradients) .as-group-chip,
+.as-root--marketing:where(.as-root--no-gradients) .as-seq-head {
+  background: var(--as-mk-flat);
+}
+
+.as-root--marketing:where(.as-root--no-gradients) .as-node--status-stubbed:not(.as-node--shaped) {
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent 0 9px,
+    color-mix(in srgb, var(--as-node-accent, var(--as-text-dim)) 8%, transparent) 9px 12px
+  );
+}
+
+/* A silhouette's def stays in the DOM; both stops at the coat paint it flat. */
+.as-root--marketing:where(.as-root--no-gradients) .as-node__gradstop--from,
+.as-root--marketing:where(.as-root--no-gradients) .as-node__gradstop--to {
+  stop-color: var(--as-mk-flat);
+}
+
+/* The chip's fade had its own ends (145deg, above); these are their midpoints. */
+.as-root--marketing:where(.as-root--no-gradients) .as-node__iconbox {
+  background: light-dark(
+    color-mix(in srgb, var(--as-node-accent) 6%, var(--as-surface)),
+    color-mix(in srgb, var(--as-node-accent) 18%, transparent)
+  );
+}
+
+.as-root--marketing:where(.as-root--no-gradients) .as-annotation--boxed {
+  background: color-mix(in srgb, var(--as-surface) 81%, transparent);
 }
 
 /* ── Forced colours (Windows high contrast) ──────────────────────────────── */
@@ -6373,6 +6500,11 @@ details.as-paths__section > .as-paths__caption {
 }
 .as-paths__item--hover {
   background: color-mix(in srgb, var(--as-accent) 12%, transparent);
+}
+/* A key kept lit, as a kept route is. */
+.as-paths__item--sticky {
+  border-color: color-mix(in srgb, var(--as-accent) 50%, transparent);
+  background: color-mix(in srgb, var(--as-accent) 14%, transparent);
 }
 .as-paths__more {
   padding: 4px 8px;

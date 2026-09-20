@@ -19,20 +19,20 @@ const RECORDS: FieldRecord[] = [
   rec({ id: "Name", label: "Account Name", type: "string", required: true }),
   rec({ id: "OwnerId", key: "fk", type: "→ User", required: true, fk: [{ label: "User" }] }),
   rec({ id: "ParentId", key: "fk", type: "→ Account", fk: [{ label: "Account", nodeId: "core/account", edgeId: "e" }] }),
-  rec({ id: "Score__c", type: "double", formula: 'IF(Amount > 10, "big", "small")', unique: true, externalId: true, row: false }),
-  rec({ id: "Description", type: "textarea", visibleToIntegrationUser: false, row: false }),
+  rec({ id: "Score", type: "double", formula: 'IF(Amount > 10, "big", "small")', unique: true, externalId: true, row: false }),
+  rec({ id: "Description", type: "textarea", visible: false, row: false }),
 ];
 
 describe("cellText", () => {
-  it("renders keys, ticks, references and FLS as short text", () => {
+  it("renders keys, ticks, references and visibility as short text", () => {
     const by = Object.fromEntries(RECORDS.map((r) => [r.id, r]));
     expect(cellText(by.Id, "key")).toBe("PK");
     expect(cellText(by.Name, "required")).toBe("✓");
     expect(cellText(by.Id, "required")).toBe("");
     expect(cellText(by.ParentId, "fk")).toBe("→ Account");
-    expect(cellText(by.Description, "fls")).toBe("hidden");
-    expect(cellText(by.Score__c, "externalId")).toBe("✓");
-    expect(cellText(by.Score__c, "formula")).toBe('IF(Amount > 10, "big", "small")');
+    expect(cellText(by.Description, "visible")).toBe("hidden");
+    expect(cellText(by.Score, "externalId")).toBe("✓");
+    expect(cellText(by.Score, "formula")).toBe('IF(Amount > 10, "big", "small")');
     expect(cellText(by.Name, "label")).toBe("Account Name");
     expect(cellText(by.Id, "label")).toBe("");
   });
@@ -43,7 +43,7 @@ describe("filterRecords", () => {
     const ids = (q: string) => filterRecords(RECORDS, q).map((r) => r.id);
     expect(ids("account")).toEqual(["Name", "ParentId"]);
     expect(ids("USER")).toEqual(["OwnerId"]);
-    expect(ids("amount")).toEqual(["Score__c"]);
+    expect(ids("amount")).toEqual(["Score"]);
     expect(ids("textarea")).toEqual(["Description"]);
     expect(ids("")).toHaveLength(RECORDS.length);
     expect(filterRecords(RECORDS, "")).not.toBe(RECORDS);
@@ -52,15 +52,15 @@ describe("filterRecords", () => {
 
 describe("sortRecords", () => {
   it("text ascending puts empties last; descending inverts the comparison; ties keep document order", () => {
-    expect(sortRecords(RECORDS, "label", "asc").map((r) => r.id)).toEqual(["Name", "Id", "OwnerId", "ParentId", "Score__c", "Description"]);
-    expect(sortRecords(RECORDS, "label", "desc").map((r) => r.id)).toEqual(["Id", "OwnerId", "ParentId", "Score__c", "Description", "Name"]);
-    expect(sortRecords(RECORDS, "type", "asc").map((r) => r.id)).toEqual(["Score__c", "Id", "Name", "Description", "ParentId", "OwnerId"]);
+    expect(sortRecords(RECORDS, "label", "asc").map((r) => r.id)).toEqual(["Name", "Id", "OwnerId", "ParentId", "Score", "Description"]);
+    expect(sortRecords(RECORDS, "label", "desc").map((r) => r.id)).toEqual(["Id", "OwnerId", "ParentId", "Score", "Description", "Name"]);
+    expect(sortRecords(RECORDS, "type", "asc").map((r) => r.id)).toEqual(["Score", "Id", "Name", "Description", "ParentId", "OwnerId"]);
   });
 
   it("booleans put true first, keys pk before fk before none", () => {
-    expect(sortRecords(RECORDS, "required", "asc").map((r) => r.id)).toEqual(["Name", "OwnerId", "Id", "ParentId", "Score__c", "Description"]);
-    expect(sortRecords(RECORDS, "key", "asc").map((r) => r.id)).toEqual(["Id", "OwnerId", "ParentId", "Name", "Score__c", "Description"]);
-    expect(sortRecords(RECORDS, "fls", "asc").map((r) => r.id).at(-1)).toBe("Description");
+    expect(sortRecords(RECORDS, "required", "asc").map((r) => r.id)).toEqual(["Name", "OwnerId", "Id", "ParentId", "Score", "Description"]);
+    expect(sortRecords(RECORDS, "key", "asc").map((r) => r.id)).toEqual(["Id", "OwnerId", "ParentId", "Name", "Score", "Description"]);
+    expect(sortRecords(RECORDS, "visible", "asc").map((r) => r.id).at(-1)).toBe("Description");
     expect(sortRecords(RECORDS, "fk", "asc").map((r) => r.id).slice(0, 2)).toEqual(["ParentId", "OwnerId"]);
   });
 

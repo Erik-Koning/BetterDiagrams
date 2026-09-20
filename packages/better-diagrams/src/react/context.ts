@@ -5,6 +5,7 @@
  * the registry as a prop. A context keeps the alternative — stuffing a copy of
  * the registry into every node's `data` — out of the serialised document.
  */
+import type { Notation } from "../contract/schema";
 import { createContext, useContext } from "react";
 import { createRegistry } from "./create-registry";
 import type { ZoneBox } from "../contract/schema";
@@ -33,6 +34,13 @@ export interface StudioContextValue {
    * filter — presentational only, so hiding badges can't touch what persists.
    */
   showTeams: boolean;
+  /**
+   * Render the ↗ link affix on nodes that carry a `url`. The same kind of
+   * view preference as the team badges: the links stay in the document, so
+   * exports and the inspector still have them — only the canvas stops
+   * wearing them, which a hundred imported tables can be glad of.
+   */
+  showLinks: boolean;
   /**
    * Ask the editor to record the current state — an undo point plus onChange.
    * Node renderers mutate state directly via updateNodeData/setNodes (inline
@@ -98,14 +106,19 @@ export interface StudioContextValue {
   onFieldClick?: (ref: FieldRef, at: { clientX: number; clientY: number }) => void;
   /** `fieldKey`s of the pinned fields — a pinned row wears a mark; a pinned TABLE (no field) marks the card. */
   pinnedFields: ReadonlySet<string>;
-  /** `fieldKey` of the row the search or a pin chip just jumped to, or null. */
-  highlightField: string | null;
+  /** `fieldKey`s of the rows the reader was just taken to — a search hit, a pin chip, or both halves of a followed reference. */
+  highlightFields: ReadonlySet<string>;
   /**
    * When set, every node NOT in it renders dimmed — the path panel's
    * "outside the reachable set" view. Presentational like the tag filter
    * (dimmed, never hidden), and combined with it.
    */
   dimmedIds: ReadonlySet<string> | null;
+  /**
+   * How a line's ends draw their cardinality — the document's
+   * `settings.notation`, "both" when it says nothing. See `NOTATIONS`.
+   */
+  notation: Notation;
 }
 
 const FALLBACK: StudioContextValue = {
@@ -114,6 +127,7 @@ const FALLBACK: StudioContextValue = {
   mode: "technical",
   tagFilter: [],
   showTeams: true,
+  showLinks: true,
   requestCommit: () => {},
   beginZoneResize: () => {},
   endZoneResize: () => {},
@@ -125,8 +139,9 @@ const FALLBACK: StudioContextValue = {
   setRenamingId: () => {},
   showToast: () => {},
   pinnedFields: new Set(),
-  highlightField: null,
+  highlightFields: new Set(),
   dimmedIds: null,
+  notation: "both",
 };
 
 export const StudioContext = createContext<StudioContextValue>(FALLBACK);

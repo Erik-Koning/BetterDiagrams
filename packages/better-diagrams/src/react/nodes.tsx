@@ -100,8 +100,21 @@ export function ConnectHandles({ hidden }: { hidden: boolean }) {
  * so a row that renders taller here would leave foreign-key lines pointing
  * between columns on screen while landing correctly in the export.
  */
+/** Whether any mark is a whole table's — the sign a reference is being shown. */
+function marksTables(marks: ReadonlySet<string>): boolean {
+  for (const key of marks) if (key.endsWith("\u0000")) return true;
+  return false;
+}
+
+/** Whether the card, or any row on it, carries a mark. */
+function nodeMarked(marks: ReadonlySet<string>, nodeId: string): boolean {
+  const prefix = `${nodeId}\u0000`;
+  for (const key of marks) if (key.startsWith(prefix)) return true;
+  return false;
+}
+
 function FieldList({ nodeId, fields }: { nodeId: string; fields: readonly NodeField[] }) {
-  const { onFieldClick, pinnedFields, highlightField } = useStudio();
+  const { onFieldClick, pinnedFields, highlightFields } = useStudio();
   // Rows are inert unless the editor offers a field menu. When it does, a
   // row owns its own press: `nodrag` keeps React Flow and the marquee off it
   // (see marquee.ts PASSTHROUGH), the stops keep the wrapper's click-select
@@ -118,7 +131,7 @@ function FieldList({ nodeId, fields }: { nodeId: string; fields: readonly NodeFi
           "as-node__field",
           interactive ? "nodrag" : "",
           pinnedFields.has(key) ? "as-node__field--pinned" : "",
-          highlightField === key ? "as-node__field--match" : "",
+          highlightFields.has(key) ? "as-node__field--match" : "",
         ]
           .filter(Boolean)
           .join(" ");
@@ -152,7 +165,16 @@ function FieldList({ nodeId, fields }: { nodeId: string; fields: readonly NodeFi
           {field.key ? (
             <span className={`as-node__fieldkey as-node__fieldkey--${field.key}`}>{field.key}</span>
           ) : null}
-          <span className="as-node__fieldname" title={field.name}>
+          <span
+            className="as-node__fieldname"
+            title={field.derived ? `${field.name} — derived: computed, not stored` : field.name}
+          >
+            {/* UML's leading slash for a derived attribute. */}
+            {field.derived ? (
+              <span className="as-node__fieldderived" aria-hidden="true">
+                /
+              </span>
+            ) : null}
             {field.name}
             {field.required ? (
               <span className="as-node__fieldreq" title="Required">
@@ -160,6 +182,11 @@ function FieldList({ nodeId, fields }: { nodeId: string; fields: readonly NodeFi
               </span>
             ) : null}
           </span>
+          {field.unique ? (
+            <span className="as-node__fieldflag" title="Unique">
+              UQ
+            </span>
+          ) : null}
           {field.type ? (
             <span className="as-node__fieldtype" title={field.type}>
               {field.type}
@@ -266,7 +293,7 @@ export const ShapeNode = memo(function ShapeNode({
   width,
   height,
 }: NodeProps<ShapeNodeType>) {
-  const { registry, readOnly, mode, tagFilter, showTeams, requestCommit, navigateFile, drillInto, navigateToNode, childCounts, dimmedIds, pinnedFields } = useStudio();
+  const { registry, readOnly, mode, tagFilter, showTeams, showLinks, requestCommit, navigateFile, drillInto, navigateToNode, childCounts, dimmedIds, pinnedFields, highlightFields } = useStudio();
   const { updateNodeData } = useReactFlow();
   const def = kindDef(registry, data.kind);
   const paths = iconPaths(registry, data.icon);
@@ -340,6 +367,12 @@ export const ShapeNode = memo(function ShapeNode({
     scopeGhost ? "as-node--scope-ghost" : "",
     dimmed ? "as-node--dimmed" : "",
     pinnedFields.has(fieldKey({ nodeId: docId })) ? "as-node--pinned" : "",
+    highlightFields.has(fieldKey({ nodeId: docId })) ? "as-node--match" : "",
+    // A shown reference marks TABLES (keys ending in an empty field). While
+    // one is up, every card it did not touch steps back, so the marked ones
+    // read as the picture rather than as a few bars in a crowd. A followed
+    // reference or a search hit marks rows only and fades nothing.
+    marksTables(highlightFields) && !nodeMarked(highlightFields, docId) ? "as-node--unmarked" : "",
     data.status ? `as-node--status-${data.status}` : "",
     // Text layout. Absent data means the pre-existing look, so no class.
     data.textAlign ? `as-node--align-${data.textAlign}` : "",
@@ -446,7 +479,7 @@ export const ShapeNode = memo(function ShapeNode({
           {data.fields?.length ? <FieldList nodeId={docId} fields={data.fields} /> : null}
           <DateChip date={data.date} prefix="Lands" overdue={isOverdue(data.date, data.status)} />
         </div>
-        {data.url?.startsWith("file:") ? (
+        {!showLinks ? null : data.url?.startsWith("file:") ? (
           navigateFile ? (
             <button
               type="button"

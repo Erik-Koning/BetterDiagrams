@@ -1,0 +1,9 @@
+kind: custom
+label: Recipe
+name: recipe
+recordCount: 28
+fieldsTotal: 6
+fieldsVisible: 6
+diagramType: custom
+diagramName: Recipe
+url: /entities/recipe

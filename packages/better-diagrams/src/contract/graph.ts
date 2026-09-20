@@ -173,7 +173,7 @@ export function shortestPath(
  * fewer distinct routes. Routes of equal length keep the order they were
  * found in, which follows document order, so the result is stable.
  *
- * Parallel edges count as distinct routes: two lookups from Contact to
+ * Parallel edges count as distinct routes: two references from Contact to
  * Account are two ways to get there, and a reader wants to see both.
  */
 export function shortestPaths(
@@ -309,28 +309,17 @@ export function neighbourhood(
 ): { nodes: Map<string, number>; edges: string[] } {
   const starts = typeof from === "string" ? [from] : [...from];
   const adj = buildAdjacency(doc, opts);
-  const dist = new Map<string, number>();
-  const queue: string[] = [];
-  for (const id of starts) {
-    if (!adj.has(id) || dist.has(id)) continue;
-    dist.set(id, 0);
-    queue.push(id);
-  }
-  for (let head = 0; head < queue.length; head++) {
-    const at = queue[head];
-    const d = dist.get(at)!;
-    if (d >= depth) continue;
-    for (const arc of adj.get(at) ?? []) {
-      if (dist.has(arc.to)) continue;
-      dist.set(arc.to, d + 1);
-      queue.push(arc.to);
-    }
-  }
-  const edges = doc.edges
-    .filter((e) => dist.has(e.source) && dist.has(e.target))
-    .filter((e) => !opts.edgeFilter || opts.edgeFilter(e))
-    .map((e) => e.id);
-  return { nodes: dist, edges };
+  // The same multi-source walk `reachableFrom` makes, with no field to hold
+  // a first step to. (Key coverage runs a third in `coverage.ts`, over a
+  // graph of its own: adjacency filtered to the chosen keys, built once and
+  // reused across thousands of candidate evaluations — routing it through
+  // here would rebuild that adjacency on every call.)
+  const nodes = distances(
+    adj,
+    starts.map((id) => ({ id, arcs: null })),
+    depth,
+  );
+  return { nodes, edges: edgesWithin(doc, nodes, opts) };
 }
 
 /**
@@ -535,10 +524,27 @@ export interface BetweenResult {
   constrained: { from: boolean; to: boolean };
 }
 
-/** Multi-source BFS distances, with each seed's first step optionally held to given arcs. */
+/** Every edge whose two ends were both reached — what a neighbourhood is wired by. */
+function edgesWithin(
+  doc: GraphDocument,
+  reached: ReadonlyMap<string, number>,
+  opts: GraphOptions,
+): string[] {
+  return doc.edges
+    .filter((e) => reached.has(e.source) && reached.has(e.target))
+    .filter((e) => !opts.edgeFilter || opts.edgeFilter(e))
+    .map((e) => e.id);
+}
+
+/**
+ * Multi-source BFS distances, with each seed's first step optionally held to
+ * given arcs, stopping `maxDepth` hops out. Both reachability answers —
+ * `neighbourhood` and `reachableFrom` — are this one walk.
+ */
 function distances(
   adj: Map<string, Arc[]>,
   seeds: Array<{ id: string; arcs: Arc[] | null }>,
+  maxDepth = Infinity,
 ): Map<string, number> {
   const dist = new Map<string, number>();
   const queue: string[] = [];
@@ -561,6 +567,7 @@ function distances(
     const at = queue[head];
     if (sealed.has(at)) continue;
     const d = dist.get(at)!;
+    if (d >= maxDepth) continue;
     for (const arc of adj.get(at) ?? []) {
       if (dist.has(arc.to)) continue;
       dist.set(arc.to, d + 1);
@@ -771,7 +778,6 @@ export function reachableFrom(
   starts: readonly FieldEndpoint[],
   opts: GraphOptions & { maxDepth?: number } = {},
 ): ReachableResult {
-  const maxDepth = opts.maxDepth ?? Infinity;
   const ids = new Set(starts.map((s) => s.nodeId));
   const nodeFilter = opts.nodeFilter;
   const adj = buildAdjacency(doc, {
@@ -780,12 +786,6 @@ export function reachableFrom(
   });
   const edgeById = edgeIndex(doc);
   const seeds = starts.map((s) => ({ id: s.nodeId, arcs: anchoredArcs(adj, edgeById, s) }));
-  const all = distances(adj, seeds);
-  const nodes = new Map<string, number>();
-  for (const [id, d] of all) if (d <= maxDepth) nodes.set(id, d);
-  const edges = doc.edges
-    .filter((e) => nodes.has(e.source) && nodes.has(e.target))
-    .filter((e) => !opts.edgeFilter || opts.edgeFilter(e))
-    .map((e) => e.id);
-  return { nodes, edges, constrained: seeds.map((s) => s.arcs !== null) };
+  const nodes = distances(adj, seeds, opts.maxDepth ?? Infinity);
+  return { nodes, edges: edgesWithin(doc, nodes, opts), constrained: seeds.map((s) => s.arcs !== null) };
 }
