@@ -527,3 +527,39 @@ describe("lighting a path", () => {
     expect(container.querySelector(".as-legend")).toBeNull();
   });
 });
+
+describe("a shortcut acts on the selection the click just made", () => {
+  /**
+   * React Flow reports its selection from an effect, one scheduler tick
+   * after the click. A shortcut in that gap used to act on the PREVIOUS
+   * selection — ⌘D duplicated the node you had, not the one you clicked.
+   * The click and the key are dispatched back to back here, with nothing
+   * awaited between them, which is exactly the gap.
+   */
+  it("⌘D right after a click duplicates the clicked node, not the one selected before", async () => {
+    const onChange = vi.fn();
+    const DOC = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "a", label: "Alpha", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76 },
+        { id: "b", label: "Bravo", kind: "service", icon: "box", description: "", parentId: null, x: 400, y: 0, w: 170, h: 76 },
+      ],
+      edges: [],
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={DOC} onChange={onChange} />);
+    const card = (id: string) => container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`)!;
+
+    // Select Alpha the slow way, and let every report land.
+    fireEvent.click(card("a"));
+    await waitFor(() => expect(card("a").classList.contains("selected")).toBe(true));
+
+    // Now click Bravo and press ⌘D in the same breath.
+    fireEvent.click(card("b"));
+    fireEvent.keyDown(window, { key: "d", metaKey: true });
+
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const doc = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    const copies = doc.nodes.filter((n) => !["a", "b"].includes(n.id));
+    expect(copies.map((n) => n.label)).toEqual(["Bravo"]);
+  });
+});

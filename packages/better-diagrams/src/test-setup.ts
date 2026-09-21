@@ -73,9 +73,14 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     proto.getBBox ??= () => ({ x: 0, y: 0, width: 170, height: 76 }) as DOMRect;
   }
 
-  // jsdom implements neither; the download helper touches both.
-  globalThis.URL.createObjectURL ??= () => "blob:stub";
-  globalThis.URL.revokeObjectURL ??= () => {};
+  // jsdom implements neither; the download helper touches both. Assigned,
+  // not defaulted: Vitest's jsdom environment installs a URL of its own whose
+  // createObjectURL bridges a jsdom Blob to Node's by reading a private field
+  // jsdom 30 renamed (`_buffer` → `_bytes`), so it throws on every export.
+  // No test needs a real object URL — the anchor click below is a no-op — so
+  // the stub stands in whatever the environment provides.
+  globalThis.URL.createObjectURL = () => "blob:stub";
+  globalThis.URL.revokeObjectURL = () => {};
 
   // The download helper clicks a programmatic <a href>. jsdom responds by
   // attempting real navigation and printing "Not implemented: navigation to
@@ -127,6 +132,27 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     get(this: UIEvent) {
       return viewDescriptor?.get?.call(this) ?? window;
     },
+  });
+
+  // The patch above cannot reach events user-event dispatches: it defines
+  // `view` on each one as an OWN, non-configurable getter that returns null
+  // (it never passes a view). d3-drag's mousedown handler then does
+  // `nodrag(event.view)` → `null.document` and throws — after the press has
+  // already done everything the test observes. jsdom reports the throw as a
+  // window error, which Vitest turns into an unhandled error and fails the
+  // run on. Swallow exactly that one. Registering ANY error listener stops
+  // Vitest re-raising window errors itself, so everything else is re-raised
+  // here the way it would have been, and still fails the run.
+  window.addEventListener("error", (event) => {
+    const stack = String((event.error as Error | undefined)?.stack ?? "");
+    if (/reading 'document'/.test(event.message) && stack.includes("d3-drag")) {
+      event.preventDefault();
+      return;
+    }
+    if (event.error != null) {
+      event.preventDefault();
+      process.emit("uncaughtException", event.error as Error);
+    }
   });
 }
 

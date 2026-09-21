@@ -33,6 +33,8 @@ import {
   ReactFlow,
   ReactFlowProvider,
   ViewportPortal,
+  applyEdgeChanges,
+  applyNodeChanges,
   useEdgesState,
   useNodesState,
   useReactFlow,
@@ -768,35 +770,6 @@ function StudioInner({
    */
   const mergeBase = useRef<{ nodes: Set<string>; edges: Set<string> } | null>(null);
 
-  const onNodesChange = useCallback(
-    (changes: NodeChange<Node>[]) => {
-      // A resize of one selected node is repeated for the rest of the
-      // selection, so they follow the handle together (see resize.ts).
-      flowNodesChange(fanOutResize(changes, flow.getNodes(), registry) as NodeChange<Node>[]);
-      const base = mergeBase.current;
-      if (!base?.nodes.size || !changes.some((change) => change.type === "select")) return;
-      setNodes((current) =>
-        current.some((n) => !n.selected && base.nodes.has(n.id))
-          ? current.map((n) => (!n.selected && base.nodes.has(n.id) ? { ...n, selected: true } : n))
-          : current,
-      );
-    },
-    [flowNodesChange, setNodes, flow, registry],
-  );
-
-  const onEdgesChange = useCallback(
-    (changes: EdgeChange<Edge>[]) => {
-      flowEdgesChange(changes);
-      const base = mergeBase.current;
-      if (!base?.edges.size || !changes.some((change) => change.type === "select")) return;
-      setEdges((current) =>
-        current.some((e) => !e.selected && base.edges.has(e.id))
-          ? current.map((e) => (!e.selected && base.edges.has(e.id) ? { ...e, selected: true } : e))
-          : current,
-      );
-    },
-    [flowEdgesChange, setEdges],
-  );
   const history = useHistory({
     nodes: initialFlow.nodes as Node[],
     edges: initialFlow.edges as Edge[],
@@ -819,6 +792,73 @@ function StudioInner({
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
   /** The same selection, readable from callbacks that run outside render. */
   const selectionRef = useRef<{ nodes: string[]; edges: string[] }>({ nodes: [], edges: [] });
+
+  /**
+   * The canvas reports its selection through `onSelectionChange`, which React
+   * Flow fires from an effect — one scheduler tick after the click that made
+   * it. A shortcut pressed in that gap (automation does; a person under load
+   * can) would act on the PREVIOUS selection: ⌘D duplicating the node you
+   * had, not the one you just clicked. So the selection is also mirrored
+   * synchronously from the node and edge change streams (`onNodesChange`),
+   * which carry the same click in the same task, and this is the one place
+   * either path writes it — content-keyed, so the later report of the same
+   * selection is a no-op rather than a second render.
+   */
+  const setSelection = useCallback(
+    (nodeIds: string[], edgeIds: string[]) => {
+      const before = selectionRef.current;
+      const same = (a: readonly string[], b: readonly string[]) =>
+        a.length === b.length && a.every((id, i) => id === b[i]);
+      if (same(before.nodes, nodeIds) && same(before.edges, edgeIds)) return;
+      // Selecting something else ends any run of typing: the next keystroke
+      // is a different edit and must undo on its own.
+      endHistoryRun();
+      // Mirrored into a ref because `materializeTemplate` runs outside render
+      // and needs the CURRENT selection to carry it across a rebuild.
+      selectionRef.current = { nodes: nodeIds, edges: edgeIds };
+      setSelectedNodeIds((current) => (same(current, nodeIds) ? current : nodeIds));
+      setSelectedEdgeIds((current) => (same(current, edgeIds) ? current : edgeIds));
+    },
+    [endHistoryRun],
+  );
+
+  const onNodesChange = useCallback(
+    (changes: NodeChange<Node>[]) => {
+      // A resize of one selected node is repeated for the rest of the
+      // selection, so they follow the handle together (see resize.ts).
+      flowNodesChange(fanOutResize(changes, flow.getNodes(), registry) as NodeChange<Node>[]);
+      if (!changes.some((change) => change.type === "select")) return;
+      // The selection this click (or key) just made, taken NOW — see
+      // `setSelection` for why the canvas's own report is too late.
+      const next = applyNodeChanges(changes, flow.getNodes());
+      setSelection(next.filter((n) => n.selected).map((n) => n.id), selectionRef.current.edges);
+      const base = mergeBase.current;
+      if (!base?.nodes.size) return;
+      setNodes((current) =>
+        current.some((n) => !n.selected && base.nodes.has(n.id))
+          ? current.map((n) => (!n.selected && base.nodes.has(n.id) ? { ...n, selected: true } : n))
+          : current,
+      );
+    },
+    [flowNodesChange, setNodes, flow, registry, setSelection],
+  );
+
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange<Edge>[]) => {
+      flowEdgesChange(changes);
+      if (!changes.some((change) => change.type === "select")) return;
+      const next = applyEdgeChanges(changes, flow.getEdges());
+      setSelection(selectionRef.current.nodes, next.filter((e) => e.selected).map((e) => e.id));
+      const base = mergeBase.current;
+      if (!base?.edges.size) return;
+      setEdges((current) =>
+        current.some((e) => !e.selected && base.edges.has(e.id))
+          ? current.map((e) => (!e.selected && base.edges.has(e.id) ? { ...e, selected: true } : e))
+          : current,
+      );
+    },
+    [flowEdgesChange, setEdges, flow, setSelection],
+  );
 
   /**
    * What a bulk edit applies to, with the derived view elements taken out —

@@ -26,7 +26,9 @@ const useClientBanner = {
 export default defineConfig({
   plugins: [
     react(),
-    dts({ include: ["src"], exclude: ["src/**/*.test.*"], rollupTypes: true }),
+    // `bundleTypes` is v5's name for v4's `rollupTypes`: one rolled-up
+    // declaration file per entry, which the `exports` map points at.
+    dts({ include: ["src"], exclude: ["src/**/*.test.*"], bundleTypes: true }),
     useClientBanner,
   ],
   build: {
