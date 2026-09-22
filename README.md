@@ -84,6 +84,7 @@ shadow.
 | `gradients` | `boolean` | Marketing's one setting. Default `true`. `false` paints every fade the mode draws as one flat coat — on screen and in every picture export, which then carry no gradient at all. Ignored in technical. Both editors take it; see **Without gradients** under Marketing mode. |
 | `generate` | `DiagramGenerator` | Enables the AI panel. Omitted ⇒ no network code runs. |
 | `minimap` | `boolean` | Default `true`. |
+| `edgesOnHover` | `boolean` | Default `false`. Hide every connection until the pointer is over a node it touches. Hovering a group draws its members' lines; a selected node, or a selected connection, keeps its lines while the pointer moves on. A view setting only — the document, the inspector and every export still carry every connection. |
 | `welcome` | `boolean` | Default `true`. Shows the **welcome modal** over a brand-new document — see below. |
 | `legend` | `boolean` | Show the corner legend: the infra key when zones exist, and the key to the lit paths. Defaults to `true`. |
 | `defaultShowHidden` | `boolean` | Start with provider-hidden nodes ghosted rather than omitted. Default `false`. |
@@ -867,7 +868,9 @@ on that:
   both halves of the join marked, the foreign key and the key it lands on), *Show references* (on a
   key — the other direction: marks the key, every foreign-key row pointing at it, and the tables
   those rows sit in, so a reference from across the canvas still shows, while every other card
-  steps back; the node's menu offers it for the whole table; `Esc` or a click on empty canvas
+  steps back; it also opens the references panel — the keys it carries and the keys pointing at
+  it, each row a jump, and the subject chip under the title the way back to the table itself;
+  the node's menu offers it for the whole table; `Esc` or a click on empty canvas
   lifts the marks, as does selecting anything they did not touch), *Edit…* (hand-authored documents only — a folder-imported document's fields
   belong to the source), *Copy name*. Rows stay 19px; the states are inset-only.
 - **The field grid** — *View all fields* on a row, the node's menu, or the inspector — lists every
@@ -887,7 +890,8 @@ on that:
   **Keys most routes use** (shown once there are two or more routes) ranks the keys the routes
   share (`Contact.AccountId — 7 of 9`); hover one to light every route through it, click to keep
   them lit — as with a route, and keeping one lets go of the other. Then the tables between and
-  the wider corridor, every table a click away. Three or more pins: what lies between every pair and
+  the wider corridor, every table a click away — as are the pin chips under the panel's title,
+  which go to the row (or table) each names. Three or more pins: what lies between every pair and
   everything the pins reach, with the canvas dimmed to one or the other. "Ignore arrow direction"
   is on by default. The panel says when a search stopped at its limits or a pin's field anchors
   nothing. See **Between fields** under *Finding paths* for the contract calls.
@@ -1426,7 +1430,9 @@ The toolbar opens with the **tool tray** (below), then groups its actions into f
 **Export** — all sharing one open-menu slot, so opening one closes the rest and a click
 anywhere else closes them all — and the click that dismisses a menu is spent on dismissing it,
 rather than also selecting whatever was under the pointer. The inspector reads as captioned
-sections (Node · Style · On · Tags · Link) instead of an unbroken run of inputs.
+sections (Node · Style · On · Tags · Link) instead of an unbroken run of inputs. A selected
+connection opens with **Between** — the two boxes it joins, each end a click away, so the
+answer to "what does this line join?" is also the way there — and a way to reverse it.
 
 Selecting **more than one** element keeps the same inspector, handed the whole selection: the
 count, then every node setting the selected nodes **share** — kind, icon, lifecycle status, text

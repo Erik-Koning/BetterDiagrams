@@ -3090,6 +3090,26 @@
   color: var(--as-text);
 }
 
+/* Each end is a jump to that box. Underlined only on hover: the bar reads as
+   the sentence it always was until you reach for one of its two nouns. */
+.as-inspector__end {
+  max-width: 110px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  cursor: pointer;
+}
+
+.as-inspector__end:hover {
+  color: var(--as-accent);
+  text-decoration: underline;
+}
+
 /* A captioned cluster of controls, separated by a hairline from its
    neighbours — the inspector reads as labelled sections, not a run of inputs. */
 .as-inspector__section {
@@ -6613,6 +6633,12 @@ details.as-paths__section > .as-paths__caption {
   font-size: 0.6875rem;
   color: var(--as-text-dim);
 }
+/* "Show all N routes" under a capped route list. */
+.as-paths__expand {
+  align-self: flex-start;
+  margin-top: 2px;
+  font-size: 0.6875rem;
+}
 /* The bright route: its halo and dash flow re-resolve to the theme's route colour. */
 .as-edge--c-route {
   stroke: var(--as-route);
@@ -6633,6 +6659,16 @@ details.as-paths__section > .as-paths__caption {
 /* An edge outside the pins' reachable set, in the paths panel's dimmed view. */
 .react-flow__edge.as-edge--outside {
   opacity: 0.25;
+  transition: opacity 150ms;
+}
+
+/* Edges-on-hover: a connection nobody is pointing at is not drawn at all,
+   and takes no clicks — the card underneath gets them. It fades back in as
+   the pointer arrives so the wiring appears rather than pops. */
+.react-flow__edge.as-edge--dormant,
+.as-edge__labellayer.as-edge--dormant {
+  opacity: 0;
+  pointer-events: none;
   transition: opacity 150ms;
 }
 

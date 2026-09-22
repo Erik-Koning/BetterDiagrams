@@ -255,6 +255,26 @@ describe("paths between pins", () => {
     expect(within(strip).getByRole("button", { name: "Show paths" })).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("a pin chip goes to the row it names", async () => {
+    const ref = { current: null as StudioHandle | null };
+    const { container } = mount(<ArchitectureStudio ref={ref} defaultValue={MODEL} />);
+    ref.current!.setPins([{ nodeId: "orders", fieldId: "user_id" }, { nodeId: "users", fieldId: "id" }]);
+    const strip = await screen.findByRole("toolbar", { name: "Pinned fields" });
+    fireEvent.click(within(strip).getByRole("button", { name: "Show paths" }));
+    const panel = await screen.findByRole("region", { name: "Paths between pinned fields" });
+
+    // The chips name the two ends of everything the panel says; on a model
+    // big enough to need the search they are often the only mention of a
+    // table still on screen.
+    const chips = panel.querySelector(".as-paths__pins") as HTMLElement;
+    fireEvent.click(within(chips).getByRole("button", { name: "Users · id" }));
+    await waitFor(() => expect(nodeEl(container, "users").classList.contains("selected")).toBe(true));
+    expect(row(container, "users", "id").classList.contains("as-node__field--match")).toBe(true);
+    // Jumping is not unpinning, and the panel stays put.
+    expect(ref.current!.getPins()).toHaveLength(2);
+    expect(screen.getByRole("region", { name: "Paths between pinned fields" })).toBeInTheDocument();
+  });
+
   it("hides the key ranking with one route — its hop strip already names the keys", async () => {
     const ref = { current: null as StudioHandle | null };
     mount(<ArchitectureStudio ref={ref} defaultValue={MODEL} />);
@@ -568,6 +588,47 @@ describe("pins across levels", () => {
   });
 });
 
+describe("the route list", () => {
+  const nodeEl = (container: HTMLElement, id: string) => container.querySelector(`.react-flow__node[data-id="${id}"]`) as HTMLElement;
+  it("shows four routes, then all of them on request, and folds back when the view changes", async () => {
+    // Six parallel two-hop routes: a → m1..m6 → z.
+    const t = (id: string, label: string, fields: string[], x: number) =>
+      table(id, label, fields.map((f) => ({ id: f, name: f })), x);
+    const fk = (id: string, source: string, target: string, field: string) =>
+      ({ id, source, target, label: "", style: "solid", color: "slate", startField: field, endField: "Id" });
+    const mids = [1, 2, 3, 4, 5, 6];
+    const FAN = validateTemplate({
+      version: 1,
+      nodes: [t("a", "A", ["Id", ...mids.map((n) => `M${n}Id`)], 100), ...mids.map((n) => t(`m${n}`, `M${n}`, ["Id", "ZId"], 500)), t("z", "Z", ["Id"], 900)],
+      edges: [...mids.map((n) => fk(`a-m${n}`, "a", `m${n}`, `M${n}Id`)), ...mids.map((n) => fk(`m${n}-z`, `m${n}`, "z", "ZId"))],
+    });
+    const ref = { current: null as StudioHandle | null };
+    const { container } = mount(<ArchitectureStudio ref={ref} defaultValue={FAN} />);
+    ref.current!.setPins([{ nodeId: "a", fieldId: "Id" }, { nodeId: "z", fieldId: "Id" }]);
+    const strip = await screen.findByRole("toolbar", { name: "Pinned fields" });
+    fireEvent.click(within(strip).getByRole("button", { name: "Show paths" }));
+    const panel = await screen.findByRole("region", { name: "Paths between pinned fields" });
+    const routes = within(panel).getByRole("region", { name: "Routes" });
+    expect(within(routes).getByText("6")).toBeInTheDocument();
+    expect(routes.querySelectorAll(".as-routes__row")).toHaveLength(4);
+    const more = within(routes).getByRole("button", { name: "Show all 6 routes" });
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(more);
+    expect(routes.querySelectorAll(".as-routes__row")).toHaveLength(6);
+    // Every route is still lit on the canvas whether or not the list shows it.
+    await waitFor(() => expect(nodeEl(container, "m6").classList.contains("as-path-node")).toBe(true));
+    const fewer = within(routes).getByRole("button", { name: "Show fewer" });
+    expect(fewer).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(fewer);
+    expect(routes.querySelectorAll(".as-routes__row")).toHaveLength(4);
+    // Expanded, then the direction toggled: the recomputed view folds the list back.
+    fireEvent.click(within(routes).getByRole("button", { name: "Show all 6 routes" }));
+    expect(routes.querySelectorAll(".as-routes__row")).toHaveLength(6);
+    fireEvent.click(within(panel).getByRole("checkbox", { name: "Ignore arrow direction" }));
+    await waitFor(() => expect(within(panel).getByRole("region", { name: "Routes" }).querySelectorAll(".as-routes__row")).toHaveLength(4));
+  });
+});
+
 describe("references panel", () => {
   const marked = (container: HTMLElement, nodeId: string, fieldId: string) => row(container, nodeId, fieldId).classList.contains("as-node__field--match");
 
@@ -598,6 +659,21 @@ describe("references panel", () => {
     expect(screen.queryByRole("region", { name: "References" })).not.toBeInTheDocument();
   });
 
+  it("the subject chip is the way back to what the panel is about", async () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={MODEL} />);
+    fireEvent.contextMenu(container.querySelector('.react-flow__node[data-id="orders"]')!);
+    fireEvent.click(within(await screen.findByRole("menu", { name: "Actions" })).getByRole("menuitem", { name: /Show references \(1\)/ }));
+    const panel = await screen.findByRole("region", { name: "References" });
+
+    // Following a row leaves the subject behind — Items is now the selection.
+    const by = within(panel).getByRole("region", { name: "Referenced by" });
+    fireEvent.click(within(by).getByRole("button", { name: /Items\.order_id → id/ }));
+    await waitFor(() => expect(container.querySelector('.react-flow__node[data-id="items"].selected')).not.toBeNull());
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Orders" }));
+    await waitFor(() => expect(container.querySelector('.react-flow__node[data-id="orders"].selected')).not.toBeNull());
+  });
+
   it("a table with no key pointing at it still lists the keys it carries; the panels share the slot", async () => {
     const ref = { current: null as StudioHandle | null };
     const { container } = mount(<ArchitectureStudio ref={ref} defaultValue={MODEL} />);
@@ -612,5 +688,47 @@ describe("references panel", () => {
     fireEvent.click(within(strip).getByRole("button", { name: "Show paths" }));
     await screen.findByRole("region", { name: "Paths between pinned fields" });
     expect(screen.queryByRole("region", { name: "References" })).not.toBeInTheDocument();
+  });
+});
+
+describe("a multi-selection's menu", () => {
+  it("pins the selected tables together, or shows the paths between just them", async () => {
+    const ref = { current: null as StudioHandle | null };
+    const { container } = mount(<ArchitectureStudio ref={ref} defaultValue={MODEL} />);
+    const box = (id: string) => container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`)!;
+    const click = (el: HTMLElement, init: Record<string, unknown> = {}) => {
+      fireEvent.pointerDown(el, init);
+      fireEvent.mouseDown(el, init);
+      fireEvent.mouseUp(el, init);
+      fireEvent.click(el, init);
+    };
+    click(box("orders"));
+    fireEvent.keyDown(window, { key: "Shift", shiftKey: true });
+    click(box("users"), { shiftKey: true });
+    fireEvent.keyUp(window, { key: "Shift" });
+    await waitFor(() => expect(container.querySelectorAll(".react-flow__node.selected")).toHaveLength(2));
+
+    // Right-clicking a box already in the selection keeps the selection.
+    fireEvent.contextMenu(box("users"));
+    let menu = await screen.findByRole("menu", { name: "Actions" });
+    expect(within(menu).queryByRole("menuitem", { name: /^Pin table for search/ })).not.toBeInTheDocument();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Pin 2 tables for search/ }));
+    await waitFor(() => expect(ref.current!.getPins().map((p) => p.nodeId).sort()).toEqual(["orders", "users"]));
+    expect(screen.queryByRole("region", { name: "Paths between pinned fields" })).not.toBeInTheDocument();
+
+    // Every one pinned: the same item takes them all out again.
+    fireEvent.contextMenu(box("users"));
+    menu = await screen.findByRole("menu", { name: "Actions" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Unpin 2 tables/ }));
+    await waitFor(() => expect(ref.current!.getPins()).toEqual([]));
+
+    // Show paths: these become the pins, whatever was pinned before, and the panel opens.
+    ref.current!.setPins([{ nodeId: "logs", fieldId: "id" }]);
+    fireEvent.contextMenu(box("users"));
+    menu = await screen.findByRole("menu", { name: "Actions" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Show paths between 2 tables/ }));
+    await waitFor(() => expect(ref.current!.getPins().map((p) => p.nodeId).sort()).toEqual(["orders", "users"]));
+    const panel = await screen.findByRole("region", { name: "Paths between pinned fields" });
+    expect(within(panel).getByRole("button", { name: /^(Orders → Users|Users → Orders)/ })).toHaveTextContent("user_id");
   });
 });

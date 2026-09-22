@@ -4,10 +4,11 @@
  * Two pins: the routes between them (hover lights one, click keeps it and
  * frames it), the tables on any route, and the wider corridor. Three or
  * more: what lies between every pair and what the pins reach, with the
- * canvas dimmed to one or the other. Presentational: the studio owns the
+ * canvas dimmed to one or the other. The pin chips under the title are
+ * jumps, like every other label here. Presentational: the studio owns the
  * pins, the query and the computed view.
  */
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import { fieldKey, type Pin } from "../contract/fields";
 import type { RouteView } from "./field-routes";
 import { UiIcon } from "./ui-icons";
@@ -36,11 +37,15 @@ export interface FieldPathPanelProps {
   stickyKey: string | null;
   onPickKey: (fieldKey: string) => void;
   onNavigate: (nodeId: string) => void;
+  /** A pin chip: go to the row it names, or to the table for a table pin. */
+  onJumpToPin: (pin: Pin) => void;
   onClose: () => void;
 }
 
 /** More rows than this and the list says how many it left out. */
 const LIST_CAP = 500;
+/** Routes shown before the list asks to be expanded. */
+const ROUTE_CAP = 4;
 
 export function FieldPathPanel({
   view,
@@ -60,8 +65,15 @@ export function FieldPathPanel({
   stickyKey,
   onPickKey,
   onNavigate,
+  onJumpToPin,
   onClose,
 }: FieldPathPanelProps) {
+  // Which view the reader expanded the route list for: a new view (other
+  // pins, the direction toggled) folds it back to the first few.
+  const [expandedFor, setExpandedFor] = useState<RouteView | null>(null);
+  const routesExpanded = expandedFor === view;
+  const shownRoutes = routesExpanded ? view.routes : view.routes.slice(0, ROUTE_CAP);
+
   const pair = view.kind === "pair";
   const reachableOthers = [...view.reachable.entries()].filter(([id]) => !pins.some((p) => p.nodeId === id));
 
@@ -75,10 +87,20 @@ export function FieldPathPanel({
       </div>
 
       <div className="as-paths__pins">
+        {/* The panel is a map of what lies between these two, and the pins
+            themselves are the one pair of labels on it that did not take you
+            anywhere — on a model big enough to need the search, the chip is
+            often the only mention of a table you can still see. */}
         {pins.map((pin) => (
-          <span key={`${pin.nodeId}.${pin.fieldId}`} className="as-chip as-chip--on">
+          <button
+            key={`${pin.nodeId}.${pin.fieldId}`}
+            type="button"
+            className="as-chip as-chip--on"
+            title={`Go to ${labelOf(pin)}`}
+            onClick={() => onJumpToPin(pin)}
+          >
             {labelOf(pin)}
-          </span>
+          </button>
         ))}
       </div>
 
@@ -121,7 +143,7 @@ export function FieldPathPanel({
           </h3>
           {view.routes.length ? (
             <ol className="as-routes">
-              {view.routes.map((route, i) => (
+              {shownRoutes.map((route, i) => (
                 <li key={i}>
                   <button
                     type="button"
@@ -160,6 +182,16 @@ export function FieldPathPanel({
           ) : (
             <p className="as-paths__empty">No route between these fields within 10 hops{undirected ? "" : " in the arrows' direction"}.</p>
           )}
+          {view.routes.length > ROUTE_CAP ? (
+            <button
+              type="button"
+              className="as-btn as-paths__expand"
+              aria-expanded={routesExpanded}
+              onClick={() => setExpandedFor(routesExpanded ? null : view)}
+            >
+              {routesExpanded ? "Show fewer" : `Show all ${view.routes.length} routes`}
+            </button>
+          ) : null}
           {hoverRoute === null && stickyRoute === null && hoverKey === null && stickyKey === null && view.routes.length > 1 ? (
             <p className="as-paths__hint">All routes are lit; hover one to see it alone.</p>
           ) : null}

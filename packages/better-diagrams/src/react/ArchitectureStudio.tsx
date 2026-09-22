@@ -121,7 +121,7 @@ import {
   type ZoneNodeData,
 } from "../contract/schema";
 import { pathColor, type DiagramPath } from "../contract/paths";
-import { applyOutsideView, applyPathView, buildPathGlowIndex, canvasStandIns, keptOnCanvas, representatives, transientPathColors } from "./path-view";
+import { applyOutsideView, applyPathView, buildPathGlowIndex, canvasStandIns, documentNodeId, keptOnCanvas, representatives, transientPathColors } from "./path-view";
 import { FieldPathPanel } from "./FieldPathPanel";
 import { computeRouteView, structureSignature, type RouteView } from "./field-routes";
 import { ReferencePanel } from "./ReferencePanel";
@@ -398,6 +398,15 @@ export interface ArchitectureStudioProps {
   filename?: string;
   /** Show the React Flow minimap. Defaults to true. */
   minimap?: boolean;
+  /**
+   * Hide every connection until the pointer is over a node it touches.
+   * Default `false`. On, the canvas shows cards alone; hovering a node draws
+   * its lines, hovering a group draws its members' lines, and the lines of a
+   * selected node or a selected connection stay visible — so a click pins a
+   * node's wiring while the pointer moves on. A view setting only: the
+   * document, the inspector and every export still carry every connection.
+   */
+  edgesOnHover?: boolean;
   /**
    * Show the welcome/import modal over a brand-new document (or an empty
    * workspace): brand mark, "Insert Node Manually", "Copy Schema & System
@@ -705,6 +714,7 @@ function StudioInner({
   generate,
   filename = "architecture",
   minimap = true,
+  edgesOnHover = false,
   welcome = true,
   legend = true,
   defaultShowHidden = false,
@@ -1006,6 +1016,10 @@ function StudioInner({
   >(null);
   /** The container the dragged node would land in, highlighted while it moves. */
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  /** The node under the pointer — only tracked while `edgesOnHover` is on. */
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  /** Dormant twins of the view edges, keyed by the edge object they came from. */
+  const dormantEdgeCache = useRef(new WeakMap<Edge, Edge>());
 
   /** Narrow picture exports to the selection. See `runDirectExport`. */
   const [exportSelectionOnly, setExportSelectionOnly] = useState(false);
@@ -2251,6 +2265,59 @@ function StudioInner({
       ),
     };
   }, [nodes, edges, timelineFutureIds, timelineFuture, dropTargetId, pathGlowIndex, routeKeepEdges, template]);
+
+  /**
+   * The edges-on-hover pass, after every other display pass: a connection
+   * shows when the pointer is over a node it touches (or a group holding
+   * one), when either end is selected, or when it is selected itself. The
+   * rest wear `as-edge--dormant`, which the stylesheet fades to nothing.
+   * Kept out of the memo above so a hover costs one map over the edges,
+   * not the timeline and path work too.
+   */
+  const displayEdges = useMemo(() => {
+    if (!edgesOnHover) return viewEdges;
+    const shown = new Set<string>();
+    for (const n of viewNodes) if (n.selected) shown.add(n.id);
+    if (hoveredNodeId) {
+      shown.add(hoveredNodeId);
+      // A group's members: hovering the frame lights the wiring inside it.
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const n of viewNodes) {
+          if (n.parentId && shown.has(n.parentId) && !shown.has(n.id)) {
+            shown.add(n.id);
+            grew = true;
+          }
+        }
+      }
+    }
+    // The class hides the line; the data flag reaches the labels, which
+    // render through a portal outside the edge wrapper (see edges.tsx).
+    // Each dormant edge is built once per source object and reused across
+    // hovers, so moving the pointer re-renders the edges that change and
+    // not every hidden one on the canvas.
+    const cache = dormantEdgeCache.current;
+    return viewEdges.map((e) => {
+      if (e.selected || shown.has(e.source) || shown.has(e.target)) return e;
+      let dormant = cache.get(e);
+      if (!dormant) {
+        dormant = {
+          ...e,
+          className: `${e.className ? `${e.className} ` : ""}as-edge--dormant`,
+          data: { ...e.data, dormant: true },
+        };
+        cache.set(e, dormant);
+      }
+      return dormant;
+    });
+  }, [edgesOnHover, viewEdges, viewNodes, hoveredNodeId]);
+
+  // The hover is only worth a re-render while the setting is on; off, the
+  // handlers are not even attached (see the <ReactFlow> props).
+  useEffect(() => {
+    if (!edgesOnHover) setHoveredNodeId(null);
+  }, [edgesOnHover]);
 
   useEffect(() => {
     timelineAtRef.current = timelineAt;
@@ -3577,6 +3644,29 @@ function StudioInner({
     },
     [setPins],
   );
+  /** Pin several tables at once — or, when every one is already pinned, unpin them all. */
+  const toggleTablePins = useCallback(
+    (ids: readonly string[]) => {
+      const current = pinsRef.current;
+      const isPinned = (id: string) => current.some((p) => !p.fieldId && p.nodeId === id);
+      setPins(
+        ids.every(isPinned)
+          ? current.filter((p) => p.fieldId || !ids.includes(p.nodeId))
+          : [...current, ...ids.filter((id) => !isPinned(id)).map((nodeId) => ({ nodeId }))],
+      );
+    },
+    [setPins],
+  );
+  /** Make these tables THE pins and open the panel on them. */
+  const showPathsBetween = useCallback(
+    (ids: readonly string[]) => {
+      setPins(ids.map((nodeId) => ({ nodeId })));
+      setPathPanelOpen(true);
+      setPanelOpen(false); // the panels share a slot
+      setRefPanel(null);
+    },
+    [setPins],
+  );
   const setCoverageKeys = useCallback((refs: readonly FieldRef[]) => {
     const next: FieldRef[] = [];
     for (const ref of refs) if (!next.some((k) => sameFieldRef(k, ref))) next.push({ nodeId: ref.nodeId, fieldId: ref.fieldId });
@@ -3607,6 +3697,31 @@ function StudioInner({
     (ref: FieldRef) => {
       navigateToNode(ref.nodeId);
       setHighlightFields(new Set([fieldKey(ref)]));
+    },
+    [navigateToNode],
+  );
+  /**
+   * A pin chip, wherever one is drawn — the strip above the canvas, the
+   * references panel's subject, the paths panel's pins. One callback so a
+   * chip means the same thing in all three: a field pin lands on its row,
+   * a table pin on the table.
+   */
+  const jumpToPin = useCallback(
+    (pin: Pin) =>
+      pin.fieldId
+        ? navigateToField({ nodeId: pin.nodeId, fieldId: pin.fieldId })
+        : navigateToNode(pin.nodeId),
+    [navigateToField, navigateToNode],
+  );
+  /**
+   * Go to what a CANVAS id stands for — the inspector names an edge's two
+   * ends, and on a drilled level an end can be a ghost or the boundary
+   * frame, which stand in for a document node rather than being one.
+   */
+  const navigateToCanvasNode = useCallback(
+    (id: string) => {
+      const docId = documentNodeId(id);
+      if (docId) navigateToNode(docId);
     },
     [navigateToNode],
   );
@@ -5710,6 +5825,25 @@ function StudioInner({
   }, [childCountsSig]);
 
   /**
+   * The document tables a multi-selection stands for, for the menu's pin
+   * items: ghosts resolved to their tables, frames and zones left out, and a
+   * group holding children left out — a route runs between tables, and a
+   * pin on the group around them would search from nothing.
+   */
+  const selectedTables = useMemo(() => {
+    if (selectedNodeIds.length < 2) return [];
+    const known = new Set(template.nodes.map((n) => n.id));
+    const out: string[] = [];
+    for (const raw of selectedNodeIds) {
+      if (isZoneNodeId(raw) || isBoundaryNodeId(raw)) continue;
+      const id = documentNodeOf(raw);
+      if (!known.has(id) || out.includes(id) || (childCounts.get(id) ?? 0) > 0) continue;
+      out.push(id);
+    }
+    return out;
+  }, [selectedNodeIds, template, childCounts]);
+
+  /**
    * What the selected node affords about nesting, or nothing. A container
    * with contents can push them a level deeper; a card that already has
    * contents can bring them back. A node with no children affords neither —
@@ -6805,7 +6939,7 @@ function StudioInner({
           <PinStrip
             pins={pins}
             labelOf={fieldLabel}
-            onJump={(pin) => (pin.fieldId ? navigateToField({ nodeId: pin.nodeId, fieldId: pin.fieldId }) : navigateToNode(pin.nodeId))}
+            onJump={jumpToPin}
             onRemove={togglePin}
             onClear={() => setPins([])}
             pathsOpen={pathPanelOpen}
@@ -6852,6 +6986,7 @@ function StudioInner({
               nodeLabel={(id) => template.nodes.find((n) => n.id === id)?.label ?? id}
               onFollow={followLink}
               onNavigateField={navigateToField}
+              onJump={jumpToPin}
               onClose={closeRefPanel}
             />
           ) : pathPanelOpen && routeView && !activeDiffBase ? (
@@ -6873,6 +7008,7 @@ function StudioInner({
               stickyKey={stickyKey}
               onPickKey={pickKey}
               onNavigate={navigateToNode}
+              onJumpToPin={jumpToPin}
               onClose={() => setPathPanelOpen(false)}
             />
           ) : aiPanelVisible ? (
@@ -6969,7 +7105,13 @@ function StudioInner({
           ) : (
           <ReactFlow
             nodes={viewNodes}
-            edges={viewEdges}
+            edges={displayEdges}
+            onNodeMouseEnter={edgesOnHover ? (_, node) => setHoveredNodeId(node.id) : undefined}
+            onNodeMouseLeave={
+              edgesOnHover
+                ? (_, node) => setHoveredNodeId((current) => (current === node.id ? null : current))
+                : undefined
+            }
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -7211,6 +7353,7 @@ function StudioInner({
                 relevantProviders={referencedProviderSet}
                 fieldsOf={edgeEndFields}
                 labelOf={nodeLabelOf}
+                onNavigate={navigateToCanvasNode}
                 onPatchNodes={patchNodes}
                 onPatchEdges={patchEdges}
                 onPatchZone={patchZone}
@@ -7283,6 +7426,7 @@ function StudioInner({
                   edges={[selectedEdge]}
                   fieldsOf={edgeEndFields}
                   labelOf={nodeLabelOf}
+                  onNavigate={navigateToCanvasNode}
                   relevantProviders={[...referencedProviderSet]}
                   registry={registry}
                   onPatch={patchEdges}
@@ -7610,6 +7754,26 @@ function StudioInner({
                     onPick={() => togglePin({ nodeId: documentNodeOf(selectedNodeIds[0]!) })}
                     close={closeContext}
                   />
+                ) : null}
+                {contextMenu.kind === "node" && selectedTables.length >= 2 ? (
+                  <>
+                    <ContextItem
+                      label={
+                        selectedTables.every((id) => pins.some((p) => !p.fieldId && p.nodeId === id))
+                          ? `Unpin ${selectedTables.length} tables`
+                          : `Pin ${selectedTables.length} tables for search`
+                      }
+                      hint="Paths between them"
+                      onPick={() => toggleTablePins(selectedTables)}
+                      close={closeContext}
+                    />
+                    <ContextItem
+                      label={`Show paths between ${selectedTables.length} tables`}
+                      hint="Pins just these and opens the panel"
+                      onPick={() => showPathsBetween(selectedTables)}
+                      close={closeContext}
+                    />
+                  </>
                 ) : null}
                 {contextMenu.kind === "node" && selectedFieldCount ? (
                   <ContextItem
@@ -7942,6 +8106,7 @@ function MultiInspector({
   relevantProviders,
   fieldsOf,
   labelOf,
+  onNavigate,
   onPatchNodes,
   onPatchEdges,
   onPatchZone,
@@ -7963,6 +8128,8 @@ function MultiInspector({
   relevantProviders: ReadonlySet<string>;
   fieldsOf: (nodeId: string) => readonly NodeField[];
   labelOf: (nodeId: string) => string;
+  /** One selected line still names its two ends, and each is a way there. */
+  onNavigate: (nodeId: string) => void;
   onPatchNodes: (ids: readonly string[], patch: NodePatch) => void;
   onPatchEdges: (ids: readonly string[], patch: EdgePatch) => void;
   onPatchZone: (id: string, patch: Partial<DiagramZone>) => void;
@@ -8049,6 +8216,7 @@ function MultiInspector({
           edges={edges}
           fieldsOf={fieldsOf}
           labelOf={labelOf}
+          onNavigate={onNavigate}
           relevantProviders={[...relevantProviders]}
           registry={registry}
           onPatch={onPatchEdges}
@@ -9127,6 +9295,7 @@ function EdgeInspector({
   edges,
   fieldsOf,
   labelOf,
+  onNavigate,
   relevantProviders,
   registry,
   onPatch,
@@ -9139,6 +9308,8 @@ function EdgeInspector({
   fieldsOf: (nodeId: string) => readonly NodeField[];
   /** What a node is called, so the bar can say what a line joins. */
   labelOf: (nodeId: string) => string;
+  /** Go to one end by its canvas id — the studio resolves what it stands for. */
+  onNavigate: (nodeId: string) => void;
   relevantProviders: readonly string[];
   registry: ResolvedRegistry;
   onPatch: (ids: readonly string[], patch: EdgePatch) => void;
@@ -9194,11 +9365,27 @@ function EdgeInspector({
           the line and drawing it again, losing its label and its route. */}
       <InspectorSection caption={single ? "Between" : "Connections"}>
         {single ? (
-          <span
-            className="as-inspector__ends"
-            title={`${labelOf(edge.source)} → ${labelOf(edge.target)}`}
-          >
-            {labelOf(edge.source)} → {labelOf(edge.target)}
+          // Each end is a way there. Selecting a line is how you ask what it
+          // joins, and on anything bigger than a screenful the answer named
+          // two boxes you then had to go and find.
+          <span className="as-inspector__ends">
+            <button
+              type="button"
+              className="as-inspector__end"
+              title={`Go to ${labelOf(edge.source)}`}
+              onClick={() => onNavigate(edge.source)}
+            >
+              {labelOf(edge.source)}
+            </button>
+            <span aria-hidden="true"> → </span>
+            <button
+              type="button"
+              className="as-inspector__end"
+              title={`Go to ${labelOf(edge.target)}`}
+              onClick={() => onNavigate(edge.target)}
+            >
+              {labelOf(edge.target)}
+            </button>
           </span>
         ) : null}
         <button

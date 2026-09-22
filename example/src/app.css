@@ -389,6 +389,55 @@ body {
   color: var(--shell-text-dim);
 }
 
+/* A view setting in the menu: the same drawn box as the bar's chips, laid
+   out as a menu row — label after the box, the whole row a hit target. */
+.app__dropdown-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--shell-text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+}
+
+.app__dropdown-check:hover {
+  background: var(--shell-hover);
+}
+
+.app__dropdown-check input[type="checkbox"] {
+  appearance: none;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1.5px solid var(--shell-text-dim);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.app__dropdown-check input[type="checkbox"]:checked {
+  border-color: var(--shell-accent);
+  color: var(--shell-accent);
+  /* The same two-arm tick as the bar's chips — see `.app__toggle`. */
+  background-image:
+    linear-gradient(45deg, transparent 32%, currentcolor 32%, currentcolor 68%, transparent 68%),
+    linear-gradient(135deg, transparent 40%, currentcolor 40%, currentcolor 60%, transparent 60%);
+  background-position: 1.8px 5.2px, 3.6px 3px;
+  background-size: 3px 3px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.app__dropdown-check input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--shell-accent);
+  outline-offset: 1px;
+}
+
 .app__dropdown-note {
   padding: 4px 8px 6px;
   font-size: 11px;

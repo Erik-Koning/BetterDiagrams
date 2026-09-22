@@ -197,18 +197,20 @@ export default function App() {
   const [workspace, setWorkspace] = useState(seedWorkspace);
   const [savedAt, setSavedAt] = useState(null);
   const [readOnly, setReadOnly] = useState(false);
-  const [minimap, setMinimap] = useState(true);
-  const [mode, setMode] = useState("dark");
+  const [minimap, setMinimap] = useState(false);
+  const [mode, setMode] = useState("light");
   // "technical" | "marketing" — the editor's presentation mode, independent
   // of light/dark.
-  const [studioMode, setStudioMode] = useState("technical");
+  const [studioMode, setStudioMode] = useState("marketing");
   // Marketing's one setting: its gradients, or one flat coat per card. Kept
   // while the mode is technical (where it is inert) so flipping back to
   // marketing finds it where it was left.
-  const [gradients, setGradients] = useState(true);
+  const [gradients, setGradients] = useState(false);
+  // Draw a connection only while the pointer is over a node it touches.
+  const [edgesOnHover, setEdgesOnHover] = useState(false);
   // null = "use the active theme's accent"; set once the user picks a colour.
   const [accent, setAccent] = useState(null);
-  const [aiEnabled, setAiEnabled] = useState(true);
+  const [aiEnabled, setAiEnabled] = useState(false);
   // The template panel starts collapsed; hovering the handle explains what it is.
   const [showJson, setShowJson] = useState(false);
   /** The template-JSON edit modal over the viewer panel. */
@@ -700,46 +702,6 @@ export default function App() {
 
         <div className="app__controls">
           <label className="app__toggle">
-            <input type="checkbox" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} />
-            Read-only
-          </label>
-          <label className="app__toggle">
-            <input type="checkbox" checked={minimap} onChange={(e) => setMinimap(e.target.checked)} />
-            Minimap
-          </label>
-          <label className="app__toggle">
-            <input type="checkbox" checked={aiEnabled} onChange={(e) => setAiEnabled(e.target.checked)} />
-            AI panel
-          </label>
-          <label className="app__toggle">
-            <input
-              type="checkbox"
-              checked={mode === "light"}
-              onChange={(e) => setMode(e.target.checked ? "light" : "dark")}
-            />
-            Light
-          </label>
-          <label className="app__toggle">
-            <input
-              type="checkbox"
-              checked={studioMode === "marketing"}
-              onChange={(e) => setStudioMode(e.target.checked ? "marketing" : "technical")}
-            />
-            Marketing
-          </label>
-          {/* Only meaningful in marketing mode — technical has no gradients
-              to switch off — so it only shows there. */}
-          {studioMode === "marketing" ? (
-            <label className="app__toggle" title="Marketing's gradients, or one flat coat per card — on screen and in every picture export">
-              <input type="checkbox" checked={gradients} onChange={(e) => setGradients(e.target.checked)} />
-              Gradients
-            </label>
-          ) : null}
-          <label className="app__toggle">
-            <input type="checkbox" checked={showJson} onChange={(e) => setShowJson(e.target.checked)} />
-            JSON
-          </label>
-          <label className="app__toggle">
             Accent
             <input type="color" value={themeAccent} onChange={(e) => setAccent(e.target.value)} />
           </label>
@@ -807,6 +769,40 @@ export default function App() {
             </button>
             {settingsOpen ? (
               <div className="app__dropdown" role="menu" aria-label="Settings">
+                {/* The view settings live here rather than loose on the bar:
+                    they are set once and left, and eight chips across the
+                    top read as a toolbar for things you never touch. Each
+                    is a checkbox, so the menu stays open while you tick. */}
+                <span className="app__dropdown-caption">View</span>
+                {[
+                  ["Read-only", readOnly, setReadOnly, "Hide every editing affordance; pan, zoom and export still work"],
+                  ["Minimap", minimap, setMinimap, "The overview in the canvas corner"],
+                  ["AI panel", aiEnabled, setAiEnabled, "Offer the AI generate / refine panel"],
+                  ["Light", mode === "light", (on) => setMode(on ? "light" : "dark"), "Light theme, or dark"],
+                  [
+                    "Marketing",
+                    studioMode === "marketing",
+                    (on) => setStudioMode(on ? "marketing" : "technical"),
+                    "The presentation look — bigger type and icons, tucked-away labels",
+                  ],
+                  // Only meaningful in marketing mode — technical has no
+                  // gradients to switch off — so it only shows there.
+                  ...(studioMode === "marketing"
+                    ? [["Gradients", gradients, setGradients, "Marketing's gradients, or one flat coat per card — on screen and in every picture export"]]
+                    : []),
+                  [
+                    "Lines on hover",
+                    edgesOnHover,
+                    setEdgesOnHover,
+                    "Draw a connection only while the pointer is over a node it touches; a selected node keeps its lines",
+                  ],
+                  ["JSON", showJson, setShowJson, "The live template panel beside the editor"],
+                ].map(([label, checked, set, hint]) => (
+                  <label key={label} className="app__dropdown-check" title={hint}>
+                    <input type="checkbox" checked={checked} onChange={(e) => set(e.target.checked)} />
+                    {label}
+                  </label>
+                ))}
                 {templatesDir
                   ? // One section per folder, in the order a reader ranks them:
                     // the curated examples first, then whatever auto-save has
@@ -903,6 +899,7 @@ export default function App() {
               value={EMPTY_TEMPLATE}
               readOnly={readOnly}
               minimap={minimap}
+              edgesOnHover={edgesOnHover}
               registry={registry}
               theme={theme}
               mode={studioMode}
@@ -932,6 +929,7 @@ export default function App() {
               onSave={handleSave}
               readOnly={readOnly}
               minimap={minimap}
+              edgesOnHover={edgesOnHover}
               registry={registry}
               theme={theme}
               mode={studioMode}

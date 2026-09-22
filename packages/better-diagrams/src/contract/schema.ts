@@ -2699,6 +2699,12 @@ export type DiagramEdgeData = {
    */
   future?: boolean;
   /**
+   * Edges-on-hover display flag (see `ArchitectureStudioProps.edgesOnHover`):
+   * nothing is pointing at this edge, so its line and its labels are not
+   * drawn. Set on the view, never persisted — like `future`.
+   */
+  dormant?: boolean;
+  /**
    * Set only by the path view pass: this edge is on one or more LIT paths.
    * View-only, like `future`, and on the data for the same reason — the glow
    * and its dash flow are drawn by the edge component, which is the only

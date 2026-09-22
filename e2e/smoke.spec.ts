@@ -28,9 +28,9 @@ test.describe("workspace shell", () => {
     await expect(menu.getByRole("menuitem", { name: /New file/ })).toBeVisible();
   });
 
-  test("read-only hides the editing chrome and restores it when unchecked", async ({ page, studio }) => {
+  test("read-only hides the editing chrome and restores it when unchecked", async ({ studio }) => {
     await studio.goto();
-    const readOnly = page.getByLabel("Read-only", { exact: true });
+    const readOnly = await studio.setting("Read-only");
 
     await readOnly.check();
     await expect(studio.menuButton("Insert")).toBeHidden();
@@ -49,12 +49,13 @@ test.describe("workspace shell", () => {
     const app = page.locator(".app");
     const minimap = page.locator(".react-flow__minimap");
 
-    await expect(app).toHaveAttribute("data-theme", "dark");
-    await page.getByLabel("Light", { exact: true }).check();
+    // The host opens light, with the minimap off.
     await expect(app).toHaveAttribute("data-theme", "light");
+    await (await studio.setting("Light")).uncheck();
+    await expect(app).toHaveAttribute("data-theme", "dark");
 
-    await expect(minimap).toBeVisible();
-    await page.getByLabel("Minimap", { exact: true }).uncheck();
     await expect(minimap).toBeHidden();
+    await (await studio.setting("Minimap")).check();
+    await expect(minimap).toBeVisible();
   });
 });

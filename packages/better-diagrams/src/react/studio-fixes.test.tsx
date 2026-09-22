@@ -10,7 +10,7 @@
  */
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ArchitectureStudio } from "./ArchitectureStudio";
 import { clearWelcomeSuppression } from "./WelcomeModal";
@@ -388,15 +388,25 @@ describe("the inspector", () => {
     await waitFor(() => expect(latest(onChange).nodes.map((n) => n.tags)).toEqual([["gdpr"], ["gdpr"]]));
   });
 
-  it("says what a connection joins, and can turn it round", async () => {
+  it("says what a connection joins, goes to either end, and can turn it round", async () => {
     const onChange = vi.fn();
     const { container } = mount(<ArchitectureStudio defaultValue={TWO} onChange={onChange} />);
 
     await waitFor(() => expect(container.querySelector(".as-edge__hit")).toBeTruthy());
     fireEvent.click(container.querySelector(".as-edge__hit")!);
 
-    await waitFor(() => expect(screen.getByText("A → B")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "Reverse this connection" }));
+    const between = await screen.findByRole("group", { name: "Between" });
+    expect(between).toHaveTextContent("A → B");
+
+    // Each end is a jump to that box — the bar names two nodes the reader
+    // would otherwise have to go and find.
+    fireEvent.click(within(between).getByRole("button", { name: "B" }));
+    await waitFor(() =>
+      expect(container.querySelector('.react-flow__node[data-id="b"]')?.classList.contains("selected")).toBe(true),
+    );
+
+    fireEvent.click(container.querySelector(".as-edge__hit")!);
+    fireEvent.click(await screen.findByRole("button", { name: "Reverse this connection" }));
 
     await waitFor(() => {
       const reversed = latest(onChange).edges[0]!;

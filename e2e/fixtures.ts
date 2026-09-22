@@ -340,9 +340,23 @@ export class Studio {
 
   // ── Host chrome (the example app around the editor) ──────────────────────
 
+  /**
+   * A host view setting — Read-only, Minimap, AI panel, Light, Marketing,
+   * Gradients, Lines on hover, JSON — as its checkbox in the Settings menu,
+   * opened on the way if it is closed.
+   */
+  async setting(name: string): Promise<Locator> {
+    const menu = this.page.getByRole("menu", { name: "Settings" });
+    if (!(await menu.isVisible())) {
+      await this.page.getByRole("button", { name: "Settings" }).click();
+      await expect(menu).toBeVisible();
+    }
+    return menu.getByLabel(name, { exact: true });
+  }
+
   /** Open the live-template side panel and return the rendered JSON. */
   async showJson(): Promise<Locator> {
-    await this.page.getByLabel("JSON", { exact: true }).check();
+    await (await this.setting("JSON")).check();
     const json = this.page.locator(".app__json");
     await expect(json).toBeVisible();
     return json;

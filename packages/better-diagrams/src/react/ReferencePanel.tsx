@@ -5,7 +5,9 @@
  * the keys elsewhere that point at it. A row is a jump: a carried key
  * follows the reference (both rows marked, as the row menu does), a
  * referencing key goes to the field that holds it — on whatever level it
- * lives. Presentational: the studio owns the pin and the computed view.
+ * lives. The subject chip under the title is a jump too, back to what the
+ * panel is about. Presentational: the studio owns the pin and the computed
+ * view.
  */
 import type { FieldRef, KeyLink, KeyReferences, Pin } from "../contract/fields";
 import { fieldKey } from "../contract/fields";
@@ -21,13 +23,15 @@ export interface ReferencePanelProps {
   onFollow: (link: KeyLink) => void;
   /** A referencing key: go to the field holding it. */
   onNavigateField: (ref: FieldRef) => void;
+  /** The subject chip: go back to the table (or row) the panel is about. */
+  onJump: (pin: Pin) => void;
   onClose: () => void;
 }
 
 /** More rows than this and the list says how many it left out. */
 const LIST_CAP = 500;
 
-export function ReferencePanel({ pin, view, labelOf, nodeLabel, onFollow, onNavigateField, onClose }: ReferencePanelProps) {
+export function ReferencePanel({ pin, view, labelOf, nodeLabel, onFollow, onNavigateField, onJump, onClose }: ReferencePanelProps) {
   const end = (ref: Pin) => `${nodeLabel(ref.nodeId)}${ref.fieldId ? `.${ref.fieldId}` : ""}`;
   return (
     <div className="as-panel as-panel--paths" role="region" aria-label="References">
@@ -38,7 +42,17 @@ export function ReferencePanel({ pin, view, labelOf, nodeLabel, onFollow, onNavi
         </button>
       </div>
       <div className="as-paths__pins">
-        <span className="as-chip as-chip--on">{labelOf(pin)}</span>
+        {/* The subject names a box that may be off-screen, on another level,
+            or folded into a chip — every other label in this panel takes you
+            to what it names, and this one used to be the exception. */}
+        <button
+          type="button"
+          className="as-chip as-chip--on"
+          title={`Go to ${labelOf(pin)}`}
+          onClick={() => onJump(pin)}
+        >
+          {labelOf(pin)}
+        </button>
       </div>
 
       <LinkList
