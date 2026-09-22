@@ -3625,6 +3625,30 @@
   display: none;
 }
 
+/* A stand-in on a lit path — the chip of a group the path runs into, a card
+   whose contents are its next level, the ghost of a group — says how many of
+   the path's elements it hides ("2 inside"). The count rides the wrapper as
+   `data-path-inside` (path-view.ts), the one channel a pseudo-element can
+   read, so no renderer learns about paths; it wears the path's own ink and
+   the route key's dress, so it reads as the path's mark and not the
+   element's. Above the halo, which paints under everything. */
+.react-flow__node.as-path-node[data-path-inside]::before {
+  content: attr(data-path-inside) " inside";
+  position: absolute;
+  top: -8px;
+  right: 10px;
+  z-index: 1;
+  padding: 0 6px;
+  border: 1px solid var(--as-path-ink);
+  border-radius: 999px;
+  background: var(--as-surface);
+  color: var(--as-path-ink);
+  font: 600 0.625rem/15px var(--as-font);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .as-node__silhouette-glow {
   display: none;
 }

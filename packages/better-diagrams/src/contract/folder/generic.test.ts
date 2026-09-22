@@ -116,6 +116,19 @@ describe("full round trip", () => {
     ...shipped,
   ];
 
+  /**
+   * `meta.folderFormat` is the importer's stamp of the import that just ran,
+   * not data the document owns — every import rewrites it, and a document that
+   * was itself imported (the data-model example) arrives carrying one. So it
+   * is dropped from BOTH sides: what must survive the trip is everything else.
+   */
+  function withoutStamp(t: DiagramTemplate): string {
+    const { folderFormat: _ff, ...meta } = t.meta ?? {};
+    const stripped = { ...t, meta };
+    if (!Object.keys(meta).length) delete (stripped as { meta?: unknown }).meta;
+    return JSON.stringify(validateTemplate(stripped));
+  }
+
   it.each(cases)("%s survives export → import byte-for-byte", (_name, raw) => {
     const doc = validateTemplate(raw);
     const out = exportFolder(doc, { mode: "full" });
@@ -125,11 +138,7 @@ describe("full round trip", () => {
     const back = importFolder(out.files);
     expect(back.dialect).toBe("generic");
     expect(back.warnings).toEqual([]);
-    // The one thing import adds is its own provenance on meta.
-    const { folderFormat: _ff, ...meta } = back.template.meta ?? {};
-    const stripped = { ...back.template, meta };
-    if (!Object.keys(meta).length) delete (stripped as { meta?: unknown }).meta;
-    expect(JSON.stringify(validateTemplate(stripped))).toBe(JSON.stringify(doc));
+    expect(withoutStamp(back.template)).toBe(withoutStamp(doc));
   });
 
   it("a manifest remembers non-builtin kinds, so a dialect's document reads back intact", () => {

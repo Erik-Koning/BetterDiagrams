@@ -121,7 +121,7 @@ import {
   type ZoneNodeData,
 } from "../contract/schema";
 import { pathColor, type DiagramPath } from "../contract/paths";
-import { applyOutsideView, applyPathView, buildPathGlowIndex, transientPathColors } from "./path-view";
+import { applyOutsideView, applyPathView, buildPathGlowIndex, canvasStandIns, keptOnCanvas, representatives, transientPathColors } from "./path-view";
 import { FieldPathPanel } from "./FieldPathPanel";
 import { computeRouteView, structureSignature, type RouteView } from "./field-routes";
 import { walkToPath } from "../contract/graph";
@@ -1952,10 +1952,26 @@ function StudioInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coverageMask, coverageKeys, coverageHover, structureSig]);
   /**
-   * One dim mask for the canvas: the coverage panel's while it is showing
-   * something, else the paths panel's reachable set, else nothing.
+   * Which canvas node stands for each document node right now — a folded
+   * group's chip for the tables inside it, a ghost for a table on another
+   * level. Keyed on the canvas's ID SET rather than the node array, so a
+   * drag (positions only) leaves it, and everything memoised on it, alone.
    */
-  const dimmedIds = coverageMask ?? routeView?.keep ?? null;
+  const canvasIdsKey = useMemo(() => nodes.map((n) => n.id).join("\n"), [nodes]);
+  const canvasReps = useMemo(
+    () => representatives(template, canvasIdsKey ? canvasIdsKey.split("\n") : []),
+    [template, canvasIdsKey],
+  );
+  /**
+   * One dim mask for the canvas: the coverage panel's while it is showing
+   * something, else the paths panel's reachable set, else nothing — widened
+   * to the stand-ins, so a chip hiding a kept table stays bright and a chip
+   * hiding none recedes like any other card.
+   */
+  const dimmedIds = useMemo(() => {
+    const keep = coverageMask ?? routeView?.keep ?? null;
+    return keep ? keptOnCanvas(keep, canvasReps) : null;
+  }, [coverageMask, routeView, canvasReps]);
   const routeKeepEdges = coverageMask ? coverageKeepEdges : (routeView?.keepEdges ?? null);
 
   const allTags = useMemo(() => {
@@ -2149,12 +2165,17 @@ function StudioInner({
    */
   const { nodes: viewNodes, edges: viewEdges } = useMemo(() => {
     const scrubbed = applyTimelineView(nodes, edges, timelineFutureIds, timelineFuture);
+    // What stands for what on this canvas — a chip for the tables folded
+    // into it, one line for a bundle of edges — so a lit or kept element the
+    // canvas hides shows on its stand-in. Only while something is lit or
+    // kept; the common case stays a pass-through.
+    const standIns = pathGlowIndex || routeKeepEdges ? canvasStandIns(template, scrubbed.nodes, scrubbed.edges) : null;
     // Lit paths glow. After the timeline pass (a hidden node stays hidden),
     // before the lifts below, which append their classes rather than replace.
-    const lit = applyPathView(scrubbed.nodes, scrubbed.edges, pathGlowIndex);
+    const lit = applyPathView(scrubbed.nodes, scrubbed.edges, pathGlowIndex, standIns);
     // Everything outside the pins' reach recedes (nodes take the same
     // treatment through the studio context, where the renderer dims).
-    const view = { nodes: lit.nodes, edges: applyOutsideView(lit.edges, routeKeepEdges) };
+    const view = { nodes: lit.nodes, edges: applyOutsideView(lit.edges, routeKeepEdges, standIns) };
     // Manual z-index mode (see the <ReactFlow> props) drops React Flow's
     // built-in elevate-on-select, so restore it here as a display pass: a
     // selected node floats above whatever it is dragged across. Containers
@@ -2186,7 +2207,7 @@ function StudioInner({
         e.selected ? { ...e, zIndex: (e.zIndex ?? 0) + SELECTED_EDGE_ELEVATION } : e,
       ),
     };
-  }, [nodes, edges, timelineFutureIds, timelineFuture, dropTargetId, pathGlowIndex, routeKeepEdges]);
+  }, [nodes, edges, timelineFutureIds, timelineFuture, dropTargetId, pathGlowIndex, routeKeepEdges, template]);
 
   useEffect(() => {
     timelineAtRef.current = timelineAt;
@@ -3606,31 +3627,64 @@ function StudioInner({
     setStickyKey((current) => (current === key ? null : key));
     setStickyRoute(null);
   }, []);
-  /** Keep a route lit alone and frame it — or, when it crosses levels, go to it. */
+  /**
+   * Keep a route lit alone and frame it. The frame goes around whatever
+   * STANDS for each hop on the level being shown — the table itself, the
+   * chip of the group it is folded into, a ghost — so a route through a
+   * collapsed group frames as A → [G] → B here, lit chip and all, rather than
+   * jumping inside. The view moves only when some hop has nothing standing
+   * for it on this level: to the deepest level every hop is under, framed
+   * there once it has drawn.
+   */
   const pickRoute = useCallback(
     (index: number) => {
       setStickyRoute((current) => (current === index ? null : index));
       setStickyKey(null);
       const route = routeView?.routes[index];
       if (!route) return;
-      const boxes = route.walk.nodes.map((id) => flow.getInternalNode(id));
-      if (boxes.every((b) => b)) {
+      const doc = templateRef.current;
+      const standIns = () => {
+        const reps = representatives(doc, flow.getNodes().map((n) => n.id));
+        return route.walk.nodes.map((id) => reps.get(id));
+      };
+      const frame = () => {
+        const boxes = [...new Set(standIns())].flatMap((id) => (id === undefined ? [] : (flow.getInternalNode(id) ?? [])));
+        if (!boxes.length) {
+          void flow.fitView({ padding: 0.15, duration: 250 });
+          return;
+        }
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         for (const b of boxes) {
-          const abs = b!.internals.positionAbsolute;
-          const w = (b!.measured?.width as number) ?? 170;
-          const h = (b!.measured?.height as number) ?? 76;
+          const abs = b.internals.positionAbsolute;
+          const w = (b.measured?.width as number) ?? 170;
+          const h = (b.measured?.height as number) ?? 76;
           minX = Math.min(minX, abs.x);
           minY = Math.min(minY, abs.y);
           maxX = Math.max(maxX, abs.x + w);
           maxY = Math.max(maxY, abs.y + h);
         }
         void flow.fitBounds({ x: minX, y: minY, width: maxX - minX, height: maxY - minY }, { padding: 0.3, duration: 300 });
-      } else {
-        navigateToNode(route.walk.nodes[1] ?? route.walk.nodes[0]);
+      };
+      if (standIns().every((id) => id !== undefined)) {
+        frame();
+        return;
       }
+      // The deepest level every hop is under: the longest common prefix of
+      // the hops' ancestries. There, every hop is a child of the level or
+      // folded into one — a stand-in either way.
+      const chains = route.walk.nodes.map((id) => focusPath(doc, id));
+      const common: string[] = [];
+      for (let depth = 0; ; depth++) {
+        const step = chains[0]?.[depth];
+        if (step === undefined || !chains.every((chain) => chain[depth] === step)) break;
+        common.push(step);
+      }
+      drillTo(common);
+      // Post-materialize timer, the navigateToNode precedent: the rebuild
+      // effect must run before the level's boxes exist to frame.
+      window.setTimeout(frame, 80);
     },
-    [routeView, flow, navigateToNode],
+    [routeView, flow, drillTo],
   );
 
   // The FACT refs the imperative reads answer from — a handle method runs
@@ -4555,21 +4609,12 @@ function StudioInner({
 
   // ── Selection ─────────────────────────────────────────────────────────────
 
-  const onSelectionChange = useCallback((params: OnSelectionChangeParams) => {
-    const nodeIds = params.nodes.map((n) => n.id);
-    const edgeIds = params.edges.map((e) => e.id);
-    // Selecting something else ends any run of typing: the next keystroke is
-    // a different edit and must undo on its own.
-    const before = selectionRef.current;
-    if (before.nodes.join() !== nodeIds.join() || before.edges.join() !== edgeIds.join()) {
-      endHistoryRun();
-    }
-    // Mirrored into a ref because `materializeTemplate` runs outside render
-    // and needs the CURRENT selection to carry it across a rebuild.
-    selectionRef.current = { nodes: nodeIds, edges: edgeIds };
-    setSelectedNodeIds(nodeIds);
-    setSelectedEdgeIds(edgeIds);
-  }, [endHistoryRun]);
+  const onSelectionChange = useCallback(
+    (params: OnSelectionChangeParams) => {
+      setSelection(params.nodes.map((n) => n.id), params.edges.map((e) => e.id));
+    },
+    [setSelection],
+  );
 
   // Report the selection to the host in template terms: zone nodes drop their
   // canvas prefix, a collapse-rerouted edge resolves to the document edge it
