@@ -3,7 +3,7 @@
  * that put a foreign-key line on the column it references.
  */
 import { describe, expect, it } from "vitest";
-import { referencesTo } from "./fields";
+import { keyReferences, keysBetween, referencesTo } from "./fields";
 import {
   FIELD_ROW_H,
   MAX_NODE_FIELDS,
@@ -495,5 +495,59 @@ describe("referencesTo — what points at a key", () => {
     expect(referencesTo(t, { nodeId: "users" }).map((r) => r.edgeId)).toEqual(["o-u", "n-u", "n-m", "u-u"]);
     expect(referencesTo(t, { nodeId: "logs", fieldId: "id" })).toEqual([]);
     expect(referencesTo(t, { nodeId: "ghost", fieldId: "id" })).toEqual([]);
+  });
+});
+
+describe("keyReferences and keysBetween — a table's keys both ways", () => {
+  const tbl = (id: string, label: string, fields: unknown[], data?: Record<string, unknown>) => ({
+    id, label, kind: "table", icon: "none", description: "", parentId: null, x: 0, y: 0, w: 230, h: 96, fields, ...(data ? { data } : {}),
+  });
+  const t = validateTemplate({
+    version: 1,
+    nodes: [
+      tbl("users", "Users", [{ id: "id", name: "id", key: "pk" }]),
+      tbl("orders", "Orders", [{ id: "id", name: "id", key: "pk" }, { id: "user_id", name: "user_id", key: "fk" }, { id: "owner", name: "owner", key: "fk" }]),
+      // A reference the data describes that no line draws.
+      tbl("notes", "Notes", [{ id: "id", name: "id", key: "pk" }], {
+        model: { shape: "entity", name: "Notes", fields: [{ name: "id", primaryKey: true }, { name: "user", relationship: { kind: "lookup", referenceTo: ["Users"] } }] },
+      }),
+    ],
+    edges: [
+      { id: "o-u", source: "orders", target: "users", label: "", style: "solid", color: "slate", startField: "user_id", endField: "id" },
+      { id: "o-o", source: "orders", target: "users", label: "", style: "solid", color: "slate", startField: "owner" },
+    ],
+  } as unknown as DiagramTemplate);
+  // `nameIndex` resolves a data reference only through an entity's own record.
+  const doc = { ...t, nodes: t.nodes.map((n) => (n.id === "users" ? { ...n, data: { model: { shape: "entity", name: "Users" } } } : n)) };
+
+  it("a table: what it carries, resolved to the key it lands on, and what points at it", () => {
+    expect(keyReferences(doc, { nodeId: "orders" })).toEqual({
+      carries: [
+        { from: { nodeId: "orders", fieldId: "user_id" }, to: { nodeId: "users", fieldId: "id" }, edgeId: "o-u" },
+        { from: { nodeId: "orders", fieldId: "owner" }, to: { nodeId: "users", fieldId: "id" }, edgeId: "o-o" },
+      ],
+      referencedBy: [],
+    });
+    expect(keyReferences(doc, { nodeId: "users" }).referencedBy).toEqual([
+      { from: { nodeId: "orders", fieldId: "user_id" }, to: { nodeId: "users", fieldId: "id" }, edgeId: "o-u" },
+      { from: { nodeId: "orders", fieldId: "owner" }, to: { nodeId: "users", fieldId: "id" }, edgeId: "o-o" },
+    ]);
+  });
+
+  it("a field narrows both lists; an undrawn data reference is listed without a line", () => {
+    expect(keyReferences(doc, { nodeId: "orders", fieldId: "owner" }).carries.map((l) => l.edgeId)).toEqual(["o-o"]);
+    expect(keyReferences(doc, { nodeId: "notes" }).carries).toEqual([
+      { from: { nodeId: "notes", fieldId: "user" }, to: { nodeId: "users", fieldId: "id" } },
+    ]);
+    expect(keyReferences(doc, { nodeId: "nope" })).toEqual({ carries: [], referencedBy: [] });
+  });
+
+  it("keysBetween lists the keys joining two pins either way round, held to a pinned field", () => {
+    expect(keysBetween(doc, { nodeId: "users" }, { nodeId: "orders" }).map((l) => l.from.fieldId)).toEqual(["user_id", "owner"]);
+    expect(keysBetween(doc, { nodeId: "orders", fieldId: "owner" }, { nodeId: "users" }).map((l) => l.from.fieldId)).toEqual(["owner"]);
+    expect(keysBetween(doc, { nodeId: "notes" }, { nodeId: "users" })).toEqual([
+      { from: { nodeId: "notes", fieldId: "user" }, to: { nodeId: "users", fieldId: "id" } },
+    ]);
+    expect(keysBetween(doc, { nodeId: "notes" }, { nodeId: "orders" })).toEqual([]);
   });
 });

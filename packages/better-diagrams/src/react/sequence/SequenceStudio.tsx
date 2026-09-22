@@ -100,6 +100,7 @@ import {
 import { useHistory, type Snapshot } from "../history";
 import {
   FileMenu,
+  InspectorBar,
   InspectorSection,
   Modal,
   ShortcutsModal,
@@ -253,6 +254,25 @@ function download(blob: Blob, filename: string): void {
 }
 
 /** Per-node decorations the adapter can't know about (drag constraints). */
+/** What the collapsed inspector pill calls the selection. */
+function seqSelectionSummary(node: Node | undefined, edge: Edge | undefined): string {
+  if (node) {
+    const data = node.data as {
+      participant?: SeqParticipant;
+      fragment?: SeqFragment;
+      note?: SeqNote;
+      activation?: SeqActivation;
+    };
+    if (data.participant) return data.participant.label || "Participant";
+    if (data.fragment) return `${data.fragment.kind} [${data.fragment.label}]`;
+    if (data.note) return data.note.text || "Note";
+    if (data.activation) return `Activation on ${data.activation.participant}`;
+    return "Selection";
+  }
+  if (edge) return (edge.data as { message?: SeqMessage }).message?.label || "Message";
+  return "";
+}
+
 function decorate(nodes: SeqRFNode[]): Node[] {
   return nodes.map((n) =>
     n.type === "participant"
@@ -316,6 +336,11 @@ function SequenceInner({
   /** The `?` shortcuts sheet — the same one the architecture editor shows. */
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [toast, setToast] = useState("");
+  /**
+   * The inspector bar folded to a pill. Kept above the bar so it survives the
+   * bar unmounting between selections — see the architecture editor's note.
+   */
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -1753,7 +1778,11 @@ function SequenceInner({
           </ReactFlow>
 
           {(singleNode || singleEdge) && !readOnly ? (
-            <div className="as-inspector">
+            <InspectorBar
+              collapsed={inspectorCollapsed}
+              onToggle={() => setInspectorCollapsed((c) => !c)}
+              summary={seqSelectionSummary(singleNode, singleEdge)}
+            >
               {singleNode?.type === "participant" ? (
                 <ParticipantInspector
                   node={singleNode}
@@ -1809,7 +1838,7 @@ function SequenceInner({
               <button type="button" className="as-btn as-btn--danger" onClick={deleteSelection}>
                 Delete
               </button>
-            </div>
+            </InspectorBar>
           ) : null}
 
           <div className="as-status">

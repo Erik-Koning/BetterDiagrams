@@ -1295,6 +1295,56 @@ export function InspectorSection({ caption, children }: { caption: string; child
   );
 }
 
+/**
+ * The floating bar that holds a selection's inspector, with a way to get it
+ * out of the way. Collapsed, it shrinks to a pill naming the selection and
+ * the button that opens it again — the controls are gone, but the reader can
+ * still see what is selected and that the bar exists.
+ *
+ * The collapsed flag lives with the CALLER, not here: the bar unmounts when
+ * nothing is selected and remounts for the next click, and a bar that sprang
+ * open on every reselection would make collapsing it pointless. Held in the
+ * studio, it follows the reader from node to node until they open it.
+ */
+export function InspectorBar({
+  collapsed,
+  onToggle,
+  summary,
+  children,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+  /** What is selected, for the collapsed pill — a label, or a count. */
+  summary: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={`as-inspector${collapsed ? " as-inspector--collapsed" : ""}`}
+      role="region"
+      aria-label="Selection inspector"
+    >
+      {collapsed ? (
+        <span className="as-inspector__summary" title={summary}>
+          {summary}
+        </span>
+      ) : (
+        children
+      )}
+      <button
+        type="button"
+        className="as-btn as-btn--icon as-inspector__toggle"
+        onClick={onToggle}
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? "Expand inspector" : "Collapse inspector"}
+        title={collapsed ? "Show the selection's controls" : "Collapse to a label"}
+      >
+        <UiIcon name={collapsed ? "chevronUp" : "chevronDown"} size={13} />
+      </button>
+    </div>
+  );
+}
+
 // ─── Drill breadcrumbs ───────────────────────────────────────────────────────
 
 /** C4 level names by drill depth. Depth 0 (the root) never shows the bar. */

@@ -478,3 +478,81 @@ export function searchFields(
   return out;
 }
 
+
+/**
+ * One foreign key as a pair of ends: the referencing field and the key it
+ * lands on. `edgeId` is absent when the document draws no line for it — a
+ * reference the data describes that the import chose not to draw — and
+ * `to.fieldId` when the target draws no key row to land on.
+ */
+export interface KeyLink {
+  from: FieldRef;
+  to: Pin;
+  edgeId?: string;
+}
+
+/** Every key touching a table or a field, in both directions. */
+export interface KeyReferences {
+  /** Keys the table (or the one field) carries, pointing out at other tables. */
+  carries: KeyLink[];
+  /** Keys elsewhere pointing at the table (or at the one field). */
+  referencedBy: KeyLink[];
+}
+
+const sameLink = (a: KeyLink, b: KeyLink): boolean =>
+  sameFieldRef(a.from, b.from) && sameFieldRef(a.to, b.to);
+
+/**
+ * The keys a table or field takes part in: what it carries (its own
+ * reference fields, each resolved to the key it lands on) and what points
+ * at it (`referencesTo`, each with the key the line lands on). A field pin
+ * narrows both to that one field. Same rules as the row menu's "Follow
+ * reference" and "Show references", so the panel and the menu agree.
+ */
+export function keyReferences(doc: FieldDocument, pin: Pin): KeyReferences {
+  const node = doc.nodes.find((n) => n.id === pin.nodeId);
+  if (!node) return { carries: [], referencedBy: [] };
+  const carries: KeyLink[] = [];
+  for (const record of fieldRecords(node, doc)) {
+    if (pin.fieldId !== undefined && record.id !== pin.fieldId) continue;
+    for (const target of record.fk) {
+      if (!target.nodeId) continue;
+      const key = referencedKey(doc, target);
+      const link: KeyLink = {
+        from: { nodeId: node.id, fieldId: record.id },
+        to: key ?? { nodeId: target.nodeId },
+        ...(target.edgeId !== undefined ? { edgeId: target.edgeId } : {}),
+      };
+      if (!carries.some((l) => sameLink(l, link))) carries.push(link);
+    }
+  }
+  const implicit = referencedKey(doc, { label: "", nodeId: pin.nodeId })?.fieldId;
+  const referencedBy: KeyLink[] = [];
+  for (const r of referencesTo(doc, pin)) {
+    if (r.fieldId === undefined) continue; // a line with no field is not a key
+    const edge = doc.edges.find((e) => e.id === r.edgeId);
+    const landed = (edge ? edgeFieldIds(edge).end : undefined) ?? implicit;
+    const link: KeyLink = {
+      from: { nodeId: r.nodeId, fieldId: r.fieldId },
+      to: landed !== undefined ? { nodeId: pin.nodeId, fieldId: landed } : { nodeId: pin.nodeId },
+      edgeId: r.edgeId,
+    };
+    if (!referencedBy.some((l) => sameLink(l, link))) referencedBy.push(link);
+  }
+  return { carries, referencedBy };
+}
+
+/**
+ * The keys joining two pins directly, either way round: what `a` carries
+ * that lands on `b`, then what `b` carries that lands on `a`. A field pin
+ * holds its end to that field. References the document draws no line for
+ * are included (`edgeId` absent) — a key is a key whether or not it is drawn.
+ */
+export function keysBetween(doc: FieldDocument, a: Pin, b: Pin): KeyLink[] {
+  const landsOn = (link: KeyLink, end: Pin) =>
+    link.to.nodeId === end.nodeId && (end.fieldId === undefined || link.to.fieldId === end.fieldId);
+  return [
+    ...keyReferences(doc, a).carries.filter((l) => landsOn(l, b)),
+    ...keyReferences(doc, b).carries.filter((l) => landsOn(l, a)),
+  ];
+}

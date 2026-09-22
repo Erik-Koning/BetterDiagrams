@@ -124,6 +124,7 @@ import { pathColor, type DiagramPath } from "../contract/paths";
 import { applyOutsideView, applyPathView, buildPathGlowIndex, canvasStandIns, keptOnCanvas, representatives, transientPathColors } from "./path-view";
 import { FieldPathPanel } from "./FieldPathPanel";
 import { computeRouteView, structureSignature, type RouteView } from "./field-routes";
+import { ReferencePanel } from "./ReferencePanel";
 import { walkToPath } from "../contract/graph";
 import {
   DEFAULT_POLYGON_POINTS,
@@ -158,6 +159,7 @@ import {
   Breadcrumbs,
   Modal,
   ShortcutsModal,
+  InspectorBar,
   InspectorSection,
   RelationSwatch,
   TimelineScrubber,
@@ -182,7 +184,7 @@ import { fanOutResize } from "./resize";
 import { NestingModal } from "./NestingModal";
 import { inlineContents, nestContents } from "../contract/nesting";
 import { importFolder } from "../contract/folder";
-import { buildFieldIndex, fieldKey, fieldRecords, hasField, keyFields, referencedKey, referencesTo, sameFieldRef, searchFields, type FieldRef, type FieldTarget, type Pin } from "../contract/fields";
+import { buildFieldIndex, fieldKey, fieldRecords, hasField, keyFields, keyReferences, referencedKey, referencesTo, sameFieldRef, searchFields, type FieldRef, type FieldTarget, type KeyLink, type Pin } from "../contract/fields";
 import { keyCoverage, marginalGains, minimalKeyCover, storesFields, type CoverageScope } from "../contract/coverage";
 import { CoveragePanel } from "./CoveragePanel";
 import { FieldGridModal } from "./FieldGridModal";
@@ -946,8 +948,17 @@ function StudioInner({
   const [fieldGrid, setFieldGrid] = useState<{ nodeId: string; fieldId?: string } | null>(null);
   /** The row the inspector should put its cursor in — the field menu's Edit…. */
   const [editField, setEditField] = useState<FieldRef | null>(null);
+  /**
+   * Whether the inspector bar is folded down to a pill. Held here, above the
+   * bar, so it survives the bar unmounting between selections: collapse it
+   * once and it stays collapsed from node to node until it is opened again.
+   */
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const toggleInspector = useCallback(() => setInspectorCollapsed((c) => !c), []);
   /** The paths panel: routes between the pins. Opens from the pin strip. */
   const [pathPanelOpen, setPathPanelOpen] = useState(false);
+  /** The table or field whose keys the references panel lists; shares the panel slot. */
+  const [refPanel, setRefPanel] = useState<Pin | null>(null);
   /** Ignore arrow direction — the default a "how do these connect" question wants. */
   const [routeUndirected, setRouteUndirected] = useState(true);
   /** With three or more pins: dim the canvas to what lies between, or to what they reach. */
@@ -1890,6 +1901,17 @@ function StudioInner({
     // `structureSig` stands in for the template on purpose (see above).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [structureSig, pins, routeUndirected, routeMode, pathPanelOpen, routeColors]);
+  /** The keys of the table or field the references panel is open on; memoised like the routes. */
+  const refView = useMemo(() => {
+    if (!refPanel) return null;
+    return keyReferences(templateRef.current, refPanel);
+    // `structureSig` stands in for the template on purpose (see above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [structureSig, refPanel]);
+  // The panel's subject went with an edit or an import: close it.
+  useEffect(() => {
+    if (refPanel && !hasField(template, refPanel)) setRefPanel(null);
+  }, [template, refPanel]);
   /** The found routes as transient paths — all of them, or the hovered/kept one alone. */
   const transientPaths = useMemo(() => {
     if (!routeView || routeView.kind !== "pair") return [];
@@ -3538,7 +3560,10 @@ function StudioInner({
 
   const setPins = useCallback((refs: readonly Pin[]) => {
     const next: Pin[] = [];
-    for (const ref of refs) {
+    for (const raw of refs) {
+      // A pin names a DOCUMENT node: a ghost on a drilled-in level stands for
+      // a table on another level, and pinning it means pinning that table.
+      const ref: Pin = { ...raw, nodeId: documentNodeOf(raw.nodeId) };
       if (next.some((p) => sameFieldRef(p, ref))) continue;
       next.push(ref.fieldId ? { nodeId: ref.nodeId, fieldId: ref.fieldId } : { nodeId: ref.nodeId });
     }
@@ -3600,6 +3625,18 @@ function StudioInner({
     },
     [navigateToNode],
   );
+  const closeRefPanel = useCallback(() => {
+    setRefPanel(null);
+    setHighlightFields(NO_FIELDS);
+  }, []);
+  /** A key from the references panel: go to the key it lands on, both rows marked. */
+  const followLink = useCallback(
+    (link: KeyLink) => {
+      navigateToNode(link.to.nodeId);
+      setHighlightFields(new Set([fieldKey(link.from), ...(link.to.fieldId ? [fieldKey(link.to)] : [])]));
+    },
+    [navigateToNode],
+  );
   /**
    * The other direction: light everything that points AT a key — its own
    * row, every foreign-key row landing on it, and the tables those rows sit
@@ -3616,6 +3653,9 @@ function StudioInner({
         if (r.fieldId) marks.add(fieldKey(r));
       }
       setHighlightFields(marks);
+      setRefPanel({ ...ref });
+      setPathPanelOpen(false);
+      setPanelOpen(false); // the panels share a slot
       const tables = new Set(refs.map((r) => r.nodeId)).size;
       showToast(
         refs.length
@@ -3649,7 +3689,8 @@ function StudioInner({
   }, [searchQuery]);
   const togglePathPanel = useCallback(() => {
     setPathPanelOpen((open) => !open);
-    setPanelOpen(false); // the two panels share a slot
+    setPanelOpen(false); // the panels share a slot
+    setRefPanel(null);
   }, []);
   // Fewer than two pins, nothing to search: the panel closes; a changed set
   // of pins forgets which route was kept.
@@ -4735,6 +4776,30 @@ function StudioInner({
   const nodeLabelOf = (id: string): string =>
     ((nodes.find((n) => n.id === id)?.data as DiagramNodeData | undefined)?.label ?? id);
 
+  /** What the collapsed inspector pill says the selection is. */
+  const inspectorSummary = ((): string => {
+    if (multiSelected) {
+      const parts = [
+        [selectedDocNodes.length, "node"],
+        [selectedZoneIds.length, "zone"],
+        [selectedEdges.length, "connection"],
+      ] as const;
+      return parts
+        .filter(([n]) => n > 0)
+        .map(([n, word]) => `${n} ${word}${n === 1 ? "" : "s"}`)
+        .join(" · ");
+    }
+    if (selectedZoneNode) {
+      return (selectedZoneNode.data as unknown as ZoneNodeData).zone.label || "Zone";
+    }
+    if (selectedNode) return (selectedNode.data as DiagramNodeData).label || "Node";
+    if (selectedEdge) {
+      const label = (selectedEdge.data as DiagramEdgeData | undefined)?.label;
+      return label || `${nodeLabelOf(selectedEdge.source)} → ${nodeLabelOf(selectedEdge.target)}`;
+    }
+    return "";
+  })();
+
   /**
    * Turn a connection round.
    *
@@ -5506,6 +5571,12 @@ function StudioInner({
           setCoverageOpen(false);
           return;
         }
+        // The references panel and the marks it came with are one thing: a
+        // way out of the panel is a way out of the marks.
+        if (refPanel) {
+          closeRefPanel();
+          return;
+        }
         if (pathPanelOpen) {
           setPathPanelOpen(false);
           return;
@@ -5543,7 +5614,7 @@ function StudioInner({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, pathPanelOpen, coverageOpen, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
+  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, pathPanelOpen, refPanel, closeRefPanel, coverageOpen, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
 
   // ── Zone resize gesture ───────────────────────────────────────────────────
   //
@@ -5597,7 +5668,7 @@ function StudioInner({
   /** How many field records the single selected node has — the grid's openers show it. */
   const selectedFieldCount = useMemo(() => {
     if (selectedNodeIds.length !== 1) return 0;
-    const node = template.nodes.find((n) => n.id === selectedNodeIds[0]);
+    const node = template.nodes.find((n) => n.id === documentNodeOf(selectedNodeIds[0]!));
     return node ? fieldRecords(node, template).length : 0;
   }, [selectedNodeIds, template]);
 
@@ -6773,7 +6844,17 @@ function StudioInner({
             mergeBase.current = null;
           }}
         >
-          {pathPanelOpen && routeView && !activeDiffBase ? (
+          {refPanel && refView && !activeDiffBase ? (
+            <ReferencePanel
+              pin={refPanel}
+              view={refView}
+              labelOf={fieldLabel}
+              nodeLabel={(id) => template.nodes.find((n) => n.id === id)?.label ?? id}
+              onFollow={followLink}
+              onNavigateField={navigateToField}
+              onClose={closeRefPanel}
+            />
+          ) : pathPanelOpen && routeView && !activeDiffBase ? (
             <FieldPathPanel
               view={routeView}
               pins={pins}
@@ -7115,7 +7196,11 @@ function StudioInner({
               Duplicate with it — so selecting five nodes left the user with
               fewer controls than selecting one. */}
           {multiSelected && !readOnly && !activeDiffBase ? (
-            <div className="as-inspector">
+            <InspectorBar
+              collapsed={inspectorCollapsed}
+              onToggle={toggleInspector}
+              summary={inspectorSummary}
+            >
               <MultiInspector
                 nodes={selectedDocNodes}
                 edges={selectedEdges}
@@ -7138,11 +7223,15 @@ function StudioInner({
                 onGroup={groupSelection}
               />
               {renderSlot(inspectorExtras)}
-            </div>
+            </InspectorBar>
           ) : null}
 
           {(selectedNode || selectedEdge || selectedZoneNode) && !multiSelected && !readOnly && !activeDiffBase ? (
-            <div className="as-inspector">
+            <InspectorBar
+              collapsed={inspectorCollapsed}
+              onToggle={toggleInspector}
+              summary={inspectorSummary}
+            >
               {selectedZoneNode ? (
                 <ZoneInspector
                   zone={(selectedZoneNode.data as unknown as ZoneNodeData).zone}
@@ -7236,7 +7325,7 @@ function StudioInner({
               <button type="button" className="as-btn as-btn--danger" onClick={deleteSelection}>
                 Delete
               </button>
-            </div>
+            </InspectorBar>
           ) : null}
 
           {focusId &&
@@ -7516,9 +7605,9 @@ function StudioInner({
                 />
                 {contextMenu.kind === "node" && selectedNodeIds.length === 1 ? (
                   <ContextItem
-                    label={pins.some((p) => !p.fieldId && p.nodeId === selectedNodeIds[0]) ? "Unpin table" : "Pin table for search"}
+                    label={pins.some((p) => !p.fieldId && p.nodeId === documentNodeOf(selectedNodeIds[0]!)) ? "Unpin table" : "Pin table for search"}
                     hint="Paths to and from it"
-                    onPick={() => togglePin({ nodeId: selectedNodeIds[0]! })}
+                    onPick={() => togglePin({ nodeId: documentNodeOf(selectedNodeIds[0]!) })}
                     close={closeContext}
                   />
                 ) : null}
@@ -7526,18 +7615,20 @@ function StudioInner({
                   <ContextItem
                     label="View all fields"
                     hint={String(selectedFieldCount)}
-                    onPick={() => setFieldGrid({ nodeId: selectedNodeIds[0]! })}
+                    onPick={() => setFieldGrid({ nodeId: documentNodeOf(selectedNodeIds[0]!) })}
                     close={closeContext}
                   />
                 ) : null}
                 {contextMenu.kind === "node" && selectedFieldCount
                   ? (() => {
-                      const count = referencesTo(template, { nodeId: selectedNodeIds[0]! }).length;
-                      return count ? (
+                      const subject = { nodeId: documentNodeOf(selectedNodeIds[0]!) };
+                      const refs = keyReferences(template, subject);
+                      const count = refs.referencedBy.length;
+                      return count || refs.carries.length ? (
                         <ContextItem
                           label={`Show references (${count})`}
-                          hint="Every foreign key pointing here"
-                          onPick={() => showReferences({ nodeId: selectedNodeIds[0]! })}
+                          hint={count ? "Every foreign key pointing here, and its own" : "The foreign keys it carries"}
+                          onPick={() => showReferences(subject)}
                           close={closeContext}
                         />
                       ) : null;
@@ -9519,6 +9610,9 @@ function viewSignatureOf(
 
 /** The longest prefix of the focus stack whose nodes still exist in `doc`. */
 /** Pins whose field (or table) still exists. */
+/** The document node a canvas node stands for: a ghost's source, else itself. */
+const documentNodeOf = (id: string): string => (isGhostNodeId(id) ? ghostSourceId(id) : id);
+
 function prunePins(doc: DiagramTemplate, pins: readonly Pin[]): Pin[] {
   return pins.filter((p) => hasField(doc, p));
 }

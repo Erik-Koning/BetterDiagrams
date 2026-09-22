@@ -166,6 +166,40 @@ export function FieldPathPanel({
         </section>
       ) : null}
 
+      {pair && view.directKeys.length ? (
+        <section className="as-paths__section" aria-label="Keys joining the pins">
+          <h3 className="as-paths__caption">
+            Keys joining the pins <span className="as-paths__count">{view.directKeys.length}</span>
+          </h3>
+          <ul className="as-paths__list">
+            {view.directKeys.slice(0, LIST_CAP).map((link) => {
+              const key = fieldKey(link.from);
+              const drawn = link.edgeId !== undefined;
+              const text = `${nodeLabel(link.from.nodeId)}.${link.from.fieldId} → ${nodeLabel(link.to.nodeId)}${link.to.fieldId ? `.${link.to.fieldId}` : ""}`;
+              return (
+                <li key={`${key}\u0000${fieldKey(link.to)}`}>
+                  <button
+                    type="button"
+                    className={`as-paths__item as-paths__keyuse${hoverKey === key ? " as-paths__item--hover" : ""}${stickyKey === key ? " as-paths__item--sticky" : ""}`}
+                    aria-pressed={stickyKey === key}
+                    title={drawn ? "Hover to light this key on the canvas; click to keep it lit" : "The document draws no line for this reference"}
+                    disabled={!drawn}
+                    onMouseEnter={() => onHoverKey(key)}
+                    onMouseLeave={() => onHoverKey(null)}
+                    onFocus={() => onHoverKey(key)}
+                    onBlur={() => onHoverKey(null)}
+                    onClick={() => onPickKey(key)}
+                  >
+                    <span className="as-paths__itemlabel">{text}</span>
+                    {!drawn ? <span className="as-paths__itemdetail">not drawn</span> : null}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+
       {/* A ranking needs something to rank: with one route every key on it
           is trivially "1 of 1", and the route's own hop strip already names
           them in order. */}

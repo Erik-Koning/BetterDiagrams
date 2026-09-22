@@ -216,7 +216,7 @@ describe("the keyboard", () => {
 
     // Double-click is the drill gesture and stays that way, so rename needed
     // a key of its own.
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "Name" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText("Node label")).toBeInTheDocument());
   });
 });
 
@@ -239,6 +239,43 @@ describe("the inspector", () => {
     await waitFor(() => expect(screen.getByText(/2 nodes/)).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Duplicate the selection" })).toBeInTheDocument();
+  });
+
+  it("stays collapsed from one selection to the next until it is opened again", async () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={TWO} />);
+
+    fireEvent.click(node(container, "a"));
+    await waitFor(() => expect(screen.getByLabelText("Node label")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse inspector" }));
+    // Folded: the controls are gone, the pill names the selection.
+    expect(screen.queryByLabelText("Node label")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Selection inspector" })).toHaveTextContent("A");
+
+    // Selecting another node swaps the pill's name but does NOT spring the
+    // bar open — a bar that reopened on every click couldn't be put away.
+    fireEvent.click(node(container, "b"));
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: "Selection inspector" })).toHaveTextContent("B"),
+    );
+    expect(screen.queryByLabelText("Node label")).not.toBeInTheDocument();
+
+    // Deselecting and selecting again keeps it folded too.
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Selection inspector" })).not.toBeInTheDocument(),
+    );
+    fireEvent.click(node(container, "a"));
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: "Selection inspector" })).toHaveTextContent("A"),
+    );
+    expect(screen.queryByLabelText("Node label")).not.toBeInTheDocument();
+
+    // Expanding brings every control back.
+    fireEvent.click(screen.getByRole("button", { name: "Expand inspector" }));
+    expect(screen.getByLabelText("Node label")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
   });
 
   it("offers a multi-selection every setting the elements share, and writes it to all", async () => {
