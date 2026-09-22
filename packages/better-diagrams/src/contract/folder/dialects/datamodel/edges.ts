@@ -11,7 +11,7 @@
 import type { DiagramEdge } from "../../../schema";
 import { FALLBACK_RELATION, RELATION_KINDS, relationDressing } from "../../../relations";
 import type { FolderNode, FolderImportOptions, ImportWarning } from "../../types";
-import type { ForeignKey, EntitySchema, RecordTypeSchema } from "./shapes";
+import type { ForeignKey, EntityField, EntitySchema, RecordTypeSchema } from "./shapes";
 
 /** How many targets `polymorphic: "in-model"` fans out to before capping. */
 export const POLY_FANOUT_CAP = 12;
@@ -33,7 +33,23 @@ export interface EdgeContext {
   stubs: Map<string, FolderNode>;
   /** Collapse points requested so far. */
   points: FolderNode[];
+  /** Entity folders whose record types fold into one enumeration node (`recordTypes: "enum"`). */
+  recordTypeEntities: Set<string>;
 }
+
+/**
+ * The field that says which record type a row is — Salesforce's
+ * `RecordTypeId`, a plain `record_type` column. Matched by name, or by a
+ * reference whose target is the record-type object itself.
+ */
+const DISCRIMINATOR_NAME = /^record_?type(_?id)?$/i;
+const DISCRIMINATOR_TARGET = /^record_?type$/i;
+export function isDiscriminator(f: EntityField): boolean {
+  return DISCRIMINATOR_NAME.test(f.name) || (f.relationship?.referenceTo ?? []).some((t) => DISCRIMINATOR_TARGET.test(t));
+}
+
+/** The enumeration node an entity's record types fold into — synthetic, so underscored like `_poly`. */
+export const recordTypeEnumId = (entityFolder: string) => `${entityFolder}/_record-types`;
 
 export const stubId = (name: string) => `${EXTERNAL_GROUP_ID}/${name.toLowerCase()}`;
 
@@ -121,6 +137,31 @@ function canonicalTarget(fk: ForeignKey, ctx: EdgeContext, canonical: ReadonlySe
   return (first && ctx.nameToFolder.get(first)) ?? null;
 }
 
+/**
+ * Entity → its record-type enumeration: a reference, drawn from the
+ * discriminator's row when the entity carries one. The line is what makes
+ * the enumeration read as "the values of this field" rather than a stray
+ * box, so it is drawn even for an entity with no discriminator column —
+ * anchored to the box, labelled by what it stands for.
+ */
+export function recordTypeEnumEdge(schema: EntitySchema, folder: string, ctx: EdgeContext): DiagramEdge {
+  const target = recordTypeEnumId(folder);
+  const field = schema.fields.find(isDiscriminator) ?? null;
+  const dressing = relationDressing(RELATION_KINDS.reference ?? FALLBACK_RELATION);
+  if (field?.nullable === false && dressing.endLabel === "0..1") dressing.endLabel = "1";
+  const hasStart = !!field && (ctx.fieldsByFolder.get(folder)?.has(field.name) ?? false);
+  return {
+    id: `${folder}::${field?.name ?? "record-type"}::${target}`,
+    source: folder,
+    target,
+    label: field?.name ?? "record type",
+    relation: "reference",
+    ...dressing,
+    ...(hasStart && field ? { startField: field.name } : {}),
+    data: { model: { kind: "record-type", field: field?.name ?? null, business: true } },
+  };
+}
+
 export function entityEdges(
   schema: EntitySchema,
   folder: string,
@@ -131,7 +172,11 @@ export function entityEdges(
   const out: DiagramEdge[] = [];
   const name = schema.entity.name;
   const canonical = new Set(ctx.nameToFolder.values());
+  // The enumeration stands for the discriminator's foreign key: that key
+  // would otherwise stub an external "RecordType" table beside it.
+  const asEnum = (opts.recordTypes ?? "enum") === "enum" && ctx.recordTypeEntities.has(folder);
   for (const fk of schema.foreignKeys ?? []) {
+    if (asEnum && schema.fields.some((f) => f.name === fk.field && isDiscriminator(f))) continue;
     const business = ctx.business.has(`${name}::${fk.field}`);
     if ((opts.edges ?? "business") === "business" && !business) continue;
     const required = fkRequired(schema, fk);
@@ -187,6 +232,7 @@ export function entityEdges(
     }
     out.push(baseEdge(folder, target, fk, ctx, business, required));
   }
+  if (asEnum) out.push(recordTypeEnumEdge(schema, folder, ctx));
   return out;
 }
 

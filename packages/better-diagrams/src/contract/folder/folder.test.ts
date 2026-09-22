@@ -76,6 +76,22 @@ describe("shape discrimination", () => {
   });
 });
 
+describe("pinned rows", () => {
+  it("curated.diagramFields adds rows by name, and warns about a name the entity has no field for", async () => {
+    const files = new Map(await fixture());
+    const raw = JSON.parse(files.get("core/account/schema.json")!);
+    raw.curated = { ...raw.curated, diagramFields: ["description", "no_such_field"] };
+    files.set("core/account/schema.json", JSON.stringify(raw));
+    const { template, warnings } = importFolder(files);
+    const rows = byId(template, "core/account")!.fields!;
+    const description = rows.find((f) => f.id === "description")!;
+    expect(description.tags).toEqual(["hidden"]);
+    expect(warnings).toContainEqual(expect.objectContaining({ code: "unknown-field", path: "core/account" }));
+    // The pin is on top of the mode, never instead of it.
+    expect(rows.some((f) => f.key === "pk")).toBe(true);
+  });
+});
+
 describe("name index", () => {
   it("warns when two folders claim one name, and resolves references to the first", async () => {
     const files = new Map(await fixture());
@@ -91,7 +107,8 @@ describe("name index", () => {
 
 describe("nesting", () => {
   it("parents every node to its enclosing folder's node, to depth five", async () => {
-    const { template } = await imported();
+    // Leaf record types: the deepest folders the fixture has.
+    const { template } = await imported({ recordTypes: "nodes" });
     const parent = (id: string) => byId(template, id)?.parentId;
     expect(parent("core")).toBeNull();
     expect(parent("core/account")).toBe("core");
@@ -364,8 +381,40 @@ describe("views and record types", () => {
     expect(template.edges.some((e) => e.target === "core/account/individuals" && e.label !== "alias")).toBe(false);
   });
 
-  it("a record type is a labelled leaf whose one line is a generalization to its parent entity", async () => {
-    const { template } = await imported();
+  it("record types fold into one enumeration beside the entity, joined by a reference line", async () => {
+    const { template, warnings } = await imported();
+    expect(warnings.filter((w) => w.path?.includes("record-types"))).toEqual([]);
+    // Neither the leaf nor its wrapper group is a node.
+    expect(byId(template, "core/account/individuals/record-types/person")).toBeUndefined();
+    expect(byId(template, "core/account/individuals/record-types")).toBeUndefined();
+    const rts = byId(template, "core/account/individuals/record-types/person".replace(/\/individuals.*$/, "/_record-types"))!;
+    expect(rts.id).toBe("core/account/_record-types");
+    expect(rts).toMatchObject({ kind: "enum", label: "Account record types", description: "Record types of Individuals", parentId: "core" });
+    // A row per record type, keyed by the stable key.
+    expect(rts.fields).toEqual([{ id: "person", name: "Person" }]);
+    expect(rts.data!.model).toMatchObject({
+      shape: "record-types",
+      entity: "core/account",
+      discriminator: null,
+      recordTypes: [{ folder: "core/account/individuals/record-types/person", key: "person", active: true }],
+    });
+    // Account has no discriminator column, so the line leaves the box itself.
+    const edge = template.edges.find((e) => e.target === rts.id)!;
+    expect(edge).toMatchObject({ id: "core/account::record-type::core/account/_record-types", source: "core/account", label: "record type", relation: "reference", style: "dashed", color: "slate" });
+    expect(edge.startField).toBeUndefined();
+    expect(template.edges.filter((e) => e.target === rts.id)).toHaveLength(1);
+  });
+
+  it("recordTypes: \"none\" leaves record types out entirely", async () => {
+    const { template, warnings } = await imported({ recordTypes: "none" });
+    expect(warnings.filter((w) => w.path?.includes("record-types"))).toEqual([]);
+    expect(template.nodes.some((n) => n.id.includes("record-types"))).toBe(false);
+    expect(template.edges.some((e) => e.id.includes("record-type"))).toBe(false);
+  });
+
+  it("recordTypes: \"nodes\" keeps a record type as a labelled leaf whose one line is a generalization to its parent entity", async () => {
+    const { template } = await imported({ recordTypes: "nodes" });
+    expect(byId(template, "core/account/_record-types")).toBeUndefined();
     const rt = byId(template, "core/account/individuals/record-types/person")!;
     expect(rt.label).toBe("Person");
     expect(rt.description).toBe("Individual customers");
@@ -707,20 +756,39 @@ describe("the shipped datamodel example", () => {
     const { template, stats, warnings, dialect } = importFolder(await readFolderToFileMap(dir));
     expect(dialect).toBe(DATAMODEL_DIALECT_ID);
     expect(warnings).toEqual([]);
-    expect(stats.nodes).toBe(14); // 9 entities + a view + a group + 3 record types
+    expect(stats.nodes).toBe(11); // 9 entities + a view + one enumeration of 3 record types
     // Small enough to open expanded; the README says so.
     expect(template.nodes.filter((n) => n.collapsed)).toEqual([]);
     const kinds = new Set(template.nodes.map((n) => n.kind));
-    expect([...kinds].sort()).toEqual(["entity", "group", "record-type", "view"]);
+    expect([...kinds].sort()).toEqual(["entity", "enum", "view"]);
+    // Person's record types: three rows, and a line from its discriminator column.
+    const rts = byId(template, "people/_record-types")!;
+    expect(rts.fields!.map((f) => f.id)).toEqual(["chef", "customer", "manager"]);
+    expect(rts.description).toBe("How a person is classified");
+    const line = template.edges.find((e) => e.target === rts.id)!;
+    expect(line).toMatchObject({ id: "people::record_type_id::people/_record-types", startField: "record_type_id", relation: "reference" });
+    // Person pins two non-key rows: a hidden one and a read-only one, tagged
+    // from the source's access flags, in the schema's own field order.
+    const person = byId(template, "people")!;
+    expect(person.fields!.map((f) => f.id)).toEqual(["id", "name", "record_type_id", "building_id", "notes", "owner_id", "created_at"]);
+    expect(person.fields!.find((f) => f.id === "notes")!.tags).toEqual(["hidden"]);
+    expect(person.fields!.find((f) => f.id === "created_at")).toMatchObject({ required: true, tags: ["ro"] });
+    expect(person.fields!.find((f) => f.id === "id")!.tags).toBeUndefined();
+    // The discriminator's own key is the enumeration's line, never a stub.
+    const all = importFolder(await readFolderToFileMap(dir), { edges: "all" });
+    expect(all.template.nodes.some((n) => n.id === "_external/record_type")).toBe(false);
+    // Asked for as leaves, the tree is what it was: a group of three under Person.
+    const leaves = importFolder(await readFolderToFileMap(dir), { recordTypes: "nodes" });
+    expect(leaves.stats.nodes).toBe(14);
+    expect(leaves.template.nodes.filter((n) => n.kind === "record-type").map((n) => n.parentId)).toEqual(["people/record-types", "people/record-types", "people/record-types"]);
     // Composition against references, and the view's alias.
     const composition = template.edges.find((e) => e.relation === "composition")!;
     expect(composition.id).toBe("bread::recipe_id::recipes");
     expect(template.edges.find((e) => e.label === "alias")!.target).toBe("customers");
     // Audit keys are hidden by default and stubbed when asked for.
     expect(template.edges.some((e) => e.id.includes("owner_id"))).toBe(false);
-    const all = importFolder(await readFolderToFileMap(dir), { edges: "all" });
     expect(all.template.nodes.some((n) => n.id === "_external/user")).toBe(true);
-    // Nine tables, all reachable, and a provably smallest key set.
+    // Nine tables — the enumeration is not one — all reachable, and a provably smallest key set.
     const cover = minimalKeyCover(template);
     expect(cover.fraction).toBe(1);
     expect(cover.optimal).toBe(true);

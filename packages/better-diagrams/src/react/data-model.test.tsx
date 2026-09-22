@@ -227,6 +227,61 @@ describe("mermaid", () => {
   });
 });
 
+/** One table whose rows carry tags: a read-only column, a hidden one, a free label. */
+const TAGGED = validateTemplate({
+  version: 1,
+  nodes: [
+    {
+      id: "people",
+      label: "people",
+      kind: "table",
+      icon: "none",
+      description: "",
+      parentId: null,
+      x: 0,
+      y: 0,
+      w: 230,
+      h: 200,
+      fields: [
+        { id: "id", name: "id", type: "uuid", key: "pk" },
+        { id: "created_at", name: "created_at", type: "datetime", tags: ["ro"] },
+        { id: "secret", name: "secret", type: "text", tags: ["hidden", "pii"] },
+      ],
+    },
+  ],
+  edges: [],
+} as unknown as DiagramTemplate);
+
+describe("row tags", () => {
+  it("prints a badge per tag and a hidden row quiet, in the image export", () => {
+    const cmds = emitTemplate(TAGGED, createRegistry()).cmds.filter((c) => c.op === "text") as Array<{ text: string; alpha?: number }>;
+    const textOf = (text: string) => cmds.find((c) => c.text === text);
+    expect(textOf("RO")).toBeTruthy();
+    expect(textOf("PII")).toBeTruthy();
+    // `hidden` is not a badge: the row itself dims.
+    expect(textOf("HIDDEN")).toBeUndefined();
+    expect(textOf("secret")!.alpha).toBeCloseTo(0.45);
+    expect(textOf("created_at")!.alpha).toBeUndefined();
+  });
+
+  it("puts the tags in the Mermaid ER comment", () => {
+    const out = renderTemplateToMermaid(TAGGED);
+    expect(out).toContain('datetime created_at "ro"');
+    expect(out).toContain('text secret "hidden, pii"');
+  });
+
+  it("badges and dims the rows on the canvas", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const { container } = render(<ArchitectureStudio defaultValue={TAGGED} welcome={false} />, { container: host });
+    await screen.findAllByText("created_at");
+    const badges = [...container.querySelectorAll(".as-node__fieldflag--tag")].map((el) => el.textContent);
+    expect(badges).toEqual(["RO", "PII"]);
+    expect(container.querySelector('[data-field-id="secret"]')!.className).toContain("as-node__field--hidden");
+    expect(container.querySelector('[data-field-id="created_at"]')!.className).not.toContain("as-node__field--hidden");
+  });
+});
+
 describe("canvas", () => {
   const mount = (ui: React.ReactElement) => {
     const host = document.createElement("div");

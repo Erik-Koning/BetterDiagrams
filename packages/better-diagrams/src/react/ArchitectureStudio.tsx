@@ -1721,8 +1721,10 @@ function StudioInner({
     ? searchMatches[(searchIndex < 0 ? 0 : searchIndex) % searchMatches.length]
     : undefined;
 
-  /** Declared later (needs the drill machinery); the search jumps through it. */
-  const navigateToNodeRef = useRef<(id: string) => void>(() => {});
+  /** Declared later (needs the drill machinery); the search and Checks jump through it. */
+  const navigateToNodeRef = useRef<
+    (id: string, select?: { nodes?: readonly string[]; edges?: readonly string[] }) => void
+  >(() => {});
 
   /** Select + centre one match. Enter cycles through them. */
   const jumpToMatch = useCallback(
@@ -1976,7 +1978,10 @@ function StudioInner({
 
   const allTags = useMemo(() => {
     const out: string[] = [];
-    for (const n of template.nodes) for (const t of n.tags ?? []) if (!out.includes(t)) out.push(t);
+    for (const n of template.nodes) {
+      for (const t of n.tags ?? []) if (!out.includes(t)) out.push(t);
+      for (const f of n.fields ?? []) for (const t of f.tags ?? []) if (!out.includes(t)) out.push(t);
+    }
     return out.sort();
   }, [template]);
 
@@ -2016,6 +2021,22 @@ function StudioInner({
         void flow.setCenter(abs.x + w / 2, abs.y + h / 2, {
           zoom: Math.max(flow.getViewport().zoom, 0.9),
           duration: 300,
+        });
+        return;
+      }
+      // Nothing the finding blames is on this canvas: it lives inside a
+      // collapsed group, under the document's fold, or on a level the reader
+      // is not standing on — the shape a big folder import opens in, where
+      // the unconnected entity the lint is complaining about is inside a
+      // chip. Drill to the level that shows it, exactly as the search does,
+      // rather than leaving the menu item doing nothing.
+      const offender = finding.nodeIds?.find((id) =>
+        templateRef.current.nodes.some((n) => n.id === id),
+      );
+      if (offender) {
+        navigateToNodeRef.current(offender, {
+          nodes: finding.nodeIds,
+          edges: finding.edgeIds ?? [],
         });
       }
     },
@@ -3434,17 +3455,34 @@ function StudioInner({
 
   /**
    * Jump to the level that shows a node, then select and centre it — the
-   * search's cross-level fallback and a ghost's "go to definition".
+   * search's cross-level fallback, a ghost's "go to definition", and the
+   * Checks menu's way to an offender that is folded away.
+   *
+   * `select` names what the level should land with selected in place of the
+   * node itself: a lint finding blames a whole set (both ends of an edge,
+   * every node on a cycle), and centring on one of them while silently
+   * deselecting the rest would under-report the offence.
    */
   const navigateToNode = useCallback(
-    (id: string) => {
+    (id: string, select?: { nodes?: readonly string[]; edges?: readonly string[] }) => {
       const doc = templateRef.current;
       if (!doc.nodes.some((n) => n.id === id)) return;
+      const selectNodes = new Set(select?.nodes ?? [id]);
+      const selectEdges = select?.edges ? new Set(select.edges) : null;
+      // A node the provider selection hides has no box to land on however far
+      // we drill, so revealing it is what "go there" means — a view toggle
+      // (the View menu shows it ticked, and it is how you get back), never a
+      // document edit. Skipped for a read-only viewer: they have no toggle to
+      // undo it with.
+      if (!readOnly && !visibleElements(doc).nodes.has(id)) setShowHidden(true);
       drillTo(focusPath(doc, id));
       // Post-materialize timer, the applyTemplate precedent: the rebuild
       // effect must run before the node exists to select.
       window.setTimeout(() => {
-        setNodes((current) => current.map((n) => ({ ...n, selected: n.id === id })));
+        setNodes((current) => current.map((n) => ({ ...n, selected: selectNodes.has(n.id) })));
+        if (selectEdges) {
+          setEdges((current) => current.map((e) => ({ ...e, selected: selectEdges.has(e.id) })));
+        }
         const internal = flow.getInternalNode(id);
         if (internal) {
           const abs = internal.internals.positionAbsolute;
@@ -3458,7 +3496,7 @@ function StudioInner({
         }
       }, 80);
     },
-    [drillTo, flow, setNodes],
+    [drillTo, flow, setNodes, setEdges, readOnly],
   );
 
   useEffect(() => {
@@ -6215,7 +6253,7 @@ function StudioInner({
                 ) : null}
                 {allTags.length ? (
                   <>
-                    <div className="as-menu__caption">Dim nodes without tag</div>
+                    <div className="as-menu__caption">Dim nodes and rows without tag</div>
                     {allTags.map((tag) => (
                       <label key={tag} className="as-menu__check">
                         <input
@@ -8788,6 +8826,48 @@ function NodeInspector({
 }
 
 /**
+ * A row's tags as one comma-separated input. Edited as a draft and committed
+ * on blur or Enter: splitting on every keystroke would eat the comma the
+ * user just typed, and a chip list per row would not fit the row.
+ */
+function FieldTagsInput({
+  tags,
+  label,
+  onChange,
+}: {
+  tags: readonly string[];
+  label: string;
+  onChange: (tags: string[] | undefined) => void;
+}) {
+  const joined = tags.join(", ");
+  const [draft, setDraft] = useState(joined);
+  // A change from outside — undo, an AI edit — resets the draft.
+  useEffect(() => setDraft(joined), [joined]);
+  const commit = () => {
+    const next = [...new Set(draft.split(",").map((t) => t.trim()).filter(Boolean))];
+    if (next.join(", ") !== joined) onChange(next.length ? next : undefined);
+    setDraft(next.join(", "));
+  };
+  return (
+    <input
+      className="as-input as-fieldrow__tags"
+      value={draft}
+      placeholder="tags"
+      title="Tags, comma-separated — ro (read-only), hidden, pii…"
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit();
+        }
+      }}
+      aria-label={label}
+    />
+  );
+}
+
+/**
  * The row editor for a record node — a table's columns, a class's properties.
  *
  * Rows are ordered, and the order is visible: it decides where each one sits
@@ -8864,6 +8944,11 @@ function FieldsEditor({
               placeholder="type"
               onChange={(event) => patch(index, { type: event.target.value || undefined })}
               aria-label={`Field ${index + 1} type`}
+            />
+            <FieldTagsInput
+              tags={field.tags ?? []}
+              label={`Field ${index + 1} tags`}
+              onChange={(tags) => patch(index, { tags })}
             />
             <button
               type="button"

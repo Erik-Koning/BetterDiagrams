@@ -1500,6 +1500,15 @@
   background: color-mix(in srgb, var(--as-accent) 18%, transparent);
   box-shadow: inset 2px 0 0 var(--as-accent);
 }
+/* A hidden row — not readable by the reading principal — is drawn quiet
+   rather than badged: the absence is the point. A row the tag filter leaves
+   out dims the same way a card does. Opacity only; the 19px box is untouched. */
+.as-node__field--hidden {
+  opacity: 0.45;
+}
+.as-node__field--dimmed {
+  opacity: 0.3;
+}
 /* A marked TABLE — one end of a shown reference. The pinned card's bar, the
    accent on the frame, a ring, and a soft glow, so a referencing table
    reads from across the canvas even at a zoom where its rows do not. */
@@ -2947,6 +2956,11 @@
 
 /* Wider than the 62px it used to be: the select now reserves ~16px on its
    right for the chevron, and "pfk" needs the rest. */
+.as-inspector .as-fieldrow__tags {
+  width: 88px;
+  flex: none;
+}
+
 .as-inspector .as-fieldrow__key {
   width: 78px;
   flex: none;
@@ -5268,14 +5282,44 @@
   background: color-mix(in srgb, var(--as-accent) 10%, transparent);
 }
 
+/* The handles a box is resized by. Up while the node is selected and — since
+   the pointer reaches them without a click — while it is hovered (see
+   `useResizeHandles`). Sized to the connect dots, so the two kinds of grab
+   around a card read as one family; React Flow's own 5px square was a target
+   you aimed at rather than took. */
 .as-root .react-flow__resize-control.handle {
+  width: 8px;
+  height: 8px;
   border: 1px solid var(--as-bg);
   border-radius: 2px;
   background: var(--as-accent);
 }
 
+/* A fingertip-sized press around the 8px square. Hit-testing credits the
+   pseudo-element to the control, so a press on the halo starts the resize;
+   3px keeps it clear of the card's title and the connect dot beside it. */
+.as-root .react-flow__resize-control.handle::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+}
+
 .as-root .react-flow__resize-control.line {
   border-color: var(--as-accent);
+}
+
+/* Hovered but not selected: an OFFER, not a selection outline. The four
+   corners show hollow and the edge lines stay away — a card you merely pass
+   over must not light up like the one you clicked, and the two states have to
+   be tellable apart while both are on screen (a hovered card beside a selected
+   one). The lines come back with selection, as before. */
+.as-root .react-flow__node:not(.selected) .react-flow__resize-control.handle {
+  border-color: var(--as-accent);
+  background: var(--as-surface);
+}
+
+.as-root .react-flow__node:not(.selected) .react-flow__resize-control.line {
+  display: none;
 }
 
 /* ── Cloud toggle (welcome modal) ────────────────────────────────────────── */

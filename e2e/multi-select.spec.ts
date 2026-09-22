@@ -108,4 +108,49 @@ test.describe("editing several things at once", () => {
       })
       .toEqual({ same: true, grown: true, c: [170, 76] });
   });
+
+  test("a node outside the selection resizes alone, from the handles its hover brings up", async ({
+    studio,
+  }, testInfo) => {
+    await studio.goto();
+    await studio.focusEditor();
+    await importPair(studio, testInfo.outputPath("pair.json"));
+    await studio.pickTool("Select");
+    await studio.band(await studio.boxAround(["a", "b"]));
+    await studio.pickTool("Cursor");
+    await expect(studio.selectedNodes).toHaveCount(2);
+
+    // Gamma is not selected, so it has no handles — until the pointer rests
+    // on it. Then its corner is there to take, with no click first.
+    const gamma = studio.node("c");
+    await expect(gamma.locator(".react-flow__resize-control")).toHaveCount(0);
+    await gamma.hover();
+    const handle = gamma.locator(".react-flow__resize-control.bottom.right.handle");
+    await expect(handle).toBeVisible();
+    // Hover-only: the corners are up, the selection outline's edge lines are not.
+    await expect(gamma.locator(".react-flow__resize-control.line").first()).toBeHidden();
+
+    const box = (await handle.boundingBox())!;
+    const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await studio.page.mouse.move(from.x, from.y);
+    await studio.page.mouse.down();
+    await studio.page.mouse.move(from.x + 80, from.y + 40, { steps: 10 });
+    await studio.page.mouse.up();
+
+    // Gamma grew; the selection neither followed it nor changed.
+    await expect
+      .poll(async () => {
+        const doc = await studio.liveDoc();
+        const by = Object.fromEntries(doc.nodes.map((n) => [n.id, [n.w, n.h]]));
+        return { grown: (by.c![0] as number) > 170 && (by.c![1] as number) > 76, a: by.a, b: by.b };
+      })
+      .toEqual({ grown: true, a: [170, 76], b: [170, 76] });
+    await expect(studio.node("a")).toHaveClass(/selected/);
+    await expect(studio.node("b")).toHaveClass(/selected/);
+    await expect(gamma).not.toHaveClass(/selected/);
+
+    // And once the pointer moves on, the handles go with it.
+    await studio.page.mouse.move(5, 400);
+    await expect(gamma.locator(".react-flow__resize-control")).toHaveCount(0);
+  });
 });

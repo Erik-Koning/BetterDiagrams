@@ -8,6 +8,11 @@
  * aliasing an entity, record types under it, and a root `relationships.json`
  * naming the business edges. See `shapes.ts` for the six manifests.
  *
+ * Record types are values of one field, not tables: by default an entity's
+ * fold into ONE enumeration node beside it (a row each, a reference line
+ * from the discriminator), and their folders — leaves and wrapper group —
+ * produce no nodes. `recordTypes: "nodes"` keeps one leaf each.
+ *
  * The tree's own shape counts too: a folder that says nothing about itself
  * but holds entities is a group, so a plain directory structure — schemas
  * as folders, tables inside — reads without a manifest at every level.
@@ -16,7 +21,7 @@
  * Writes nothing the exporter owns — export is sidecar-only, with the one
  * opt-in exception of the two curated keys of an `entity.yaml`.
  */
-import type { DiagramEdge } from "../../../schema";
+import type { DiagramEdge, NodeField } from "../../../schema";
 import { readJson } from "../../tree";
 import { SIDECAR_DIR } from "../../sidecar";
 import type { Dialect, FolderEntry, FolderNode, FolderImportOptions, ImportWarning } from "../../types";
@@ -44,7 +49,15 @@ import {
   type FieldMeta,
 } from "./fields";
 import { MAX_NODE_FIELDS } from "../../../schema";
-import { EXTERNAL_GROUP_ID, externalGroup, entityEdges, recordTypeEdges, type EdgeContext } from "./edges";
+import {
+  EXTERNAL_GROUP_ID,
+  externalGroup,
+  entityEdges,
+  isDiscriminator,
+  recordTypeEdges,
+  recordTypeEnumId,
+  type EdgeContext,
+} from "./edges";
 import { DATAMODEL_KINDS, diagramTypeOf, entityKind, dataModelRegistry } from "./kinds";
 import { parseFlatYaml, patchFlatYaml } from "./yaml";
 
@@ -63,10 +76,35 @@ interface Parsed {
   raw: unknown;
 }
 
+/** One record type as its folder states it — from `schema.json`, or an `entity.yaml` alone. */
+interface RecordTypeInfo {
+  folder: string;
+  name: string | null;
+  key: string | null;
+  id: string | null;
+  active: boolean;
+  description: string | null;
+  parent: { folder?: string; name?: string } | null;
+}
+
+/** An entity's record types, in folder order, with the wrapper group's description when one exists. */
+interface RecordTypeGroup {
+  description: string | null;
+  items: RecordTypeInfo[];
+}
+
 export interface ModelCtx extends EdgeContext {
   root: RootManifest | null;
   crossCutting: string[];
   schemas: Map<string, Parsed>;
+  /** Every node folder that is a record type, whatever mode draws it. */
+  recordTypeByPath: Map<string, RecordTypeInfo | null>;
+  /** Record types by the entity folder they extend — only the resolvable ones. */
+  recordTypes: Map<string, RecordTypeGroup>;
+  /** Each entity's discriminator field, when it has one. */
+  discriminatorByFolder: Map<string, string>;
+  /** Each entity's card title, so the enumeration beside it can name it. */
+  labelByFolder: Map<string, string>;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -184,7 +222,16 @@ function entityNode(
     ...(typeof schema.url === "string" && schema.url ? { url: schema.url } : {}),
     w: 230,
   };
-  const chosen = selectFields(schema.fields, opts.fields, partial);
+  // Rows the entity pins by name, on top of the import-wide mode. A name
+  // the schema doesn't list is a stale curation, and says so.
+  const known = new Set(schema.fields.map((f) => f.name));
+  const pinned = (curated.diagramFields ?? []).filter((n): n is string => typeof n === "string");
+  for (const n of pinned) {
+    if (!known.has(n)) {
+      warn({ code: "unknown-field", path: entry.path, message: `curated.diagramFields names "${n}", which ${e.name} has no field called; ignored` });
+    }
+  }
+  const chosen = selectFields(schema.fields, opts.fields, partial, pinned);
   if (chosen.length > FIELD_WARNING_THRESHOLD) {
     warn({
       code: "too-many-fields",
@@ -195,6 +242,7 @@ function entityNode(
   for (const f of chosen) model.fieldMeta[f.name] = fieldMeta(f);
   ctx.fieldsByFolder.set(id, new Set(chosen.map((f) => f.name)));
   ctx.parentByFolder.set(id, parentId);
+  ctx.labelByFolder.set(id, partial.label);
   return {
     ...partial,
     ...(chosen.length ? { fields: chosen.map(toNodeField) } : {}),
@@ -255,6 +303,120 @@ function recordTypeNode(
         active: rt.active ?? true,
         description: rt.description ?? null,
         parentEntity: r.parentEntity?.folder ?? null,
+      },
+    },
+  };
+}
+
+/**
+ * What a folder says about being a record type, by either manifest. Read in
+ * `prepare`, so the walk knows a wrapper group's children before it reaches
+ * them, and so the enumeration can be built without a second parse.
+ */
+function recordTypeOf(entry: FolderEntry, ctx: ModelCtx): RecordTypeInfo | null {
+  const cached = ctx.recordTypeByPath.get(entry.path);
+  if (cached !== undefined) return cached;
+  let info: RecordTypeInfo | null = null;
+  const parsed = parsedSchema(entry, ctx);
+  if (parsed?.shape === "record-type") {
+    const r = parsed.raw as RecordTypeSchema;
+    const rt = r.recordType ?? {};
+    info = {
+      folder: entry.path,
+      name: rt.name ?? r.curated?.diagramName ?? null,
+      key: rt.key ?? null,
+      id: rt.id ?? null,
+      active: rt.active !== false,
+      description: rt.description ?? null,
+      parent: r.parentEntity ?? null,
+    };
+  } else if ((!parsed || parsed.shape === "unknown") && entry.files["entity.yaml"] !== undefined) {
+    const yaml = parseFlatYaml(entry.files["entity.yaml"] ?? "");
+    if (yaml && !yaml.aliasOf && (yaml.key || yaml.diagramType === "record-type")) {
+      info = {
+        folder: entry.path,
+        name: yaml.diagramName ?? yaml.label ?? yaml.name ?? null,
+        key: yaml.key ?? null,
+        id: yaml.id ?? null,
+        active: true,
+        description: null,
+        parent: null,
+      };
+    }
+  }
+  ctx.recordTypeByPath.set(entry.path, info);
+  return info;
+}
+
+/**
+ * The entity a record type extends: the folder it declares when that is an
+ * entity in the model, else the entity of that name, else the nearest
+ * entity folder above it — where an exporter that writes only `entity.yaml`
+ * will have put it.
+ */
+function recordTypeParent(info: RecordTypeInfo, ctx: ModelCtx): string | null {
+  const canonical = new Set(ctx.nameToFolder.values());
+  const declared = info.parent?.folder;
+  if (declared && canonical.has(declared)) return declared;
+  const byName = info.parent?.name ? ctx.nameToFolder.get(info.parent.name) : undefined;
+  if (byName) return byName;
+  let path = info.folder;
+  while (path.includes("/")) {
+    path = path.slice(0, path.lastIndexOf("/"));
+    if (canonical.has(path)) return path;
+  }
+  return null;
+}
+
+/** A group folder that holds record types and nothing else — scaffolding the enumeration replaces. */
+function isRecordTypeWrapper(entry: FolderEntry, ctx: ModelCtx): boolean {
+  return entry.children.length > 0 && entry.children.every((c) => ctx.recordTypeByPath.get(c.path));
+}
+
+/**
+ * The enumeration an entity's record types fold into. Rows are the values —
+ * the stable key, or the folder when there is none — and an inactive one
+ * says so in the type column, the one place a row has for a word.
+ */
+function recordTypeEnumNode(entity: string, group: RecordTypeGroup, ctx: ModelCtx): FolderNode {
+  const label = ctx.labelByFolder.get(entity) ?? humanise(basename(entity));
+  const used = new Set<string>();
+  const fields: NodeField[] = group.items.map((r) => {
+    let id = r.key ?? basename(r.folder);
+    if (used.has(id)) id = r.folder;
+    used.add(id);
+    return {
+      id,
+      name: r.name ?? r.key ?? humanise(basename(r.folder)),
+      ...(r.active ? {} : { type: "inactive" }),
+    };
+  });
+  return {
+    id: recordTypeEnumId(entity),
+    label: `${label} record types`,
+    kind: "enum",
+    icon: "none",
+    description: group.description ?? "",
+    // Beside the entity, as a collapse point is: inside a non-container it
+    // would be drill-in detail, invisible on the canvas its line is drawn on.
+    parentId: ctx.parentByFolder.get(entity) ?? null,
+    tags: ["record-type"],
+    fields,
+    data: {
+      model: {
+        shape: "record-types",
+        entity,
+        entityLabel: label,
+        description: group.description,
+        discriminator: ctx.discriminatorByFolder.get(entity) ?? null,
+        recordTypes: group.items.map(({ folder, name, key, id, active, description }) => ({
+          folder,
+          name,
+          key,
+          id,
+          active,
+          description,
+        })),
       },
     },
   };
@@ -391,6 +553,11 @@ export function createDataModelDialect(options: DataModelDialectOptions = {}): D
         parentByFolder: new Map(),
         stubs: new Map(),
         points: [],
+        recordTypeEntities: new Set(),
+        recordTypeByPath: new Map(),
+        recordTypes: new Map(),
+        discriminatorByFolder: new Map(),
+        labelByFolder: new Map(),
       };
       for (const entry of tree.byPath.values()) {
         if (!entry.path || !dialect.isNode(entry, ctx)) continue;
@@ -401,6 +568,8 @@ export function createDataModelDialect(options: DataModelDialectOptions = {}): D
           const name = schema.entity.name;
           const pk = primaryKeyOf(schema.fields);
           if (pk) ctx.primaryKeyByFolder.set(folder, pk.name);
+          const discriminator = schema.fields.find(isDiscriminator);
+          if (discriminator) ctx.discriminatorByFolder.set(folder, discriminator.name);
           if (ctx.nameToFolder.has(name)) {
             // Edges resolve BY name; two folders claiming one means the
             // second's inbound references silently land on the first.
@@ -412,6 +581,29 @@ export function createDataModelDialect(options: DataModelDialectOptions = {}): D
           } else {
             ctx.nameToFolder.set(name, folder);
           }
+        }
+      }
+      // Record types after every entity is named, since a parent resolves by name.
+      const entries = [...tree.byPath.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+      for (const entry of entries) {
+        if (!entry.path || !dialect.isNode(entry, ctx)) continue;
+        const info = recordTypeOf(entry, ctx);
+        if (!info) continue;
+        const parent = recordTypeParent(info, ctx);
+        if (!parent) continue;
+        let group = ctx.recordTypes.get(parent);
+        if (!group) {
+          group = { description: null, items: [] };
+          ctx.recordTypes.set(parent, group);
+          ctx.recordTypeEntities.add(parent);
+        }
+        group.items.push(info);
+        // The wrapper folder's description ("How a person is classified")
+        // is the enumeration's: it is about the set, not any one value.
+        const wrapper = entry.path.includes("/") ? tree.byPath.get(entry.path.slice(0, entry.path.lastIndexOf("/"))) : undefined;
+        const manifest = wrapper ? parsedSchema(wrapper, ctx) : undefined;
+        if (group.description === null && manifest?.shape === "group") {
+          group.description = (manifest.raw as GroupManifest).description ?? null;
         }
       }
       const rel = readJson<RelationshipsManifest>(tree.root, "relationships.json");
@@ -432,6 +624,22 @@ export function createDataModelDialect(options: DataModelDialectOptions = {}): D
     },
 
     toNode(entry, parentId, ctx, opts, warn) {
+      // A record type is a row of the enumeration, and its wrapper group is
+      // scaffolding — neither is a node unless the leaves were asked for.
+      if ((opts.recordTypes ?? "enum") !== "nodes") {
+        const info = recordTypeOf(entry, ctx);
+        if (info) {
+          if (opts.recordTypes !== "none" && !recordTypeParent(info, ctx)) {
+            warn({
+              code: "edge-target-missing",
+              path: entry.path,
+              message: `record type ${info.name ?? entry.path} extends ${info.parent?.name ?? info.parent?.folder ?? "?"}, which has no entity folder in the model; left out of the enumeration`,
+            });
+          }
+          return null;
+        }
+        if (isRecordTypeWrapper(entry, ctx)) return null;
+      }
       const parsed = parsedSchema(entry, ctx);
       if (!parsed || parsed.shape === "unknown") {
         if (entry.files["entity.yaml"] !== undefined) return yamlFallback(entry, parentId, warn);
@@ -492,8 +700,13 @@ export function createDataModelDialect(options: DataModelDialectOptions = {}): D
       return [];
     },
 
-    extraNodes(ctx) {
-      const out: FolderNode[] = [...ctx.points];
+    extraNodes(ctx, opts) {
+      const out: FolderNode[] = [];
+      if ((opts.recordTypes ?? "enum") === "enum") {
+        const entities = [...ctx.recordTypes.keys()].sort((a, b) => (a < b ? -1 : 1));
+        for (const entity of entities) out.push(recordTypeEnumNode(entity, ctx.recordTypes.get(entity)!, ctx));
+      }
+      out.push(...ctx.points);
       if (ctx.stubs.size) {
         out.push(externalGroup());
         for (const stub of [...ctx.stubs.values()].sort((a, b) => (a.id < b.id ? -1 : 1))) out.push(stub);
@@ -536,6 +749,12 @@ export function createDataModelDialect(options: DataModelDialectOptions = {}): D
             label: String(m.name ?? m.diagramName ?? m.key ?? node.id),
             description: typeof m.description === "string" ? m.description : "",
             tags: ["record-type", ...(m.active === false ? ["inactive"] : [])],
+          };
+        case "record-types":
+          return {
+            label: `${String(m.entityLabel ?? "")} record types`,
+            description: typeof m.description === "string" ? m.description : "",
+            tags: ["record-type"],
           };
         case "band":
           return { label: humanise(String(m.band ?? node.id)), description: typeof m.description === "string" ? m.description : "" };

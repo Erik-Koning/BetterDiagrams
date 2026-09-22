@@ -30,6 +30,8 @@ import {
   EDGE_DASH,
   DEFAULT_FONT_SIZE,
   FIELD_ROW_H,
+  FIELD_TAG_HIDDEN,
+  fieldTagBadge,
   fieldAnchors,
   fieldListTop,
   resolveRouting,
@@ -1637,6 +1639,8 @@ export function emitTemplate(
       });
       rows.forEach((field, i) => {
         const rowTop = listTop + i * FIELD_ROW_H;
+        // A hidden row prints quiet, as the canvas's `.as-node__field--hidden` does.
+        const rowDim = field.tags?.includes(FIELD_TAG_HIDDEN) ? dim * 0.45 : dim;
         let nameX = textX;
         if (field.key) {
           const badge = field.key.toUpperCase();
@@ -1646,9 +1650,9 @@ export function emitTemplate(
           // foreign key only points elsewhere, so it stays an outline —
           // matching .as-node__fieldkey--pk in the stylesheet.
           if (field.key !== "fk") {
-            cmds.push({ op: "path", d, fill: accent, fillAlpha: 0.18 * dim });
+            cmds.push({ op: "path", d, fill: accent, fillAlpha: 0.18 * rowDim });
           }
-          cmds.push({ op: "path", d, stroke: accent, strokeAlpha: 0.45 * dim, strokeWidth: 1 });
+          cmds.push({ op: "path", d, stroke: accent, strokeAlpha: 0.45 * rowDim, strokeWidth: 1 });
           cmds.push({
             op: "text",
             x: textX + (badgeW - approxTextWidth(badge, 8, "mono")) / 2,
@@ -1658,7 +1662,7 @@ export function emitTemplate(
             font: "mono",
             weight: 700,
             color: accent,
-            ...(dim < 1 ? { alpha: dim } : {}),
+            ...(rowDim < 1 ? { alpha: rowDim } : {}),
           });
           nameX = textX + badgeW + 6;
         }
@@ -1670,11 +1674,15 @@ export function emitTemplate(
         const typeText = skin.fieldTypes ? (field.type ?? "") : "";
         const typeW = typeText ? approxTextWidth(typeText, 9.5, "mono") : 0;
         // A unique column wears a small UQ badge after its name (the canvas's
-        // `.as-node__fieldflag`), a derived one UML's leading slash. Marketing
-        // drops the badge with the other marks.
-        const flagText = field.unique && skin.fieldTypes ? "UQ" : "";
-        const flagW = flagText ? approxTextWidth(flagText, 8, "mono") + 6 : 0;
-        const nameW = rightEdge - nameX - (typeW ? typeW + 8 : 0) - (flagW ? flagW + 4 : 0);
+        // `.as-node__fieldflag`), then one badge per row tag (`hidden` dims
+        // instead), a derived one UML's leading slash. Marketing drops the
+        // badges with the other marks.
+        const flags = skin.fieldTypes
+          ? [...(field.unique ? ["UQ"] : []), ...(field.tags ?? []).map(fieldTagBadge).filter((b): b is string => !!b)]
+          : [];
+        const flagWs = flags.map((text) => approxTextWidth(text, 8, "mono") + 6);
+        const flagsW = flagWs.reduce((sum, w) => sum + w + 4, 0);
+        const nameW = rightEdge - nameX - (typeW ? typeW + 8 : 0) - flagsW;
         const nameText = `${field.derived ? "/" : ""}${field.name}${field.required && skin.fieldTypes ? "*" : ""}`;
         const drawnName = ellipsise(nameText, skin.fieldSize, skin.fieldFont, nameW);
         cmds.push({
@@ -1685,24 +1693,26 @@ export function emitTemplate(
           size: skin.fieldSize,
           font: skin.fieldFont,
           color: palette.text,
-          ...(dim < 1 ? { alpha: dim } : {}),
+          ...(rowDim < 1 ? { alpha: rowDim } : {}),
         });
-        if (flagText) {
-          const fx = nameX + approxTextWidth(drawnName, skin.fieldSize, skin.fieldFont) + 4;
+        let fx = nameX + approxTextWidth(drawnName, skin.fieldSize, skin.fieldFont) + 4;
+        flags.forEach((text, f) => {
+          const flagW = flagWs[f]!;
           const d = roundedRectPath(fx, rowTop + 3.5, flagW, 12, 3);
-          cmds.push({ op: "path", d, stroke: accent, strokeAlpha: 0.45 * dim, strokeWidth: 1 });
+          cmds.push({ op: "path", d, stroke: accent, strokeAlpha: 0.45 * rowDim, strokeWidth: 1 });
           cmds.push({
             op: "text",
             x: fx + 3,
             y: rowTop + 12.5,
-            text: flagText,
+            text,
             size: 8,
             font: "mono",
             weight: 700,
             color: accent,
-            ...(dim < 1 ? { alpha: dim } : {}),
+            ...(rowDim < 1 ? { alpha: rowDim } : {}),
           });
-        }
+          fx += flagW + 4;
+        });
         if (typeText) {
           cmds.push({
             op: "text",
@@ -1712,7 +1722,7 @@ export function emitTemplate(
             size: 9.5,
             font: "mono",
             color: palette.textFaint,
-            ...(dim < 1 ? { alpha: dim } : {}),
+            ...(rowDim < 1 ? { alpha: rowDim } : {}),
           });
         }
       });

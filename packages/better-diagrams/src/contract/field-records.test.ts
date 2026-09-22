@@ -95,7 +95,7 @@ describe("fieldRecords", () => {
     // The row's own type/key win; the data field fills in the rest.
     expect(byId.account_id).toMatchObject({ label: "Account ID", type: "→ account", key: "fk" });
     expect(byId.email).toEqual({
-      id: "email", name: "email", label: "Email", type: "email", row: false, fk: [], visible: false,
+      id: "email", name: "email", label: "Email", type: "email", row: false, fk: [], visible: false, tags: ["hidden"],
     });
     expect(byId.score).toMatchObject({ required: true, unique: true, externalId: true, formula: "amount * 2", type: "double" });
     expect(byId.id).toMatchObject({ key: "pk" });

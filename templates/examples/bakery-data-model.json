@@ -68,7 +68,9 @@
               "type": "id",
               "primaryKey": true,
               "nullable": false,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "name",
@@ -76,7 +78,9 @@
               "type": "string",
               "nullable": false,
               "nameField": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "recipe_id",
@@ -85,6 +89,8 @@
               "displayType": "Composition",
               "nullable": false,
               "visible": true,
+              "createable": true,
+              "updateable": true,
               "relationship": {
                 "kind": "composition",
                 "referenceTo": [
@@ -100,6 +106,8 @@
               "displayType": "Reference",
               "nullable": true,
               "visible": true,
+              "createable": true,
+              "updateable": true,
               "relationship": {
                 "kind": "reference",
                 "referenceTo": [
@@ -113,14 +121,18 @@
               "label": "Crust",
               "type": "enum",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "weight_grams",
               "label": "Weight Grams",
               "type": "int",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             }
           ],
           "fieldMeta": {
@@ -144,7 +156,7 @@
         }
       },
       "x": 640,
-      "y": 92.5,
+      "y": 102,
       "w": 230,
       "h": 138,
       "fontSize": 13
@@ -211,7 +223,9 @@
               "type": "id",
               "primaryKey": true,
               "nullable": false,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "name",
@@ -219,35 +233,45 @@
               "type": "string",
               "nullable": false,
               "nameField": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "address",
               "label": "Address",
               "type": "textarea",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "city",
               "label": "City",
               "type": "string",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "capacity",
               "label": "Capacity",
               "type": "int",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "opened",
               "label": "Opened",
               "type": "date",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "owner_id",
@@ -256,6 +280,8 @@
               "displayType": "Reference",
               "nullable": false,
               "visible": true,
+              "createable": true,
+              "updateable": true,
               "relationship": {
                 "kind": "reference",
                 "referenceTo": [
@@ -282,7 +308,7 @@
         }
       },
       "x": 1600,
-      "y": 102,
+      "y": 38,
       "w": 230,
       "h": 119,
       "fontSize": 13
@@ -354,7 +380,9 @@
               "type": "id",
               "primaryKey": true,
               "nullable": false,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "code",
@@ -362,14 +390,18 @@
               "type": "string",
               "nullable": false,
               "unique": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "discount_percent",
               "label": "Discount Percent",
               "type": "percent",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "product_id",
@@ -378,6 +410,8 @@
               "displayType": "Reference",
               "nullable": true,
               "visible": true,
+              "createable": true,
+              "updateable": true,
               "relationship": {
                 "kind": "reference",
                 "referenceTo": [
@@ -393,6 +427,8 @@
               "displayType": "Reference",
               "nullable": true,
               "visible": true,
+              "createable": true,
+              "updateable": true,
               "relationship": {
                 "kind": "reference",
                 "referenceTo": [
@@ -406,14 +442,18 @@
               "label": "Expires",
               "type": "date",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "redeemed",
               "label": "Redeemed",
               "type": "boolean",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             }
           ],
           "fieldMeta": {
@@ -438,7 +478,7 @@
         }
       },
       "x": 0,
-      "y": 92.5,
+      "y": 102,
       "w": 230,
       "h": 138,
       "fontSize": 13
@@ -509,7 +549,9 @@
               "type": "id",
               "primaryKey": true,
               "nullable": false,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "name",
@@ -517,7 +559,9 @@
               "type": "string",
               "nullable": false,
               "nameField": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "person_id",
@@ -526,6 +570,8 @@
               "displayType": "Reference",
               "nullable": true,
               "visible": true,
+              "createable": true,
+              "updateable": true,
               "relationship": {
                 "kind": "reference",
                 "referenceTo": [
@@ -539,21 +585,27 @@
               "label": "Email",
               "type": "email",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "loyalty_points",
               "label": "Loyalty Points",
               "type": "int",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "joined",
               "label": "Joined",
               "type": "date",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "external_key",
@@ -562,7 +614,9 @@
               "nullable": true,
               "externalId": true,
               "unique": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             }
           ],
           "fieldMeta": {
@@ -588,7 +642,7 @@
         }
       },
       "x": 320,
-      "y": 0,
+      "y": 9.5,
       "w": 230,
       "h": 138,
       "fontSize": 13
@@ -682,7 +736,9 @@
               "type": "id",
               "primaryKey": true,
               "nullable": false,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "name",
@@ -690,14 +746,18 @@
               "type": "string",
               "nullable": false,
               "nameField": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "material",
               "label": "Material",
               "type": "enum",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "building_id",
@@ -706,6 +766,8 @@
               "displayType": "Reference",
               "nullable": true,
               "visible": true,
+              "createable": true,
+              "updateable": true,
               "relationship": {
                 "kind": "reference",
                 "referenceTo": [
@@ -719,7 +781,9 @@
               "label": "Quantity",
               "type": "int",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             }
           ],
           "fieldMeta": {
@@ -739,7 +803,7 @@
         }
       },
       "x": 1280,
-      "y": 19,
+      "y": 0,
       "w": 230,
       "h": 119,
       "fontSize": 13
@@ -798,7 +862,9 @@
               "type": "id",
               "primaryKey": true,
               "nullable": false,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "name",
@@ -806,35 +872,45 @@
               "type": "string",
               "nullable": false,
               "nameField": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "unit",
               "label": "Unit",
               "type": "enum",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "unit_cost",
               "label": "Unit Cost",
               "type": "currency",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "allergen",
               "label": "Allergen",
               "type": "boolean",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "supplier",
               "label": "Supplier",
               "type": "string",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             }
           ],
           "fieldMeta": {
@@ -850,7 +926,7 @@
         }
       },
       "x": 960,
-      "y": 38,
+      "y": 47.5,
       "w": 230,
       "h": 100,
       "fontSize": 13
@@ -875,10 +951,24 @@
           "required": true
         },
         {
+          "id": "record_type_id",
+          "name": "record_type_id",
+          "type": "→ record_type",
+          "key": "fk"
+        },
+        {
           "id": "building_id",
           "name": "building_id",
           "type": "→ building",
           "key": "fk"
+        },
+        {
+          "id": "notes",
+          "name": "notes",
+          "type": "textarea",
+          "tags": [
+            "hidden"
+          ]
         },
         {
           "id": "owner_id",
@@ -886,6 +976,15 @@
           "type": "→ user",
           "key": "fk",
           "required": true
+        },
+        {
+          "id": "created_at",
+          "name": "created_at",
+          "type": "datetime",
+          "required": true,
+          "tags": [
+            "ro"
+          ]
         }
       ],
       "parentId": null,
@@ -908,15 +1007,15 @@
           "kind": "custom",
           "namespace": null,
           "recordCount": 37,
-          "fieldsTotal": 8,
-          "fieldsVisible": 7,
+          "fieldsTotal": 10,
+          "fieldsVisible": 9,
           "hiddenFields": 1,
           "businessLine": "Bakery",
           "forensicsPath": "people/forensics.json",
           "validationRuleCount": 0,
           "notes": [
             "Everyone who works for or buys from the bakery.",
-            "Record types split chefs from account holders."
+            "Record types split chefs and managers from customers; record_type_id says which."
           ],
           "fields": [
             {
@@ -925,7 +1024,9 @@
               "type": "id",
               "primaryKey": true,
               "nullable": false,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "name",
@@ -933,28 +1034,53 @@
               "type": "string",
               "nullable": false,
               "nameField": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "email",
               "label": "Email",
               "type": "email",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "phone",
               "label": "Phone",
               "type": "phone",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
+            },
+            {
+              "name": "record_type_id",
+              "label": "Record type",
+              "type": "reference",
+              "displayType": "Reference",
+              "nullable": true,
+              "visible": true,
+              "createable": true,
+              "updateable": true,
+              "relationship": {
+                "kind": "reference",
+                "referenceTo": [
+                  "record_type"
+                ],
+                "relationshipName": "record_type"
+              }
             },
             {
               "name": "role",
               "label": "Role",
               "type": "enum",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "building_id",
@@ -963,6 +1089,8 @@
               "displayType": "Reference",
               "nullable": true,
               "visible": true,
+              "createable": true,
+              "updateable": true,
               "relationship": {
                 "kind": "reference",
                 "referenceTo": [
@@ -976,7 +1104,9 @@
               "label": "Notes",
               "type": "textarea",
               "nullable": true,
-              "visible": false
+              "visible": false,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "owner_id",
@@ -985,6 +1115,8 @@
               "displayType": "Reference",
               "nullable": false,
               "visible": true,
+              "createable": true,
+              "updateable": true,
               "relationship": {
                 "kind": "reference",
                 "referenceTo": [
@@ -992,6 +1124,15 @@
                 ],
                 "relationshipName": null
               }
+            },
+            {
+              "name": "created_at",
+              "label": "Created",
+              "type": "datetime",
+              "nullable": false,
+              "visible": true,
+              "createable": false,
+              "updateable": false
             }
           ],
           "fieldMeta": {
@@ -1003,133 +1144,33 @@
               "label": "Full name",
               "visible": true
             },
+            "record_type_id": {
+              "label": "Record type",
+              "visible": true
+            },
             "building_id": {
               "label": "Home building",
               "visible": true
             },
+            "notes": {
+              "label": "Notes",
+              "visible": false
+            },
             "owner_id": {
               "label": "Owner ID",
+              "visible": true
+            },
+            "created_at": {
+              "label": "Created",
               "visible": true
             }
           }
         }
       },
       "x": 1280,
-      "y": 166,
+      "y": 147,
       "w": 230,
-      "h": 138,
-      "fontSize": 13
-    },
-    {
-      "id": "people/record-types",
-      "label": "Record types",
-      "kind": "group",
-      "icon": "none",
-      "description": "How a person is classified",
-      "parentId": "people",
-      "zoneId": null,
-      "data": {
-        "folder": "people/record-types",
-        "model": {
-          "shape": "group",
-          "description": "How a person is classified",
-          "entityCount": 3
-        }
-      },
-      "x": 28,
-      "y": 52,
-      "w": 226,
-      "h": 364,
-      "fontSize": 13
-    },
-    {
-      "id": "people/record-types/chef",
-      "label": "Chef",
-      "kind": "record-type",
-      "icon": "pin",
-      "description": "A chef who owns recipes.",
-      "parentId": "people/record-types",
-      "zoneId": null,
-      "tags": [
-        "record-type"
-      ],
-      "data": {
-        "folder": "people/record-types/chef",
-        "model": {
-          "shape": "record-type",
-          "name": "Chef",
-          "diagramName": "Chef",
-          "key": "chef",
-          "id": "rt-chef",
-          "active": true,
-          "description": "A chef who owns recipes.",
-          "parentEntity": "people"
-        }
-      },
-      "x": 28,
-      "y": 52,
-      "w": 170,
-      "h": 76,
-      "fontSize": 13
-    },
-    {
-      "id": "people/record-types/customer",
-      "label": "Customer",
-      "kind": "record-type",
-      "icon": "pin",
-      "description": "A retail customer held as a person.",
-      "parentId": "people/record-types",
-      "zoneId": null,
-      "tags": [
-        "record-type"
-      ],
-      "data": {
-        "folder": "people/record-types/customer",
-        "model": {
-          "shape": "record-type",
-          "name": "Customer",
-          "diagramName": "Customer",
-          "key": "customer",
-          "id": "rt-customer",
-          "active": true,
-          "description": "A retail customer held as a person.",
-          "parentEntity": "people"
-        }
-      },
-      "x": 28,
-      "y": 156,
-      "w": 170,
-      "h": 76,
-      "fontSize": 13
-    },
-    {
-      "id": "people/record-types/manager",
-      "label": "Manager",
-      "kind": "record-type",
-      "icon": "pin",
-      "description": "Runs a building and its staff.",
-      "parentId": "people/record-types",
-      "zoneId": null,
-      "tags": [
-        "record-type"
-      ],
-      "data": {
-        "folder": "people/record-types/manager",
-        "model": {
-          "shape": "record-type",
-          "name": "Manager",
-          "diagramName": "Manager",
-          "key": "manager",
-          "id": "rt-manager",
-          "active": true,
-          "description": "Runs a building and its staff.",
-          "parentEntity": "people"
-        }
-      },
-      "x": 28,
-      "y": 260,
-      "w": 170,
-      "h": 76,
+      "h": 195,
       "fontSize": 13
     },
     {
@@ -1205,7 +1246,9 @@
               "type": "id",
               "primaryKey": true,
               "nullable": false,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "name",
@@ -1213,7 +1256,9 @@
               "type": "string",
               "nullable": false,
               "nameField": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "bread_id",
@@ -1222,6 +1267,8 @@
               "displayType": "Reference",
               "nullable": true,
               "visible": true,
+              "createable": true,
+              "updateable": true,
               "relationship": {
                 "kind": "reference",
                 "referenceTo": [
@@ -1235,14 +1282,18 @@
               "label": "Price",
               "type": "currency",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "active",
               "label": "Active",
               "type": "boolean",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "sku",
@@ -1251,7 +1302,9 @@
               "nullable": true,
               "externalId": true,
               "unique": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "owner_id",
@@ -1260,6 +1313,8 @@
               "displayType": "Reference",
               "nullable": false,
               "visible": true,
+              "createable": true,
+              "updateable": true,
               "relationship": {
                 "kind": "reference",
                 "referenceTo": [
@@ -1296,7 +1351,7 @@
         }
       },
       "x": 320,
-      "y": 166,
+      "y": 175.5,
       "w": 230,
       "h": 157,
       "fontSize": 13
@@ -1361,7 +1416,9 @@
               "type": "id",
               "primaryKey": true,
               "nullable": false,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "name",
@@ -1369,7 +1426,9 @@
               "type": "string",
               "nullable": false,
               "nameField": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "chef_id",
@@ -1378,6 +1437,8 @@
               "displayType": "Reference",
               "nullable": true,
               "visible": true,
+              "createable": true,
+              "updateable": true,
               "relationship": {
                 "kind": "reference",
                 "referenceTo": [
@@ -1391,21 +1452,27 @@
               "label": "Prep Minutes",
               "type": "int",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "instructions",
               "label": "Instructions",
               "type": "textarea",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             },
             {
               "name": "yield",
               "label": "Yield (loaves)",
               "type": "double",
               "nullable": true,
-              "visible": true
+              "visible": true,
+              "createable": true,
+              "updateable": true
             }
           ],
           "fieldMeta": {
@@ -1425,8 +1492,74 @@
         }
       },
       "x": 960,
-      "y": 166,
+      "y": 175.5,
       "w": 230,
+      "h": 119,
+      "fontSize": 13
+    },
+    {
+      "id": "people/_record-types",
+      "label": "Person record types",
+      "kind": "enum",
+      "icon": "none",
+      "description": "How a person is classified",
+      "fields": [
+        {
+          "id": "chef",
+          "name": "Chef"
+        },
+        {
+          "id": "customer",
+          "name": "Customer"
+        },
+        {
+          "id": "manager",
+          "name": "Manager"
+        }
+      ],
+      "parentId": null,
+      "zoneId": null,
+      "tags": [
+        "record-type"
+      ],
+      "data": {
+        "model": {
+          "shape": "record-types",
+          "entity": "people",
+          "entityLabel": "Person",
+          "description": "How a person is classified",
+          "discriminator": "record_type_id",
+          "recordTypes": [
+            {
+              "folder": "people/record-types/chef",
+              "name": "Chef",
+              "key": "chef",
+              "id": "rt-chef",
+              "active": true,
+              "description": "A chef who owns recipes."
+            },
+            {
+              "folder": "people/record-types/customer",
+              "name": "Customer",
+              "key": "customer",
+              "id": "rt-customer",
+              "active": true,
+              "description": "A retail customer held as a person."
+            },
+            {
+              "folder": "people/record-types/manager",
+              "name": "Manager",
+              "key": "manager",
+              "id": "rt-manager",
+              "active": true,
+              "description": "Runs a building and its staff."
+            }
+          ]
+        }
+      },
+      "x": 1625,
+      "y": 185,
+      "w": 180,
       "h": 119,
       "fontSize": 13
     }
@@ -1630,57 +1763,6 @@
       }
     },
     {
-      "id": "people/record-types/chef::isa::people",
-      "source": "people/record-types/chef",
-      "target": "people",
-      "label": "",
-      "labelT": 0.5,
-      "style": "solid",
-      "color": "emerald",
-      "relation": "generalization",
-      "endHead": "triangle",
-      "data": {
-        "model": {
-          "kind": "generalization",
-          "parentEntity": "people"
-        }
-      }
-    },
-    {
-      "id": "people/record-types/customer::isa::people",
-      "source": "people/record-types/customer",
-      "target": "people",
-      "label": "",
-      "labelT": 0.5,
-      "style": "solid",
-      "color": "emerald",
-      "relation": "generalization",
-      "endHead": "triangle",
-      "data": {
-        "model": {
-          "kind": "generalization",
-          "parentEntity": "people"
-        }
-      }
-    },
-    {
-      "id": "people/record-types/manager::isa::people",
-      "source": "people/record-types/manager",
-      "target": "people",
-      "label": "",
-      "labelT": 0.5,
-      "style": "solid",
-      "color": "emerald",
-      "relation": "generalization",
-      "endHead": "triangle",
-      "data": {
-        "model": {
-          "kind": "generalization",
-          "parentEntity": "people"
-        }
-      }
-    },
-    {
       "id": "people::building_id::buildings",
       "source": "people",
       "target": "buildings",
@@ -1706,6 +1788,26 @@
           "cascadeDelete": false,
           "deleteConstraint": "SetNull",
           "visible": true,
+          "business": true
+        }
+      }
+    },
+    {
+      "id": "people::record_type_id::people/_record-types",
+      "source": "people",
+      "target": "people/_record-types",
+      "label": "record_type_id",
+      "labelT": 0.5,
+      "style": "dashed",
+      "color": "slate",
+      "relation": "reference",
+      "startLabel": "*",
+      "endLabel": "0..1",
+      "startField": "record_type_id",
+      "data": {
+        "model": {
+          "kind": "record-type",
+          "field": "record_type_id",
           "business": true
         }
       }
@@ -1787,6 +1889,7 @@
         "fields": "keys",
         "edges": "business",
         "polymorphic": "collapse",
+        "recordTypes": "enum",
         "externalStubs": true
       }
     }

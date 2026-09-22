@@ -380,15 +380,15 @@ function renderTemplateToMermaidEr(template: DiagramTemplate, safe: (id: string)
     for (const field of n.fields) {
       // Mermaid wants `type name KEYS "comment"`: a comma list of PK, FK,
       // UK — so a `pfk` is "PK, FK" and a unique column adds UK — and one
-      // quoted comment, which is where "required" and "derived" go, since
-      // the grammar has no marker for either.
+      // quoted comment, which is where "required", "derived" and the row's
+      // tags go, since the grammar has no marker for any of them.
       const roles = [
         ...(field.key === "pk" || field.key === "pfk" ? ["PK"] : []),
         ...(field.key === "fk" || field.key === "pfk" ? ["FK"] : []),
         ...(field.unique ? ["UK"] : []),
       ];
       const key = roles.length ? ` ${roles.join(", ")}` : "";
-      const notes = [...(field.required ? ["required"] : []), ...(field.derived ? ["derived"] : [])];
+      const notes = [...(field.required ? ["required"] : []), ...(field.derived ? ["derived"] : []), ...(field.tags ?? [])];
       const note = notes.length ? ` "${notes.join(", ")}"` : "";
       lines.push(`    ${token(field.type || "string")} ${token(field.name) || "column"}${key}${note}`);
     }

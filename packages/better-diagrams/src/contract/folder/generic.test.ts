@@ -12,6 +12,7 @@ import { exportFolder } from "./export";
 import { MANIFEST_FILE, LAYOUT_FILE } from "./sidecar";
 import { genericDialect, slugFolder, humanise } from "./dialects/generic";
 import { parseFlatYaml, patchFlatYaml } from "./dialects/datamodel/yaml";
+import { DATAMODEL_KINDS } from "./dialects/datamodel";
 import { EXAMPLE_TEMPLATE, EXAMPLE_ZONED_TEMPLATE, validateTemplate, type DiagramTemplate } from "../schema";
 
 describe("buildFolderTree", () => {
@@ -117,6 +118,13 @@ describe("full round trip", () => {
   ];
 
   /**
+   * The data-model example's kinds are not built in; validated blind they
+   * would all collapse to "service" before the trip began, and the test would
+   * pass without ever carrying an entity. Same option the host app uses.
+   */
+  const KINDS = { knownKinds: Object.keys(DATAMODEL_KINDS) };
+
+  /**
    * `meta.folderFormat` is the importer's stamp of the import that just ran,
    * not data the document owns — every import rewrites it, and a document that
    * was itself imported (the data-model example) arrives carrying one. So it
@@ -126,11 +134,11 @@ describe("full round trip", () => {
     const { folderFormat: _ff, ...meta } = t.meta ?? {};
     const stripped = { ...t, meta };
     if (!Object.keys(meta).length) delete (stripped as { meta?: unknown }).meta;
-    return JSON.stringify(validateTemplate(stripped));
+    return JSON.stringify(validateTemplate(stripped, KINDS));
   }
 
   it.each(cases)("%s survives export → import byte-for-byte", (_name, raw) => {
-    const doc = validateTemplate(raw);
+    const doc = validateTemplate(raw, KINDS);
     const out = exportFolder(doc, { mode: "full" });
     expect(out.mode).toBe("full");
     expect(out.files.has(MANIFEST_FILE)).toBe(true);
