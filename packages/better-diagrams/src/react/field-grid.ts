@@ -14,6 +14,7 @@ export type GridColumn =
   | "visible"
   | "externalId"
   | "unique"
+  | "tags"
   | "formula";
 
 export interface GridColumnDef {
@@ -36,6 +37,7 @@ export const GRID_COLUMNS: readonly GridColumnDef[] = [
   { id: "visible", title: "Visible", width: 64, align: "center" },
   { id: "externalId", title: "Ext. id", width: 64, align: "center" },
   { id: "unique", title: "Unique", width: 64, align: "center" },
+  { id: "tags", title: "Tags", width: 120 },
   { id: "formula", title: "Formula", width: 260, mono: true },
 ];
 
@@ -65,17 +67,19 @@ export function cellText(record: FieldRecord, col: GridColumn): string {
       return record.externalId ? CHECK : "";
     case "unique":
       return record.unique ? CHECK : "";
+    case "tags":
+      return (record.tags ?? []).join(", ");
     case "formula":
       return record.formula ?? "";
   }
 }
 
-/** Records whose name, label, type, formula or reference targets contain the query. */
+/** Records whose name, label, type, formula, tags or reference targets contain the query. */
 export function filterRecords(records: readonly FieldRecord[], query: string): FieldRecord[] {
   const q = query.trim().toLowerCase();
   if (!q) return [...records];
   return records.filter((r) =>
-    [r.name, r.label ?? "", r.type ?? "", r.formula ?? "", ...r.fk.map((t) => t.label)]
+    [r.name, r.label ?? "", r.type ?? "", r.formula ?? "", ...(r.tags ?? []), ...r.fk.map((t) => t.label)]
       .join("\u0000")
       .toLowerCase()
       .includes(q),

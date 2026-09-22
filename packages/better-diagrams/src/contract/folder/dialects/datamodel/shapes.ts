@@ -102,6 +102,8 @@ export interface EntityField {
   updateable?: boolean;
   filterable?: boolean;
   sortable?: boolean;
+  /** Free labels on the field, carried onto the row as-is (`pii`, `deprecated`…). */
+  tags?: string[];
   relationship?: FieldRelationship;
 }
 
@@ -151,6 +153,8 @@ export interface EntitySchema {
     businessLine?: string | null;
     source?: string;
     note?: string;
+    /** Fields drawn as rows in addition to what the import's `fields` mode picks, by name. */
+    diagramFields?: string[];
   };
   recordTypes?: unknown[];
   fieldSummary?: { total?: number; visible?: number; hidden?: number };

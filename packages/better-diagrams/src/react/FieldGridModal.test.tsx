@@ -56,7 +56,8 @@ describe("FieldGridModal", () => {
     expect(rowIds()).toEqual(["Id", "AccountId", "Email", "Score"]);
     expect(screen.getByText("4 fields")).toBeInTheDocument();
     expect(screen.getByRole("row", { name: /Email/ }).className).toContain("as-grid__row--data");
-    expect(within(screen.getByRole("row", { name: /Email/ })).getByText("hidden")).toBeInTheDocument();
+    // "hidden" twice: the Visible column, and the tag the flag implies.
+    expect(within(screen.getByRole("row", { name: /Email/ })).getAllByText("hidden")).toHaveLength(2);
   });
 
   it("sorts by a column header, ascending then descending then off", () => {

@@ -225,6 +225,30 @@ export interface NodeField {
   unique?: boolean;
   /** Computed rather than stored — a formula field, a UML derived attribute. Renders with UML's leading slash. */
   derived?: boolean;
+  /**
+   * Free labels on the row, the node's `tags` one level down — filterable
+   * in the editor, a small badge each on the canvas and in image exports.
+   * Two are known to every renderer: {@link FIELD_TAG_RO} (not writeable)
+   * wears an `RO` badge, {@link FIELD_TAG_HIDDEN} (not readable by the
+   * reading principal) dims the row instead of badging it.
+   */
+  tags?: string[];
+}
+
+/** Row tag: the field cannot be written — the folder importer sets it from `updateable: false`. */
+export const FIELD_TAG_RO = "ro";
+/** Row tag: the field is not readable by the reading principal — from `visible: false`. */
+export const FIELD_TAG_HIDDEN = "hidden";
+/** At most this many tags survive validation on one row. */
+export const MAX_FIELD_TAGS = 8;
+
+/**
+ * The badge a row tag draws, or null for a tag that marks the row some
+ * other way (`hidden` dims it). Uppercase like the key and unique badges,
+ * so `ro` reads as RO beside PK and UQ.
+ */
+export function fieldTagBadge(tag: string): string | null {
+  return tag === FIELD_TAG_HIDDEN ? null : tag.toUpperCase();
 }
 
 /**
@@ -794,6 +818,7 @@ const FIELD_KEY_MAP: Record<keyof NodeField, true> = {
   required: true,
   unique: true,
   derived: true,
+  tags: true,
 };
 export const NODE_FIELD_KEYS: readonly string[] = Object.keys(FIELD_KEY_MAP);
 
@@ -928,7 +953,7 @@ Rules:
 - A "group" may also be styled as a purely visual grouping frame: "fill":false drops its background, "outline":"none" drops its border, "outline":"dotted"/"solid" changes it (default dashed), and "color" is an "#rrggbb" ink the background tint derives from. Use "fill":false with "outline":"none" only when the user explicitly wants an invisible/abstract grouping box.
 - Node/edge/zone "date" = when that piece lands or landed, as "YYYY-MM-DD". Set it ONLY when the user gives a roadmap, phases, quarters, or a migration order; omit it everywhere else. Undated elements are treated as always present, so a phased plan dates the new pieces and leaves today's system undated. A node inside a group is never shown before the group, so date the group with its earliest phase.
 - parentId may reference ANY existing node. A child of a "group" renders inside its frame. A child of any other node is that component's INTERNAL decomposition (the next C4 level) — shown only when the user drills into that component, never on the parent's own diagram. Do NOT decompose a component into children unless the user explicitly asks for its internal detail. Never create a parent cycle.
-- DATA MODELS: an entity/table is a node of kind "table" whose columns are "fields" — {id, name, type, key:"pk"/"fk"/"pfk", required, unique, derived}; "unique" marks a unique column, "derived" a computed/formula one; omit both when false. An enumeration or picklist is a node of kind "enum" whose "fields" are its values (name only). Field ids are unique within their node.${geo ? " Give a table w 200-260; the editor grows its height to fit the rows, so h is only a hint." : ""} A relationship is an ordinary edge between the two tables: name the columns it joins with "startField"/"endField" (field ids on the source and target), and put cardinality in "startLabel"/"endLabel" ("1", "0..1", "0..*", "1..*") — these render as crow's-foot symbols, so write real cardinalities there rather than prose. Say what KIND of relationship it is with "relation": "composition" when the child cannot exist without the parent (owned, cascade delete), "reference" for an ordinary foreign key, "hierarchy" when a table points at itself, "polymorphic" when the target varies per row — "aggregation" for shared ownership (the part outlives the whole), "generalization" from a subtype to the type it extends (record types, table inheritance) — and dress the line to match (composition: solid rose with "startHead":"diamond-filled", "*" → "1"; aggregation: solid sky with "startHead":"diamond", "*" → "0..1"; reference: dashed slate, "*" → "0..1", or "*" → "1" when the foreign key is required; hierarchy: dashed violet; polymorphic: dotted amber; generalization: solid emerald with "endHead":"triangle" and no cardinality). Omit "relation" on an architecture edge. Use "fields" ONLY for data modelling — an ordinary architecture node omits the key entirely. Subject areas are "group" parents, exactly as elsewhere.
+- DATA MODELS: an entity/table is a node of kind "table" whose columns are "fields" — {id, name, type, key:"pk"/"fk"/"pfk", required, unique, derived, tags}; "unique" marks a unique column, "derived" a computed/formula one; omit both when false. "tags" is an optional list of short labels on the row ("ro" = read-only, "hidden" = not readable by the reader, or anything the user asks for such as "pii"); omit when none. An enumeration or picklist is a node of kind "enum" whose "fields" are its values (name only). Field ids are unique within their node.${geo ? " Give a table w 200-260; the editor grows its height to fit the rows, so h is only a hint." : ""} A relationship is an ordinary edge between the two tables: name the columns it joins with "startField"/"endField" (field ids on the source and target), and put cardinality in "startLabel"/"endLabel" ("1", "0..1", "0..*", "1..*") — these render as crow's-foot symbols, so write real cardinalities there rather than prose. Say what KIND of relationship it is with "relation": "composition" when the child cannot exist without the parent (owned, cascade delete), "reference" for an ordinary foreign key, "hierarchy" when a table points at itself, "polymorphic" when the target varies per row — "aggregation" for shared ownership (the part outlives the whole), "generalization" from a subtype to the type it extends (record types, table inheritance) — and dress the line to match (composition: solid rose with "startHead":"diamond-filled", "*" → "1"; aggregation: solid sky with "startHead":"diamond", "*" → "0..1"; reference: dashed slate, "*" → "0..1", or "*" → "1" when the foreign key is required; hierarchy: dashed violet; polymorphic: dotted amber; generalization: solid emerald with "endHead":"triangle" and no cardinality). Omit "relation" on an architecture edge. Use "fields" ONLY for data modelling — an ordinary architecture node omits the key entirely. Subject areas are "group" parents, exactly as elsewhere.
 - ZONES are infra backgrounds, drawn behind everything, in ABSOLUTE canvas coordinates (never relative). Provider ids: ${providers}. Omit the "zones" key entirely unless the request actually involves infrastructure or hosting.
 - Zone "color" (optional) is the OUTLINE hex; the background derives from it automatically. It may carry "/NN" percent alpha for fill strength ("#38bdf8/22"). Omit for the provider's default colour. Zone "outline" (optional): dashed for logical/planned boundaries, dotted for soft groupings, none for a pure background wash; omit for solid.
 - A zone's "providers" lists every provider it could run on; "provider" is the one shown. Use a higher "z" for a small zone that sits on top of a bigger one (e.g. a third-party SaaS island inside a cloud region).
@@ -1426,6 +1451,7 @@ function validateFields(raw: unknown): NodeField[] | undefined {
     while (seen.has(id)) id = `${rawId || slugifyFieldId(name)}_${bump++}`;
     seen.add(id);
     const type = typeof f.type === "string" ? f.type.trim() : "";
+    const tags = validateFieldTags(f.tags);
     out.push({
       id,
       name: name || id,
@@ -1436,10 +1462,24 @@ function validateFields(raw: unknown): NodeField[] | undefined {
       ...(f.required === true ? { required: true } : {}),
       ...(f.unique === true ? { unique: true } : {}),
       ...(f.derived === true ? { derived: true } : {}),
+      ...(tags.length ? { tags } : {}),
     });
     if (out.length === MAX_NODE_FIELDS) break;
   }
   return out.length ? out : undefined;
+}
+
+/** Trimmed, de-duplicated, capped; anything that isn't a non-empty string is dropped. */
+function validateFieldTags(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const t of raw) {
+    if (typeof t !== "string") continue;
+    const tag = t.trim();
+    if (tag && !out.includes(tag)) out.push(tag);
+    if (out.length === MAX_FIELD_TAGS) break;
+  }
+  return out;
 }
 
 /** A URL-ish id from a column name: "User ID" → "user_id". */

@@ -23,11 +23,14 @@ type CoverageNode = FieldDocument["nodes"][number];
  * coverage score asks, and it excludes by construction everything a key can
  * never stand for: bands and groups (structure), views and record types
  * (facets of a table), external stubs and polymorphic collapse points
- * (stand-ins). An object with no foreign key at all still counts — an island
- * table is exactly what the score should report as unreached.
+ * (stand-ins). An enumeration is the one exception the rule needs stating:
+ * its rows are allowed values, not fields, and a key that points at one
+ * reaches a picklist, not a table. An object with no foreign key at all
+ * still counts — an island table is exactly what the score should report
+ * as unreached.
  */
 export const storesFields = (node: CoverageNode): boolean =>
-  !!node.fields?.length || dataFields(node).length > 0;
+  node.kind !== "enum" && (!!node.fields?.length || dataFields(node).length > 0);
 
 export type CoverageScope = { kind: "all" } | { kind: "from"; nodeId: string };
 

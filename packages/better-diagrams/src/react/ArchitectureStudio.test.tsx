@@ -1926,6 +1926,64 @@ describe("ArchitectureStudio", () => {
     expect(container.querySelector('[data-id="db"]')?.classList.contains("selected")).toBe(true);
   });
 
+  it("drills to an offender that is folded away rather than doing nothing", async () => {
+    const user = userEvent.setup();
+    // The shape a big folder import opens in: top-level containers collapsed
+    // into chips, so the orphan the lint is complaining about is not on the
+    // canvas at all.
+    const mapped = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "people", label: "People", kind: "group", icon: "none", description: "", parentId: null, collapsed: true, x: 0, y: 0, w: 300, h: 200 },
+        { id: "session", label: "Session", kind: "service", icon: "box", description: "", parentId: "people", x: 30, y: 60, w: 170, h: 76 },
+      ],
+      edges: [],
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={mapped} />);
+
+    // Folded: the offender has no box to centre on.
+    expect(container.querySelector('[data-id="session"]')).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /Checks \(/ }));
+    await user.click(screen.getByRole("menuitem", { name: /Unconnected component/ }));
+
+    // The click lands on the level that shows it, selected.
+    await waitFor(() =>
+      expect(container.querySelector('[data-id="session"]')?.classList.contains("selected")).toBe(
+        true,
+      ),
+    );
+  });
+
+  it("reveals an offender the provider selection is hiding", async () => {
+    const user = userEvent.setup();
+    // "lambda" is only on AWS; the zone is showing GCP, so the canvas does not
+    // draw it — but the lint, which reads the whole document, still reports it.
+    const zoned = validateTemplate({
+      version: 1,
+      zones: [{ id: "cloud", label: "Cloud", x: 0, y: 0, w: 900, h: 400, providers: ["aws", "gcp"], provider: "gcp" }],
+      nodes: [
+        { id: "lambda", label: "Scheduler", kind: "service", icon: "box", description: "", parentId: null, zoneId: "cloud", providers: ["aws"], x: 60, y: 60, w: 170, h: 76 },
+      ],
+      edges: [],
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={zoned} />);
+    expect(container.querySelector('[data-id="lambda"]')).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /Checks \(/ }));
+    await user.click(screen.getByRole("menuitem", { name: /Unconnected component/ }));
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-id="lambda"]')?.classList.contains("selected")).toBe(
+        true,
+      ),
+    );
+    // Through the ghost toggle, so the View menu says why it is on screen and
+    // the reader can put it back.
+    await user.click(screen.getByRole("button", { name: /^View/ }));
+    expect(screen.getByRole("checkbox", { name: /Show hidden nodes/ })).toBeChecked();
+  });
+
   it("boxes text notes by default and lets the Outline toggle opt out", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

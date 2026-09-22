@@ -17,7 +17,7 @@
  *
  * Zero dependencies, like every contract module.
  */
-import type { FieldKey, NodeField } from "./schema";
+import { FIELD_TAG_HIDDEN, FIELD_TAG_RO, type FieldKey, type NodeField } from "./schema";
 
 export interface FieldRef {
   nodeId: string;
@@ -80,12 +80,15 @@ export interface FieldRecord {
   /** Computed rather than stored — the row's own flag, or a formula the data carries. */
   derived?: boolean;
   formula?: string;
+  /** The row's tags, or what the data implies — `ro` for `updateable: false`, `hidden` for `visible: false`. */
+  tags?: string[];
 }
 
 /** The structural slice these helpers read — a scoped view document serves too. */
 export interface FieldDocument {
   nodes: ReadonlyArray<{
     id: string;
+    kind?: string;
     label?: string;
     fields?: readonly NodeField[];
     data?: Record<string, unknown>;
@@ -118,6 +121,9 @@ export interface DataField {
   unique?: boolean;
   formula?: string;
   visible?: boolean;
+  createable?: boolean;
+  updateable?: boolean;
+  tags?: string[];
   relationship?: { kind?: string; referenceTo?: string[]; relationshipName?: string | null };
 }
 
@@ -162,6 +168,12 @@ function coerceDataField(raw: unknown): DataField | null {
   if (raw.unique === true) out.unique = true;
   if (typeof raw.formula === "string") out.formula = raw.formula;
   if (typeof raw.visible === "boolean") out.visible = raw.visible;
+  if (typeof raw.createable === "boolean") out.createable = raw.createable;
+  if (typeof raw.updateable === "boolean") out.updateable = raw.updateable;
+  if (Array.isArray(raw.tags)) {
+    const tags = raw.tags.filter((t): t is string => typeof t === "string" && !!t.trim()).map((t) => t.trim());
+    if (tags.length) out.tags = [...new Set(tags)];
+  }
   if (isRecord(raw.relationship)) {
     const r = raw.relationship;
     out.relationship = {
@@ -213,6 +225,18 @@ export function nameIndex(doc: FieldDocument): Map<string, string> {
 }
 
 /** A reference's targets on one short line — the same rule the importer's rows use. */
+/**
+ * A data field's tags: the ones it names, plus the two the access flags
+ * imply. The same rule the folder importer applies when it makes a row, so
+ * a field that was not drawn reads the same in the grid as one that was.
+ */
+export function dataFieldTags(d: DataField): string[] {
+  const out = [...(d.tags ?? [])];
+  if (d.updateable === false && !out.includes(FIELD_TAG_RO)) out.push(FIELD_TAG_RO);
+  if (d.visible === false && !out.includes(FIELD_TAG_HIDDEN)) out.push(FIELD_TAG_HIDDEN);
+  return out;
+}
+
 function referenceType(d: DataField): string {
   const targets = d.relationship?.referenceTo ?? [];
   if (targets.length > 3) return `→ ${targets.length} types`;
@@ -269,6 +293,7 @@ export function fieldRecords(node: FieldDocNode, doc?: FieldDocument): FieldReco
       row?.key ??
       (d ? (d.primaryKey && d.relationship ? "pfk" : d.primaryKey ? "pk" : d.relationship ? "fk" : undefined) : undefined);
     const required = row?.required ?? (d?.nullable === false && !d.primaryKey ? true : undefined);
+    const tags = row?.tags ?? (d ? dataFieldTags(d) : []);
     return {
       id,
       name,
@@ -283,6 +308,7 @@ export function fieldRecords(node: FieldDocNode, doc?: FieldDocument): FieldReco
       ...(row?.unique || d?.unique ? { unique: true } : {}),
       ...(row?.derived || d?.formula ? { derived: true } : {}),
       ...(d?.formula !== undefined ? { formula: d.formula } : {}),
+      ...(tags.length ? { tags } : {}),
     };
   };
 

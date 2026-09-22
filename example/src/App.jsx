@@ -58,8 +58,15 @@ const LEGACY_SEQ_KEY = "architecture-studio:example-sequence";
 let fileCounter = 0;
 const nextFileId = () => `f_${Date.now().toString(36)}${(fileCounter++).toString(36)}`;
 
+/**
+ * Registry-aware, like the folder import below: a plain `validateTemplate`
+ * knows only the built-in kinds and rewrites every other one to "service",
+ * so a data model read back from localStorage or a template file would lose
+ * its entities before the studio ever saw it.
+ */
+const VALIDATE = { knownKinds: Object.keys(registry.nodeKinds) };
 const validateDoc = (kind, doc) =>
-  kind === "sequence" ? validateSequence(doc) : validateTemplate(doc);
+  kind === "sequence" ? validateSequence(doc) : validateTemplate(doc, VALIDATE);
 
 /** Nothing in it yet — deleting is safe, and the mode switch flips in place. */
 const isBlank = (kind, doc) =>
@@ -581,7 +588,7 @@ export default function App() {
         const tree = await readFolderTree(entry.file);
         if (!tree) return;
         const result = importFolder(new Map(Object.entries(tree.files)), {
-          validate: { knownKinds: Object.keys(registry.nodeKinds) },
+          validate: VALIDATE,
         });
         setActiveDoc(result.template);
         setSettingsOpen(false);
@@ -596,7 +603,7 @@ export default function App() {
       }
       const doc = await readTemplate(entry.folder, entry.file);
       if (!doc) return;
-      setActiveDoc(entry.kind === "sequence" ? validateSequence(doc) : validateTemplate(doc));
+      setActiveDoc(validateDoc(entry.kind, doc));
       setSettingsOpen(false);
       toast.success(`Loaded ${entry.name}`, { description: `${entry.folder}/${entry.file}` });
     },

@@ -587,6 +587,7 @@ const { template, dialect, warnings, stats, registry } = importFolder(files, {
   fields: "keys",          // "keys" (primary key, name, references, external ids) | "visible" | "all" | predicate
   edges: "business",       // hide audit FKs (owner_id, created_by_id…) | "all"
   polymorphic: "collapse", // one point node per polymorphic FK | "in-model" (fan out, capped) | "none"
+  recordTypes: "enum",     // an entity's record types as one enumeration node | "nodes" (a leaf each) | "none"
 });
 <ArchitectureStudio defaultValue={template} registry={dataModelRegistry} />
 
@@ -601,12 +602,21 @@ than a wall of cards at fit-zoom — 137 entities arrive as eight chips at 107% 
 15%. `foldGroups` forces it either way; a generic tree never folds on its own, because it
 round-trips a document that already said what it wanted, and a **layout sidecar always wins** —
 the fold is applied but the reader's own arrangement is never re-laid-out over.
-`templates/folders/datamodel/` is a small worked example of the format — nine entities, a view, a
-group of record types, cross-cutting metadata.
+`templates/folders/datamodel/` is a small worked example of the format — nine entities, a view, an
+entity with record types, cross-cutting metadata.
+
+**Record types** are values of one field, not tables, and the importer draws them that way: an
+entity's record-type folders fold into **one `enum` node beside it** — a row per record type
+(`inactive` in the type column when it is), the wrapper group's description as the node's — joined
+by a **reference line from the discriminator column** (`record_type_id`, `RecordTypeId`, or any
+reference to a record-type object; the line leaves the box itself when the entity has none). The
+discriminator's own foreign key is that line, so it never stubs an external "RecordType" table.
+`recordTypes: "nodes"` keeps the older picture — one amber `record-type` leaf each under its
+wrapper folder, a generalization line to the entity — and `"none"` leaves them out.
 
 Import is dialect-detected (or named with `dialect`), never throws on a recoverable tree, and returns
 typed `warnings` — `unknown-shape`, `folder-mismatch`, `edge-target-missing`, `poly-capped`,
-`too-many-fields`, `sidecar-orphan`, `yaml-fallback-used`, … A dropped directory whose own name
+`too-many-fields`, `unknown-field`, `sidecar-orphan`, `yaml-fallback-used`, … A dropped directory whose own name
 prefixes every path is re-rooted automatically. Node ids are folder paths (`core/account`), edge
 ids are `${from}::${field}::${to}`, so both stay stable across regenerations and addressable
 from a host. Every node and edge carries the source's metadata in `data` (`data.folder`, and for
@@ -641,10 +651,20 @@ from a folder tree. A node added on the canvas has no source folder, so a sideca
 `templates/folders/` under Settings ▾ → Templates.
 
 Every entity node also carries its **full field list** in `data.model.fields` — compact
-(name, label, type, primary key, nullable, external-id/unique marks, formula, visibility, reference
-targets; no enum values or lengths), whatever the `fields:` row mode drew on the canvas, capped at
-`MAX_NODE_FIELDS` (500) with a `fields-truncated` warning past that. `fieldRecords(node, doc)`
-merges it with the rows; the field grid, the search and the row menu read that, never the bag.
+(name, label, type, primary key, nullable, external-id/unique marks, formula, visibility, the
+`createable`/`updateable` access flags, tags, reference targets; no enum values or lengths),
+whatever the `fields:` row mode drew on the canvas, capped at `MAX_NODE_FIELDS` (500) with a
+`fields-truncated` warning past that. `fieldRecords(node, doc)` merges it with the rows; the field
+grid, the search and the row menu read that, never the bag.
+
+**Which fields become rows** is the import-wide `fields` option — `"keys"` (default: primary key,
+name, references, external ids, unique keys), `"visible"`, `"all"`, or a predicate over the
+source's own field shape — plus, per entity, `curated.diagramFields: ["notes", "created_at"]` in
+its `schema.json`: names pinned as rows on top of whatever the mode picks, in the entity's own
+field order (an unlisted name is an `unknown-field` warning). **Row tags** come from the source:
+`fields[].updateable: false` → `ro`, `fields[].visible: false` → `hidden`, and a field's own
+`fields[].tags` (`pii`, `deprecated`…) verbatim. `entity.yaml` carries none of this — the yaml
+fallback draws a labelled box with no rows.
 
 ## Content and layout: the split document
 
@@ -802,8 +822,8 @@ hollow diamond at the part, `*` → `0..1`), **`reference`** (an ordinary foreig
 can exist alone: dashed slate, `*` → `0..1`, or `*` → `1` when the key is required),
 **`hierarchy`** (a table pointing at itself: dashed violet), **`polymorphic`** (a target that
 varies per row: dotted amber) and **`generalization`** (is-a — a subtype or record type extending
-the table it points at: solid emerald, a hollow triangle at the parent, no cardinality; the
-folder importer draws one from every record type to its parent entity). Crow's-foot's identifying-solid / non-identifying-
+the table it points at: solid emerald, a hollow triangle at the parent, no cardinality; with
+`recordTypes: "nodes"` the folder importer draws one from every record type to its parent entity). Crow's-foot's identifying-solid / non-identifying-
 dashed rule is where the line styles come from; the colours keep the four apart at a glance. A
 kind **dresses** a line rather than being read at draw time — the importer or the inspector's
 *relation* picker writes `style`, `color`, the end glyph and the cardinality onto the edge
@@ -882,7 +902,8 @@ on that:
 
   A **table** is a node that stores field data — rows it draws, or fields in its `data` bag. That
   is the whole of the test, and it leaves out by construction everything a key can never stand
-  for: bands and groups, views and record types, external stubs and polymorphic collapse points.
+  for: bands and groups, views and record types, external stubs and polymorphic collapse points —
+  and, by the one rule that has to be stated, `enum` nodes, whose rows are values rather than fields.
   An object with no foreign key at all still counts, because "this table is an island" is exactly
   what the score should tell you. Pass `isTable` to `keyCoverage` / `marginalGains` /
   `minimalKeyCover` (or `storesFields`, the default, directly) when your documents say it
@@ -1117,7 +1138,7 @@ The schema and editor cover C4's notational essentials:
 | **Flow-chart kinds** — `decision` (diamond), `terminator` (stadium), `io` (parallelogram) | Insert or the kind picker; Mermaid exports each by its shape |
 | **Language models** — `lm-small`, `lm-medium`, `llm` | One hue at three strengths, so the weight class is legible at a glance: a 1B router never looks like a frontier model. Provider-neutral — name the model in `description` ("Phi-3 mini", "Claude Opus 5"); use a cloud's own kind (`azure-openai`, `aws-bedrock`, `gcp-vertex-ai`) when the box is the hosting *service* |
 | **Collapsible groups** | ▾ on a group collapses it to a chip; contents hide, their edges re-route to the chip, and the stored size survives expand. Never destructive — collapse is view state that rides the undo stack. `settings.groupContents: "hide"` folds every group with contents at once, with a **Fold groups** toolbar toggle to flip it (see **Settings** above) |
-| **Tags + filter** | `node.tags`; the View tag filter dims non-matching nodes — dim only, never hide, so the filter can't touch what persists |
+| **Tags + filter** | `node.tags` and `field.tags`; the View tag filter dims non-matching nodes — a table whose row carries the tag is kept, and its other rows dim — dim only, never hide, so the filter can't touch what persists |
 | **Doc links** | `node.url` renders an ↗ affix (a real link in read-only); View → Show link buttons hides the affixes without touching the document, and a multi-selection's inspector offers **Clear links** to drop them from every selected node at once |
 | **Team ownership** | `node.team` renders a tag riding the node's edge, coloured stably per team name (same hue on screen and in image exports); View → Show team badges toggles them while editing |
 | **Lifecycle status** | `node.status`: `proposed` (dotted) / `planned` (dashed) / `stubbed` (heavy construction dashes + faint hatch — scaffolding with no implementation) / `dark` (black/white hazard-tape outline — built and shipped but not yet enabled) / `active` (default, never stored) / `deprecated` (dimmed, salmon status text sharpening to red on hover/selection) / `retired` (dimmed + struck through). Every dulled stage brightens to full strength under the cursor so its label stays readable. Same conventions in image exports; C4-PlantUML gets `$tags` |
@@ -1129,6 +1150,7 @@ The schema and editor cover C4's notational essentials:
 | **Notation** — symbols and numbers / crow's foot / UML | View: how a line's ends draw cardinality; `settings.notation`. UML shows the end glyphs a crow's-foot symbol would replace |
 | **Enumerations** | Kind `enum`: a record whose rows are the allowed values, «enumeration» style; Insert ▸ Enumeration |
 | **Field flags** — unique, derived | `field.unique` wears a UQ badge and exports as Mermaid `UK`; `field.derived` takes UML's leading slash. The folder importer sets both from `unique` and `formula`/`calculated` |
+| **Row tags** | `field.tags`: free labels on a row, each an uppercase badge after the name (`ro` → RO, `pii` → PII) in the canvas and image exports, in the Mermaid ER comment, and a Tags column in the field grid. Two are known everywhere: `ro` (not writeable) and `hidden` (not readable by the reading principal — the row dims instead of badging). Edited per row in the inspector, comma-separated; the folder importer sets `ro` from `updateable: false`, `hidden` from `visible: false`, and copies a field's own `tags` |
 | **Junction tables** | Arrange ▸ Collapse junction tables: a table keyed by two foreign keys becomes one `*`–`*` line named after it, its other rows noted on the line; `junctionTables` / `collapseJunctions` in the contract |
 | **Title block** | `meta.title` stamps exported images |
 | **C4-PlantUML export** | `Person`/`ContainerDb`/`ContainerQueue`/`System_Ext`/`Container`, `Container_Boundary` for groups, `Deployment_Node` for zones, `Rel`/`BiRel` with tech |
@@ -1217,7 +1239,9 @@ tabs.
 
 **Checks** is an architecture lint. `lintTemplate(template, rules)` is a pure contract function
 run on every committed edit; findings appear in the toolbar's **Checks** menu (error-first) and
-clicking one selects and centres the offenders. Built-in rules: unconnected components,
+clicking one selects and centres the offenders — drilling to the level that shows them when they
+are folded into a chip or a level down, and revealing them when the provider selection is hiding
+them, so a finding is never a dead click. Built-in rules: unconnected components,
 synchronous cycles, external systems reaching datastores directly (error), partially-missing
 team ownership, unlabeled cross-team edges, and active components depending on
 deprecated/retired ones. Hosts add or remove rules through the registry:

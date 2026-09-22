@@ -27,10 +27,14 @@ import { kindDef, iconPaths } from "./registry-types";
 import { ZoneNode } from "./ZoneNode";
 import { silhouettePath, teamColor } from "./shapes";
 import { groupContentBox, shapeMinHeight } from "./resize";
+import { useResizeHandles } from "./resize-handles";
 import {
   DEFAULT_CONTAINER_OPACITY,
   DEFAULT_FONT_SIZE,
+  FIELD_TAG_HIDDEN,
+  FIELD_TAG_RO,
   NODE_MIN_SIZE,
+  fieldTagBadge,
   ghostSourceId,
   isBoundaryNodeId,
   isGhostNodeId,
@@ -113,8 +117,21 @@ function nodeMarked(marks: ReadonlySet<string>, nodeId: string): boolean {
   return false;
 }
 
-function FieldList({ nodeId, fields }: { nodeId: string; fields: readonly NodeField[] }) {
-  const { onFieldClick, pinnedFields, highlightFields } = useStudio();
+/** Whether a tag list meets the View menu's filter. */
+const meetsFilter = (tags: readonly string[] | undefined, filter: readonly string[]): boolean =>
+  !!tags?.some((tag) => filter.includes(tag));
+
+function FieldList({
+  nodeId,
+  fields,
+  rowsFiltered,
+}: {
+  nodeId: string;
+  fields: readonly NodeField[];
+  /** The tag filter is on and it was a ROW of this table that met it — so rows that don't are dimmed. */
+  rowsFiltered: boolean;
+}) {
+  const { onFieldClick, pinnedFields, highlightFields, tagFilter } = useStudio();
   // Rows are inert unless the editor offers a field menu. When it does, a
   // row owns its own press: `nodrag` keeps React Flow and the marquee off it
   // (see marquee.ts PASSTHROUGH), the stops keep the wrapper's click-select
@@ -127,11 +144,14 @@ function FieldList({ nodeId, fields }: { nodeId: string; fields: readonly NodeFi
     <ul className="as-node__fields">
       {fields.map((field) => {
         const key = fieldKey({ nodeId, fieldId: field.id });
+        const hidden = !!field.tags?.includes(FIELD_TAG_HIDDEN);
         const className = [
           "as-node__field",
           interactive ? "nodrag" : "",
           pinnedFields.has(key) ? "as-node__field--pinned" : "",
           highlightFields.has(key) ? "as-node__field--match" : "",
+          hidden ? "as-node__field--hidden" : "",
+          rowsFiltered && !meetsFilter(field.tags, tagFilter) ? "as-node__field--dimmed" : "",
         ]
           .filter(Boolean)
           .join(" ");
@@ -167,7 +187,13 @@ function FieldList({ nodeId, fields }: { nodeId: string; fields: readonly NodeFi
           ) : null}
           <span
             className="as-node__fieldname"
-            title={field.derived ? `${field.name} — derived: computed, not stored` : field.name}
+            title={
+              hidden
+                ? `${field.name} — hidden: not readable by the reading principal`
+                : field.derived
+                  ? `${field.name} — derived: computed, not stored`
+                  : field.name
+            }
           >
             {/* UML's leading slash for a derived attribute. */}
             {field.derived ? (
@@ -187,6 +213,15 @@ function FieldList({ nodeId, fields }: { nodeId: string; fields: readonly NodeFi
               UQ
             </span>
           ) : null}
+          {/* Row tags as badges, after the unique mark; `hidden` dims the row instead. */}
+          {field.tags?.map((tag) => {
+            const badge = fieldTagBadge(tag);
+            return badge ? (
+              <span key={tag} className="as-node__fieldflag as-node__fieldflag--tag" title={tag === FIELD_TAG_RO ? "Read-only" : tag}>
+                {badge}
+              </span>
+            ) : null;
+          })}
           {field.type ? (
             <span className="as-node__fieldtype" title={field.type}>
               {field.type}
@@ -319,6 +354,14 @@ export const ShapeNode = memo(function ShapeNode({
     : childCount > 0 || !readOnly
       ? () => drillInto(id)
       : undefined;
+  const handles = useResizeHandles(!readOnly && !data.locked && !scopeGhost, selected);
+  // Stable, like `requestCommit` alone was: React Flow rebuilds a resizer
+  // whenever its callbacks change identity, and this renders every frame of
+  // a resize.
+  const onResizeEnd = useCallback(() => {
+    handles.onResizeEnd();
+    requestCommit();
+  }, [handles.onResizeEnd, requestCommit]);
 
   const w = width ?? 170;
   const h = height ?? 76;
@@ -337,8 +380,15 @@ export const ShapeNode = memo(function ShapeNode({
   // Tag filter and the path panel's reachable set: dim, never hide. Purely
   // presentational, so neither can interact with the visibility machinery
   // that decides what persists.
+  // A table whose ROW carries the tag is kept, so the filter can point at
+  // "every table with a pii column" as well as at tagged boxes. In that
+  // table the rows that don't carry it dim; a table that met the filter by
+  // its OWN tags keeps every row bright — the filter was about the table.
+  const tableTagged = tagFilter.length > 0 && meetsFilter(data.tags, tagFilter);
+  const rowTagged = tagFilter.length > 0 && !!data.fields?.some((f) => meetsFilter(f.tags, tagFilter));
+  const rowsFiltered = rowTagged && !tableTagged;
   const dimmed =
-    (tagFilter.length > 0 && !data.tags?.some((tag) => tagFilter.includes(tag))) ||
+    (tagFilter.length > 0 && !tableTagged && !rowTagged) ||
     (dimmedIds !== null && !dimmedIds.has(docId));
 
   const style = {
@@ -385,7 +435,7 @@ export const ShapeNode = memo(function ShapeNode({
   return (
     <>
       <NodeResizer
-        isVisible={!!selected && !readOnly && !data.locked && !scopeGhost}
+        isVisible={handles.visible}
         minWidth={NODE_MIN_SIZE.shape.w}
         // Rows and a wrapped title are CONTENT: `validateTemplate` grows the
         // stored height to hold them, so a box dragged shorter than they need
@@ -394,10 +444,12 @@ export const ShapeNode = memo(function ShapeNode({
         // floor is whatever the content actually needs.
         minHeight={minHeight}
         lineClassName="as-resize-line"
-        onResizeEnd={requestCommit}
+        onResizeStart={handles.onResizeStart}
+        onResizeEnd={onResizeEnd}
       />
       <ConnectHandles hidden={readOnly} />
       <div
+        ref={handles.hostRef}
         className={className}
         style={style}
         onDoubleClick={onDoubleClick}
@@ -476,7 +528,7 @@ export const ShapeNode = memo(function ShapeNode({
             }}
           />
           {data.description ? <div className="as-node__desc">{data.description}</div> : null}
-          {data.fields?.length ? <FieldList nodeId={docId} fields={data.fields} /> : null}
+          {data.fields?.length ? <FieldList nodeId={docId} fields={data.fields} rowsFiltered={rowsFiltered} /> : null}
           <DateChip date={data.date} prefix="Lands" overdue={isOverdue(data.date, data.status)} />
         </div>
         {!showLinks ? null : data.url?.startsWith("file:") ? (
@@ -573,6 +625,9 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
   const isBoundary = isBoundaryNodeId(id);
   const inScopedView = focus !== null;
   const childCount = scopeGhost || isBoundary ? 0 : (childCounts.get(id) ?? 0);
+  // The host ref goes on the chip as well as the frame: the wrapper's hover
+  // listener is attached once, at mount, whichever of the two mounted.
+  const handles = useResizeHandles(!readOnly && !data.locked, selected);
   const onDoubleClick = isBoundary
     ? undefined
     : scopeGhost
@@ -670,6 +725,7 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
       <>
         <ConnectHandles hidden={readOnly} />
         <div
+          ref={handles.hostRef}
           className={`as-group-chip${selected ? " as-group-chip--selected" : ""}${scopeGhost ? " as-ghost as-node--scope-ghost" : ""}${dimmed ? " as-node--dimmed" : ""}`}
           style={style}
           onDoubleClick={onDoubleClick}
@@ -698,7 +754,7 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
   return (
     <>
       <NodeResizer
-        isVisible={!!selected && !readOnly && !data.locked}
+        isVisible={handles.visible}
         // Never smaller than what it contains: shrinking past a child used to
         // leave it parented but hanging outside the frame, visibly not in the
         // box it still belongs to.
@@ -708,14 +764,17 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
         onResizeEnd={(event, params) => {
           holdChildrenStill(event, params);
           resizeOrigin.current = null;
+          handles.onResizeEnd();
           requestCommit();
         }}
         onResizeStart={(_event, params) => {
           resizeOrigin.current = { x: params.x, y: params.y };
+          handles.onResizeStart();
         }}
       />
       <ConnectHandles hidden={readOnly} />
       <div
+        ref={handles.hostRef}
         className={`as-group${selected ? " as-group--selected" : ""}${data.status ? ` as-node--status-${data.status}` : ""}`}
         style={style}
       >
@@ -783,16 +842,24 @@ export const AnnotationNode = memo(function AnnotationNode({
     lineHeight: 1.35,
   } as CSSProperties;
 
+  const handles = useResizeHandles(!readOnly && !data.locked, selected);
+  const onResizeEnd = useCallback(() => {
+    handles.onResizeEnd();
+    requestCommit();
+  }, [handles.onResizeEnd, requestCommit]);
+
   return (
     <>
       <NodeResizer
-        isVisible={!!selected && !readOnly && !data.locked}
+        isVisible={handles.visible}
         minWidth={NODE_MIN_SIZE.annotation.w}
         minHeight={NODE_MIN_SIZE.annotation.h}
-        onResizeEnd={requestCommit}
+        onResizeStart={handles.onResizeStart}
+        onResizeEnd={onResizeEnd}
       />
       <ConnectHandles hidden={readOnly} />
       <div
+        ref={handles.hostRef}
         className={`as-annotation${data.plain ? "" : " as-annotation--boxed"}${selected ? " as-annotation--selected" : ""}`}
         style={style}
         onDoubleClick={

@@ -19,6 +19,12 @@ datamodel/
         ├── chef/  customer/  manager/
 ```
 
+The three record types do not open as three boxes: they are values of
+`person.record_type_id`, so the importer folds them into one `enum` node beside
+Person — a row each — with a reference line from that column. Pass
+`recordTypes: "nodes"` to see the folders as they are (a group of three amber
+leaves, each generalizing to Person), or `"none"` to leave them out.
+
 Five of the six `schema.json` shapes appear here — root, group, entity, record
 type and view. The sixth, a band, is a folder holding entities; this tree keeps
 its nine entities at the root instead, which the importer handles just as well.
@@ -32,6 +38,11 @@ What it exercises:
 - **Audit foreign keys** (`owner_id` → `user`) absent from `relationships.json`:
   hidden by the default `edges: "business"`, and drawn against an **Outside the
   model** stub with `edges: "all"`.
+- **A discriminator** (`person.record_type_id` → `record_type`): the enumeration's
+  line, and never an **Outside the model** stub, even with `edges: "all"`.
+- **Pinned rows and row tags** (`people/schema.json`): `curated.diagramFields` draws
+  `notes` and `created_at` beside the key fields; `notes` is `visible: false` so its
+  row dims as `hidden`, `created_at` is `updateable: false` so it wears an `RO` badge.
 - **External ids and unique keys** (`customer.external_key`, `product.sku`)
   and a **field hidden from the reader** (`person.notes`, `visible: false`) —
   both in the field grid, neither on a row.

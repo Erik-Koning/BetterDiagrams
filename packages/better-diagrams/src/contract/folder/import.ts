@@ -198,6 +198,7 @@ export function importFolder(files: FileMap, opts: FolderImportOptions = {}): Fo
         fields: typeof opts.fields === "function" ? "custom" : (opts.fields ?? "keys"),
         edges: opts.edges ?? "business",
         polymorphic: opts.polymorphic ?? "collapse",
+        recordTypes: opts.recordTypes ?? "enum",
         externalStubs: opts.externalStubs !== false,
       },
     },

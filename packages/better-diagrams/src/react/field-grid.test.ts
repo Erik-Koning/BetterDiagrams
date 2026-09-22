@@ -20,10 +20,16 @@ const RECORDS: FieldRecord[] = [
   rec({ id: "OwnerId", key: "fk", type: "→ User", required: true, fk: [{ label: "User" }] }),
   rec({ id: "ParentId", key: "fk", type: "→ Account", fk: [{ label: "Account", nodeId: "core/account", edgeId: "e" }] }),
   rec({ id: "Score", type: "double", formula: 'IF(Amount > 10, "big", "small")', unique: true, externalId: true, row: false }),
-  rec({ id: "Description", type: "textarea", visible: false, row: false }),
+  rec({ id: "Description", type: "textarea", visible: false, row: false, tags: ["hidden", "pii"] }),
 ];
 
 describe("cellText", () => {
+  it("lists a row's tags, and a query finds a record by one", () => {
+    expect(cellText(RECORDS[5]!, "tags")).toBe("hidden, pii");
+    expect(cellText(RECORDS[0]!, "tags")).toBe("");
+    expect(filterRecords(RECORDS, "pii").map((r) => r.id)).toEqual(["Description"]);
+  });
+
   it("renders keys, ticks, references and visibility as short text", () => {
     const by = Object.fromEntries(RECORDS.map((r) => [r.id, r]));
     expect(cellText(by.Id, "key")).toBe("PK");
@@ -76,7 +82,7 @@ describe("exports", () => {
     const csv = toCsv([rec({ id: "F", label: 'say "hi", now', formula: "a\nb" })], GRID_COLUMNS);
     const [head, row, tail] = csv.split("\r\n");
     expect(head).toBe(GRID_COLUMNS.map((c) => c.title).join(","));
-    expect(row).toBe(',F,"say ""hi"", now",,,,,,,"a\nb"'.replace("\n", "\n"));
+    expect(row).toBe(',F,"say ""hi"", now",,,,,,,,"a\nb"'.replace("\n", "\n"));
     expect(tail).toBe("");
     expect(toCsv([])).toBe(`${GRID_COLUMNS.map((c) => c.title).join(",")}\r\n`);
   });

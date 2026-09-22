@@ -22,6 +22,7 @@ import { NodeResizer, useReactFlow, type Node, type NodeProps } from "@xyflow/re
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { useStudio } from "./context";
 import { DateChip } from "./chrome";
+import { useResizeHandles } from "./resize-handles";
 import { providerDef, zoneFill, zoneInk } from "./registry-types";
 import {
   containZonePoints,
@@ -50,6 +51,7 @@ export const ZoneNode = memo(function ZoneNode({ id, data, selected }: NodeProps
   // outline, header chip, swatch — and the fill is DERIVED from it as a dull
   // tint, so one picked colour styles the whole region in either theme.
   const ink = zoneInk(registry, zone);
+  const handles = useResizeHandles(!readOnly && !zone.locked, selected);
 
   /** Write a change back into this zone node's `data.zone`. */
   const patchZone = useCallback(
@@ -122,21 +124,24 @@ export const ZoneNode = memo(function ZoneNode({ id, data, selected }: NodeProps
 
   return (
     <div
+      ref={handles.hostRef}
       className="as-zone"
       style={style}
       data-selected={selected ? "" : undefined}
       data-outline={zone.outline ?? "solid"}
     >
       <NodeResizer
-        isVisible={!!selected && !readOnly && !zone.locked}
+        isVisible={handles.visible}
         minWidth={120}
         minHeight={100}
         onResizeStart={(_event, params) => {
+          handles.onResizeStart();
           const box = { x: params.x, y: params.y, w: params.width, h: params.height };
           resizeBoxRef.current = box;
           beginZoneResize(fromZoneNodeId(id), box);
         }}
         onResizeEnd={(_event, params) => {
+          handles.onResizeEnd();
           const started = resizeBoxRef.current;
           resizeBoxRef.current = null;
           if (started) {

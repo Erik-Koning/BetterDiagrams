@@ -44,6 +44,7 @@ export type ImportWarningCode =
   | "poly-capped"
   | "too-many-fields"
   | "fields-truncated"
+  | "unknown-field"
   | "duplicate-node-id"
   | "duplicate-name"
   | "yaml-fallback-used"
@@ -123,6 +124,15 @@ export interface FolderImportOptions {
   edges?: "business" | "all";
   /** How a polymorphic reference is drawn. Default `"collapse"`. */
   polymorphic?: "collapse" | "in-model" | "none";
+  /**
+   * How an entity's record types are drawn. `"enum"` (default) folds them
+   * into ONE enumeration node beside the entity — a row per record type, a
+   * reference line from the discriminator field — since a record type is a
+   * value of one field, not a table. `"nodes"` keeps one leaf node each
+   * (under their wrapper folder, a generalization line to the entity);
+   * `"none"` leaves them out.
+   */
+  recordTypes?: "enum" | "nodes" | "none";
   /** Stand-in nodes for references that leave the model. Default true. */
   externalStubs?: boolean;
    /**
