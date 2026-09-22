@@ -23,6 +23,8 @@ import type { IconPaths } from "./icons";
 export const UI_ICONS = {
   /** The one caret. Every dropdown on the bar wears it, closed or open. */
   chevronDown: ["M6 9.5l6 6 6-6"],
+  /** The caret's opposite: a collapsed bar offering to open back up. */
+  chevronUp: ["M6 14.5l6-6 6 6"],
   chevronLeft: ["M14.5 5.5l-6 6.5 6 6.5"],
   chevronRight: ["M9.5 5.5l6 6.5-6 6.5"],
 

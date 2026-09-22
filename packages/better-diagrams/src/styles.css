@@ -2884,6 +2884,40 @@
   margin-bottom: 72px;
 }
 
+/* Collapsed, the bar is a pill: the selection's name and the button that
+   brings the controls back. The name is capped so a long label doesn't turn
+   the pill back into a bar. */
+.as-inspector--collapsed {
+  flex-wrap: nowrap;
+  padding: 4px 6px 4px 12px;
+  border-radius: 999px;
+}
+
+.as-inspector__summary {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--as-text);
+}
+
+/* The toggle sits last on the bar, a hair apart from the controls so it
+   reads as the bar's own handle rather than one more action. */
+.as-inspector__toggle {
+  margin-left: 2px;
+}
+
+.as-inspector--collapsed .as-inspector__toggle {
+  margin-left: 0;
+}
+
+/* A one-row pill needs less room under the minimap than the full bar. */
+.as-canvas:has(.as-inspector--collapsed) .react-flow__minimap {
+  margin-bottom: 52px;
+}
+
 .as-inspector .as-input,
 .as-inspector .as-select {
   width: auto;

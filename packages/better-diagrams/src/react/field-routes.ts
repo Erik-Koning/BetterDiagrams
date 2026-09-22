@@ -11,7 +11,7 @@
  */
 import type { DiagramTemplate, EdgeColor } from "../contract/schema";
 import { between, fieldPaths, keyFrequency, reachableFrom, type GraphWalk, type KeyFrequencyResult } from "../contract/graph";
-import { edgeKeyOf, type Pin } from "../contract/fields";
+import { edgeKeyOf, keysBetween, type KeyLink, type Pin } from "../contract/fields";
 
 export interface RouteQuery {
   pins: readonly Pin[];
@@ -52,6 +52,12 @@ export interface RouteView {
   pinsIgnored: number;
   /** Two pins only: which keys the routes have in common. */
   keyUse: KeyFrequencyResult | null;
+  /**
+   * Two pins only: the keys joining the pinned tables directly, either way
+   * round — including references the document draws no line for, which no
+   * route can travel but a reader asking "how do these join" still wants.
+   */
+  directKeys: KeyLink[];
 }
 
 /** Pairwise mode looks at the first this-many pins (28 pairs). */
@@ -77,6 +83,7 @@ export function computeRouteView(doc: DiagramTemplate, query: RouteQuery, colors
     constrainedFallback: [],
     pinsIgnored,
     keyUse: null,
+    directKeys: [],
   };
   if (pins.length < 2) return empty;
 
@@ -114,6 +121,7 @@ export function computeRouteView(doc: DiagramTemplate, query: RouteQuery, colors
       truncated: paths.truncated || span.truncated,
       constrainedFallback: fallback,
       keyUse: keyFrequency(doc, a, b, opts),
+      directKeys: keysBetween(doc, a, b),
     };
   }
 
@@ -154,6 +162,7 @@ export function computeRouteView(doc: DiagramTemplate, query: RouteQuery, colors
     constrainedFallback: fallback,
     pinsIgnored,
     keyUse: null,
+    directKeys: [],
   };
 }
 

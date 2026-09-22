@@ -7,7 +7,7 @@
  */
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ArchitectureStudio, type StudioHandle } from "./ArchitectureStudio";
 import { validateTemplate, type DiagramTemplate } from "../contract/schema";
 
@@ -516,5 +516,101 @@ describe("lifting the marks", () => {
     expect(onSelectionChange).toHaveBeenLastCalledWith({ nodes: ["users"], edges: [], zones: [] });
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(onSelectionChange).toHaveBeenLastCalledWith({ nodes: [], edges: [], zones: [] }));
+  });
+});
+
+/**
+ * Pins from a drilled-in level: a table on another level shows here as a
+ * ghost, and pinning the ghost pins the table it stands for — the pin names
+ * a document node, so the route search can find it. The pair's direct keys
+ * are listed by name, whatever level either table lives on.
+ */
+describe("pins across levels", () => {
+  const nodeEl = (container: HTMLElement, id: string) => container.querySelector(`.react-flow__node[data-id="${id}"]`) as HTMLElement | null;
+  const LEVELS: DiagramTemplate = validateTemplate({
+    ...MODEL,
+    nodes: [
+      { id: "core", label: "Core", kind: "group", icon: "none", description: "", parentId: null, x: 400, y: 40, w: 900, h: 300 },
+      ...MODEL.nodes.map((n) => (n.id === "orders" || n.id === "items" ? { ...n, parentId: "core", y: 60 } : n)),
+    ],
+  });
+
+  it("the node menu on a ghost pins the table it stands for; the panel lists the keys joining the pins", async () => {
+    const ref = { current: null as StudioHandle | null };
+    const onPinsChange = vi.fn();
+    const { container } = mount(<ArchitectureStudio ref={ref} defaultValue={LEVELS} onPinsChange={onPinsChange} />);
+    act(() => ref.current!.drillTo(["core"]));
+    await waitFor(() => expect(nodeEl(container, "ghost:users")).not.toBeNull());
+    expect(nodeEl(container, "users")).toBeNull();
+
+    fireEvent.contextMenu(nodeEl(container, "ghost:users")!);
+    const menu = await screen.findByRole("menu", { name: "Actions" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Pin table for search/ }));
+    await waitFor(() => expect(onPinsChange).toHaveBeenLastCalledWith([{ nodeId: "users" }]));
+    // The ghost wears the pin, since it stands for the pinned table.
+    await waitFor(() => expect(container.querySelector('.react-flow__node[data-id="ghost:users"] .as-node--pinned')).not.toBeNull());
+    const strip = screen.getByRole("toolbar", { name: "Pinned fields" });
+    expect(within(strip).getByRole("button", { name: "Users" })).toBeInTheDocument();
+    // And the same menu now offers to unpin it.
+    fireEvent.contextMenu(nodeEl(container, "ghost:users")!);
+    expect(within(await screen.findByRole("menu", { name: "Actions" })).getByRole("menuitem", { name: /Unpin table/ })).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+
+    fireEvent.contextMenu(nodeEl(container, "orders")!);
+    fireEvent.click(within(await screen.findByRole("menu", { name: "Actions" })).getByRole("menuitem", { name: /Pin table for search/ }));
+    await waitFor(() => expect(ref.current!.getPins()).toEqual([{ nodeId: "users" }, { nodeId: "orders" }]));
+    fireEvent.click(within(strip).getByRole("button", { name: "Show paths" }));
+    const panel = await screen.findByRole("region", { name: "Paths between pinned fields" });
+    expect(within(panel).getByRole("button", { name: /^Users → Orders/ })).toHaveTextContent("user_id");
+    const keys = within(panel).getByRole("region", { name: "Keys joining the pins" });
+    expect(within(keys).getByRole("button", { name: /Orders\.user_id → Users\.id/ })).toBeInTheDocument();
+    expect(ref.current!.getFocus()).toEqual(["core"]);
+  });
+});
+
+describe("references panel", () => {
+  const marked = (container: HTMLElement, nodeId: string, fieldId: string) => row(container, nodeId, fieldId).classList.contains("as-node__field--match");
+
+  it("Show references on a table opens the panel with its keys both ways; a row jumps to the field", async () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={MODEL} />);
+    fireEvent.contextMenu(container.querySelector('.react-flow__node[data-id="orders"]')!);
+    const menu = await screen.findByRole("menu", { name: "Actions" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Show references \(1\)/ }));
+    const panel = await screen.findByRole("region", { name: "References" });
+    expect(within(panel).getByText("Orders")).toBeInTheDocument();
+    const carries = within(panel).getByRole("region", { name: "Keys it carries" });
+    expect(within(carries).getByRole("button", { name: /user_id → Users\.id/ })).toBeInTheDocument();
+    const by = within(panel).getByRole("region", { name: "Referenced by" });
+    expect(within(by).getByRole("button", { name: /Items\.order_id → id/ })).toBeInTheDocument();
+    // The canvas marks are the same ones the menu always left.
+    await waitFor(() => expect(marked(container, "items", "order_id")).toBe(true));
+
+    // A referencing key goes to the field holding it; a carried key follows the join.
+    fireEvent.click(within(by).getByRole("button", { name: /Items\.order_id → id/ }));
+    await waitFor(() => expect(container.querySelector('.react-flow__node[data-id="items"].selected')).not.toBeNull());
+    expect(marked(container, "items", "order_id")).toBe(true);
+    expect(screen.getByRole("region", { name: "References" })).toBeInTheDocument();
+    fireEvent.click(within(carries).getByRole("button", { name: /user_id → Users\.id/ }));
+    await waitFor(() => expect(marked(container, "users", "id")).toBe(true));
+    expect(marked(container, "orders", "user_id")).toBe(true);
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Close references panel" }));
+    expect(screen.queryByRole("region", { name: "References" })).not.toBeInTheDocument();
+  });
+
+  it("a table with no key pointing at it still lists the keys it carries; the panels share the slot", async () => {
+    const ref = { current: null as StudioHandle | null };
+    const { container } = mount(<ArchitectureStudio ref={ref} defaultValue={MODEL} />);
+    fireEvent.contextMenu(container.querySelector('.react-flow__node[data-id="items"]')!);
+    fireEvent.click(within(await screen.findByRole("menu", { name: "Actions" })).getByRole("menuitem", { name: /Show references \(0\)/ }));
+    const panel = await screen.findByRole("region", { name: "References" });
+    expect(within(within(panel).getByRole("region", { name: "Keys it carries" })).getByRole("button", { name: /order_id → Orders\.id/ })).toBeInTheDocument();
+    expect(within(panel).getByText("Nothing points at it.")).toBeInTheDocument();
+
+    ref.current!.setPins([{ nodeId: "items", fieldId: "order_id" }, { nodeId: "users", fieldId: "id" }]);
+    const strip = await screen.findByRole("toolbar", { name: "Pinned fields" });
+    fireEvent.click(within(strip).getByRole("button", { name: "Show paths" }));
+    await screen.findByRole("region", { name: "Paths between pinned fields" });
+    expect(screen.queryByRole("region", { name: "References" })).not.toBeInTheDocument();
   });
 });
