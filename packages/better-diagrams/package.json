@@ -104,27 +104,28 @@
     "@codemirror/lang-json": "^6.0.1",
     "@codemirror/language": "^6.11.0",
     "@codemirror/lint": "^6.8.0",
-    "@codemirror/state": "^6.5.0",
+    "@codemirror/state": "^6.7.4",
     "@codemirror/view": "^6.38.0",
     "@lezer/common": "^1.2.0",
     "@lezer/highlight": "^1.2.0",
     "@xyflow/react": "^12.3.5"
   },
   "devDependencies": {
+    "@microsoft/api-extractor": "^7.59.1",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "@types/node": "^26.1.2",
+    "@types/node": "^26.5.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^5.2.0",
-    "jsdom": "^29.1.1",
+    "@vitejs/plugin-react": "^6.1.1",
+    "jsdom": "^30.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "typescript": "^5.6.3",
-    "vite": "^7.3.6",
-    "vite-plugin-dts": "^4.5.4",
-    "vitest": "^3.2.7"
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vite-plugin-dts": "^5.1.0",
+    "vitest": "^5.0.1"
   },
   "bin": {
     "bd-folder": "./bin/bd-folder.mjs"

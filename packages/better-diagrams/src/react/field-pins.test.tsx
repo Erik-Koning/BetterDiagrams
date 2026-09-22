@@ -343,6 +343,80 @@ describe("paths between pins", () => {
   });
 });
 
+/**
+ * Pins across depths: the route's middle table is folded into a collapsed
+ * group, so from the root the canvas draws a chip where Orders would be. The
+ * chip stands for it — lit, counting what it hides, framed in place — and a
+ * chip hiding nothing the pins reach recedes like any other card.
+ */
+describe("paths through a collapsed group", () => {
+  const nodeEl = (container: HTMLElement, id: string) => container.querySelector(`.react-flow__node[data-id="${id}"]`) as HTMLElement;
+  const edgeEl = (container: HTMLElement, id: string) => container.querySelector(`.react-flow__edge[data-id="${id}"]`) as HTMLElement | null;
+  const group = (id: string, label: string, x: number) => ({ id, label, kind: "group", parentId: null, x, y: 40, w: 420, h: 260, collapsed: true });
+  const FOLDED: DiagramTemplate = validateTemplate({
+    ...MODEL,
+    nodes: [
+      ...MODEL.nodes.map((n) => (n.id === "orders" ? { ...n, parentId: "core", x: 20, y: 60 } : n)),
+      group("core", "Core", 400),
+      // A second line from Items into Core, declared first, so the one line
+      // the canvas draws between them borrows THIS edge's id — the route's
+      // own hop into the chip has to light through the pair, not the id.
+      table("payments", "Payments", [{ id: "id", name: "id", key: "pk" }], 200, { parentId: "core", y: 60 }),
+      group("archive", "Archive", 1700),
+      table("audit", "Audit", [{ id: "id", name: "id", key: "pk" }], 20, { parentId: "archive", y: 60 }),
+    ],
+    edges: [
+      { id: "i-p", source: "items", target: "payments", label: "", style: "solid", color: "slate", startField: "id", endField: "id" },
+      ...MODEL.edges,
+    ],
+  });
+
+  it("lights the chip with a count, lights the line the route enters it by, and frames the route without leaving the root", async () => {
+    const ref = { current: null as StudioHandle | null };
+    const { container } = mount(<ArchitectureStudio ref={ref} defaultValue={FOLDED} />);
+    expect(nodeEl(container, "orders")).toBeNull();
+    await waitFor(() => expect(edgeEl(container, "collapsed:i-p")).not.toBeNull());
+    expect(edgeEl(container, "collapsed:i-o")).toBeNull();
+    ref.current!.setPins([{ nodeId: "items", fieldId: "order_id" }, { nodeId: "users", fieldId: "id" }]);
+    const strip = await screen.findByRole("toolbar", { name: "Pinned fields" });
+    fireEvent.click(within(strip).getByRole("button", { name: "Show paths" }));
+    const panel = await screen.findByRole("region", { name: "Paths between pinned fields" });
+    const route = within(panel).getByRole("button", { name: /Items\.order_id → Orders → Users\.id/ });
+    await waitFor(() => expect(nodeEl(container, "core").classList.contains("as-path-node")).toBe(true));
+    expect(nodeEl(container, "core").getAttribute("data-path-inside")).toBe("1");
+    expect(nodeEl(container, "archive").classList.contains("as-path-node")).toBe(false);
+    expect(edgeEl(container, "collapsed:i-p")!.classList.contains("as-path-edge")).toBe(true);
+    expect(edgeEl(container, "collapsed:o-u")!.classList.contains("as-path-edge")).toBe(true);
+    // Picking the route frames it here — every hop has something standing
+    // for it on this level — rather than drilling into Core.
+    fireEvent.click(route);
+    await waitFor(() => expect(route).toHaveAttribute("aria-pressed", "true"));
+    expect(ref.current!.getFocus()).toEqual([]);
+    expect(nodeEl(container, "core").classList.contains("as-path-node")).toBe(true);
+    // Going inside from the panel still works, and there the real table lights.
+    fireEvent.click(within(within(panel).getByRole("region", { name: "Tables between" })).getByRole("button", { name: "Orders" }));
+    await waitFor(() => expect(ref.current!.getFocus()).toEqual(["core"]));
+    await waitFor(() => expect(nodeEl(container, "orders").classList.contains("as-path-node")).toBe(true));
+    expect(nodeEl(container, "orders").hasAttribute("data-path-inside")).toBe(false);
+  });
+
+  it("with three pins, a chip hiding a kept table stays bright and a chip hiding none recedes", async () => {
+    const ref = { current: null as StudioHandle | null };
+    const { container } = mount(<ArchitectureStudio ref={ref} defaultValue={FOLDED} />);
+    ref.current!.setPins([{ nodeId: "items", fieldId: "order_id" }, { nodeId: "users", fieldId: "id" }, { nodeId: "logs", fieldId: "id" }]);
+    const strip = await screen.findByRole("toolbar", { name: "Pinned fields" });
+    fireEvent.click(within(strip).getByRole("button", { name: "Show paths" }));
+    await screen.findByRole("region", { name: "Paths between pinned fields" });
+    await waitFor(() => expect(nodeEl(container, "archive").querySelector(".as-node--dimmed")).not.toBeNull());
+    expect(nodeEl(container, "core").querySelector(".as-node--dimmed")).toBeNull();
+    expect(nodeEl(container, "users").querySelector(".as-node--dimmed")).toBeNull();
+    // The line Items enters Core by borrowed another edge's id; it stays
+    // bright because the route's own hop is in its bundle.
+    await waitFor(() => expect(edgeEl(container, "collapsed:i-p")).not.toBeNull());
+    expect(edgeEl(container, "collapsed:i-p")!.classList.contains("as-edge--outside")).toBe(false);
+  });
+});
+
 describe("table pins and hop keys", () => {
   it("the node menu pins a whole table; routes show the key on each hop", async () => {
     const ref = { current: null as StudioHandle | null };

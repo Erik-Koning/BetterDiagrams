@@ -532,7 +532,7 @@ export const ShapeNode = memo(function ShapeNode({
 // ─── Group ───────────────────────────────────────────────────────────────────
 
 export const GroupNode = memo(function GroupNode({ id, data, selected }: NodeProps<GroupNodeType>) {
-  const { registry, readOnly, showTeams, requestCommit, focus, drillInto, navigateToNode, childCounts } = useStudio();
+  const { registry, readOnly, showTeams, requestCommit, focus, drillInto, navigateToNode, childCounts, dimmedIds } = useStudio();
   const { updateNodeData, getNodes, setNodes } = useReactFlow();
   const def = kindDef(registry, data.kind);
 
@@ -659,11 +659,18 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
     // flag underneath a fold would change nothing on screen and leave a
     // stray `collapsed` behind for when the fold lifts. The toolbar's
     // "Fold groups" toggle is where the fold is undone.
+    //
+    // The chip recedes with the tables it hides. The paths panel's keep-set
+    // is widened to stand-ins (`keptOnCanvas`), so a chip hiding a kept
+    // table is in the set and stays bright; one hiding none steps back like
+    // any other card. An open frame never dims — its children do, each for
+    // itself.
+    const dimmed = dimmedIds !== null && !dimmedIds.has(scopeGhost ? ghostSourceId(id) : id);
     return (
       <>
         <ConnectHandles hidden={readOnly} />
         <div
-          className={`as-group-chip${selected ? " as-group-chip--selected" : ""}${scopeGhost ? " as-ghost as-node--scope-ghost" : ""}`}
+          className={`as-group-chip${selected ? " as-group-chip--selected" : ""}${scopeGhost ? " as-ghost as-node--scope-ghost" : ""}${dimmed ? " as-node--dimmed" : ""}`}
           style={style}
           onDoubleClick={onDoubleClick}
           title={
