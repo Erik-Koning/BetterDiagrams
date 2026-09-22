@@ -10,7 +10,7 @@
     "server": "node server.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.125.0",
+    "@anthropic-ai/sdk": "^0.127.0",
     "@mosphere/better-diagrams": "*",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
