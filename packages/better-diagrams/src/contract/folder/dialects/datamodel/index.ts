@@ -194,7 +194,11 @@ function entityNode(
     hiddenFields: hidden,
     businessLine: curated.businessLine ?? null,
     ...(entry.files["forensics.json"] !== undefined && isForensics(readJson(entry, "forensics.json"))
-      ? { forensicsPath: `${entry.path}/forensics.json` }
+      ? {
+          forensicsPath: `${entry.path}/forensics.json`,
+          // Observed numbers ride along as the table's profile (see `tableProfile`).
+          ...dataProfileOf(readJson(entry, "forensics.json")),
+        }
       : {}),
     validationRuleCount: schema.validationRules?.length ?? 0,
     notes: (schema.notes ?? []).filter((n): n is string => typeof n === "string"),
@@ -814,3 +818,9 @@ export { DATAMODEL_KINDS, dataModelRegistry } from "./kinds";
 export { parseFlatYaml, patchFlatYaml } from "./yaml";
 export { classify as classifyDataModelShape } from "./shapes";
 export type { ModelShape, EntitySchema, EntityField, ForeignKey, RelationshipKind } from "./shapes";
+
+/** `forensics.json`'s `dataProfile`, as the node's `profile` — copied as written; `tableProfile` repairs on read. */
+function dataProfileOf(raw: unknown): { profile?: Record<string, unknown> } {
+  const p = raw && typeof raw === "object" ? (raw as Record<string, unknown>).dataProfile : undefined;
+  return p && typeof p === "object" && !Array.isArray(p) && Object.keys(p).length ? { profile: { ...(p as Record<string, unknown>) } } : {};
+}

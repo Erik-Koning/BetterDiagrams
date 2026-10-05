@@ -104,6 +104,9 @@ export interface EntityField {
   sortable?: boolean;
   /** Free labels on the field, carried onto the row as-is (`pii`, `deprecated`…). */
   tags?: string[];
+  /** What the field means. `inlineHelpText` (a platform's help text) stands in when absent. */
+  description?: string;
+  inlineHelpText?: string;
   relationship?: FieldRelationship;
 }
 

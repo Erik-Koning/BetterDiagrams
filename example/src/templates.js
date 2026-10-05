@@ -9,14 +9,21 @@
  */
 const ROUTE = "/__templates";
 
-/** The one folder the route lets the app write to; the other is read-only. */
+/** Auto-save's own folder: where a file with no other home is written. */
 export const SCRATCH = "scratch";
+/** Folders a file opened from them is saved back to (see the plugin). */
+export const SAVABLE = new Set([SCRATCH, "examples"]);
+/** A folder outside the repo, named in `BD_LINKED_DIRS` — its id starts with this. */
+export const LINKED_PREFIX = "linked-";
+/** Is a file opened from this folder saved back to it? The server still has the last word. */
+export const isSavable = (folder) => SAVABLE.has(folder) || folder.startsWith(LINKED_PREFIX);
 
 /**
  * Is the disk store reachable? Probed once at mount, and the answer is what
  * decides whether the UI mentions templates at all — an editor that offers to
  * save somewhere it cannot write is worse than one that stays quiet.
- * Resolves to `{ dirs, templates }`, each template carrying its `folder`.
+ * Resolves to `{ dirs, linked, templates }`, each template carrying its
+ * `folder`; `linked` is `[{ folder, name, dir, display }]`, one per linked folder.
  */
 export async function probeTemplates() {
   try {
@@ -57,10 +64,10 @@ export async function readFolderTree(name) {
   }
 }
 
-/** Auto-save's write. Scratch only — the route refuses anything else. */
-export async function writeTemplate(file, doc) {
+/** Auto-save's write — to scratch, or back to the file a document was opened from. */
+export async function writeTemplate(folder, file, doc) {
   try {
-    const res = await fetch(pathOf(SCRATCH, file), {
+    const res = await fetch(pathOf(folder, file), {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(doc),
@@ -69,6 +76,40 @@ export async function writeTemplate(file, doc) {
   } catch {
     return false;
   }
+}
+
+/**
+ * The last write as the page goes away — `keepalive`, so it outlives the tab.
+ * Best effort by nature: browsers cap a keepalive body at 64 KB, so a very
+ * large diagram closed inside the debounce can still miss its final second.
+ */
+export function flushTemplate(folder, file, doc) {
+  try {
+    void fetch(pathOf(folder, file), {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(doc),
+      keepalive: true,
+    }).catch(() => undefined);
+  } catch {
+    // Nothing to do on the way out.
+  }
+}
+
+/**
+ * Hear about a template another program changed on disk — the dev server
+ * announces it over Vite's HMR socket (see the plugin). Returns the
+ * unsubscribe. A built app has no socket, so this quietly does nothing.
+ */
+const changeListeners = new Set();
+if (import.meta.hot) {
+  import.meta.hot.on("better-diagrams:template", (data) => {
+    for (const listener of changeListeners) listener(data);
+  });
+}
+export function onTemplateChange(listener) {
+  changeListeners.add(listener);
+  return () => changeListeners.delete(listener);
 }
 
 /** Auto-save's delete, for a renamed or removed workspace file. Scratch only. */

@@ -193,6 +193,17 @@ describe("neighbourhood", () => {
     expect(two.nodes.has("x")).toBe(false);
   });
 
+  it("walks against the arrows with direction \"in\" — what points here — and both ways with \"both\"", () => {
+    // Into b: only a points at b (ab); d reaches b through a only against two arrows.
+    expect([...neighbourhood(DOC, "b", 1, { direction: "in" }).nodes.keys()]).toEqual(["b", "a"]);
+    expect(neighbourhood(DOC, "b", 2, { direction: "in" }).nodes.get("d")).toBe(2);
+    // A two-way line is walked both ways whatever the direction.
+    expect(neighbourhood(DOC, "e", 1, { direction: "in" }).nodes.has("c")).toBe(true);
+    expect([...neighbourhood(DOC, "a", 1, { direction: "both" }).nodes.keys()].sort()).toEqual(
+      [...neighbourhood(DOC, "a", 1, { undirected: true }).nodes.keys()].sort(),
+    );
+  });
+
   it("accepts several starts and honours `undirected`", () => {
     expect([...neighbourhood(DOC, ["a", "x"], 0).nodes.keys()]).toEqual(["a", "x"]);
     expect(neighbourhood(DOC, "a", 1).nodes.has("d")).toBe(false);

@@ -367,6 +367,13 @@ export function scopedView(
       w: size.w,
       h: size.h,
       ...(repNode.team !== undefined ? { team: repNode.team } : {}),
+      // A ghost task is the real one seen from another level: its check,
+      // its estimate and its people come with it.
+      ...(repNode.assignees !== undefined ? { assignees: repNode.assignees } : {}),
+      ...(repNode.storyPoints !== undefined ? { storyPoints: repNode.storyPoints } : {}),
+      ...(repNode.done ? { done: true } : {}),
+      ...(repNode.stage !== undefined ? { stage: repNode.stage } : {}),
+      ...(repNode.priority !== undefined ? { priority: repNode.priority } : {}),
       ...(repNode.status !== undefined ? { status: repNode.status } : {}),
       ...(date !== undefined ? { date } : {}),
     };

@@ -1491,6 +1491,12 @@
 .as-node--pinned {
   box-shadow: inset 3px 0 0 var(--as-accent);
 }
+/* Colour tables by domain (Model structure): an outline, so it never fights
+   the box-shadows that pinning, matching and selection draw. */
+.as-node--domain {
+  outline: 3px solid var(--as-node-domain);
+  outline-offset: 3px;
+}
 .as-node--selected.as-node--pinned {
   box-shadow:
     inset 3px 0 0 var(--as-accent),
@@ -2018,12 +2024,136 @@
   color: var(--as-text-dim);
 }
 
+/* A People row is a toggle: the whole row is the button, styled as a row. */
+.as-legend__row--person {
+  width: 100%;
+  margin: 0 -4px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  font: inherit;
+  font-size: 0.6875rem;
+  text-align: left;
+  cursor: pointer;
+  box-sizing: content-box;
+}
+
+.as-legend__row--person:hover {
+  background: var(--as-surface-2);
+}
+
+.as-legend__row--person:focus-visible {
+  outline: 2px solid var(--as-accent);
+  outline-offset: -2px;
+}
+
+.as-legend__row--on {
+  background: color-mix(in srgb, var(--as-accent) 16%, transparent);
+}
+
+.as-legend__swatch--person {
+  border-radius: 999px;
+}
+
+/* The Plan section: progress as a bar and a count, then the tasks worth a
+   look — each count a toggle for the View menu's task filter. */
+.as-legend__plan {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.as-legend__bar {
+  position: relative;
+  flex: 1;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--as-text-dim) 22%, transparent);
+}
+
+.as-legend__bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: #16a34a;
+}
+
+.as-legend__states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+.as-legend__states:empty {
+  display: none;
+}
+
+.as-legend__state {
+  --as-pill: var(--as-text-dim);
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--as-pill) 40%, transparent);
+  border-radius: 999px;
+  background: none;
+  color: color-mix(in srgb, var(--as-pill) 82%, var(--as-text));
+  font: inherit;
+  font-size: 0.625rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.as-legend__state--ready { --as-pill: #16a34a; }
+.as-legend__state--blocked { --as-pill: var(--as-warn); }
+.as-legend__state--overdue { --as-pill: var(--as-overdue); }
+.as-legend__state--started { --as-pill: var(--as-accent); }
+
+/* The filter that's on says how to turn it off. */
+.as-legend__state-clear {
+  margin-left: 3px;
+  opacity: 0.7;
+}
+
+.as-legend__state:hover,
+.as-legend__state--on {
+  background: color-mix(in srgb, var(--as-pill) 16%, transparent);
+}
+
+.as-legend__count--over {
+  color: var(--as-warn);
+  font-weight: 700;
+}
+
+.as-legend__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .as-legend__hidden {
   margin-top: 6px;
   padding-top: 6px;
   border-top: 1px solid var(--as-border);
   font-size: 0.625rem;
   color: var(--as-text-dim);
+}
+
+/* "Show all N routes" under a capped route legend — a text link, like a row. */
+.as-legend__expand {
+  margin-top: 4px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.6875rem;
+  color: var(--as-accent);
+  cursor: pointer;
+}
+.as-legend__expand:hover {
+  text-decoration: underline;
 }
 
 /* ── Ghosts: nodes the active provider hides, shown so they stay editable ── */
@@ -2141,6 +2271,33 @@
   text-decoration: line-through;
 }
 
+/* A finished task steps back like a deprecated card — gentler, since done is
+   good news — and strikes its summary through, so the open work is what the
+   eye lands on. The corner check is NOT faded (see .as-task__check). */
+.as-node--done {
+  --as-dim: 0.55;
+}
+
+.as-node--done .as-node__title {
+  text-decoration: line-through;
+}
+
+/* The People legend's mute — a hovered or focused person's work is the
+   picture, so a card that isn't theirs drains to grey and steps back as far
+   as the lines do (.as-edge--outside), not just the faint recede of a tag
+   filter. Under the cursor, or selected, it is fully back. */
+.as-node--person-muted {
+  filter: grayscale(1);
+  opacity: 0.4;
+  transition: filter 140ms, opacity 140ms, border-color 120ms, box-shadow 120ms;
+}
+
+.as-node--person-muted:hover,
+.as-node--person-muted.as-node--selected {
+  filter: none;
+  opacity: 1;
+}
+
 /* Groups and sequence headers set their own border/background AFTER this
    block, which would silently beat the single-class rules above — the
    border-carrying stages are restated here at two-class strength. (Before
@@ -2199,17 +2356,19 @@
 .as-node--dimmed,
 .as-ghost,
 .as-node--status-deprecated,
-.as-node--status-retired {
+.as-node--status-retired,
+.as-node--done {
   border-color: color-mix(in srgb, var(--as-border) 65%, transparent);
 }
 
-:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired, .as-future)
+:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired, .as-node--done, .as-future)
   :is(
     .as-node__iconbox,
     .as-node__desc,
     .as-node__fields,
     .as-node__silhouette,
-    .as-node__team,
+    .as-node__team:not(.as-node__team--strip),
+    .as-node__assignees,
     .as-node__drill,
     .as-ghost__badge,
     .as-date
@@ -2220,7 +2379,7 @@
 
 /* One tier down, not one third as visible. `--as-text-dim` is the theme's own
    secondary ink, so it clears AA in both themes by construction. */
-:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired, .as-future)
+:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired, .as-node--done, .as-future)
   :is(.as-node__title, .as-group__name, .as-group-chip__label, .as-seq-head__label) {
   color: var(--as-text-dim);
 }
@@ -2231,20 +2390,20 @@
    the cursor, the selection accent once it is picked. (Both are restated
    here because the recede above is a single-class rule and would otherwise
    outrank `.as-node--selected`, which is declared earlier in the file.) */
-:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired):hover {
+:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired, .as-node--done):hover {
   --as-dim: 1;
   border-color: color-mix(in srgb, var(--as-node-accent) 45%, var(--as-border));
 }
 
-:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired).as-node--selected,
+:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired, .as-node--done).as-node--selected,
 :is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired).as-group--selected {
   --as-dim: 1;
   border-color: var(--as-accent);
 }
 
-:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired, .as-future):hover
+:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired, .as-node--done, .as-future):hover
   :is(.as-node__title, .as-group__name, .as-group-chip__label, .as-seq-head__label),
-:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired).as-node--selected
+:is(.as-node--dimmed, .as-ghost, .as-node--status-deprecated, .as-node--status-retired, .as-node--done).as-node--selected
   :is(.as-node__title, .as-group__name, .as-group-chip__label, .as-seq-head__label) {
   color: var(--as-text);
 }
@@ -2298,6 +2457,284 @@
   position: static;
   flex-shrink: 0;
   margin-left: 6px;
+}
+
+/* ── Tasks: the corner check, the estimate, blocked, the assignee tabs ───── */
+
+/* The done check straddles the card's top edge near its right corner — not ON
+   the corner, where the resize handle is centred and would cover it. An open
+   ring until clicked; then a filled green disc with a white tick that pops in.
+   Green is literal, like the hazard tape: done doesn't theme. */
+.as-task__check {
+  position: absolute;
+  top: -11px;
+  right: 8px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1.5px solid color-mix(in srgb, var(--as-node-accent) 45%, var(--as-border));
+  border-radius: 999px;
+  background: var(--as-surface);
+  color: transparent;
+  cursor: pointer;
+  box-shadow: 0 1px 3px -1px var(--as-shadow-ink, rgb(0 0 0 / 0.35));
+  transition: background 140ms, border-color 140ms, transform 140ms, color 140ms;
+}
+
+.as-task__tick {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Hovering an open check previews the tick, faintly — the click's promise. */
+button.as-task__check:not(.as-task__check--done):not(.as-task__check--blocked):hover {
+  border-color: #16a34a;
+  color: color-mix(in srgb, #16a34a 55%, transparent);
+}
+
+button.as-task__check:focus-visible {
+  outline: 2px solid var(--as-accent);
+  outline-offset: 2px;
+}
+
+.as-task__check--done {
+  border-color: #15803d;
+  background: #16a34a;
+  color: #fff;
+  animation: as-task-check-pop 180ms ease-out;
+}
+
+button.as-task__check--done:hover {
+  background: #15803d;
+}
+
+.as-task__check--static {
+  cursor: default;
+}
+
+/* Blocked: the circle struck through in the warn ink — the task waits on
+   unfinished work and can't be checked yet (the tooltip names it). */
+.as-task__check--blocked {
+  border-color: color-mix(in srgb, var(--as-warn) 65%, var(--as-border));
+  color: var(--as-warn);
+}
+
+button.as-task__check--blocked {
+  cursor: not-allowed;
+}
+
+.as-task__slash {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+}
+
+@keyframes as-task-check-pop {
+  0% {
+    transform: scale(0.7);
+  }
+  60% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .as-task__check--done {
+    animation: none;
+  }
+}
+
+/* The ↗ link owns the top-right corner on every other card; on a task the
+   check does, so the link becomes a round badge riding the edge just left of
+   it — in both modes (marketing moves the link onto the corner otherwise). */
+.as-node--task .as-node__link,
+.as-root--marketing .as-node--task .as-node__link {
+  top: -11px;
+  right: 36px;
+  min-width: 22px;
+  min-height: 22px;
+  border: 1px solid color-mix(in srgb, var(--as-node-accent) 40%, var(--as-border));
+  border-radius: 999px;
+  background: var(--as-surface);
+}
+
+/* Room under the check so a long summary doesn't run beneath it. */
+.as-node--task .as-node__body {
+  padding-right: 14px;
+}
+
+.as-node--task .as-node__desc {
+  white-space: pre-line;
+}
+
+.as-node__points {
+  color: var(--as-text-dim);
+  text-transform: none;
+}
+
+/* The pills in a work item's eyebrow: a task's priority and stage, a
+   milestone's Reached. Done is green everywhere (the corner check), so
+   Reached shares its hue; a stage takes the accent, review a violet beside it. */
+.as-node__priority,
+.as-node__stage,
+.as-node__reached {
+  --as-pill: var(--as-text-dim);
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--as-pill) 16%, transparent);
+  color: color-mix(in srgb, var(--as-pill) 82%, var(--as-text));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* A task's header holds the estimate and two pills on a narrow card: one
+   line, never a second — what doesn't fit is clipped rather than pushing into
+   the title. */
+.as-node--task .as-node__kind {
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.as-node__priority,
+.as-node__stage,
+.as-node__reached {
+  white-space: nowrap;
+}
+
+.as-node__priority--p0 { --as-pill: var(--as-warn-strong); }
+.as-node__priority--p1 { --as-pill: var(--as-overdue); }
+.as-node__priority--p2 { --as-pill: var(--as-accent); }
+.as-node__stage--in-progress { --as-pill: var(--as-accent); }
+.as-node__stage--in-review { --as-pill: #8b5cf6; }
+.as-node__reached { --as-pill: #16a34a; }
+
+/* A container's task roll-up — done over total and a thin bar — in the
+   frame's label and on its chip. Warn-coloured past its capacity. */
+.as-rollup {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  margin-left: 6px;
+  color: var(--as-text-dim);
+  font-family: var(--as-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.as-rollup__bar {
+  position: relative;
+  width: 34px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--as-text-dim) 22%, transparent);
+}
+
+.as-rollup__bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: #16a34a;
+}
+
+.as-rollup--over {
+  color: var(--as-warn);
+}
+
+.as-rollup--over .as-rollup__bar > span {
+  background: var(--as-warn);
+}
+
+.as-group-chip .as-rollup {
+  margin-left: 0;
+}
+
+/* Assignee tabs hang from the card's bottom edge: flat on top (they meet the
+   outline), rounded underneath, one colour per person (see assigneeColor).
+   The same tint/border/ink recipe as the team pill, so every hue reads on
+   both themes. */
+.as-node__assignees {
+  position: absolute;
+  top: 100%;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  gap: 3px;
+  align-items: flex-start;
+  min-width: 0;
+  pointer-events: none;
+}
+
+.as-node__assignee {
+  flex: 0 0 auto;
+  min-width: 0;
+  margin-top: -1px;
+  padding: 1px 7px 2px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--as-assignee-color) 55%, var(--as-border));
+  border-top: 0;
+  border-radius: 0 0 6px 6px;
+  background: color-mix(in srgb, var(--as-assignee-color) 16%, var(--as-surface));
+  color: color-mix(in srgb, var(--as-assignee-color) 78%, var(--as-text));
+  font-family: var(--as-font);
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* For the tooltip — the full name when the tab is ellipsised. */
+  pointer-events: auto;
+}
+
+.as-node__assignee--more {
+  --as-assignee-color: var(--as-text-dim);
+}
+
+/* Tabs keep their natural width — the strip MEASURES what fits (see
+   AssigneeStrip) rather than squeezing every name to an ellipsis. Only a lone
+   first tab, on a card narrower than its name, may shrink and ellipsise; and
+   never during the measuring pass, which has to read natural widths. */
+.as-node__assignee:first-child {
+  flex-shrink: 1;
+}
+
+.as-node__assignees--measuring {
+  overflow: hidden;
+  visibility: hidden;
+}
+
+.as-node__assignees--measuring .as-node__assignee {
+  flex-shrink: 0;
+}
+
+/* The team pill joins the strip at its far end instead of riding over it. */
+.as-node__team--strip {
+  position: static;
+  flex-shrink: 0;
+  max-width: 45%;
+  margin-left: auto;
+  margin-top: 3px;
+}
+
+/* The strip is later in the DOM than the connect handles, so without this the
+   bottom handle would sit under a tab. */
+.react-flow__node:has(> .as-node--task) .react-flow__handle {
+  z-index: 2;
 }
 
 /* ── Group / container nodes ─────────────────────────────────────────────── */
@@ -2933,6 +3370,19 @@
   flex: 1 1 180px;
 }
 
+/* A task's description runs to lines: a short textarea the reader can pull
+   taller, in the input's own face. */
+.as-inspector .as-inspector__desc--multi {
+  min-height: 2.6em;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.35;
+}
+
+.as-inspector .as-inspector__points {
+  width: 72px;
+}
+
 .as-inspector .as-inspector__tech {
   flex: 1 1 130px;
 }
@@ -3079,20 +3529,25 @@
 }
 
 /* "Source → Target". One line: the pair is an orientation check, and a
-   wrapped one would push the reverse button onto its own row. The full text
-   is on the element's `title`. */
+   wrapped one would push the reverse button onto its own row. Each end is its
+   own button now, so each clips and ellipsises on its own and carries the full
+   name on its `title`; `align-items: baseline` keeps the two labels sitting on
+   the arrow's line, where an inline-block that clips would take its baseline
+   from its bottom edge and drop them a couple of pixels below it. */
 .as-inspector__ends {
+  display: inline-flex;
+  align-items: baseline;
   max-width: 240px;
   overflow: hidden;
   font-size: 0.75rem;
-  text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--as-text);
 }
 
-/* Each end is a jump to that box. Underlined only on hover: the bar reads as
-   the sentence it always was until you reach for one of its two nouns. */
-.as-inspector__end {
+/* Each end is a jump to that box — `__endjump`, not `__end`, which is already
+   the end-LABEL input a few sections down. Underlined only on hover: the bar
+   reads as the sentence it always was until you reach for one of its nouns. */
+.as-inspector__endjump {
   max-width: 110px;
   padding: 0;
   overflow: hidden;
@@ -3101,11 +3556,11 @@
   color: inherit;
   font: inherit;
   text-overflow: ellipsis;
-  vertical-align: bottom;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.as-inspector__end:hover {
+.as-inspector__endjump:hover {
   color: var(--as-accent);
   text-decoration: underline;
 }
@@ -3516,6 +3971,56 @@
 
 .as-diffbar__chip--changed {
   color: var(--as-diff-changed);
+}
+
+.as-diffbar__tasks {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--as-accent) 12%, transparent);
+  color: var(--as-text);
+  font-size: 0.6875rem;
+  white-space: nowrap;
+}
+
+/* View → Team capacity…: one row per person — their colour, name, what they
+   hold now, and the limit. */
+.as-capacity__rows {
+  display: grid;
+  gap: 6px;
+  max-height: 50vh;
+  margin: 8px 0 14px;
+  overflow-y: auto;
+}
+
+.as-capacity__row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto 96px;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8125rem;
+}
+
+.as-capacity__swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.as-capacity__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.as-capacity__open {
+  color: var(--as-text-dim);
+  font-family: var(--as-mono);
+  font-size: 0.6875rem;
+}
+
+.as-capacity__open--over {
+  color: var(--as-warn);
+  font-weight: 700;
 }
 
 .as-diffbar__note {
@@ -5340,22 +5845,27 @@
    the pointer reaches them without a click — while it is hovered (see
    `useResizeHandles`). Sized to the connect dots, so the two kinds of grab
    around a card read as one family; React Flow's own 5px square was a target
-   you aimed at rather than took. */
-.as-root .react-flow__resize-control.handle {
+   you aimed at rather than took.
+
+   The sequence editor's activation bar is the exception, by name: it shares
+   this `.as-root`, and it is BAR_W = 12 wide by MIN_BAR_H = 24 tall. Four
+   8px handles meet across a box that narrow and leave almost nothing of the
+   bar itself to grab, so a bar that could be dragged up its lifeline could
+   no longer be picked up. It keeps React Flow's 5px.
+
+   The square is the whole target: a `::before` halo around it was tried and
+   removed. It hit-tests (`elementFromPoint` returns the control) but the
+   resizer's own drag never starts from it, so it only swallowed presses that
+   belonged to the canvas in a ring around every corner. */
+.as-root .react-flow__node:not(.react-flow__node-activation) .react-flow__resize-control.handle {
   width: 8px;
   height: 8px;
+}
+
+.as-root .react-flow__resize-control.handle {
   border: 1px solid var(--as-bg);
   border-radius: 2px;
   background: var(--as-accent);
-}
-
-/* A fingertip-sized press around the 8px square. Hit-testing credits the
-   pseudo-element to the control, so a press on the halo starts the resize;
-   3px keeps it clear of the card's title and the connect dot beside it. */
-.as-root .react-flow__resize-control.handle::before {
-  content: "";
-  position: absolute;
-  inset: -3px;
 }
 
 .as-root .react-flow__resize-control.line {
@@ -6012,7 +6522,7 @@
   display: none;
 }
 
-.as-root--marketing .as-node__kind:not(:has(.as-node__status, .as-node__drill)) {
+.as-root--marketing .as-node__kind:not(:has(.as-node__status, .as-node__drill, .as-node__points, .as-node__priority, .as-node__stage, .as-node__reached)) {
   display: none;
 }
 
@@ -6802,4 +7312,244 @@ details.as-paths__section > .as-paths__caption {
   font-size: 0.625rem;
   color: var(--as-text-dim);
   white-space: nowrap;
+}
+
+/* ── Key usage panel (left sidebar) — the coverage bars, read by name ────── */
+.as-usage__search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* The results are the input to the score below them: kept short enough
+   that picking one never pushes the percentage off the panel. */
+.as-usage__results {
+  max-height: 30vh;
+}
+.as-usage__pickedhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.as-usage__name {
+  font-family: var(--as-mono);
+}
+.as-usage__badge {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--as-accent) 45%, transparent);
+  border-radius: 3px;
+  color: var(--as-accent);
+  font-family: var(--as-mono);
+  font-size: 0.5625rem;
+  font-weight: 700;
+}
+.as-usage__badge--mixed {
+  border-color: color-mix(in srgb, var(--as-overdue, #d97706) 55%, transparent);
+  color: var(--as-overdue, #d97706);
+}
+.as-usage__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.as-usage__variants {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 0 4px 14px;
+  padding: 0 0 0 8px;
+  border-left: 2px solid color-mix(in srgb, var(--as-accent) 30%, transparent);
+  list-style: none;
+}
+.as-usage__target {
+  color: var(--as-text-dim);
+}
+.as-usage__fields {
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── SQL for a route (paths panel) ──────────────────────────────────────── */
+.as-sql {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0 8px 22px;
+  padding: 8px;
+  border: 1px solid var(--as-line);
+  border-radius: var(--as-radius-md);
+  background: color-mix(in srgb, var(--as-surface-2) 60%, transparent);
+}
+.as-sql__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.as-input.as-sql__select {
+  width: auto;
+  min-width: 0;
+  font-size: 0.6875rem;
+}
+.as-sql__code {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  font-family: var(--as-mono);
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  white-space: pre;
+  color: var(--as-text);
+}
+.as-sql__warnings {
+  margin: 0;
+  padding: 0 0 0 16px;
+  font-size: 0.6875rem;
+  color: var(--as-text-dim);
+}
+.as-sql__warning--double-fan-out,
+.as-sql__warning--no-key {
+  color: var(--as-overdue, #d97706);
+}
+.as-routes__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+.as-routes__item > .as-routes__row,
+.as-routes__item > .as-paths__item {
+  flex: 1;
+  min-width: 0;
+}
+.as-routes__sqlbtn {
+  flex: 0 0 auto;
+  font-size: 0.625rem;
+}
+.as-analysis__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.as-analysis__row > .as-paths__item {
+  flex: 1;
+  min-width: 0;
+}
+.as-analysis__rowaction {
+  flex: 0 0 auto;
+  font-size: 0.625rem;
+}
+
+/* ── Checks and impact panels ───────────────────────────────────────────── */
+.as-check__sev {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--as-text-dim);
+}
+.as-check__sev--error { background: var(--as-danger, #fb7185); }
+.as-check__sev--warning { background: var(--as-overdue, #f59e0b); }
+.as-check__sev--info { background: var(--as-accent); }
+.as-impact__badge {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border: 1px solid var(--as-line);
+  border-radius: 3px;
+  font-family: var(--as-mono);
+  font-size: 0.5625rem;
+  color: var(--as-text-dim);
+}
+.as-impact__badge--cascade {
+  border-color: color-mix(in srgb, var(--as-danger, #fb7185) 55%, transparent);
+  color: var(--as-danger, #fb7185);
+}
+.as-governance__line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 0.6875rem;
+}
+.as-changes__row {
+  cursor: default;
+}
+.as-changes__impact {
+  flex: 0 0 auto;
+  min-width: 56px;
+  font-family: var(--as-mono);
+  font-size: 0.5625rem;
+  text-transform: uppercase;
+  color: var(--as-text-dim);
+}
+.as-changes__impact--breaking { color: var(--as-danger, #fb7185); }
+.as-changes__impact--caution { color: var(--as-overdue, #f59e0b); }
+/* Model structure: a domain's colour, and the domain the canvas dims to. */
+.as-structure__swatch {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+.as-paths__item--on {
+  border-color: var(--as-accent);
+  background: color-mix(in srgb, var(--as-accent) 12%, transparent);
+}
+/* Saved analyses: the Analyses menu's rows and the save dialog. */
+.as-analyses__row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.as-analyses__open {
+  flex: 1;
+  min-width: 0;
+}
+.as-analyses__drift {
+  margin-top: 2px;
+  font-size: 0.625rem;
+  color: var(--as-overdue, #f59e0b);
+}
+.as-analyses__empty {
+  padding: 4px 9px 8px;
+}
+.as-analysis-save {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.as-analysis-save__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.75rem;
+  color: var(--as-text-dim);
+}
+/* Column lineage over the canvas: row-to-row lines in flow coordinates. */
+.as-lineage {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 1000;
+}
+.as-lineage__line {
+  fill: none;
+  stroke: var(--as-edge-violet, #8b5cf6);
+  stroke-width: 1.75;
+  stroke-dasharray: 6 4;
+  opacity: 0.75;
+}
+.as-lineage__line--on {
+  stroke-width: 3;
+  stroke-dasharray: none;
+  opacity: 1;
+}
+.as-lineage__arrow {
+  fill: var(--as-edge-violet, #8b5cf6);
 }

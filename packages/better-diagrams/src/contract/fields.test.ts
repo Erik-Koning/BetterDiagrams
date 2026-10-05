@@ -531,7 +531,10 @@ describe("keyReferences and keysBetween — a table's keys both ways", () => {
     expect(keyReferences(doc, { nodeId: "users" }).referencedBy).toEqual([
       { from: { nodeId: "orders", fieldId: "user_id" }, to: { nodeId: "users", fieldId: "id" }, edgeId: "o-u" },
       { from: { nodeId: "orders", fieldId: "owner" }, to: { nodeId: "users", fieldId: "id" }, edgeId: "o-o" },
+      // The other direction of an undrawn reference is a reference too.
+      { from: { nodeId: "notes", fieldId: "user" }, to: { nodeId: "users", fieldId: "id" } },
     ]);
+    expect(keyReferences(doc, { nodeId: "users", fieldId: "id" }).referencedBy.map((l) => l.from.fieldId)).toEqual(["user_id", "owner", "user"]);
   });
 
   it("a field narrows both lists; an undrawn data reference is listed without a line", () => {

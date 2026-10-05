@@ -89,6 +89,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && vite build && npm run build:dts-cts",
     "build:dts-cts": "node -e \"for (const f of ['better-diagrams','contract','contract-folder-node']) require('fs').copyFileSync('dist/'+f+'.d.ts','dist/'+f+'.d.cts')\"",
+    "build:explorer": "node scripts/build-explorer-runtime.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "prepublishOnly": "npm run typecheck && npm run test && npm run build",

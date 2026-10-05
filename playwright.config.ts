@@ -1,4 +1,9 @@
+import { mkdirSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
+import { E2E_LINKED_DIR, E2E_TEMPLATES_DIR } from "./e2e/templates-dir";
+
+// Before the dev server starts: it skips a linked folder that isn't there.
+mkdirSync(E2E_LINKED_DIR, { recursive: true });
 
 /**
  * End-to-end tests drive the example app (`example/`) in a real Chromium.
@@ -46,5 +51,9 @@ export default defineConfig({
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
+    // Its own templates folder, and a linked folder standing in for one
+    // outside the repo: the disk-sync spec reads and writes files there,
+    // never in the repo's templates/ (see e2e/templates-dir.ts).
+    env: { BD_TEMPLATES_DIR: E2E_TEMPLATES_DIR, BD_LINKED_DIRS: E2E_LINKED_DIR },
   },
 });

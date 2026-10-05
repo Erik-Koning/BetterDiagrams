@@ -16,6 +16,7 @@
  *   parallelogram — flow-chart input/output
  */
 import type { NodeShape } from "./registry-types";
+import { approxTextWidth } from "../contract/text";
 
 export interface Silhouette {
   /** The filled+stroked outline. May contain multiple subpaths. */
@@ -148,6 +149,111 @@ export function teamColor(team: string): string {
   return stableColor(team);
 }
 
+/** One person colour: its step for a light theme and its step for a dark one. */
+export interface AssigneeSwatch {
+  light: string;
+  dark: string;
+}
+
+/**
+ * The colours people wear on a task graph. A hash-to-hue (what a team pill
+ * uses) put two of five people in near-identical greens, so people take
+ * slots from a fixed categorical palette instead: the dataviz reference
+ * palette's blue, orange, aqua, yellow, magenta, green and violet, each with
+ * its light- and dark-surface step. Red is left out on purpose — it is the
+ * warn ink of a blocked check, and the reference's closest pair to orange.
+ * Validated against the editor's own surfaces (#ffffff, #0b1220): with every
+ * pair on screen at once the closest pair sits at ΔE 12.9 light / 9.8 dark,
+ * where the hashed hues could land on top of each other. The name on each
+ * tab is what identifies a person; the colour helps the eye group them.
+ */
+export const ASSIGNEE_PALETTE: readonly AssigneeSwatch[] = [
+  { light: "#2a78d6", dark: "#3987e5" }, // blue
+  { light: "#eb6834", dark: "#d95926" }, // orange
+  { light: "#1baf7a", dark: "#199e70" }, // aqua
+  { light: "#eda100", dark: "#c98500" }, // yellow
+  { light: "#e87ba4", dark: "#d55181" }, // magenta
+  { light: "#008300", dark: "#008300" }, // green
+  { light: "#4a3aa7", dark: "#9085e9" }, // violet
+];
+
+/** A name's own slot — where it lands when nobody else wants it. */
+const preferredSlot = (name: string) => nameHash(name) % ASSIGNEE_PALETTE.length;
+
+/** One person's colour with no one else to make room for — its preferred slot. */
+export function assigneeSwatch(name: string): AssigneeSwatch {
+  return ASSIGNEE_PALETTE[preferredSlot(name)]!;
+}
+
+/**
+ * Everyone's colour at once, two people never sharing one while the palette
+ * lasts. Each takes its preferred slot (a hash of the name), or the next free
+ * one when that is taken — resolved in name order, so the answer depends
+ * only on WHO is on the plan, never on where they appear. A person keeps
+ * their colour as others come and go unless a newcomer wants their slot and
+ * sorts first. Past seven people, colours are shared — the names still say
+ * who is who.
+ */
+export function assigneeSwatches(names: Iterable<string>): Map<string, AssigneeSwatch> {
+  const out = new Map<string, AssigneeSwatch>();
+  const taken = new Set<number>();
+  for (const name of [...new Set(names)].sort()) {
+    let slot = preferredSlot(name);
+    if (taken.size < ASSIGNEE_PALETTE.length) {
+      while (taken.has(slot)) slot = (slot + 1) % ASSIGNEE_PALETTE.length;
+    }
+    taken.add(slot);
+    out.set(name, ASSIGNEE_PALETTE[slot]!);
+  }
+  return out;
+}
+
+/**
+ * A swatch as one CSS colour: the browser picks the step for the element's
+ * `color-scheme`, which the studio root takes from its theme.
+ */
+export function swatchColor(swatch: AssigneeSwatch): string {
+  return `light-dark(${swatch.light}, ${swatch.dark})`;
+}
+
+/** "1 pt", "3 pts", "0.5 pts" — a task's estimate, on the card and in exports. */
+export function formatPoints(points: number): string {
+  return `${points} ${points === 1 ? "pt" : "pts"}`;
+}
+
+/** Type size of an assignee tab, px — the canvas CSS and the exporter agree on it. */
+export const ASSIGNEE_FONT = 10;
+/** Horizontal padding inside a tab, both sides together, plus its border. */
+const ASSIGNEE_PAD = 16;
+/** Gap between tabs. */
+export const ASSIGNEE_GAP = 3;
+
+/** Drawn width of one assignee tab. */
+export function assigneeChipWidth(label: string): number {
+  return approxTextWidth(label, ASSIGNEE_FONT, "sans") + ASSIGNEE_PAD;
+}
+
+/**
+ * Which assignee tabs fit along a card's bottom edge, and how many are left
+ * for a "+N" tab. Measured with the shared text approximation rather than
+ * the DOM, so the canvas and an image export show the same names. The first
+ * name always shows — its tab ellipsises if the card is narrower than it.
+ */
+export function fitChips(names: readonly string[], width: number): { shown: string[]; more: number } {
+  const shown: string[] = [];
+  let used = 0;
+  for (let i = 0; i < names.length; i++) {
+    const w = assigneeChipWidth(names[i]!) + (shown.length ? ASSIGNEE_GAP : 0);
+    const left = names.length - i - 1;
+    // Room for this tab, plus the "+N" tab if any would still be left over.
+    const reserve = left ? ASSIGNEE_GAP + assigneeChipWidth(`+${left}`) : 0;
+    if (shown.length && used + w + reserve > width) break;
+    shown.push(names[i]!);
+    used += w;
+  }
+  return { shown, more: names.length - shown.length };
+}
+
 /**
  * A deterministic colour for a name nobody registered — the same input always
  * gives the same hue, on every machine and in every export, with no table to
@@ -160,7 +266,12 @@ export function teamColor(team: string): string {
  * provider toggle.
  */
 export function stableColor(name: string): string {
+  return hslToHex(nameHash(name) % 360, 0.6, 0.55);
+}
+
+/** The string hash behind every name-keyed colour here. */
+function nameHash(name: string): number {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  return hslToHex(h % 360, 0.6, 0.55);
+  return h;
 }

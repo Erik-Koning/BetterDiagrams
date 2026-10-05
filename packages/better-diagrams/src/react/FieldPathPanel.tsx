@@ -10,7 +10,10 @@
  */
 import { useState, type CSSProperties } from "react";
 import { fieldKey, type Pin } from "../contract/fields";
-import type { RouteView } from "./field-routes";
+import type { GraphWalk } from "../contract/graph";
+import type { RouteSql, RouteSqlOptions } from "../contract/route-sql";
+import { SqlBlock } from "./SqlBlock";
+import { ROUTE_CAP, shownRouteIndices, type RouteView } from "./field-routes";
 import { UiIcon } from "./ui-icons";
 
 export interface FieldPathPanelProps {
@@ -28,6 +31,9 @@ export interface FieldPathPanelProps {
   /** The route the reader clicked (kept lit alone until another click). */
   stickyRoute: number | null;
   onPickRoute: (index: number) => void;
+  /** Past the first few, the list — and the canvas, and the legend — shows every route only on request. */
+  routesExpanded: boolean;
+  onRoutesExpandedChange: (expanded: boolean) => void;
   /**
    * The key under the pointer, and the one clicked: every route through it
    * lights, the rest don't — hover previews, click keeps, as with a route.
@@ -40,12 +46,15 @@ export interface FieldPathPanelProps {
   /** A pin chip: go to the row it names, or to the table for a table pin. */
   onJumpToPin: (pin: Pin) => void;
   onClose: () => void;
+  /** A route as SQL (`routeSql`); omit and the rows offer none. */
+  sqlFor?: (walk: GraphWalk, opts: RouteSqlOptions) => RouteSql;
+  onCopySql?: (text: string) => void;
+  /** Keep this analysis with the model (a saved analysis). Absent, no Save button. */
+  onSave?: () => void;
 }
 
 /** More rows than this and the list says how many it left out. */
 const LIST_CAP = 500;
-/** Routes shown before the list asks to be expanded. */
-const ROUTE_CAP = 4;
 
 export function FieldPathPanel({
   view,
@@ -60,6 +69,8 @@ export function FieldPathPanel({
   onHoverRoute,
   stickyRoute,
   onPickRoute,
+  routesExpanded,
+  onRoutesExpandedChange,
   hoverKey,
   onHoverKey,
   stickyKey,
@@ -67,12 +78,28 @@ export function FieldPathPanel({
   onNavigate,
   onJumpToPin,
   onClose,
+  sqlFor,
+  onCopySql,
+  onSave,
 }: FieldPathPanelProps) {
-  // Which view the reader expanded the route list for: a new view (other
-  // pins, the direction toggled) folds it back to the first few.
-  const [expandedFor, setExpandedFor] = useState<RouteView | null>(null);
-  const routesExpanded = expandedFor === view;
-  const shownRoutes = routesExpanded ? view.routes : view.routes.slice(0, ROUTE_CAP);
+  // Which row's SQL is open ("route:3", "key:<fieldKey>"), if any.
+  const [sqlOpen, setSqlOpen] = useState<string | null>(null);
+  const sqlToggle = (id: string, label: string) =>
+    sqlFor ? (
+      <button
+        type="button"
+        className={`as-btn as-routes__sqlbtn${sqlOpen === id ? " as-btn--on" : ""}`}
+        aria-expanded={sqlOpen === id}
+        aria-label={`SQL for ${label}`}
+        title="The SQL that walks this route"
+        onClick={() => setSqlOpen(sqlOpen === id ? null : id)}
+      >
+        SQL
+      </button>
+    ) : null;
+  const sqlBlock = (id: string, walk: GraphWalk) =>
+    sqlFor && sqlOpen === id ? <SqlBlock sql={(opts) => sqlFor(walk, opts)} onCopy={(text) => onCopySql?.(text)} /> : null;
+  const shownRoutes = shownRouteIndices(view.routes.length, routesExpanded, stickyRoute).map((i) => ({ route: view.routes[i]!, i }));
 
   const pair = view.kind === "pair";
   const reachableOthers = [...view.reachable.entries()].filter(([id]) => !pins.some((p) => p.nodeId === id));
@@ -81,6 +108,11 @@ export function FieldPathPanel({
     <div className="as-panel as-panel--paths" role="region" aria-label="Paths between pinned fields">
       <div className="as-panel__head">
         <h2 className="as-panel__title">{pair ? "Paths between pins" : `Between ${pins.length} pins`}</h2>
+        {onSave ? (
+          <button type="button" className="as-btn" title="Keep this analysis with the model, to open and re-run later" onClick={onSave}>
+            Save…
+          </button>
+        ) : null}
         <button type="button" className="as-btn as-btn--icon" onClick={onClose} aria-label="Close paths panel">
           <UiIcon name="close" />
         </button>
@@ -136,6 +168,53 @@ export function FieldPathPanel({
         <p className="as-paths__note">Pairwise search looks at the first {pins.length} pins; {view.pinsIgnored} more are not compared.</p>
       ) : null}
 
+      {/* First: the direct answer to "how do these join". With two pins it
+          stays even when empty, so a missing first section never reads as
+          a glitch; with more, it shows only when some pair has a key. */}
+      {view.directKeys.length || pair ? (
+        <section className="as-paths__section" aria-label="Keys joining the pins">
+          <h3 className="as-paths__caption">
+            Keys joining the pins <span className="as-paths__count">{view.directKeys.length}</span>
+          </h3>
+          {!view.directKeys.length ? (
+            <p className="as-paths__empty">
+              No key joins them directly{view.routes.length ? "; see the routes below" : ""}.
+            </p>
+          ) : null}
+          <ul className="as-paths__list">
+            {view.directKeys.slice(0, LIST_CAP).map((link, k) => {
+              const key = fieldKey(link.from);
+              const drawn = link.edgeId !== undefined;
+              const text = `${nodeLabel(link.from.nodeId)}.${link.from.fieldId} → ${nodeLabel(link.to.nodeId)}${link.to.fieldId ? `.${link.to.fieldId}` : ""}`;
+              const sqlId = `key:${key}\u0000${fieldKey(link.to)}`;
+              return (
+                <li key={`${key}\u0000${fieldKey(link.to)}`}>
+                  <div className="as-routes__item">
+                  <button
+                    type="button"
+                    className={`as-paths__item as-paths__keyuse${hoverKey === key ? " as-paths__item--hover" : ""}${stickyKey === key ? " as-paths__item--sticky" : ""}`}
+                    aria-pressed={stickyKey === key}
+                    title={drawn ? "Hover to light this key on the canvas; click to keep it lit" : "The document draws no line for this reference"}
+                    disabled={!drawn}
+                    onMouseEnter={() => onHoverKey(key)}
+                    onMouseLeave={() => onHoverKey(null)}
+                    onFocus={() => onHoverKey(key)}
+                    onBlur={() => onHoverKey(null)}
+                    onClick={() => onPickKey(key)}
+                  >
+                    <span className="as-paths__itemlabel">{text}</span>
+                    {!drawn ? <span className="as-paths__itemdetail">not drawn</span> : null}
+                  </button>
+                  {drawn ? sqlToggle(sqlId, `key ${k + 1}`) : null}
+                  </div>
+                  {drawn ? sqlBlock(sqlId, { nodes: [link.from.nodeId, link.to.nodeId], edges: [link.edgeId!] }) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+
       {pair ? (
         <section className="as-paths__section" aria-label="Routes">
           <h3 className="as-paths__caption">
@@ -143,8 +222,9 @@ export function FieldPathPanel({
           </h3>
           {view.routes.length ? (
             <ol className="as-routes">
-              {shownRoutes.map((route, i) => (
+              {shownRoutes.map(({ route, i }) => (
                 <li key={i}>
+                  <div className="as-routes__item">
                   <button
                     type="button"
                     className={`as-routes__row${stickyRoute === i ? " as-routes__row--sticky" : ""}`}
@@ -176,6 +256,9 @@ export function FieldPathPanel({
                       {route.hops} hop{route.hops === 1 ? "" : "s"}
                     </span>
                   </button>
+                  {sqlToggle(`route:${i}`, `route ${i + 1}`)}
+                  </div>
+                  {sqlBlock(`route:${i}`, route.walk)}
                 </li>
               ))}
             </ol>
@@ -187,55 +270,21 @@ export function FieldPathPanel({
               type="button"
               className="as-btn as-paths__expand"
               aria-expanded={routesExpanded}
-              onClick={() => setExpandedFor(routesExpanded ? null : view)}
+              onClick={() => onRoutesExpandedChange(!routesExpanded)}
             >
               {routesExpanded ? "Show fewer" : `Show all ${view.routes.length} routes`}
             </button>
           ) : null}
-          {hoverRoute === null && stickyRoute === null && hoverKey === null && stickyKey === null && view.routes.length > 1 ? (
-            <p className="as-paths__hint">All routes are lit; hover one to see it alone.</p>
+          {hoverRoute === null && stickyRoute === null && hoverKey === null && stickyKey === null && shownRoutes.length > 1 ? (
+            <p className="as-paths__hint">{shownRoutes.length < view.routes.length ? "The shown routes are lit" : "All routes are lit"}; hover one to see it alone.</p>
           ) : null}
         </section>
       ) : null}
 
-      {pair && view.directKeys.length ? (
-        <section className="as-paths__section" aria-label="Keys joining the pins">
-          <h3 className="as-paths__caption">
-            Keys joining the pins <span className="as-paths__count">{view.directKeys.length}</span>
-          </h3>
-          <ul className="as-paths__list">
-            {view.directKeys.slice(0, LIST_CAP).map((link) => {
-              const key = fieldKey(link.from);
-              const drawn = link.edgeId !== undefined;
-              const text = `${nodeLabel(link.from.nodeId)}.${link.from.fieldId} → ${nodeLabel(link.to.nodeId)}${link.to.fieldId ? `.${link.to.fieldId}` : ""}`;
-              return (
-                <li key={`${key}\u0000${fieldKey(link.to)}`}>
-                  <button
-                    type="button"
-                    className={`as-paths__item as-paths__keyuse${hoverKey === key ? " as-paths__item--hover" : ""}${stickyKey === key ? " as-paths__item--sticky" : ""}`}
-                    aria-pressed={stickyKey === key}
-                    title={drawn ? "Hover to light this key on the canvas; click to keep it lit" : "The document draws no line for this reference"}
-                    disabled={!drawn}
-                    onMouseEnter={() => onHoverKey(key)}
-                    onMouseLeave={() => onHoverKey(null)}
-                    onFocus={() => onHoverKey(key)}
-                    onBlur={() => onHoverKey(null)}
-                    onClick={() => onPickKey(key)}
-                  >
-                    <span className="as-paths__itemlabel">{text}</span>
-                    {!drawn ? <span className="as-paths__itemdetail">not drawn</span> : null}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      ) : null}
-
-      {/* A ranking needs something to rank: with one route every key on it
-          is trivially "1 of 1", and the route's own hop strip already names
-          them in order. */}
-      {pair && view.routes.length > 1 && view.keyUse?.keys.length ? (
+      {/* A ranking needs something to rank: when no key is on more than one
+          route, every key reads "1 of N" and the list only repeats the keys
+          above and the routes' hop strips. */}
+      {pair && view.routes.length > 1 && view.keyUse?.keys.some((use) => use.routes > 1) ? (
         <section className="as-paths__section" aria-label="Keys most routes use">
           <h3 className="as-paths__caption">
             Keys most routes use <span className="as-paths__count">{view.keyUse.keys.length}</span>

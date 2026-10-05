@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "meta": {
+    "title": "Mobile app launch",
+    "versionTag": "Sprint 14"
+  },
+  "nodes": [
+    { "id": "spec", "label": "Write product spec", "kind": "task", "icon": "none", "description": "Scope, success metrics,\nout-of-scope list", "parentId": null, "x": 0, "y": 70, "w": 220, "h": 96, "assignees": ["Ana"], "storyPoints": 3, "done": true, "tags": ["planning"] },
+    { "id": "design", "label": "UI design", "kind": "task", "icon": "none", "description": "Figma flows for onboarding,\nhome and settings", "parentId": null, "x": 0, "y": 333, "w": 220, "h": 96, "assignees": ["Priya"], "storyPoints": 5, "done": true, "tags": ["frontend"] },
+    { "id": "infra", "label": "Provision cloud infra", "kind": "task", "icon": "none", "description": "Staging + prod, CI deploys", "parentId": null, "x": 0, "y": 475, "w": 220, "h": 96, "assignees": ["Ravi"], "storyPoints": 5, "tags": ["backend"] },
+
+    { "id": "api", "label": "Build REST API", "kind": "task", "icon": "none", "description": "Accounts, feed, settings\nendpoints", "parentId": null, "x": 310, "y": 0, "w": 220, "h": 96, "assignees": ["Ravi", "Mo"], "storyPoints": 8, "tags": ["backend"], "stage": "in-progress", "priority": "p1", "date": "2026-10-20" },
+    { "id": "auth", "label": "Auth & sign-in", "kind": "task", "icon": "none", "description": "Email magic link + Apple /\nGoogle sign-in", "parentId": null, "x": 310, "y": 142, "w": 220, "h": 96, "assignees": ["Mo"], "storyPoints": 5, "tags": ["backend"], "priority": "p0", "date": "2026-10-24" },
+    { "id": "screens", "label": "Build app screens", "kind": "task", "icon": "none", "description": "Onboarding, home, settings", "parentId": null, "x": 310, "y": 284, "w": 220, "h": 96, "assignees": ["Priya", "Ana"], "storyPoints": 8, "tags": ["frontend"], "stage": "in-review" },
+
+    { "id": "integrate", "label": "Wire screens to API", "kind": "task", "icon": "none", "description": "Replace mocks, error states", "parentId": null, "x": 620, "y": 79, "w": 220, "h": 96, "assignees": ["Ana", "Mo"], "storyPoints": 5 },
+    { "id": "analytics", "label": "Analytics events", "kind": "task", "icon": "none", "description": "Funnel + retention events", "parentId": null, "x": 620, "y": 277, "w": 220, "h": 96, "assignees": ["Priya"], "storyPoints": 2, "tags": ["frontend"] },
+    { "id": "store", "label": "App store listing", "kind": "task", "icon": "none", "description": "Screenshots, copy, privacy\nlabels", "parentId": null, "x": 310, "y": 426, "w": 220, "h": 96, "assignees": ["Ana"], "storyPoints": 2, "priority": "p3" },
+
+    { "id": "qa", "label": "QA pass", "kind": "task", "icon": "none", "description": "Device matrix + regression", "parentId": null, "x": 930, "y": 183, "w": 220, "h": 96, "assignees": ["Sam"], "storyPoints": 3, "date": "2026-11-06" },
+
+    { "id": "launch", "label": "Launch", "kind": "milestone", "icon": "none", "description": "Submit for review, flip the feature flag", "parentId": null, "x": 1240, "y": 327, "w": 170, "h": 96, "date": "2026-11-14" }
+  ],
+  "edges": [
+    { "id": "spec-api", "source": "spec", "target": "api", "label": "", "style": "solid", "color": "slate" },
+    { "id": "spec-auth", "source": "spec", "target": "auth", "label": "", "style": "solid", "color": "slate" },
+    { "id": "design-screens", "source": "design", "target": "screens", "label": "", "style": "solid", "color": "slate" },
+    { "id": "design-store", "source": "design", "target": "store", "label": "", "style": "solid", "color": "slate" },
+    { "id": "api-integrate", "source": "api", "target": "integrate", "label": "", "style": "solid", "color": "slate" },
+    { "id": "screens-integrate", "source": "screens", "target": "integrate", "label": "", "style": "solid", "color": "slate" },
+    { "id": "screens-analytics", "source": "screens", "target": "analytics", "label": "", "style": "solid", "color": "slate" },
+    { "id": "integrate-qa", "source": "integrate", "target": "qa", "label": "", "style": "solid", "color": "slate" },
+    { "id": "auth-qa", "source": "auth", "target": "qa", "label": "", "style": "solid", "color": "slate" },
+    { "id": "qa-launch", "source": "qa", "target": "launch", "label": "", "style": "solid", "color": "slate" },
+    { "id": "store-launch", "source": "store", "target": "launch", "label": "", "style": "solid", "color": "slate" },
+
+    { "id": "infra-api", "source": "infra", "target": "api", "label": "", "style": "dashed", "color": "sky", "relation": "dependency" },
+    { "id": "infra-auth", "source": "infra", "target": "auth", "label": "", "style": "dashed", "color": "sky", "relation": "dependency" },
+    { "id": "analytics-launch", "source": "analytics", "target": "launch", "label": "", "style": "dashed", "color": "sky", "relation": "dependency" }
+  ],
+  "settings": { "arrange": "untangle", "capacity": { "Ana": 16, "Mo": 16, "Priya": 12, "Ravi": 14, "Sam": 8 } }
+}

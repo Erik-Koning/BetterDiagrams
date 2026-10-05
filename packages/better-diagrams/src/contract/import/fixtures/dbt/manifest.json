@@ -1,0 +1,181 @@
+{
+  "metadata": {
+    "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json",
+    "dbt_version": "1.9.1",
+    "project_name": "jaffle_shop",
+    "adapter_type": "snowflake"
+  },
+  "nodes": {
+    "model.jaffle_shop.customers": {
+      "resource_type": "model",
+      "unique_id": "model.jaffle_shop.customers",
+      "name": "customers",
+      "alias": "customers",
+      "database": "analytics",
+      "schema": "marts",
+      "description": "One row per customer",
+      "config": { "enabled": true, "materialized": "table", "meta": { "owner": "Growth" } },
+      "meta": {},
+      "tags": ["core"],
+      "columns": {
+        "customer_id": { "name": "customer_id", "description": "The customer", "data_type": null, "meta": {}, "tags": [], "constraints": [] },
+        "email": { "name": "email", "description": "", "data_type": null, "meta": { "contains_pii": true }, "tags": [], "constraints": [] },
+        "number_of_orders": { "name": "number_of_orders", "description": "Lifetime orders", "data_type": null, "meta": {}, "tags": [], "constraints": [] }
+      },
+      "constraints": [],
+      "depends_on": { "nodes": ["source.jaffle_shop.raw.customers"] }
+    },
+    "model.jaffle_shop.orders": {
+      "resource_type": "model",
+      "unique_id": "model.jaffle_shop.orders",
+      "name": "orders",
+      "alias": "orders",
+      "database": "analytics",
+      "schema": "marts",
+      "description": "One row per order",
+      "group": "finance",
+      "config": { "enabled": true, "materialized": "table", "contract": { "enforced": true } },
+      "meta": {},
+      "tags": [],
+      "columns": {
+        "order_id": { "name": "order_id", "description": "", "data_type": "integer", "meta": {}, "tags": [], "constraints": [{ "type": "primary_key" }, { "type": "not_null" }] },
+        "customer_id": { "name": "customer_id", "description": "Who ordered", "data_type": "integer", "meta": {}, "tags": [], "constraints": [] },
+        "status": { "name": "status", "description": "", "data_type": "varchar", "meta": {}, "tags": [], "constraints": [] },
+        "amount": { "name": "amount", "description": "", "data_type": "number(12,2)", "meta": {}, "tags": ["finance"], "constraints": [] }
+      },
+      "constraints": [],
+      "depends_on": { "nodes": ["model.jaffle_shop.customers"] }
+    },
+    "model.jaffle_shop.order_items": {
+      "resource_type": "model",
+      "unique_id": "model.jaffle_shop.order_items",
+      "name": "order_items",
+      "alias": "order_items",
+      "database": "analytics",
+      "schema": "marts",
+      "description": "",
+      "config": { "enabled": true, "materialized": "incremental" },
+      "meta": {},
+      "tags": [],
+      "columns": {
+        "order_id": { "name": "order_id", "data_type": "integer", "constraints": [] },
+        "line_no": { "name": "line_no", "data_type": "integer", "constraints": [] },
+        "product_id": { "name": "product_id", "data_type": "integer", "constraints": [{ "type": "foreign_key", "expression": "analytics.marts.products (product_id)" }] }
+      },
+      "constraints": [
+        { "type": "primary_key", "columns": ["order_id", "line_no"] },
+        { "type": "foreign_key", "columns": ["order_id"], "to": "ref('orders')", "to_columns": ["order_id"] }
+      ],
+      "depends_on": { "nodes": ["model.jaffle_shop.orders", "model.jaffle_shop.products"] }
+    },
+    "model.jaffle_shop.products": {
+      "resource_type": "model",
+      "unique_id": "model.jaffle_shop.products",
+      "name": "products",
+      "alias": "products",
+      "database": "analytics",
+      "schema": "marts",
+      "config": { "enabled": true, "materialized": "view" },
+      "columns": { "product_id": { "name": "product_id" }, "sku": { "name": "sku" } },
+      "constraints": [],
+      "depends_on": { "nodes": [] }
+    },
+    "model.jaffle_shop.daily_revenue": {
+      "resource_type": "model",
+      "unique_id": "model.jaffle_shop.daily_revenue",
+      "name": "daily_revenue",
+      "alias": "daily_revenue",
+      "database": "analytics",
+      "schema": "marts",
+      "config": { "enabled": true, "materialized": "table" },
+      "columns": { "day": { "name": "day" }, "currency": { "name": "currency" }, "revenue": { "name": "revenue" } },
+      "constraints": [],
+      "depends_on": { "nodes": ["model.jaffle_shop.orders"] }
+    },
+    "model.jaffle_shop.int_order_payments": {
+      "resource_type": "model",
+      "unique_id": "model.jaffle_shop.int_order_payments",
+      "name": "int_order_payments",
+      "schema": "marts",
+      "config": { "enabled": true, "materialized": "ephemeral" },
+      "columns": {},
+      "depends_on": { "nodes": [] }
+    },
+    "seed.jaffle_shop.country_codes": {
+      "resource_type": "seed",
+      "unique_id": "seed.jaffle_shop.country_codes",
+      "name": "country_codes",
+      "alias": "country_codes",
+      "database": "analytics",
+      "schema": "seeds",
+      "config": { "enabled": true },
+      "columns": {},
+      "depends_on": { "nodes": [] }
+    },
+    "test.jaffle_shop.unique_customers_customer_id.c5af1ff4b1": {
+      "resource_type": "test",
+      "test_metadata": { "name": "unique", "kwargs": { "column_name": "customer_id", "model": "{{ get_where_subquery(ref('customers')) }}" }, "namespace": null },
+      "column_name": "customer_id",
+      "attached_node": "model.jaffle_shop.customers",
+      "config": { "enabled": true },
+      "depends_on": { "nodes": ["model.jaffle_shop.customers"] }
+    },
+    "test.jaffle_shop.not_null_customers_customer_id.5c9bf9911d": {
+      "resource_type": "test",
+      "test_metadata": { "name": "not_null", "kwargs": { "column_name": "customer_id" }, "namespace": null },
+      "column_name": "customer_id",
+      "attached_node": "model.jaffle_shop.customers",
+      "config": { "enabled": true },
+      "depends_on": { "nodes": ["model.jaffle_shop.customers"] }
+    },
+    "test.jaffle_shop.not_null_orders_customer_id.c5f02694af": {
+      "resource_type": "test",
+      "test_metadata": { "name": "not_null", "kwargs": { "column_name": "customer_id" }, "namespace": null },
+      "column_name": "customer_id",
+      "attached_node": "model.jaffle_shop.orders",
+      "config": { "enabled": true },
+      "depends_on": { "nodes": ["model.jaffle_shop.orders"] }
+    },
+    "test.jaffle_shop.relationships_orders_customer_id__customer_id__ref_customers_.c6ec7f58f2": {
+      "resource_type": "test",
+      "test_metadata": { "name": "relationships", "kwargs": { "column_name": "customer_id", "to": "ref('customers')", "field": "customer_id" }, "namespace": null },
+      "column_name": "customer_id",
+      "attached_node": "model.jaffle_shop.orders",
+      "config": { "enabled": true },
+      "depends_on": { "nodes": ["model.jaffle_shop.customers", "model.jaffle_shop.orders"] }
+    },
+    "test.jaffle_shop.dbt_utils_unique_combination_of_columns_daily_revenue.1a2b3c": {
+      "resource_type": "test",
+      "test_metadata": { "name": "unique_combination_of_columns", "kwargs": { "combination_of_columns": ["day", "currency"] }, "namespace": "dbt_utils" },
+      "attached_node": "model.jaffle_shop.daily_revenue",
+      "config": { "enabled": true },
+      "depends_on": { "nodes": ["model.jaffle_shop.daily_revenue"] }
+    },
+    "test.jaffle_shop.relationships_daily_revenue_currency__code__ref_currencies_.9f8e": {
+      "resource_type": "test",
+      "test_metadata": { "name": "relationships", "kwargs": { "column_name": "currency", "to": "ref('currencies')", "field": "code" }, "namespace": null },
+      "column_name": "currency",
+      "attached_node": "model.jaffle_shop.daily_revenue",
+      "config": { "enabled": true },
+      "depends_on": { "nodes": ["model.jaffle_shop.daily_revenue"] }
+    }
+  },
+  "sources": {
+    "source.jaffle_shop.raw.customers": {
+      "resource_type": "source",
+      "unique_id": "source.jaffle_shop.raw.customers",
+      "source_name": "raw",
+      "name": "customers",
+      "identifier": "raw_customers",
+      "database": "raw",
+      "schema": "jaffle",
+      "description": "As the app writes them",
+      "columns": { "id": { "name": "id", "meta": { "pii": true } }, "email": { "name": "email", "tags": ["pii:email"] } },
+      "meta": {},
+      "tags": []
+    }
+  },
+  "groups": {
+    "group.jaffle_shop.finance": { "name": "finance", "owner": { "name": "Finance", "email": "finance@example.com" } }
+  }
+}

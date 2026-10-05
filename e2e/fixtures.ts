@@ -354,6 +354,16 @@ export class Studio {
     return menu.getByLabel(name, { exact: true });
   }
 
+  /**
+   * Open a template from Settings ▾ → Templates by its file name — the menu
+   * lists it once the app has reached the dev server's templates route.
+   */
+  async openTemplate(file: string): Promise<void> {
+    const menu = this.page.getByRole("menu", { name: "Settings" });
+    if (!(await menu.isVisible())) await this.page.getByRole("button", { name: "Settings" }).click();
+    await menu.getByRole("menuitem").filter({ hasText: file }).click();
+  }
+
   /** Open the live-template side panel and return the rendered JSON. */
   async showJson(): Promise<Locator> {
     await (await this.setting("JSON")).check();
@@ -380,15 +390,23 @@ export class Studio {
   }
 }
 
-export const test = base.extend<{ studio: Studio }>({
-  context: async ({ context }, use) => {
-    // The dev server's auto-save writes every open file into the repo's
-    // /templates folder. Refuse the probe so a test run never touches disk,
-    // and the app carries on exactly as a production build would. On the
-    // context, not the page, so a test that opens a second tab is covered.
-    await context.route("**/__templates**", (route) =>
-      route.fulfill({ status: 404, contentType: "application/json", body: '{"error":"disabled under e2e"}' }),
-    );
+export const test = base.extend<{ studio: Studio; diskTemplates: boolean }>({
+  /**
+   * Let the app reach the dev server's templates route — off by default.
+   * Only the disk-sync spec turns it on, and the server it talks to keeps its
+   * templates in a temporary folder (e2e/templates-dir.ts), never the repo's.
+   */
+  diskTemplates: [false, { option: true }],
+  context: async ({ context, diskTemplates }, use) => {
+    // The dev server's auto-save writes every open file into a templates
+    // folder. Refuse the probe so a test run never touches disk, and the app
+    // carries on exactly as a production build would. On the context, not
+    // the page, so a test that opens a second tab is covered.
+    if (!diskTemplates) {
+      await context.route("**/__templates**", (route) =>
+        route.fulfill({ status: 404, contentType: "application/json", body: '{"error":"disabled under e2e"}' }),
+      );
+    }
 
     // An uncaught exception anywhere in a test is a failure even when the
     // assertions happen to pass — React may have recovered, the user did not.

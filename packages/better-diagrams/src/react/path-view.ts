@@ -65,10 +65,16 @@ export function buildPathGlowIndex(
   opts: {
     /** Draw the extras in the dedicated route colour — a route singled out, not a set of them. */
     bright?: boolean;
+    /**
+     * Computed paths lit in their OWN colour whatever `bright` says — a
+     * task graph's critical path, which is not a route someone singled out.
+     */
+    steady?: readonly DiagramPath[];
   } = {},
 ): PathGlowIndex | null {
   const paths = template.paths ?? [];
-  if ((!paths.length || !activeIds.length) && !extra.length) return null;
+  const steady = opts.steady ?? [];
+  if ((!paths.length || !activeIds.length) && !extra.length && !steady.length) return null;
   const active = new Set(activeIds);
   const index: PathGlowIndex = { nodes: new Map(), edges: new Map() };
   let any = false;
@@ -98,6 +104,7 @@ export function buildPathGlowIndex(
     if (active.has(path.id)) light(path, pathColor(path, i), false);
   });
   for (const path of extra) light(path, path.color ?? PATH_COLOR_CYCLE[0], opts.bright === true);
+  for (const path of steady) light(path, path.color ?? PATH_COLOR_CYCLE[0], false);
   if (!any) return null;
   // One path moves: the route singled out, else the shortest lit one (the
   // first of equals). Several pulses at once were a canvas full of blinking
@@ -189,7 +196,7 @@ export function documentEdgeId(id: string): string {
  * absent from the map.
  */
 export function representatives(
-  template: Pick<DiagramTemplate, "nodes">,
+  template: { nodes: ReadonlyArray<{ id: string; parentId?: string | null }> },
   canvasNodeIds: Iterable<string>,
 ): Map<string, string> {
   const shown = new Map<string, string>();

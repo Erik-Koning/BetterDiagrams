@@ -57,13 +57,13 @@ function mount(ui: React.ReactElement) {
 describe("registry", () => {
   it("carries the vocabulary, lets a host relabel or extend it, and names what nobody registered", () => {
     const plain = createRegistry();
-    expect(plain.relationOrder).toEqual(["composition", "aggregation", "reference", "hierarchy", "polymorphic", "generalization"]);
+    expect(plain.relationOrder).toEqual(["composition", "aggregation", "reference", "hierarchy", "polymorphic", "generalization", "dependency"]);
     expect(relationDef(plain, "composition").label).toBe("Composition");
     // A source's own words for the same line.
     const crm = createRegistry({ relationKinds: { composition: { label: "Master-detail" }, reference: { label: "Lookup" }, ownership: { label: "Ownership", color: "emerald" } } });
     expect(relationDef(crm, "composition")).toMatchObject({ label: "Master-detail", style: "solid", color: "rose", startHead: "diamond-filled" });
     expect(relationDef(crm, "reference").label).toBe("Lookup");
-    expect(crm.relationOrder).toEqual(["composition", "aggregation", "reference", "hierarchy", "polymorphic", "generalization", "ownership"]);
+    expect(crm.relationOrder).toEqual(["composition", "aggregation", "reference", "hierarchy", "polymorphic", "generalization", "dependency", "ownership"]);
     // Unregistered: named after its id, drawn as the plain reference line.
     expect(relationDef(plain, "many-to-many")).toMatchObject({ label: "Many To Many", style: "dashed", color: "slate" });
   });

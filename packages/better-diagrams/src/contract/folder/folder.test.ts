@@ -795,3 +795,18 @@ describe("the shipped datamodel example", () => {
     expect(keyCoverage(template, cover.keys).total).toBe(9);
   });
 });
+
+describe("saved analyses in the sidecar", () => {
+  it("ride with the overrides and come back on re-import", async () => {
+    const files = await fixture();
+    const first = importFolder(files).template;
+    const analyses = [
+      { id: "contact-usage", title: "Who carries contact ids", kind: "usage" as const, names: ["contactid"], match: "any" as const, includeTargets: false },
+      { id: "account-impact", title: "Account impact", kind: "impact" as const, subject: { nodeId: "core/account" }, direction: "dependents" as const, via: "keys" as const },
+    ];
+    const out = exportFolder({ ...first, analyses }, { tree: buildFolderTree(files) });
+    expect(JSON.parse(out.files.get(OVERRIDES_FILE)!).analyses).toEqual(analyses);
+    const second = importFolder(new Map([...files, ...out.files]));
+    expect(second.template.analyses).toEqual(analyses);
+  });
+});

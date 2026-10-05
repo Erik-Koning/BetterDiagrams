@@ -10,6 +10,7 @@ import { emitSequence } from "./sequence-draw";
 import { buildTimelineHtml } from "./html-export";
 import {
   BUILTIN_EXPORTERS,
+  htmlExplorerData,
   renderTemplateToC4Puml,
   renderTemplateToMermaid,
   renderTemplateToSvg,
@@ -249,9 +250,10 @@ describe("buildMultiViewHtml — the drill-down page", () => {
     const result = await BUILTIN_EXPORTERS.html.run({ template: flat, registry, filename: "flat" });
     const text = await result!.blob.text();
     const direct = buildTimelineHtml({
-      svg: renderTemplateToSvg(flat, registry, {}),
+      svg: renderTemplateToSvg(flat, registry, {}, { fieldHits: true }),
       title: "Flat",
       stops: [],
+      explorer: htmlExplorerData(flat, registry, {}),
     });
     expect(text).toBe(direct);
     expect(text).not.toContain("bd-crumbbar");

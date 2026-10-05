@@ -75,6 +75,9 @@ export {
 } from "./exporters";
 export type { ExportPalette, DrawCmd, DrawTag, Emitted } from "./draw";
 export { buildTimelineHtml, buildMultiViewHtml } from "./html-export";
+// What the page's search and relationship analysis read — pass as `explorer`.
+export { htmlExplorerData } from "./exporters";
+export type { HtmlExplorerData, ExplorerDocument, ExplorerLevel } from "./html-explorer";
 // Transient route colours, for a host lighting its own found paths.
 export { transientPathColors } from "./path-view";
 export type { ViewEntry, MultiViewHtmlOptions } from "./html-export";

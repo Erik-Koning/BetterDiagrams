@@ -92,3 +92,13 @@ describe("diffTemplates", () => {
     expect(diffTemplates(base, current, { ignore: ["label"] }).summary.changed).toBe(0);
   });
 });
+
+describe("task fields", () => {
+  it("reports a changed estimate, people and done flag — none of them is layout", () => {
+    const base = doc([node({ id: "t", kind: "task", storyPoints: 3, assignees: ["Ana"] })]);
+    const current = doc([node({ id: "t", kind: "task", storyPoints: 5, assignees: ["Ana", "Ravi"], done: true })]);
+    expect(diffTemplates(base, current).nodes.changed).toEqual([
+      { id: "t", fields: ["assignees", "done", "storyPoints"] },
+    ]);
+  });
+});

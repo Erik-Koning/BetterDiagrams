@@ -47,6 +47,8 @@ export interface PromptScopeOptions {
    * and no kinds, exactly as if it had never been selected.
    */
   components?: readonly string[];
+  /** "tasks" steers the model toward a task graph — see `PromptOptions.focus`. */
+  focus?: "tasks";
 }
 
 /** Everything a prompt-copying surface needs, derived from one document. */
@@ -143,6 +145,7 @@ export function promptForCloudSelection(
       .filter(Boolean)
       .join("\n"),
     ...(opts?.geometry === false ? { geometry: false } : {}),
+    ...(opts?.focus ? { focus: opts.focus } : {}),
   });
 }
 

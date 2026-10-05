@@ -230,6 +230,8 @@ export const LIGHT_THEME: Theme = {
     decision: "#c2410c",
     terminator: "#15803d",
     io: "#1d4ed8",
+    task: "#4338ca",
+    milestone: "#be123c",
     point: "#475569",
     "lm-small": "#a21caf",
     "lm-medium": "#86198f",
@@ -280,6 +282,7 @@ export function paletteFromTheme(theme: Theme | undefined): Record<string, strin
   if (theme.accentInk) out.accentInk = theme.accentInk;
   if (theme.warn) out.warn = theme.warn;
   if (theme.overdue) out.overdue = theme.overdue;
+  if (theme.routeColor) out.routeColor = theme.routeColor;
   // Record-valued entries ride through as JSON — ExportPalette is a string
   // map, and the emitters parse these two keys back out.
   if (theme.edgeColors) out.edgeColors = JSON.stringify(theme.edgeColors);

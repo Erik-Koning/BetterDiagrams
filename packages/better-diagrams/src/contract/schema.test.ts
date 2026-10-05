@@ -619,3 +619,51 @@ describe("the `data` bag", () => {
     expect(back).toEqual(doc);
   });
 });
+
+describe("task fields", () => {
+  const base = { id: "t", label: "Build login", kind: "task", x: 0, y: 0 };
+
+  it("keeps a task's people, estimate and done flag, normalised", () => {
+    const t = validateTemplate({
+      version: 1,
+      nodes: [{ ...base, assignees: [" Ana ", "Ravi", "Ana", ""], storyPoints: "3", done: true }],
+      edges: [],
+    });
+    expect(t.nodes[0]).toMatchObject({ kind: "task", assignees: ["Ana", "Ravi"], storyPoints: 3, done: true });
+    expect(NODE_KEYS).toEqual(expect.arrayContaining(["assignees", "storyPoints", "done"]));
+  });
+
+  it("stores none of them at their defaults, so an old document round-trips byte-identical", () => {
+    const t = validateTemplate({
+      version: 1,
+      nodes: [{ ...base, assignees: [], storyPoints: -2, done: false }, { ...base, id: "u", storyPoints: "lots" }],
+      edges: [],
+    });
+    for (const n of t.nodes) {
+      expect(n).not.toHaveProperty("assignees");
+      expect(n).not.toHaveProperty("storyPoints");
+      expect(n).not.toHaveProperty("done");
+    }
+  });
+
+  it("accepts a lone name for assignees and zero points", () => {
+    const t = validateTemplate({ version: 1, nodes: [{ ...base, assignees: "Ana", storyPoints: 0 }], edges: [] });
+    expect(t.nodes[0]).toMatchObject({ assignees: ["Ana"], storyPoints: 0 });
+  });
+
+  it("survives the trip through React Flow", () => {
+    const t = validateTemplate({
+      version: 1,
+      nodes: [{ ...base, assignees: ["Ana"], storyPoints: 5, done: true }],
+      edges: [],
+    });
+    const rf = toReactFlow(t);
+    expect(fromReactFlow(rf.nodes, rf.edges, { base: t })).toEqual(t);
+  });
+
+  it("is described to the model, and the Task flow focus steers toward a plan", () => {
+    expect(buildSystemPrompt()).toContain('TASKS: "task" = a unit of work');
+    expect(buildSystemPrompt()).not.toContain("TASK FLOW:");
+    expect(buildSystemPrompt({ focus: "tasks" })).toContain("TASK FLOW:");
+  });
+});

@@ -17,6 +17,9 @@ import { Modal } from "./chrome";
 import { copyText } from "./copy-text";
 import {
   GRID_COLUMNS,
+  PROFILE_COLUMNS,
+  gridColumnsFor,
+  type GridColumnDef,
   MAX_COLUMN_WIDTH,
   MIN_COLUMN_WIDTH,
   cellText,
@@ -67,10 +70,12 @@ export function FieldGridModal({
   onClose,
 }: FieldGridModalProps) {
   const records = useMemo(() => fieldRecords(node, doc), [node, doc]);
+  // A profiled table adds its observed numbers as two more columns.
+  const columns = useMemo(() => gridColumnsFor(records), [records]);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>(null);
   const [widths, setWidths] = useState<Record<GridColumn, number>>(
-    () => Object.fromEntries(GRID_COLUMNS.map((c) => [c.id, c.width])) as Record<GridColumn, number>,
+    () => Object.fromEntries([...GRID_COLUMNS, ...PROFILE_COLUMNS].map((c) => [c.id, c.width])) as Record<GridColumn, number>,
   );
   const [activeId, setActiveId] = useState<string | null>(initialFieldId ?? null);
   const [copied, setCopied] = useState(false);
@@ -175,13 +180,13 @@ export function FieldGridModal({
   };
 
   const copy = async () => {
-    if (await copyText(toTsv(visible))) {
+    if (await copyText(toTsv(visible, columns))) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
     }
   };
   const download = () =>
-    onDownload(new Blob([toCsv(visible)], { type: "text/csv" }), `${filename}-${fileSlug(node.label)}-fields.csv`);
+    onDownload(new Blob([toCsv(visible, columns)], { type: "text/csv" }), `${filename}-${fileSlug(node.label)}-fields.csv`);
 
   const total = records.length;
   return (
@@ -224,14 +229,14 @@ export function FieldGridModal({
         <table ref={tableRef} className="as-grid" role="grid" aria-rowcount={visible.length} aria-label={`${node.label} fields`} onKeyDown={onKeyDown}>
           <colgroup>
             <col style={{ width: PIN_COLUMN_WIDTH }} />
-            {GRID_COLUMNS.map((c) => (
+            {columns.map((c) => (
               <col key={c.id} style={{ width: widths[c.id] }} />
             ))}
           </colgroup>
           <thead>
             <tr>
               <th scope="col" className="as-grid__th as-grid__th--pin" aria-label="Pinned" />
-              {GRID_COLUMNS.map((c) => {
+              {columns.map((c) => {
                 const sorted = sort?.col === c.id ? sort.dir : undefined;
                 return (
                   <th
@@ -262,6 +267,7 @@ export function FieldGridModal({
                 key={record.id}
                 nodeId={node.id}
                 record={record}
+                columns={columns}
                 active={record.id === activeId}
                 pinned={pinned.has(fieldKey({ nodeId: node.id, fieldId: record.id }))}
                 onActivate={() => setActiveId(record.id)}
@@ -271,7 +277,7 @@ export function FieldGridModal({
             ))}
             {!visible.length ? (
               <tr>
-                <td className="as-grid__empty" colSpan={GRID_COLUMNS.length + 1}>
+                <td className="as-grid__empty" colSpan={columns.length + 1}>
                   {total ? "No field matches the filter" : "This node has no fields"}
                 </td>
               </tr>
@@ -286,6 +292,7 @@ export function FieldGridModal({
 function GridRow({
   nodeId,
   record,
+  columns,
   active,
   pinned,
   onActivate,
@@ -294,6 +301,7 @@ function GridRow({
 }: {
   nodeId: string;
   record: FieldRecord;
+  columns: readonly GridColumnDef[];
   active: boolean;
   pinned: boolean;
   onActivate: () => void;
@@ -325,7 +333,7 @@ function GridRow({
           {pinned ? "★" : "☆"}
         </button>
       </td>
-      {GRID_COLUMNS.map((c) => {
+      {columns.map((c) => {
         const text = cellText(record, c.id);
         const className = `as-grid__td${c.align === "center" ? " as-grid__td--center" : ""}${c.mono ? " as-grid__td--mono" : ""}`;
         if (c.id === "fk" && record.fk.length) {

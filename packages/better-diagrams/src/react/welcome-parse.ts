@@ -9,6 +9,8 @@
  * layout — the author's coordinates are truth.
  */
 import { autoLayout, type LayoutOptions } from "../contract/layout";
+import { importSqlDdl, looksLikeSqlDdl } from "../contract/import/sql-ddl";
+import { importTaskCsv, looksLikeTaskCsv } from "../contract/import/task-csv";
 import {
   fromReactFlow,
   parseLlmTemplate,
@@ -50,6 +52,18 @@ export function parseArchitectureText(
   layout: DoorLayout = {},
 ): DiagramTemplate {
   const laidOut = (t: DiagramTemplate) => layoutIfUnpositioned(t, layout);
+  // A schema script: its tables and keys, as an editable data model.
+  if (looksLikeSqlDdl(text)) {
+    const imported = importSqlDdl(text);
+    if (!imported.template.nodes.some((n) => n.kind === "table")) throw new Error("No CREATE TABLE in that script could be read");
+    return laidOut(validateTemplate(imported.template, opts));
+  }
+  // A tracker's CSV export (Jira, Linear, GitHub…): its issues as a task graph.
+  if (looksLikeTaskCsv(text)) {
+    const imported = importTaskCsv(text);
+    if (!imported.stats.tasks) throw new Error("No tasks in that CSV could be read");
+    return laidOut(validateTemplate(imported.template, opts));
+  }
   // Validated here, not just downstream: on the zero-files path the result
   // goes straight to the host's onFileCreate, which is promised a validated
   // document.

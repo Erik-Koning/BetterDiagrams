@@ -23,7 +23,11 @@ export interface ReferencePanelProps {
   onFollow: (link: KeyLink) => void;
   /** A referencing key: go to the field holding it. */
   onNavigateField: (ref: FieldRef) => void;
-  /** The subject chip: go back to the table (or row) the panel is about. */
+  /**
+   * The subject chip: go back to what the panel is about, restoring the marks
+   * it opened with — the lists stay, so the way back should land on the same
+   * answer the way in drew.
+   */
   onJump: (pin: Pin) => void;
   onClose: () => void;
 }

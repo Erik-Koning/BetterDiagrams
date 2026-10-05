@@ -55,7 +55,36 @@ import {
   tAtDistance,
   type Box,
 } from "../contract/geometry";
-import { seqBadgeOffset, silhouettePath, teamColor } from "./shapes";
+import {
+  ASSIGNEE_FONT,
+  ASSIGNEE_GAP,
+  assigneeChipWidth,
+  assigneeSwatch,
+  assigneeSwatches,
+  fitChips,
+  formatPoints,
+  seqBadgeOffset,
+  silhouettePath,
+  teamColor,
+} from "./shapes";
+import {
+  ASSIGNEE_STRIP_HEIGHT,
+  MILESTONE_KIND,
+  TASK_KIND,
+  blockedTasks,
+  hasAssigneeStrip,
+  isWorkItem,
+  overdueWork,
+  planProgress,
+  readyTasks,
+  rollupFraction,
+  rollupLabel,
+  taskAssignees,
+  taskRollups,
+  taskWorkload,
+  workDone,
+  type TaskRollup,
+} from "../contract/tasks";
 import { kindDef, iconPaths, providerDef, relationDef, zoneInk, type ResolvedRegistry } from "./registry-types";
 import { resolveStudioMode, type StudioMode } from "./theme";
 
@@ -150,6 +179,12 @@ export interface ExportPalette {
    * colours the screen had already replaced.
    */
   nodeAccents?: Record<string, string> | string;
+  /**
+   * The highlighter one route is singled out in — the theme's `routeColor`.
+   * Only the interactive HTML export draws routes; absent, it takes the
+   * built-in dark or light theme's, by the page's background.
+   */
+  routeColor?: string;
 }
 
 /** Normalize the record-or-JSON palette fields. */
@@ -477,6 +512,14 @@ export function makeSkin(mode: StudioMode, palette: ExportPalette, gradients = t
 export interface DrawTag {
   id: string;
   day?: number;
+  /**
+   * Extra `data-*` attributes for the element's group — the interactive HTML
+   * export's handles on a task's parts (`data-part`) and state (`data-on`,
+   * `data-done`, `data-person`). Part of the grouping key, so a part is its
+   * own sibling group under the element's own `data-el`. Absent everywhere
+   * else, which keeps every other picture byte-identical.
+   */
+  attrs?: Readonly<Record<string, string>>;
 }
 
 export type DrawCmd = RawDrawCmd & { tag?: DrawTag };
@@ -543,7 +586,14 @@ type RawDrawCmd =
        */
       halo?: { color: string; width: number };
     }
-  | { op: "grid"; x: number; y: number; w: number; h: number; step: number; color: string };
+  | { op: "grid"; x: number; y: number; w: number; h: number; step: number; color: string }
+  /**
+   * A field row's footprint, drawing nothing: the SVG backend writes an
+   * invisible `<rect data-field>` the interactive HTML export clicks and
+   * marks rows by; the canvas backend skips it. Emitted only under
+   * `EmitOptions.fieldHits`, so every other export is unchanged.
+   */
+  | { op: "hit"; x: number; y: number; w: number; h: number; field: string };
 
 // ─── Shared approximate text metrics ─────────────────────────────────────────
 
@@ -753,6 +803,25 @@ function layout(template: DiagramTemplate, containerKinds?: readonly string[]): 
   };
 }
 
+/**
+ * What an export of this document draws, by the ids its SVG groups carry
+ * (`node:<id>`, `edge:<id>`): the nodes placed, and each line with the ends
+ * it is DRAWN between — a line re-routed onto a folded group's chip names
+ * the chip, not the table inside it. The interactive HTML export maps the
+ * document onto the picture with it, so it reads the emitter's own layout
+ * rather than restating its visibility and collapse rules.
+ */
+export function drawnElements(
+  template: DiagramTemplate,
+  containerKinds?: readonly string[],
+): { nodes: string[]; edges: Array<{ id: string; source: string; target: string }> } {
+  const { placed, edges } = layout(template, containerKinds);
+  return {
+    nodes: placed.map((p) => p.node.id),
+    edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+  };
+}
+
 const defaultRoutingOf = (template: DiagramTemplate) => resolveRouting(template.meta?.routing);
 
 function zoneOutlineAbs(zone: DiagramZone): Array<[number, number]> | null {
@@ -802,6 +871,20 @@ export interface EmitOptions {
    * Ignored in technical, which never had one.
    */
   gradients?: boolean;
+  /**
+   * Emit a `hit` command per field row (see the op), so the interactive HTML
+   * export can pin, mark and open a row. Off by default: a picture has no
+   * use for an invisible rectangle per column.
+   */
+  fieldHits?: boolean;
+  /**
+   * Draw tasks so the interactive HTML export can change them in the page:
+   * the done fade, the strike and the corner check's three faces (open,
+   * blocked, done) become parts of their own (`data-part`), each shown or hidden by state,
+   * and the People legend's rows become targets. Off by default: a picture
+   * shows one state and draws it baked in.
+   */
+  taskHits?: boolean;
 }
 
 /**
@@ -814,10 +897,19 @@ export interface EmitOptions {
 export interface PictureOptions {
   mode?: string;
   gradients?: boolean;
+  /** See `EmitOptions.fieldHits` — the interactive HTML export's row targets. */
+  fieldHits?: boolean;
+  /** See `EmitOptions.taskHits` — the interactive HTML export's task parts. */
+  taskHits?: boolean;
 }
 
 export function emitOptions(opts: PictureOptions): EmitOptions {
-  return { mode: resolveStudioMode(opts.mode), gradients: opts.gradients !== false };
+  return {
+    mode: resolveStudioMode(opts.mode),
+    gradients: opts.gradients !== false,
+    ...(opts.fieldHits ? { fieldHits: true } : {}),
+    ...(opts.taskHits ? { taskHits: true } : {}),
+  };
 }
 
 export function emitTemplate(
@@ -839,6 +931,38 @@ export function emitTemplate(
     ...relationsUsed.map((r) => r.relation).filter((id) => !registry.relationOrder.includes(id)),
   ].map((id) => ({ relation: id, count: relationsUsed.find((r) => r.relation === id)!.count }));
   const b = templateBounds(template, { onlyVisible: true, containerKinds: registry.containerKinds });
+  // The task graph: who waits on whom, and the People key. A picture has no
+  // hover, so dependencies are drawn like any line and no person is picked.
+  const blocked = blockedTasks(template);
+  const people = taskAssignees(template);
+  // The plan's state for the whole picture — what the editor's cards,
+  // frames and legend show (see contract/tasks.ts).
+  const ready = readyTasks(template);
+  const overdue = overdueWork(template);
+  const workDoneMap = workDone(template);
+  const rollups = taskRollups(template);
+  const plan = planProgress(template);
+  const workload = new Map(taskWorkload(template).map((w) => [w.name, w]));
+  const hasPlan = template.nodes.some(isWorkItem);
+  const planStates = hasPlan
+    ? [
+        ready.size ? `${ready.size} READY` : "",
+        blocked.size ? `${blocked.size} BLOCKED` : "",
+        (() => {
+          const n = template.nodes.filter((m) => m.kind === TASK_KIND && overdue.has(m.id)).length;
+          return n ? `${n} OVERDUE` : "";
+        })(),
+      ].filter(Boolean).join(" · ")
+    : "";
+  // The canvas's people colours, picked for this page: the light step on a
+  // light export, the dark one on a dark export (the canvas lets the
+  // browser's `light-dark()` choose the same way).
+  const swatches = assigneeSwatches(people.map((p) => p.name));
+  const lightPage = isLightPalette(palette);
+  const assigneeInk = (name: string) => {
+    const swatch = swatches.get(name) ?? assigneeSwatch(name);
+    return lightPage ? swatch.light : swatch.dark;
+  };
 
   // The page's chrome — legend, title block, version tag — is drawn in
   // RESERVED margin rather than over the drawing. A 150px legend box inside a
@@ -851,12 +975,16 @@ export function emitTemplate(
   const tagW = tag ? approxTextWidth(tag, 10, skin.chipFont) + 20 : 0;
   // One box for both keys — the infra providers, then the relationship kinds
   // — with a title row per section it shows and a gap between two.
-  const legendSections = (legend.length ? 1 : 0) + (relations.length ? 1 : 0);
+  // The Plan section: a progress row, and a row naming what's ready,
+  // blocked and overdue (always kept in an interactive page, which changes it).
+  const planRows = hasPlan ? (plan.tasks ? 1 : 0) + (planStates || opts.taskHits ? 1 : 0) : 0;
+  const legendSections =
+    (legend.length ? 1 : 0) + (relations.length ? 1 : 0) + (planRows ? 1 : 0) + (people.length ? 1 : 0);
   const legendH = legendSections
     ? LEGEND_PAD * 2 +
       legendSections * LEGEND_TITLE_H +
-      (legend.length + relations.length) * LEGEND_ROW_H +
-      (legendSections > 1 ? LEGEND_SECTION_GAP : 0)
+      (legend.length + relations.length + planRows + people.length) * LEGEND_ROW_H +
+      Math.max(0, legendSections - 1) * LEGEND_SECTION_GAP
     : 0;
   // A top-right tag shares the corner with the legend, so it queues below it.
   const tagOffsetY =
@@ -884,8 +1012,10 @@ export function emitTemplate(
   const nodeDates = effectiveNodeDates(template);
   const dayOf = (date?: string) => (date ? dateToDay(date) : undefined);
   /** Stamp everything pushed since `start` as belonging to one element. */
-  const stamp = (start: number, id: string, day?: number) => {
-    for (let i = start; i < cmds.length; i++) cmds[i].tag ??= { id, ...(day !== undefined ? { day } : {}) };
+  const stamp = (start: number, id: string, day?: number, attrs?: DrawTag["attrs"]) => {
+    for (let i = start; i < cmds.length; i++) {
+      cmds[i].tag ??= { id, ...(day !== undefined ? { day } : {}), ...(attrs ? { attrs } : {}) };
+    }
   };
 
   /**
@@ -933,8 +1063,8 @@ export function emitTemplate(
     else deferred.set(band, chunk);
   };
   /** Stamp a leaf and file it under its band — every exit of the leaf loop. */
-  const endLeaf = (start: number, node: DiagramNode) => {
-    stamp(start, `node:${node.id}`, dayOf(nodeDates.get(node.id)));
+  const endLeaf = (start: number, node: DiagramNode, attrs?: DrawTag["attrs"]) => {
+    stamp(start, `node:${node.id}`, dayOf(nodeDates.get(node.id)), attrs);
     defer(bandOf(node.id), start);
   };
 
@@ -1050,6 +1180,32 @@ export function emitTemplate(
     cmds.push({ op: "text", x: x + 7, y: y + 11.5, text: team, size: 9, font: skin.chipFont, weight: 600, color: c });
   };
 
+  // A container's task roll-up (`.as-rollup`): a bar and "8/21 pts", warn
+  // past its capacity. In an interactive page it is a part the page rewrites
+  // as checks change — the bar's geometry rides on the group for that.
+  const warnInk = palette.warn ?? "#fa8072";
+  const rollupText = (r: TaskRollup) => `${rollupLabel(r)}${r.capacity !== undefined ? ` · cap ${r.capacity}` : ""}`;
+  // Sized for the widest the label can get (everything done), so a live page
+  // counting up never spills out of the pill.
+  const rollupW = (r: TaskRollup) =>
+    6 + 30 + 5 + approxTextWidth(rollupText({ ...r, done: r.tasks, donePoints: r.points }), 9, skin.chipFont) + 7;
+  const pushRollup = (containerId: string, r: TaskRollup, x: number, y: number) => {
+    const from = cmds.length;
+    cmds.push({ op: "path", d: roundedRectPath(x, y, rollupW(r), 16, 8), fill: palette.surface, fillAlpha: 0.85, stroke: palette.border, strokeAlpha: 0.6, strokeWidth: 1 });
+    cmds.push({ op: "path", d: roundedRectPath(x + 6, y + 6, 30, 4, 2), fill: palette.textDim, fillAlpha: 0.25 });
+    cmds.push({ op: "path", d: roundedRectPath(x + 6, y + 6, Math.max(0.01, 30 * rollupFraction(r)), 4, 2), fill: r.over ? warnInk : "#16a34a" });
+    cmds.push({ op: "text", x: x + 41, y: y + 11.5, text: rollupText(r), size: 9, font: skin.chipFont, weight: 600, color: r.over ? warnInk : palette.textDim });
+    if (opts.taskHits) {
+      const day = dayOf(nodeDates.get(containerId));
+      const tag: DrawTag = {
+        id: `node:${containerId}`,
+        ...(day !== undefined ? { day } : {}),
+        attrs: { "data-part": "rollup", "data-on": "", "data-bar": `${x + 6},${y + 6},30,4` },
+      };
+      for (let i = from; i < cmds.length; i++) cmds[i].tag = tag;
+    }
+  };
+
   // Expanded container boundaries. Collapsed chips paint later, with the
   // leaves — they are solid cards, and edges travel under cards, not over.
   for (const { node, box, chip } of placed) {
@@ -1137,7 +1293,12 @@ export function emitTemplate(
       pushDateChip(node.date, cursor, box.y + 4, isOverdue(node.date, node.status));
       cursor += dateChipW(node.date) + 6;
     }
-    if (node.team) pushTeamPill(node.team, cursor, box.y + 3);
+    if (node.team) {
+      pushTeamPill(node.team, cursor, box.y + 3);
+      cursor += teamPillW(node.team) + 6;
+    }
+    const frameRollup = rollups.get(node.id);
+    if (frameRollup) pushRollup(node.id, frameRollup, cursor, box.y + 3);
     stamp(nodeStart, `node:${node.id}`, dayOf(nodeDates.get(node.id)));
   }
 
@@ -1344,6 +1505,11 @@ export function emitTemplate(
         const shift = node.date ? dateChipW(node.date) + 6 : 0;
         pushTeamPill(node.team, box.x + box.width - teamPillW(node.team) - 8 - shift, box.y + (box.height - 16) / 2);
       }
+      const chipRollup = rollups.get(node.id);
+      if (chipRollup) {
+        const shift = (node.date ? dateChipW(node.date) + 6 : 0) + (node.team ? teamPillW(node.team) + 6 : 0);
+        pushRollup(node.id, chipRollup, box.x + box.width - rollupW(chipRollup) - 8 - shift, box.y + (box.height - 16) / 2);
+      }
       endLeaf(leafStart, node);
       continue;
     }
@@ -1416,7 +1582,24 @@ export function emitTemplate(
     // the heavy construction dash; `dark` gets a hazard-tape ring on top.
     const status = node.status;
     const statusDash = statusDashOf(status);
-    const dim = statusDimOf(status);
+    // A finished task recedes like the canvas's `.as-node--done`.
+    const isTask = node.kind === TASK_KIND;
+    const done = isTask && !!node.done;
+    const waitingOn = isTask && !done ? blocked.get(node.id) : undefined;
+    // An interactive export (`taskHits`) changes done-ness in the page, so it
+    // draws the body as an open task and leaves the fade, the strike and the
+    // check's three faces to parts the page shows and hides.
+    const interactive = !!opts.taskHits && isTask;
+    const isMilestone = node.kind === MILESTONE_KIND;
+    const isWork = isTask || isMilestone;
+    // Work an interactive page can change: a task's check, and everything a
+    // check moves — another task's check going blocked or open, a stage, a
+    // milestone's Reached, a date gone late.
+    const live = !!opts.taskHits && isWork;
+    const reached = isMilestone && !!workDoneMap.get(node.id);
+    const dim = statusDimOf(status) * (done && !interactive ? 0.55 : 1);
+    /** Parts an interactive page shows by state — pushed at the end of the leaf. */
+    const liveParts: Array<{ name: string; on: boolean; draw: () => void }> = [];
 
     const sil = silhouettePath(def.shape ?? "card", box.x + 0.75, box.y + 0.75, box.width - 1.5, box.height - 1.5, {
       radius: skin.radius,
@@ -1500,7 +1683,9 @@ export function emitTemplate(
 
     const textW = box.width - (textX - box.x) - 10;
     const kindText = def.label.toUpperCase();
-    const statusText = status ? ` · ${status.toUpperCase()}` : "";
+    // After the kind: the lifecycle status, then a task's estimate.
+    const pointsText = isTask && node.storyPoints !== undefined ? formatPoints(node.storyPoints).toUpperCase() : "";
+    const eyebrowTail = [status ? status.toUpperCase() : "", pointsText].filter(Boolean).join(" · ");
 
     // Text layout — mirrors the CSS classes ShapeNode applies, so an export
     // reproduces what the user arranged rather than a second interpretation.
@@ -1518,8 +1703,13 @@ export function emitTemplate(
     const authorSize = node.fontSize && node.fontSize !== DEFAULT_FONT_SIZE ? node.fontSize : undefined;
     const fontSize = authorSize ?? (skin.marketing && !node.wrap ? skin.titleSize : DEFAULT_FONT_SIZE);
     // Marketing tucks the kind away — the icon has already said it — and keeps
-    // the row only for a lifecycle status, which the icon has not.
-    const eyebrow = skin.kindEyebrow || !!status;
+    // the row only for a lifecycle status, which the icon has not, or a pill.
+    // A live milestone keeps its row even before it is reached: the page can
+    // reach it at any moment, and its pill needs the row. (The canvas collapses
+    // an empty row in marketing — a small, deliberate difference, so reaching
+    // it in the page never lands the pill on the title.)
+    const hasPills = isTask ? !!node.priority || !!node.stage : reached;
+    const eyebrow = skin.kindEyebrow || !!eyebrowTail || hasPills || (live && isMilestone);
     const align = node.textAlign ?? "left";
     const anchor = align === "center" ? "middle" : align === "right" ? "end" : "start";
     const anchorX = align === "center" ? textX + textW / 2 : align === "right" ? textX + textW : textX;
@@ -1586,7 +1776,8 @@ export function emitTemplate(
     // The kind half of the eyebrow, dropped in marketing; the status half is
     // never dropped, in either mode.
     const eyebrowKind = skin.kindEyebrow ? kindText : "";
-    const eyebrowSep = skin.kindEyebrow ? statusText : status ? status.toUpperCase() : "";
+    const tail = eyebrowTail;
+    const eyebrowSep = skin.kindEyebrow ? (tail ? ` · ${tail}` : "") : tail;
     const eyebrowFont = skin.marketing ? "sans" : "mono";
     if (eyebrow && status === "deprecated") {
       // The status token gets the editor's salmon; the node's own dimming
@@ -1611,16 +1802,73 @@ export function emitTemplate(
           ...(eyebrowKind ? {} : aligned),
         });
       }
-    } else if (eyebrow) {
+    } else if (eyebrow && (eyebrowKind || eyebrowSep)) {
       cmds.push({ op: "text", x: anchorX, y: ty(16), text: eyebrowKind + eyebrowSep, size: 9, font: eyebrowFont, weight: skin.marketing ? 600 : undefined, color: accent, alpha: 0.8 * dim, ...aligned });
+    }
+    // After the run, the canvas's pills in its order: a milestone's Reached,
+    // or a task's priority then its stage, each a faint tint of its own ink.
+    // Reached flips in a live page, but a milestone has nothing after it to
+    // move. Whether a task can move is its corner check's to say.
+    const pillRun = eyebrowKind + eyebrowSep;
+    const pillRunW = pillRun ? approxTextWidth(pillRun, 9, eyebrowFont) : 0;
+    const pillY = ty(16);
+    // Pill labels are bold capitals: a sans run of them is far wider than the
+    // mean glyph approxTextWidth assumes (mono keeps its advance at any weight).
+    const pillW = (label: string) => (eyebrowFont === "sans" ? label.length * 9 * 0.72 : approxTextWidth(label, 9, "mono")) + 10;
+    const PRIORITY_INK: Record<string, string> = { p0: "#ef4444", p1: palette.overdue ?? "#f59e0b", p2: edgeHex.sky ?? "#38bdf8", p3: palette.textDim };
+    const STAGE_TEXT: Record<string, string> = { "in-progress": "IN PROGRESS", "in-review": "IN REVIEW" };
+    const STAGE_INK: Record<string, string> = { "in-progress": edgeHex.sky ?? "#38bdf8", "in-review": "#8b5cf6" };
+    const fixedPills: Array<{ label: string; ink: string; part?: { name: string; on: boolean } }> = [];
+    if (isTask && node.priority) fixedPills.push({ label: node.priority.toUpperCase(), ink: PRIORITY_INK[node.priority] ?? palette.textDim });
+    if (isTask && node.stage && (!done || interactive)) {
+      fixedPills.push({
+        label: STAGE_TEXT[node.stage] ?? node.stage.toUpperCase(),
+        ink: STAGE_INK[node.stage] ?? palette.textDim,
+        ...(interactive ? { part: { name: "stage", on: !done } } : {}),
+      });
+    }
+    const slot: Array<{ label: string; ink: string; name: string; on: boolean }> = [];
+    if (isMilestone) slot.push({ label: "REACHED", ink: "#16a34a", name: "reached", on: reached });
+    // A fixed picture draws the slot only when it's on; a live page always.
+    const slotShown = live ? slot : slot.filter((p) => p.on);
+    const slotW = slotShown.reduce((w, p) => Math.max(w, pillW(p.label)), 0);
+    const pillWidths = [...fixedPills.map((p) => pillW(p.label)), ...(slotShown.length ? [slotW] : [])];
+    const pillsW = pillWidths.reduce((w, x) => w + x, 0) + 4 * Math.max(0, pillWidths.length - 1);
+    let pillX =
+      align === "center"
+        ? pillRun ? anchorX + pillRunW / 2 + 6 : anchorX - pillsW / 2
+        : align === "right"
+          ? anchorX - (pillRun ? pillRunW + 6 : 0) - pillsW
+          : textX + (pillRun ? pillRunW + 6 : 0);
+    const pillAt = (label: string, ink: string, x: number) => () => {
+      cmds.push({ op: "path", d: roundedRectPath(x, pillY - 9, pillW(label), 12, 3), fill: ink, fillAlpha: 0.16 });
+      cmds.push({ op: "text", x: x + 5, y: pillY, text: label, size: 9, font: eyebrowFont, weight: 700, color: ink });
+    };
+    const drawSlot = () => {
+      for (const p of slotShown) {
+        const draw = pillAt(p.label, p.ink, pillX);
+        if (live) liveParts.push({ name: p.name, on: p.on, draw });
+        else draw();
+      }
+      if (slotShown.length) pillX += slotW + 4;
+    };
+    drawSlot();
+    for (const p of fixedPills) {
+      const draw = pillAt(p.label, p.ink, pillX);
+      if (p.part) liveParts.push({ ...p.part, draw });
+      else draw();
+      pillX += pillW(p.label) + 4;
     }
     titleLines.forEach((line, i) =>
       cmds.push({ op: "text", x: anchorX, y: ty(TITLE_DY + i * lineH), text: line, size: fontSize, font: "sans", weight: 600, color: palette.text, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
     );
-    if (status === "retired") {
-      const strikeW = approxTextWidth(titleLines[0] ?? "", fontSize, "sans");
-      const strikeX = align === "center" ? anchorX - strikeW / 2 : align === "right" ? anchorX - strikeW : textX;
-      cmds.push({ op: "path", d: `M ${strikeX} ${ty(TITLE_DY - 4.5)} L ${strikeX + strikeW} ${ty(TITLE_DY - 4.5)}`, stroke: palette.text, strokeAlpha: dim, strokeWidth: 1 });
+    const strikeW = approxTextWidth(titleLines[0] ?? "", fontSize, "sans");
+    const strikeX = align === "center" ? anchorX - strikeW / 2 : align === "right" ? anchorX - strikeW : textX;
+    const strikeD = `M ${strikeX} ${ty(TITLE_DY - 4.5)} L ${strikeX + strikeW} ${ty(TITLE_DY - 4.5)}`;
+    // Retired is a status, struck in every picture; done is struck here only
+    // when the picture is fixed (an interactive task strikes as a part).
+    if (status === "retired" || (done && !interactive)) {
+      cmds.push({ op: "path", d: strikeD, stroke: palette.text, strokeAlpha: dim, strokeWidth: 1 });
     }
     descLines.forEach((line, i) =>
       cmds.push({ op: "text", x: anchorX, y: ty(DESC_DY + titleOverflow + i * skin.descLineH), text: line, size: skin.descSize, font: "sans", color: skin.descColor, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
@@ -1725,6 +1973,10 @@ export function emitTemplate(
             ...(rowDim < 1 ? { alpha: rowDim } : {}),
           });
         }
+        // Last, so it sits over the row's text and takes the pointer.
+        if (opts.fieldHits) {
+          cmds.push({ op: "hit", x: box.x + 1, y: rowTop, w: Math.max(0, box.width - 2), h: FIELD_ROW_H, field: field.id });
+        }
       });
     }
 
@@ -1740,21 +1992,107 @@ export function emitTemplate(
       const below = rows.length
         ? listTop + rows.length * FIELD_ROW_H + 2
         : ty(DESC_DY - 9 + descLines.length * skin.descLineH);
-      pushDateChip(node.date, textX, below, isOverdue(node.date, node.status));
+      // Work's date is a due date: late once it passes unfinished, whatever
+      // the lifecycle status says. A live page decides "late" itself, on the
+      // day it is opened, so both chips go in as parts.
+      if (live) {
+        const date = node.date;
+        const late = overdue.has(node.id);
+        liveParts.push({ name: "due", on: !late, draw: () => pushDateChip(date, textX, below, false) });
+        liveParts.push({ name: "due-late", on: late, draw: () => pushDateChip(date, textX, below, true) });
+      } else {
+        pushDateChip(node.date, textX, below, isWork ? overdue.has(node.id) : isOverdue(node.date, node.status));
+      }
       dateBottom = below + DATE_CHIP_H;
     }
     // Bottom-right, riding the edge — mirrors the editor's placement, unless
     // the text ran long enough that the date chip is already there. Two pieces
     // of chrome printed on top of each other is worse than one sitting a few
     // pixels lower than the edge it usually rides.
-    if (node.team) {
+    if (hasAssigneeStrip(node)) {
+      // Tabs hanging from the bottom edge (`.as-node__assignees`): flat on
+      // top, rounded below, a colour per person — the same names the canvas
+      // fits, by the same measurement. The team pill joins the strip's end.
+      const stripY = Math.max(box.y + box.height, dateBottom + 2);
+      const teamW = node.team ? teamPillW(node.team) + ASSIGNEE_GAP : 0;
+      const { shown, more } = fitChips(node.assignees!, Math.max(0, box.width - 20 - teamW));
+      let tx = box.x + 10;
+      const tab = (text: string, ink: string) => {
+        const w = assigneeChipWidth(text);
+        const d = roundedRectCorners(tx, stripY - 1, w, ASSIGNEE_STRIP_HEIGHT - 2, { bl: 6, br: 6 });
+        cmds.push({ op: "path", d, fill: palette.surface });
+        cmds.push({ op: "path", d, fill: ink, fillAlpha: 0.16 * dim, stroke: ink, strokeAlpha: 0.55 * dim, strokeWidth: 1 });
+        cmds.push({ op: "text", x: tx + 8, y: stripY + 10.5, text, size: ASSIGNEE_FONT, font: "sans", weight: 600, color: ink, ...(dim < 1 ? { alpha: dim } : {}) });
+        tx += w + ASSIGNEE_GAP;
+      };
+      for (const name of shown) tab(name, assigneeInk(name));
+      if (more) tab(`+${more}`, palette.textDim);
+      if (node.team) pushTeamPill(node.team, box.x + box.width - 10 - teamPillW(node.team), stripY + 2);
+    } else if (node.team) {
       pushTeamPill(
         node.team,
         box.x + box.width - teamPillW(node.team) - 6,
         Math.max(box.y + box.height - 8, dateBottom + 2),
       );
     }
-    endLeaf(leafStart, node);
+    // The corner check (`.as-task__check`), riding the top edge 8px in from
+    // the corner. Never dimmed: done is the news, not the noise.
+    const cx = box.x + box.width - 19;
+    const cy = box.y;
+    const pushCheckDone = () => {
+      cmds.push({ op: "circle", cx, cy, r: 11, fill: "#16a34a", stroke: "#15803d", strokeWidth: 1.5 });
+      cmds.push({
+        op: "path",
+        d: `M ${cx - 4.5} ${cy + 0.5} L ${cx - 1.2} ${cy + 3.8} L ${cx + 4.8} ${cy - 2.8}`,
+        stroke: "#ffffff",
+        strokeWidth: 2.5,
+        round: true,
+      });
+    };
+    const pushCheckOpen = () => {
+      cmds.push({ op: "circle", cx, cy, r: 11, fill: palette.surface, stroke: palette.border, strokeWidth: 1.5 });
+    };
+    // `.as-task__check--blocked`: the open circle struck through in warn ink.
+    const pushCheckBlocked = () => {
+      cmds.push({ op: "circle", cx, cy, r: 11, fill: palette.surface, stroke: mix(warnInk, palette.border, 0.65), strokeWidth: 1.5 });
+      // Ring to ring, like the canvas's ⊘: the stroke-centred ring's inner edge sits at 10.25.
+      cmds.push({ op: "path", d: `M ${cx - 7} ${cy + 7} L ${cx + 7} ${cy - 7}`, stroke: warnInk, strokeWidth: 1.75, round: true });
+    };
+    if (live) {
+      // Every state a task or milestone can take in the page, each its own part — a
+      // sibling group under the node's own `data-el` (so the scrubber, the
+      // explorer and the paths player still treat it as the node), shown by
+      // `data-on`. Pushed last, together, so the node's body stays one group
+      // and its band carries the parts with it. Stamped with the export's
+      // state, so the page is right before its script runs — and where a
+      // preview strips scripts.
+      const day = dayOf(nodeDates.get(node.id));
+      const part = (name: string, on: boolean, draw: () => void) => {
+        const from = cmds.length;
+        draw();
+        const tag: DrawTag = {
+          id: `node:${node.id}`,
+          ...(day !== undefined ? { day } : {}),
+          attrs: { "data-part": name, ...(on ? { "data-on": "" } : {}) },
+        };
+        for (let i = from; i < cmds.length; i++) cmds[i].tag = tag;
+      };
+      for (const p of liveParts) part(p.name, p.on, p.draw);
+      if (interactive) {
+        // The strike carries the done fade itself: no class on the body reaches it.
+        part("strike", done, () =>
+          cmds.push({ op: "path", d: strikeD, stroke: palette.text, strokeAlpha: statusDimOf(status) * 0.55, strokeWidth: 1 }),
+        );
+        part("check-open", !done && !waitingOn, pushCheckOpen);
+        part("check-blocked", !done && !!waitingOn, pushCheckBlocked);
+        part("check-done", done, pushCheckDone);
+      }
+    } else if (isTask) {
+      if (done) pushCheckDone();
+      else if (waitingOn) pushCheckBlocked();
+      else pushCheckOpen();
+    }
+    endLeaf(leafStart, node, interactive && done ? { "data-done": "" } : undefined);
   }
 
   // Raised bands, in order — each bucket already holds its edges before its
@@ -1800,7 +2138,7 @@ export function emitTemplate(
         if (count > 1) countAt(cursor, count);
         cursor += rowH;
       }
-      if (relations.length) cursor += LEGEND_SECTION_GAP;
+      if (relations.length || planRows || people.length) cursor += LEGEND_SECTION_GAP;
     }
     // The relationships key: each kind's line drawn as the sample — its dash,
     // its colour, its end glyphs through the same head-path maths as the
@@ -1827,6 +2165,66 @@ export function emitTemplate(
         }
         cmds.push({ op: "text", x: x0 + 38, y: cursor + 13, text: def.label, size: 11, font: "sans", color: palette.text });
         if (relations.length > 1 || count > 1) countAt(cursor, count);
+        cursor += rowH;
+      }
+      if (planRows || people.length) cursor += LEGEND_SECTION_GAP;
+    }
+    // The plan at a glance, as the canvas legend shows it: progress as a bar
+    // and a count, and what's ready, blocked and overdue. A live page
+    // rewrites both rows as checks change — the bar's geometry rides along.
+    if (planRows) {
+      cmds.push({ op: "text", x: lx + LEGEND_PAD, y: cursor + 9, text: "PLAN", size: 9, font: skin.chipFont, weight: 600, color: palette.textDim });
+      cursor += LEGEND_TITLE_H;
+      const planStart = cmds.length;
+      let bar = "";
+      if (plan.tasks) {
+        const label = rollupLabel(plan);
+        const barW = Math.max(20, boxW - LEGEND_PAD * 2 - approxTextWidth(label, 10, skin.chipFont) - 10);
+        const bx = lx + LEGEND_PAD;
+        const by = cursor + 7;
+        bar = `${bx},${by},${barW},5`;
+        cmds.push({ op: "path", d: roundedRectPath(bx, by, barW, 5, 2.5), fill: palette.textDim, fillAlpha: 0.25 });
+        cmds.push({ op: "path", d: roundedRectPath(bx, by, Math.max(0.01, barW * rollupFraction(plan)), 5, 2.5), fill: "#16a34a" });
+        cmds.push({ op: "text", x: lx + boxW - LEGEND_PAD, y: cursor + 13, text: label, size: 10, font: skin.chipFont, color: palette.textFaint, anchor: "end" });
+        cursor += rowH;
+      }
+      if (planStates || opts.taskHits) {
+        cmds.push({ op: "text", x: lx + LEGEND_PAD, y: cursor + 13, text: planStates, size: 9, font: skin.chipFont, weight: 600, color: palette.textDim });
+        cursor += rowH;
+      }
+      if (opts.taskHits) {
+        const tag: DrawTag = { id: "plan:", attrs: { "data-plan": "", ...(bar ? { "data-bar": bar } : {}) } };
+        for (let i = planStart; i < cmds.length; i++) cmds[i].tag = tag;
+      }
+      if (people.length) cursor += LEGEND_SECTION_GAP;
+    }
+    // Everyone on a task: a round swatch in their colour, their name, and
+    // the open work they hold — points when the plan estimates, else tasks —
+    // against their capacity when one is set (warn past it).
+    if (people.length) {
+      cmds.push({ op: "text", x: lx + LEGEND_PAD, y: cursor + 9, text: "PEOPLE", size: 9, font: skin.chipFont, weight: 600, color: palette.textDim });
+      cursor += LEGEND_TITLE_H;
+      const byPoints = plan.points > 0;
+      for (const { name } of people) {
+        const c = assigneeInk(name);
+        const load = workload.get(name);
+        const held = load ? (byPoints ? load.openPoints : load.openTasks) : 0;
+        const countText = `${byPoints && load?.capacity !== undefined ? `${held}/${load.capacity}` : held}${byPoints ? " pts" : ""}`;
+        const rowStart = cmds.length;
+        // An interactive export makes the row a target: a full-row hit path
+        // first (transparent, but painted, so it takes the pointer — and the
+        // page tints it when the person is in focus).
+        if (opts.taskHits) {
+          cmds.push({ op: "path", d: roundedRectPath(lx + LEGEND_PAD - 4, cursor, boxW - LEGEND_PAD * 2 + 8, rowH, 4), fill: palette.text, fillAlpha: 0 });
+        }
+        cmds.push({ op: "path", d: ellipsePath(lx + LEGEND_PAD + 5.5, cursor + 9, 5.5, 5.5), fill: c, fillAlpha: 0.3, stroke: c, strokeAlpha: 0.7, strokeWidth: 1 });
+        const nameW = boxW - LEGEND_PAD * 2 - 18 - approxTextWidth(countText, 10, skin.chipFont) - 6;
+        cmds.push({ op: "text", x: lx + LEGEND_PAD + 18, y: cursor + 13, text: ellipsise(name, 11, "sans", nameW), size: 11, font: "sans", color: palette.text });
+        cmds.push({ op: "text", x: lx + boxW - LEGEND_PAD, y: cursor + 13, text: countText, size: 10, font: skin.chipFont, ...(load?.over ? { weight: 700 } : {}), color: load?.over ? warnInk : palette.textFaint, anchor: "end" });
+        if (opts.taskHits) {
+          const tag: DrawTag = { id: `person:${name}`, attrs: { "data-person": "" } };
+          for (let i = rowStart; i < cmds.length; i++) cmds[i].tag = tag;
+        }
         cursor += rowH;
       }
     }
@@ -2013,6 +2411,8 @@ export function drawToCanvas(ctx: CanvasRenderingContext2D, cmds: DrawCmd[]): vo
         ctx.restore();
         break;
       }
+      case "hit":
+        break; // a pointer target for the HTML page — nothing to paint
     }
   }
 }
@@ -2054,7 +2454,15 @@ export function drawToSvg(cmds: DrawCmd[], opts: { gridId?: string } = {}): stri
   // The emitters push each element's commands contiguously, which is what
   // makes run-length grouping sufficient.
   let openTag: string | null = null;
-  const keyOf = (tag?: DrawTag) => (tag ? `${tag.id}\u0000${tag.day ?? ""}` : null);
+  const attrsOf = (tag: DrawTag) =>
+    tag.attrs
+      ? Object.keys(tag.attrs)
+          .filter((k) => /^data-[a-z-]+$/.test(k))
+          .sort()
+          .map((k) => ` ${k}="${esc(tag.attrs![k]!)}"`)
+          .join("")
+      : "";
+  const keyOf = (tag?: DrawTag) => (tag ? `${tag.id}\u0000${tag.day ?? ""}\u0000${attrsOf(tag)}` : null);
   for (const cmd of cmds) {
     const key = keyOf(cmd.tag);
     if (key !== openTag) {
@@ -2062,7 +2470,7 @@ export function drawToSvg(cmds: DrawCmd[], opts: { gridId?: string } = {}): stri
       if (key !== null) {
         const tag = cmd.tag!;
         out.push(
-          `<g class="bd-el" data-el="${esc(tag.id)}"${tag.day !== undefined ? ` data-day="${tag.day}"` : ""}>`,
+          `<g class="bd-el" data-el="${esc(tag.id)}"${tag.day !== undefined ? ` data-day="${tag.day}"` : ""}${attrsOf(tag)}>`,
         );
       }
       openTag = key;
@@ -2145,6 +2553,13 @@ export function drawToSvg(cmds: DrawCmd[], opts: { gridId?: string } = {}): stri
           );
         }
         out.push(`<text x="${cmd.x}" y="${cmd.y}" ${attrs}>${esc(cmd.text)}</text>`);
+        break;
+      }
+      case "hit": {
+        // Transparent, not `none`: an unpainted fill takes no pointer events.
+        out.push(
+          `<rect class="bd-row" data-field="${esc(cmd.field)}" x="${cmd.x}" y="${cmd.y}" width="${cmd.w}" height="${cmd.h}" fill="transparent"/>`,
+        );
         break;
       }
     }

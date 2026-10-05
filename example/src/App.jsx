@@ -40,7 +40,12 @@ import {
 import "@mosphere/better-diagrams/styles.css";
 import { registry } from "./extensions.js";
 import {
+  LINKED_PREFIX,
+  SCRATCH,
+  flushTemplate,
+  isSavable,
   listTemplates,
+  onTemplateChange,
   probeTemplates,
   readFolderTree,
   readTemplate,
@@ -67,6 +72,40 @@ const nextFileId = () => `f_${Date.now().toString(36)}${(fileCounter++).toString
 const VALIDATE = { knownKinds: Object.keys(registry.nodeKinds) };
 const validateDoc = (kind, doc) =>
   kind === "sequence" ? validateSequence(doc) : validateTemplate(doc, VALIDATE);
+
+/**
+ * Where each workspace file lives on disk while developing: the file it is
+ * bound to (`disk` — it was opened from there, or changed there), else a
+ * scratch file named after it. Bound files claim their paths first, so an
+ * unbound file whose name slugs to a claimed path is suffixed with its id
+ * rather than writing over another file's disk copy.
+ */
+function diskPaths(files) {
+  const paths = new Map();
+  const claimed = new Set();
+  for (const f of files) {
+    if (!f.disk) continue;
+    paths.set(f.id, f.disk);
+    claimed.add(`${f.disk.folder}/${f.disk.file}`);
+  }
+  for (const f of files) {
+    if (f.disk) continue;
+    let file = templateFile(f.name, f.id);
+    if (claimed.has(`${SCRATCH}/${file}`)) file = templateFile(`${f.name}-${f.id}`, f.id);
+    claimed.add(`${SCRATCH}/${file}`);
+    paths.set(f.id, { folder: SCRATCH, file });
+  }
+  return paths;
+}
+
+/**
+ * A disk file as a person reads it in a toast: a linked folder by its path
+ * (`~/work/tracker/plan.json`), a repo folder by its name (`examples/…`).
+ */
+function whereIs(linked, folder, file) {
+  const link = linked?.find((l) => l.folder === folder);
+  return `${link ? link.display : folder}/${file}`;
+}
 
 /** Nothing in it yet — deleting is safe, and the mode switch flips in place. */
 const isBlank = (kind, doc) =>
@@ -506,27 +545,138 @@ export default function App() {
   // The point is that the diagrams you make are FILES — readable, diffable,
   // committable — rather than rows in localStorage nobody can see.
 
-  /** null until probed; then `{ examples, scratch }` — the dev server's folders. */
+  /**
+   * null until probed AND reconciled; then `{ examples, scratch, folders, linked }` — the dev
+   * server's folders, `linked` being `[{ folder, name, dir, display }]` (see templates.js).
+   */
   const [templatesDir, setTemplatesDir] = useState(null);
   const [savedTemplates, setSavedTemplates] = useState([]);
-  /** id → what we last wrote for it, so an idle app writes nothing at all. */
+  /** id → the disk file it was last synced with and that document's JSON, so an idle app writes nothing. */
   const writtenRef = useRef(new Map());
+  /** The workspace as of the last render — for the async sync paths below. */
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
 
   const refreshTemplates = useCallback(async () => {
     setSavedTemplates(await listTemplates());
   }, []);
 
+  /**
+   * Adopt documents read from disk — the file on disk wins. Each adopted file
+   * is BOUND to the file it came from (`disk`), so a title changed on disk
+   * renames the workspace file without moving the file underneath it, and
+   * its next edit in the app saves straight back there. The sync record is
+   * set to the adopted document, so adopting writes nothing back: the file
+   * keeps the exact text its author wrote until someone edits it here.
+   */
+  const adoptFromDisk = useCallback(
+    (adopted) => {
+      if (!adopted.length) return;
+      const byId = new Map(adopted.map((a) => [a.id, a]));
+      for (const a of adopted) writtenRef.current.set(a.id, { ...a.path, json: JSON.stringify(a.doc) });
+      updateWorkspace((ws) => ({
+        ...ws,
+        files: ws.files.map((f) => {
+          const a = byId.get(f.id);
+          if (!a) return f;
+          const title = typeof a.doc.meta?.title === "string" && a.doc.meta.title.trim() ? a.doc.meta.title : f.name;
+          return { ...f, doc: a.doc, name: title, disk: a.path };
+        }),
+      }));
+    },
+    [updateWorkspace],
+  );
+
+  /**
+   * Read each file's disk copy and adopt whichever differ. Files with no disk
+   * copy yet are left for auto-save to write; files that already match just
+   * have their sync record set.
+   */
+  const reconcile = useCallback(
+    async (targets) => {
+      const adopted = [];
+      for (const { file, path } of targets) {
+        const raw = await readTemplate(path.folder, path.file);
+        if (!raw) continue;
+        let doc;
+        try {
+          doc = validateDoc(file.kind, raw);
+        } catch {
+          continue; // mid-save or hand-broken JSON: keep what the app has
+        }
+        const json = JSON.stringify(doc);
+        // Compared against the LIVE document, not the one this pass started
+        // from: an edit made while the read was in flight is newer than the
+        // record, and only a real disk change may replace it.
+        const live = workspaceRef.current.files.find((f) => f.id === file.id);
+        if (!live) continue;
+        if (json === JSON.stringify(live.doc)) {
+          writtenRef.current.set(file.id, { ...path, json });
+          continue;
+        }
+        adopted.push({ id: file.id, path, doc });
+      }
+      adoptFromDisk(adopted);
+      return adopted;
+    },
+    [adoptFromDisk],
+  );
+
   useEffect(() => {
     let live = true;
-    probeTemplates().then((probe) => {
+    probeTemplates().then(async (probe) => {
       if (!live || !probe) return;
-      setTemplatesDir(probe.dirs);
       setSavedTemplates(probe.templates);
+      // Disk wins at startup too. Auto-save stays off (no `templatesDir`)
+      // until this pass is done — otherwise it would write the workspace's
+      // stored copies over files another program changed while the app was
+      // closed, before the app had even looked at them.
+      const { files: current } = workspaceRef.current;
+      const paths = diskPaths(current);
+      await reconcile(current.map((file) => ({ file, path: paths.get(file.id) })));
+      if (!live) return;
+      const linked = probe.linked ?? [];
+      setTemplatesDir({ ...probe.dirs, linked });
+      // A file bound to a linked folder this server was started without can
+      // neither load nor save. Say so: its edits now live only here, and the
+      // disk copy replaces them once the folder is linked again (disk wins).
+      const stranded = current.filter(
+        (f) => f.disk?.folder.startsWith(LINKED_PREFIX) && !linked.some((l) => l.folder === f.disk.folder),
+      );
+      if (stranded.length) {
+        const dirs = [...new Set(stranded.map((f) => f.disk.display ?? f.disk.folder))];
+        toast.warning(`${stranded.map((f) => f.name).join(", ")} ${stranded.length === 1 ? "isn't" : "aren't"} synced to disk`, {
+          description: `Bound to ${dirs.join(", ")}, which this dev server isn't linking. Edits stay in this browser, and the file on disk replaces them once BD_LINKED_DIRS includes it again.`,
+          duration: 15_000,
+        });
+      }
     });
     return () => {
       live = false;
     };
-  }, []);
+  }, [reconcile]);
+
+  // Another program changed a template on disk: reload whichever open file
+  // is synced with it. The server never announces its own writes, and a file
+  // whose disk copy already matches is left alone, so the app's saves don't
+  // bounce back as reloads.
+  useEffect(() => {
+    if (!templatesDir) return undefined;
+    return onTemplateChange(async ({ folder, file: name }) => {
+      void refreshTemplates();
+      const { files: current } = workspaceRef.current;
+      const paths = diskPaths(current);
+      const targets = current
+        .filter((f) => paths.get(f.id)?.folder === folder && paths.get(f.id)?.file === name)
+        .map((f) => ({ file: f, path: paths.get(f.id) }));
+      if (!targets.length) return;
+      const adopted = await reconcile(targets);
+      for (const a of adopted) {
+        const file = workspaceRef.current.files.find((f) => f.id === a.id);
+        toast.info(`Reloaded ${file?.name ?? name} from disk`, { description: whereIs(templatesDir.linked, folder, name) });
+      }
+    });
+  }, [templatesDir, reconcile, refreshTemplates]);
 
   useEffect(() => {
     if (!templatesDir) return undefined;
@@ -537,38 +687,40 @@ export default function App() {
     // newer pass had written a just-created file — and delete it, because the
     // older list never had it. Once cancelled, the pass stops touching disk
     // and the ref; the pass for the new list redoes the work from what
-    // actually landed.
+    // actually landed. A reload from disk lands here as a change too, and
+    // cancels any write still waiting: the file on disk wins.
     let cancelled = false;
     const timer = setTimeout(async () => {
       let touched = false;
-      // Two files can carry the same name; their slugs must not collide, or
-      // one would silently overwrite the other on disk.
-      const claimed = new Map();
+      const paths = diskPaths(files);
+      const claimed = new Set([...paths.values()].map((p) => `${p.folder}/${p.file}`));
       for (const file of files) {
-        const base = templateFile(file.name, file.id);
-        const owner = claimed.get(base);
-        const name = owner && owner !== file.id ? templateFile(`${file.name}-${file.id}`, file.id) : base;
-        claimed.set(base, claimed.get(base) ?? file.id);
+        const path = paths.get(file.id);
         const json = JSON.stringify(file.doc);
         const before = writtenRef.current.get(file.id);
-        if (before?.file === name && before.json === json) continue;
+        const moved = before && (before.folder !== path.folder || before.file !== path.file);
+        if (before && !moved && before.json === json) continue;
         if (cancelled) return;
-        if (!(await writeTemplate(name, file.doc))) continue;
+        if (!(await writeTemplate(path.folder, path.file, file.doc))) continue;
         if (cancelled) return;
-        // A rename writes the new name and takes the old file with it, rather
-        // than leaving a stale twin behind.
-        if (before && before.file !== name) await removeTemplate(before.file);
+        // A rename of an unbound file writes the new name and takes the old
+        // scratch file with it, rather than leaving a stale twin behind.
+        if (moved && before.folder === SCRATCH && !claimed.has(`${before.folder}/${before.file}`)) {
+          await removeTemplate(before.file);
+        }
         if (cancelled) return;
-        writtenRef.current.set(file.id, { file: name, json });
+        writtenRef.current.set(file.id, { ...path, json });
         touched = true;
       }
-      // Deleted in the app ⇒ deleted on disk. The workspace is the authority
-      // while it is open; a file the user removed must not come back in the
-      // dropdown.
+      // Deleted in the app ⇒ deleted on disk — scratch only. The workspace is
+      // the authority while it is open; a file the user removed must not come
+      // back in the dropdown. A tracked example is never deleted.
       for (const [id, record] of [...writtenRef.current]) {
         if (files.some((f) => f.id === id)) continue;
         if (cancelled) return;
-        await removeTemplate(record.file);
+        if (record.folder === SCRATCH && !claimed.has(`${record.folder}/${record.file}`)) {
+          await removeTemplate(record.file);
+        }
         if (cancelled) return;
         writtenRef.current.delete(id);
         touched = true;
@@ -581,7 +733,32 @@ export default function App() {
     };
   }, [files, templatesDir, refreshTemplates]);
 
-  /** Load one back into the active file, the way the examples do. */
+  // Closing the tab inside the debounce would drop the last edit; hand the
+  // unsynced files to the browser to finish writing on the way out.
+  useEffect(() => {
+    if (!templatesDir) return undefined;
+    const flush = () => {
+      const { files: current } = workspaceRef.current;
+      const paths = diskPaths(current);
+      for (const file of current) {
+        const path = paths.get(file.id);
+        const before = writtenRef.current.get(file.id);
+        const json = JSON.stringify(file.doc);
+        if (before && before.folder === path.folder && before.file === path.file && before.json === json) continue;
+        flushTemplate(path.folder, path.file, file.doc);
+      }
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, [templatesDir]);
+
+  /**
+   * Open a template. A file from scratch or examples opens as its OWN
+   * workspace file, bound to that file on disk — edits save back to it and
+   * outside edits reload into it — or, if a workspace file is already bound
+   * to it, switches there. (Loading it over the active file would have
+   * thrown that file's content away.)
+   */
   const openTemplate = useCallback(
     async (entry) => {
       if (entry.folder === "folders") {
@@ -603,13 +780,39 @@ export default function App() {
         if (result.warnings.length) console.warn(`importFolder(${entry.file}):`, result.warnings);
         return;
       }
-      const doc = await readTemplate(entry.folder, entry.file);
-      if (!doc) return;
-      setActiveDoc(validateDoc(entry.kind, doc));
+      const raw = await readTemplate(entry.folder, entry.file);
+      if (!raw) return;
+      const kind = entry.kind === "sequence" ? "sequence" : "architecture";
+      const doc = validateDoc(kind, raw);
+      // A linked file's binding also keeps the folder's path, so a later
+      // session started without that link can say which folder it needs.
+      const link = templatesDir?.linked?.find((l) => l.folder === entry.folder);
+      const path = { folder: entry.folder, file: entry.file, ...(link ? { display: link.display } : {}) };
+      const where = whereIs(templatesDir?.linked, entry.folder, entry.file);
       setSettingsOpen(false);
-      toast.success(`Loaded ${entry.name}`, { description: `${entry.folder}/${entry.file}` });
+      const { files: current } = workspaceRef.current;
+      const paths = diskPaths(current);
+      const open = current.find((f) => paths.get(f.id)?.folder === path.folder && paths.get(f.id)?.file === path.file);
+      if (open) {
+        updateWorkspace((ws) => ({ ...ws, activeId: open.id }));
+        await reconcile([{ file: open, path }]);
+        toast.success(`Switched to ${open.name}`, { description: `${where} — already open` });
+        return;
+      }
+      const id = nextFileId();
+      // In sync from the start: opening writes nothing back.
+      if (isSavable(entry.folder)) writtenRef.current.set(id, { ...path, json: JSON.stringify(doc) });
+      updateWorkspace((ws) => ({
+        ...ws,
+        files: [
+          ...ws.files,
+          { id, name: entry.name, kind, doc, ...(isSavable(entry.folder) ? { disk: path } : {}) },
+        ],
+        activeId: id,
+      }));
+      toast.success(`Opened ${entry.name}`, { description: `${where} — saved back as you edit` });
     },
-    [setActiveDoc],
+    [setActiveDoc, updateWorkspace, reconcile, templatesDir],
   );
 
   // Guard against a stale-looking UI if another tab saves the workspace.
@@ -806,17 +1009,24 @@ export default function App() {
                 {templatesDir
                   ? // One section per folder, in the order a reader ranks them:
                     // the curated examples first, then whatever auto-save has
-                    // been writing. An empty folder still gets its caption, so
-                    // the two places a template can live are always visible.
+                    // been writing, then the folders linked from outside the
+                    // repo. An empty folder still gets its caption, so every
+                    // place a template can live is always visible.
                     [
-                      ["examples", "Templates / examples", "Curated and tracked — read-only to the app"],
-                      ["scratch", "Templates / scratch", "Auto-saved as you work; git-ignored"],
+                      ["examples", "Templates / examples", "Curated and tracked — opens live: edits save back, disk edits reload"],
+                      ["scratch", "Templates / scratch", "Auto-saved as you work; git-ignored; live like examples"],
                       ["folders", "Templates / folders", "Folder-format trees — imported on open; git-ignored"],
-                    ].map(([folder, caption, note]) => {
+                      ...templatesDir.linked.map((l) => [
+                        l.folder,
+                        `Linked / ${l.name}`,
+                        "Outside the repo (BD_LINKED_DIRS) — live like examples; never deleted",
+                        l.display,
+                      ]),
+                    ].map(([folder, caption, note, title = templatesDir[folder]]) => {
                       const entries = savedTemplates.filter((entry) => entry.folder === folder);
                       return (
                         <Fragment key={folder}>
-                          <span className="app__dropdown-caption" title={templatesDir[folder]}>
+                          <span className="app__dropdown-caption" title={title}>
                             {caption}
                           </span>
                           {entries.map((entry) => (
@@ -825,16 +1035,21 @@ export default function App() {
                               type="button"
                               role="menuitem"
                               className="app__dropdown-item"
-                              // A sequence template cannot land in the architecture
-                              // editor, and the reverse — say so rather than
-                              // failing on click.
-                              disabled={!active || entry.kind === "unreadable" || entry.kind !== active.kind}
+                              // A template opens as a workspace file of its own kind,
+                              // so any readable one can open; only a folder tree,
+                              // which still loads into the active file, needs an
+                              // architecture file to land in.
+                              disabled={
+                                entry.kind === "unreadable" ||
+                                // A folder tree still loads into the active file.
+                                (entry.folder === "folders" && (!active || active.kind !== "architecture"))
+                              }
                               onClick={() => openTemplate(entry)}
                             >
                               {entry.name}
                               <span className="app__dropdown-desc">
                                 {entry.kind === "unreadable"
-                                  ? `${entry.file} — not readable as JSON`
+                                  ? `${entry.file} — ${entry.reason ?? "not readable as JSON"}`
                                   : entry.folder === "folders"
                                     ? `${entry.file}/ · folder format`
                                     : `${entry.file} · ${entry.nodes} ${entry.kind === "sequence" ? "participants" : "nodes"}`}

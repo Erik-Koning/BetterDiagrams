@@ -156,6 +156,8 @@ describe("resolveRegistry", () => {
       "decision",
       "terminator",
       "io",
+      "task",
+      "milestone",
       "point",
       "lm-small",
       "lm-medium",

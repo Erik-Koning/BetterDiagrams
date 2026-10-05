@@ -82,6 +82,81 @@ export interface FieldRecord {
   formula?: string;
   /** The row's tags, or what the data implies — `ro` for `updateable: false`, `hidden` for `visible: false`. */
   tags?: string[];
+  /**
+   * The stored type as the source names it — the data's `type`, else a
+   * row's type unless that is a reference's display arrow (`→ Account`).
+   * What type comparisons read; `type` is what a reader is shown.
+   */
+  storageType?: string;
+  /** True or false when the source said; absent when it didn't. */
+  nullable?: boolean;
+  /** What the field means, from the row or the data. */
+  description?: string;
+  /** What the column's data looked like when it was last profiled — observed, not declared. */
+  profile?: ColumnProfile;
+}
+
+/** One column, as profiling found it. Rates are shares, 0..1. */
+export interface ColumnProfile {
+  /** Share of rows where the column is null. */
+  nullRate?: number;
+  /** Distinct non-null values. */
+  distinct?: number;
+  min?: string | number;
+  max?: string | number;
+  /** For a foreign key: share of non-null values that match no row of the table it references. */
+  orphanRate?: number;
+}
+
+/**
+ * A table's profile — `data.model.profile` on its node: what a profiling
+ * run saw (row count, when, each column's numbers). The folder import reads
+ * it from an entity's `forensics.json` (`dataProfile`); a host can set it
+ * directly. Observed values, so every check built on them says "found",
+ * never "declared".
+ */
+export interface TableProfile {
+  rowCount?: number;
+  /** When the profile was taken, ISO. */
+  profiledAt?: string;
+  /** When the data last changed, ISO — freshness. */
+  lastModified?: string;
+  /** By column name. */
+  columns?: Record<string, ColumnProfile>;
+}
+
+const finite = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+const rate = (v: unknown): number | undefined => {
+  const n = finite(v);
+  return n !== undefined && n >= 0 && n <= 1 ? n : undefined;
+};
+
+/** A table's profile, repaired: only numbers where numbers belong; absent when it has none. */
+export function tableProfile(node: { data?: Record<string, unknown> }): TableProfile | undefined {
+  const raw = modelOf(node.data)?.profile;
+  if (!isRecord(raw)) return undefined;
+  const out: TableProfile = {};
+  const rows = finite(raw.rowCount);
+  if (rows !== undefined && rows >= 0) out.rowCount = rows;
+  if (typeof raw.profiledAt === "string" && raw.profiledAt) out.profiledAt = raw.profiledAt;
+  if (typeof raw.lastModified === "string" && raw.lastModified) out.lastModified = raw.lastModified;
+  if (isRecord(raw.columns)) {
+    const columns: Record<string, ColumnProfile> = {};
+    for (const [name, c] of Object.entries(raw.columns)) {
+      if (!isRecord(c)) continue;
+      const p: ColumnProfile = {};
+      const nullRate = rate(c.nullRate);
+      const distinct = finite(c.distinct);
+      const orphanRate = rate(c.orphanRate);
+      if (nullRate !== undefined) p.nullRate = nullRate;
+      if (distinct !== undefined && distinct >= 0) p.distinct = distinct;
+      if (orphanRate !== undefined) p.orphanRate = orphanRate;
+      for (const k of ["min", "max"] as const) if (typeof c[k] === "string" || finite(c[k]) !== undefined) p[k] = c[k] as string | number;
+      if (Object.keys(p).length) columns[name] = p;
+    }
+    if (Object.keys(columns).length) out.columns = columns;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** The structural slice these helpers read — a scoped view document serves too. */
@@ -100,6 +175,10 @@ export interface FieldDocument {
     direction?: string;
     startField?: string;
     endField?: string;
+    /** The relationship kind and each end's cardinality — impact and SQL read them. */
+    relation?: string;
+    startLabel?: string;
+    endLabel?: string;
     data?: Record<string, unknown>;
   }>;
 }
@@ -124,6 +203,7 @@ export interface DataField {
   createable?: boolean;
   updateable?: boolean;
   tags?: string[];
+  description?: string;
   relationship?: { kind?: string; referenceTo?: string[]; relationshipName?: string | null };
 }
 
@@ -167,6 +247,7 @@ function coerceDataField(raw: unknown): DataField | null {
   if (raw.externalId === true) out.externalId = true;
   if (raw.unique === true) out.unique = true;
   if (typeof raw.formula === "string") out.formula = raw.formula;
+  if (typeof raw.description === "string" && raw.description.trim()) out.description = raw.description.trim();
   if (typeof raw.visible === "boolean") out.visible = raw.visible;
   if (typeof raw.createable === "boolean") out.createable = raw.createable;
   if (typeof raw.updateable === "boolean") out.updateable = raw.updateable;
@@ -217,9 +298,8 @@ export function dataFields(node: FieldDocNode): DataField[] {
 export function nameIndex(doc: FieldDocument): Map<string, string> {
   const out = new Map<string, string>();
   for (const n of doc.nodes) {
-    const m = modelOf(n.data);
-    if (!m || (m.shape !== "entity" && m.shape !== "external")) continue;
-    if (typeof m.name === "string" && !out.has(m.name)) out.set(m.name, n.id);
+    const name = entityName(n);
+    if (name !== undefined && !out.has(name)) out.set(name, n.id);
   }
   return out;
 }
@@ -250,6 +330,57 @@ function referenceType(d: DataField): string {
  * list, resolved to nodes through {@link nameIndex} when `doc` is given.
  */
 export function fieldRecords(node: FieldDocNode, doc?: FieldDocument): FieldRecord[] {
+  return recordsWith(node, recordContext(doc));
+}
+
+/**
+ * `fieldRecords` for every node at once, keyed by node id. The document-wide
+ * lookups a record needs (labels, each table's lines, the entity-name index)
+ * are built once rather than once per node, so a whole-model pass is linear.
+ */
+export function documentFieldRecords(doc: FieldDocument): Map<string, FieldRecord[]> {
+  const ctx = recordContext(doc);
+  return new Map(doc.nodes.map((n) => [n.id, recordsWith(n, ctx)]));
+}
+
+const recordsCache = new WeakMap<object, { edges: object; records: Map<string, FieldRecord[]> }>();
+
+/**
+ * `documentFieldRecords`, remembered per document — keyed on the identity of
+ * its `nodes` and `edges` arrays. For callers that never change a document
+ * in place (the editor, whose every edit is a new document; lint rules run
+ * on it), so every consumer of one commit shares one pass. The records are
+ * shared: read them, never mutate them.
+ */
+export function cachedFieldRecords(doc: FieldDocument): Map<string, FieldRecord[]> {
+  const hit = recordsCache.get(doc.nodes);
+  if (hit && hit.edges === doc.edges) return hit.records;
+  const records = documentFieldRecords(doc);
+  recordsCache.set(doc.nodes, { edges: doc.edges, records });
+  return records;
+}
+
+/** What a record reads beyond its own node; empty without a document. */
+interface RecordContext {
+  labelById: Map<string, string>;
+  outEdges: Map<string, FieldDocEdge[]>;
+  index: Map<string, string> | null;
+}
+
+function recordContext(doc: FieldDocument | undefined): RecordContext {
+  const labelById = new Map<string, string>();
+  const outEdges = new Map<string, FieldDocEdge[]>();
+  if (!doc) return { labelById, outEdges, index: null };
+  for (const n of doc.nodes) labelById.set(n.id, n.label ?? n.id);
+  for (const e of doc.edges) {
+    const list = outEdges.get(e.source);
+    if (list) list.push(e);
+    else outEdges.set(e.source, [e]);
+  }
+  return { labelById, outEdges, index: nameIndex(doc) };
+}
+
+function recordsWith(node: FieldDocNode, { labelById, outEdges: bySource, index }: RecordContext): FieldRecord[] {
   const rows = node.fields ?? [];
   const data = dataFields(node);
   const byName = new Map<string, DataField>();
@@ -259,11 +390,8 @@ export function fieldRecords(node: FieldDocNode, doc?: FieldDocument): FieldReco
     rowNames.add(r.id);
     rowNames.add(r.name);
   }
-
-  const labelById = new Map<string, string>();
-  if (doc) for (const n of doc.nodes) labelById.set(n.id, n.label ?? n.id);
-  const outEdges = doc ? doc.edges.filter((e) => e.source === node.id) : [];
-  const index = doc ? nameIndex(doc) : null;
+  const outEdges = bySource.get(node.id) ?? [];
+  const profiled = new Map(Object.entries(tableProfile(node)?.columns ?? {}).map(([name, p]) => [name.toLowerCase(), p]));
 
   const targetsOf = (id: string, d: DataField | undefined): FieldTarget[] => {
     const out: FieldTarget[] = [];
@@ -294,6 +422,10 @@ export function fieldRecords(node: FieldDocNode, doc?: FieldDocument): FieldReco
       (d ? (d.primaryKey && d.relationship ? "pfk" : d.primaryKey ? "pk" : d.relationship ? "fk" : undefined) : undefined);
     const required = row?.required ?? (d?.nullable === false && !d.primaryKey ? true : undefined);
     const tags = row?.tags ?? (d ? dataFieldTags(d) : []);
+    const storageType = d?.type ?? (row?.type && !/^\s*→/.test(row.type) ? row.type : undefined);
+    const nullable = d?.nullable ?? (row?.required ? false : undefined);
+    const description = row?.description ?? d?.description;
+    const profile = profiled.get(name.toLowerCase()) ?? profiled.get(id.toLowerCase());
     return {
       id,
       name,
@@ -309,6 +441,10 @@ export function fieldRecords(node: FieldDocNode, doc?: FieldDocument): FieldReco
       ...(row?.derived || d?.formula ? { derived: true } : {}),
       ...(d?.formula !== undefined ? { formula: d.formula } : {}),
       ...(tags.length ? { tags } : {}),
+      ...(storageType !== undefined ? { storageType } : {}),
+      ...(nullable !== undefined ? { nullable } : {}),
+      ...(description ? { description } : {}),
+      ...(profile ? { profile } : {}),
     };
   };
 
@@ -337,14 +473,35 @@ export function fieldInEdges<E extends FieldDocEdge>(doc: { edges: ReadonlyArray
 export function referencedKey(doc: FieldDocument, target: FieldTarget): FieldRef | null {
   if (!target.nodeId) return null;
   const edge = target.edgeId ? doc.edges.find((e) => e.id === target.edgeId) : undefined;
+  return keyOn(target.nodeId, doc.nodes.find((n) => n.id === target.nodeId), edge);
+}
+
+/**
+ * `referencedKey` for many lookups against one document: nodes and edges are
+ * indexed once, so resolving every reference in a model is one pass rather
+ * than a scan of the document per reference. The same answers — the first
+ * node or edge with an id wins, as `find` would have it.
+ */
+export function keyResolver(doc: FieldDocument): (target: FieldTarget) => FieldRef | null {
+  const nodes = new Map<string, FieldDocument["nodes"][number]>();
+  for (const n of doc.nodes) if (!nodes.has(n.id)) nodes.set(n.id, n);
+  const edges = new Map<string, FieldDocument["edges"][number]>();
+  for (const e of doc.edges) if (!edges.has(e.id)) edges.set(e.id, e);
+  return (target) => (target.nodeId ? keyOn(target.nodeId, nodes.get(target.nodeId), target.edgeId ? edges.get(target.edgeId) : undefined) : null);
+}
+
+function keyOn(
+  nodeId: string,
+  node: FieldDocument["nodes"][number] | undefined,
+  edge: FieldDocument["edges"][number] | undefined,
+): FieldRef | null {
   const landed = edge ? edgeFieldIds(edge).end : undefined;
-  const node = doc.nodes.find((n) => n.id === target.nodeId);
   const rows = node?.fields ?? [];
   const row =
     (landed !== undefined ? rows.find((f) => f.id === landed) : undefined) ??
     rows.find((f) => f.key === "pk" || f.key === "pfk") ??
     rows.find((f) => /^id$/i.test(f.id) || /^id$/i.test(f.name));
-  return row ? { nodeId: target.nodeId, fieldId: row.id } : null;
+  return row ? { nodeId, fieldId: row.id } : null;
 }
 
 /** One foreign key pointing at a key: the referencing table, its row (when drawn or recorded), and the line. */
@@ -539,7 +696,32 @@ export function keyReferences(doc: FieldDocument, pin: Pin): KeyReferences {
     };
     if (!referencedBy.some((l) => sameLink(l, link))) referencedBy.push(link);
   }
+  // References the data describes and no line draws: the other half of an
+  // undrawn key `carries` lists. Only tables whose data names this one are
+  // expanded into records, so the scan stays one pass over the data fields.
+  const name = entityName(node);
+  if (name !== undefined && nameIndex(doc).get(name) === node.id) {
+    for (const other of doc.nodes) {
+      if (!dataFields(other).some((d) => d.relationship?.referenceTo?.includes(name))) continue;
+      for (const record of fieldRecords(other, doc)) {
+        if (!record.fk.some((t) => t.nodeId === node.id && t.edgeId === undefined)) continue;
+        if (pin.fieldId !== undefined && implicit !== pin.fieldId) continue; // lands on the key, not this field
+        const link: KeyLink = {
+          from: { nodeId: other.id, fieldId: record.id },
+          to: implicit !== undefined ? { nodeId: node.id, fieldId: implicit } : { nodeId: node.id },
+        };
+        if (!referencedBy.some((l) => sameLink(l, link))) referencedBy.push(link);
+      }
+    }
+  }
   return { carries, referencedBy };
+}
+
+/** The entity name a data-model node answers to, the name a reference's `referenceTo` uses. */
+function entityName(node: FieldDocNode): string | undefined {
+  const m = modelOf(node.data);
+  if (!m || (m.shape !== "entity" && m.shape !== "external")) return undefined;
+  return typeof m.name === "string" ? m.name : undefined;
 }
 
 /**

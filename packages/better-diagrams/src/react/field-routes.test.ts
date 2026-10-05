@@ -4,7 +4,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { validateTemplate, type DiagramTemplate } from "../contract/schema";
-import { PAIRWISE_PIN_CAP, computeRouteView, structureSignature } from "./field-routes";
+import { PAIRWISE_PIN_CAP, ROUTE_CAP, computeRouteView, litRoutes, structureSignature, type RouteFocus } from "./field-routes";
+import { fieldKey } from "../contract/fields";
 
 const table = (id: string, label: string, fields: string[]) => ({
   id, label, kind: "table", icon: "none", description: "", parentId: null, x: 0, y: 0, w: 230, h: 120,
@@ -122,6 +123,51 @@ describe("computeRouteView — three or more pins", () => {
 
   it("fewer than two pins is an empty view", () => {
     expect(computeRouteView(DOC, { pins: [], undirected: true, mode: "between" }, COLORS).routes).toEqual([]);
+  });
+});
+
+describe("litRoutes — what the canvas lights", () => {
+  const label = (id: string) => DOC.nodes.find((n) => n.id === id)?.label ?? id;
+  const pair = computeRouteView(
+    DOC,
+    { pins: [{ nodeId: "comment", fieldId: "ParentId" }, { nodeId: "account", fieldId: "Id" }], undirected: true, mode: "between" },
+    COLORS,
+  );
+  const none: RouteFocus = { expanded: false, hoverRoute: null, stickyRoute: null, hoverKey: null, stickyKey: null };
+  const lit = (focus: Partial<RouteFocus>) => litRoutes(pair, { ...none, ...focus }, label, "rose").map((w) => w.id);
+
+  it("lights every shown route, each under a stable id, in its own colour", () => {
+    const walks = litRoutes(pair, none, label, "rose");
+    expect(walks.map((w) => [w.id, w.color, w.walk.edges])).toEqual([
+      ["route:0", "sky", ["m-k", "k-a"]],
+      ["route:1", "emerald", ["m-k", "k-c", "c-a"]],
+    ]);
+  });
+
+  it("singles out the hovered route over the kept one, and ignores one out of range", () => {
+    expect(lit({ hoverRoute: 1 })).toEqual(["route:1"]);
+    expect(lit({ stickyRoute: 0 })).toEqual(["route:0"]);
+    expect(lit({ stickyRoute: 0, hoverRoute: 1 })).toEqual(["route:1"]);
+    expect(lit({ hoverRoute: 9 })).toEqual(["route:0", "route:1"]);
+  });
+
+  it("a key lights every shown route through it, whatever route is kept", () => {
+    expect(lit({ hoverKey: fieldKey({ nodeId: "case", fieldId: "ContactId" }), stickyRoute: 0 })).toEqual(["route:1"]);
+    expect(lit({ stickyKey: fieldKey({ nodeId: "comment", fieldId: "ParentId" }) })).toEqual(["route:0", "route:1"]);
+  });
+
+  it("shows only the first few routes until expanded — plus a kept one past them", () => {
+    const many = { ...pair, routes: Array.from({ length: ROUTE_CAP + 2 }, (_, i) => ({ ...pair.routes[0]!, title: `r${i}` })) };
+    expect(litRoutes(many, none, label, "rose")).toHaveLength(ROUTE_CAP);
+    expect(litRoutes(many, { ...none, expanded: true }, label, "rose")).toHaveLength(ROUTE_CAP + 2);
+    expect(litRoutes(many, { ...none, stickyRoute: ROUTE_CAP + 1 }, label, "rose").map((w) => w.id)).toEqual([`route:${ROUTE_CAP + 1}`]);
+  });
+
+  it("between three or more pins, a key joining two of them lights its own line", () => {
+    const view = computeRouteView(DOC, { pins: [{ nodeId: "case" }, { nodeId: "contact" }, { nodeId: "account" }], undirected: true, mode: "between" }, COLORS);
+    expect(litRoutes(view, none, label, "rose")).toEqual([]);
+    const own = litRoutes(view, { ...none, hoverKey: fieldKey({ nodeId: "case", fieldId: "ContactId" }) }, label, "rose");
+    expect(own).toEqual([{ id: "key:0", walk: { nodes: ["case", "contact"], edges: ["k-c"] }, title: "Case.ContactId → Contact", color: "rose" }]);
   });
 });
 

@@ -41,6 +41,13 @@ export interface GraphDocument {
 export interface GraphOptions {
   /** Walk every edge both ways, whatever its arrow. Default false. */
   undirected?: boolean;
+  /**
+   * Which way an edge is walked: `out` source → target (the default),
+   * `in` target → source — "what points here", the way dependents are
+   * found — or `both`, the same as `undirected`. A two-way edge (`both` or
+   * `none` direction) is walked both ways under any of them.
+   */
+  direction?: "out" | "in" | "both";
   /** Which edges may be walked. Absent = all of them. */
   edgeFilter?: (edge: GraphDocument["edges"][number]) => boolean;
   /** Which nodes may be visited (the endpoints are always allowed). Absent = all. */
@@ -88,9 +95,10 @@ function buildAdjacency(doc: GraphDocument, opts: GraphOptions): Map<string, Arc
     // A self-loop never advances a simple walk; leaving it out keeps every
     // search from considering a hop that goes nowhere.
     if (e.source === e.target) continue;
-    const twoWay = opts.undirected || e.direction === "both" || e.direction === "none";
-    out.get(e.source)!.push({ edge: e.id, to: e.target });
-    if (twoWay) out.get(e.target)!.push({ edge: e.id, to: e.source });
+    const twoWay = opts.undirected || opts.direction === "both" || e.direction === "both" || e.direction === "none";
+    const reversed = opts.direction === "in";
+    if (twoWay || !reversed) out.get(e.source)!.push({ edge: e.id, to: e.target });
+    if (twoWay || reversed) out.get(e.target)!.push({ edge: e.id, to: e.source });
   }
   // The node filter bars entry: an excluded node is never stepped onto. The
   // searches exempt their own endpoints before the filter gets here.

@@ -96,6 +96,12 @@ export const BUILTIN_NODE_KINDS: Record<string, NodeKindDef> = {
   decision: { label: "Decision", fill: "#431407", accent: "#fb923c", text: "#fed7aa", icon: "none", shape: "diamond" },
   terminator: { label: "Start / End", fill: "#052e16", accent: "#4ade80", text: "#bbf7d0", icon: "none", shape: "pipe" },
   io: { label: "Input / Output", fill: "#172554", accent: "#60a5fa", text: "#bfdbfe", icon: "none", shape: "parallelogram" },
+  // A work item. Indigo, the one hue no other built-in wears; no icon — the
+  // corner check and the assignee tabs already say what it is.
+  task: { label: "Task", fill: "#1e1b4b", accent: "#818cf8", text: "#c7d2fe", icon: "none" },
+  // A checkpoint in a plan, drawn as a diamond like a decision but in rose:
+  // reached when everything feeding it is done (contract/tasks.ts).
+  milestone: { label: "Milestone", fill: "#4c0519", accent: "#fb7185", text: "#fecdd3", icon: "none", shape: "diamond" },
   point: { label: "Point", fill: "transparent", accent: "#64748b", text: "#94a3b8", icon: "none", point: true },
   // One hue at three strengths: a family the eye groups instantly, where the
   // brightness IS the weight class. Fuchsia because every neighbouring hue is
@@ -120,6 +126,8 @@ const BUILTIN_KIND_ORDER = [
   "decision",
   "terminator",
   "io",
+  "task",
+  "milestone",
   "point",
   "lm-small",
   "lm-medium",

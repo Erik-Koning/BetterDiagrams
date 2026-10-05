@@ -84,7 +84,7 @@ shadow.
 | `gradients` | `boolean` | Marketing's one setting. Default `true`. `false` paints every fade the mode draws as one flat coat — on screen and in every picture export, which then carry no gradient at all. Ignored in technical. Both editors take it; see **Without gradients** under Marketing mode. |
 | `generate` | `DiagramGenerator` | Enables the AI panel. Omitted ⇒ no network code runs. |
 | `minimap` | `boolean` | Default `true`. |
-| `edgesOnHover` | `boolean` | Default `false`. Hide every connection until the pointer is over a node it touches. Hovering a group draws its members' lines; a selected node, or a selected connection, keeps its lines while the pointer moves on. A view setting only — the document, the inspector and every export still carry every connection. |
+| `edgesOnHover` | `boolean` | Default `false`. Hide every connection until the pointer is over a node it touches. Hovering a group draws its members' lines; a selected node, or a selected connection, keeps its lines while the pointer moves on. A view setting only — the document, the inspector and every export still carry every connection. Task **dependency** lines hide this way whatever the setting says (see [Task graphs](#task-graphs)). |
 | `welcome` | `boolean` | Default `true`. Shows the **welcome modal** over a brand-new document — see below. |
 | `legend` | `boolean` | Show the corner legend: the infra key when zones exist, and the key to the lit paths. Defaults to `true`. |
 | `defaultShowHidden` | `boolean` | Start with provider-hidden nodes ghosted rather than omitted. Default `false`. |
@@ -96,8 +96,9 @@ shadow.
 | `onSelectionChange` | `(sel) => void` | The canvas selection in **document terms** — ids bucketed by template section (`{ nodes, edges, zones }` here; `{ participants, messages, activations, fragments, notes }` on the sequence editor), so a host can mirror it, e.g. highlight the matching entries of a live JSON view (the example app does exactly this). Fires on mount too, so a host that remounts per file never keeps a stale selection. |
 | `onPinsChange` | `(pins: Pin[]) => void` | The **pins** — a field (`{ nodeId, fieldId }`) or a whole table (`{ nodeId }`) — mirrored like the two above: fires on mount (empty) and on every change. View state — never in the document; a pin is dropped when its node leaves the document. See **Fields beyond the rows** below. |
 | `onCoverageChange` | `(keys: FieldRef[]) => void` | The keys the **Key coverage** panel is scoring, mirrored like the pins. View state; pruned when a key's table leaves the document. |
+| `onKeyUsageChange` | `(names: string[]) => void` | The field names the **Key usage** panel has picked, lowercased, mirrored like the pins. View state; a name no table carries is kept and scores nothing. |
 | `onFocusChange` / `onActivePathsChange` | `(ids: string[]) => void` | The two pieces of **view state** the editor keeps outside the document, mirrored to the host: the drill-in stack (root first, `[]` at the top) and the ids of the lit paths. Both fire on mount and on every change, keyed by content, so a host can render its own breadcrumbs or path list. Neither is content — a drill never enters undo or `onChange`. |
-| `ref` | `Ref<StudioHandle>` | Imperative access to the same view state: `getFocus()`, `drillTo(stack)`, `navigateTo(nodeId)`, `getActivePaths()`, `setActivePaths(ids)`. `drillTo` fits the view to the new level; the deepest id the document knows names the level and its real ancestry becomes the stack; `navigateTo` drills to whichever level shows a node, then selects and centres it. Fields: `getPins()`, `setPins(refs)` (a pin is `{ nodeId, fieldId? }` — a whole table when `fieldId` is absent), `navigateToField(ref)` (drill, select, mark the row), `openFieldGrid(nodeId, fieldId?)`, and for the coverage panel `getCoverageKeys()`, `setCoverageKeys(refs)`, `openCoverage()`. The slot context (`toolbarExtras` / `inspectorExtras`) carries the same reads and writes as `focus`, `drillTo`, `activePaths`, `setActivePaths`, `pins`, `setPins`. |
+| `ref` | `Ref<StudioHandle>` | Imperative access to the same view state: `getFocus()`, `drillTo(stack)`, `navigateTo(nodeId)`, `getActivePaths()`, `setActivePaths(ids)`. `drillTo` fits the view to the new level; the deepest id the document knows names the level and its real ancestry becomes the stack; `navigateTo` drills to whichever level shows a node, then selects and centres it. Fields: `getPins()`, `setPins(refs)` (a pin is `{ nodeId, fieldId? }` — a whole table when `fieldId` is absent), `navigateToField(ref)` (drill, select, mark the row), `openFieldGrid(nodeId, fieldId?)`, for the coverage panel `getCoverageKeys()`, `setCoverageKeys(refs)`, `openCoverage()`, and for the key-usage panel `getUsageKeys()`, `setUsageKeys(names)` (names are lowercased and deduped), `openKeyUsage()`. The slot context (`toolbarExtras` / `inspectorExtras`) carries the same reads and writes as `focus`, `drillTo`, `activePaths`, `setActivePaths`, `pins`, `setPins`, `coverageKeys`, `setCoverageKeys`, `usageKeys`, `setUsageKeys`. |
 | `toolbarExtras` / `inspectorExtras` | `ReactNode \| (ctx) => ReactNode` | Slots for your own controls. |
 
 ### Marketing mode
@@ -869,8 +870,9 @@ on that:
   key — the other direction: marks the key, every foreign-key row pointing at it, and the tables
   those rows sit in, so a reference from across the canvas still shows, while every other card
   steps back; it also opens the references panel — the keys it carries and the keys pointing at
-  it, each row a jump, and the subject chip under the title the way back to the table itself;
-  the node's menu offers it for the whole table; `Esc` or a click on empty canvas
+  it, each row a jump, and the subject chip under the title the way back to the subject with
+  these same marks restored, since following a row replaces them with that one join;
+  the node's menu offers it for the whole table, counting every key the panel lists; `Esc` or a click on empty canvas
   lifts the marks, as does selecting anything they did not touch), *Edit…* (hand-authored documents only — a folder-imported document's fields
   belong to the source), *Copy name*. Rows stay 19px; the states are inset-only.
 - **The field grid** — *View all fields* on a row, the node's menu, or the inspector — lists every
@@ -883,16 +885,23 @@ on that:
   drilling and navigating (view state, never in the document; pruned when the node goes away).
   `getPins`/`setPins`/`navigateToField` on the ref, `onPinsChange` on the props.
 - **Show paths** (two pins — a field each, or a whole table via *Pin table for search* on the
-  node's menu): the routes between them, shortest first, each with its **hop strip** — the key
-  carrying every hop (`order_id ▸ user_id`). All routes light in palette colours; hover or click
-  one and it is singled out in the theme's **route colour** (`routeColor`, `--as-route`, a
-  highlighter outside the edge palette) with a **key badge** on every lit hop. Below the routes,
-  **Keys most routes use** (shown once there are two or more routes) ranks the keys the routes
-  share (`Contact.AccountId — 7 of 9`); hover one to light every route through it, click to keep
-  them lit — as with a route, and keeping one lets go of the other. Then the tables between and
+  node's menu): first, **Keys joining the pins** names every key running directly between them,
+  either way round (`Orders.user_id → Users.id`), including references the document draws no line
+  for (marked *not drawn*), or says that no key joins them directly; hover one to light its line,
+  even against the arrows or past the routes shown. Then the routes between them, shortest first,
+  each with its **hop strip** — the key carrying every hop (`order_id ▸ user_id`). All routes light
+  in palette colours; hover or click one and it is singled out in the theme's **route colour**
+  (`routeColor`, `--as-route`, a highlighter outside the edge palette) with a **key badge** on every
+  lit hop. Below the routes, **Keys most routes use** ranks the keys the routes share
+  (`Contact.AccountId — 7 of 9`), shown once some key is on more than one route; hover one to
+  light every route through it, click to keep them lit — as with a route, and keeping one lets go
+  of the other. Then the tables between and
   the wider corridor, every table a click away — as are the pin chips under the panel's title,
   which go to the row (or table) each names. Three or more pins: what lies between every pair and
-  everything the pins reach, with the canvas dimmed to one or the other. "Ignore arrow direction"
+  everything the pins reach, with the canvas dimmed to one or the other, and the keys joining any
+  two of them. Select several tables and the node menu offers *Pin N tables for search* (or
+  *Unpin*, once all are pinned) and *Show paths between N tables*, which makes them the pins and
+  opens the panel, saying how many earlier pins it replaced. On a drilled-in level, pinning a ghost pins the table it stands for. "Ignore arrow direction"
   is on by default. The panel says when a search stopped at its limits or a pin's field anchors
   nothing. See **Between fields** under *Finding paths* for the contract calls.
 - **Key coverage** (View → *Key coverage*, or `openCoverage()` on the ref): a right-hand panel that
@@ -912,6 +921,171 @@ on that:
   what the score should tell you. Pass `isTable` to `keyCoverage` / `marginalGains` /
   `minimalKeyCover` (or `storesFields`, the default, directly) when your documents say it
   differently.
+- **Key usage** (View → *Key usage*, or `openKeyUsage()` on the ref): the left sidebar's answer to "which tables carry
+  `tenant_id`?". Search the model's field names (or, with *Keys only*, just its primary and
+  foreign keys); with nothing typed it lists the names two or more tables share. A name is
+  one entry across every table that has it, matched without regard to case, whether the
+  table draws it as a row or only its data knows it. Pick one or several (Enter picks the
+  top match) and the panel scores them — **`44%` · 4 of 9 tables use them** — then lists the
+  tables using them, with the picked fields each carries, and the tables without them. *Any*
+  counts a table carrying one of the picks, *All* only one carrying every pick; *Count the
+  tables they point at* also counts a foreign key's target. Hovering a name previews on the
+  canvas what picking it would cover; a table in the list is a jump, with its picked fields
+  marked. Where Key coverage follows one table's key along its lines, this reads names across
+  the whole schema. The picks are view state like the coverage keys: `getUsageKeys()` /
+  `setUsageKeys(names)` on the ref, `onKeyUsageChange` on the props. The contract calls are
+  `fieldUsage(doc)`, `searchFieldUsage(index, query, { keysOnly })` and
+  `usageCoverage(index, names, { match, includeTargets })`. The interactive HTML export has the
+  same panel.
+
+### Loading a schema
+
+A real model comes straight from the database or the dbt project that defines it, as an ordinary
+editable document — a `table` card per table with every column as a row (key badge, type,
+required, unique, description, tags), a group per schema when there is more than one, and a line
+per foreign key anchored at its columns and dressed as the relationship it is: *hierarchy* for a
+self-reference, *composition* when the key is part of the table's own primary key, *reference*
+otherwise, with the cardinality its nullability and uniqueness say. It is laid out on arrival.
+
+- **A SQL script** — toolbar **Import** takes a `.sql` file (or text that creates or alters
+  tables), and the welcome modal takes the same pasted. It reads what `pg_dump --schema-only`,
+  `mysqldump -d`, SQL Server's *Script table as*, Snowflake's `GET_DDL`, BigQuery and SQLite
+  write: `CREATE TABLE` with column types, `NOT NULL`, defaults, generated columns, inline and
+  table keys and comments; keys added later with `ALTER TABLE … ADD`; a one-column
+  `CREATE UNIQUE INDEX`; `COMMENT ON TABLE/COLUMN`; SQL Server's `MS_Description` (by name or by
+  position). Partitions — `PARTITION OF`, `ATTACH PARTITION`, a column-less `INHERITS` child —
+  fold into their table, which takes the keys declared only on them; a subtype by `INHERITS`
+  starts with its parent's columns. Temporary tables and MySQL's `DELIMITER` blocks (triggers,
+  routines) are left out, and a SQL Server script that omits `GO` between tables still splits.
+  Views and `CREATE TABLE … AS SELECT` are reported (they have no column list to read); everything
+  else — settings, grants, sequences, functions — is counted and skipped. Notes land in the
+  import bar. Checked against public sample schemas: Sakila in its Postgres, MySQL, SQL Server and
+  SQLite scripts (the same 15 tables and 22 keys from each), Pagila's `pg_dump`, and Microsoft's
+  AdventureWorks script (71 tables, 90 keys, descriptions on 69 tables).
+  `importSqlDdl(sql)`, `parseSqlDdl(sql)`, `looksLikeSqlDdl(text)`.
+- **A dbt project** — **Import folder** on the project's `target/` (or the project) reads
+  `manifest.json` and, when it is there, `catalog.json`; **Import** takes a `manifest.json` on its
+  own. Models (not ephemeral ones), seeds, snapshots and sources become tables; the catalog gives
+  column types, order and row counts. Keys come from `primary_key` / `foreign_key` constraints
+  (dbt 1.9's `to`/`to_columns` or the older `expression`), then from tests: `relationships` is a
+  foreign key, `unique` with `not_null` on one column is the key, `not_null` is required, and
+  `dbt_utils.unique_combination_of_columns` is a composite key. Owners come from `meta.owner` or
+  the model's group, and a column whose `meta` says `pii`, `contains_pii` or `sensitive` is
+  tagged `pii`. `importDbt({ manifest, catalog })`, `isDbtManifest(raw)`.
+
+Both go through `buildTableModel(tables)`, which a host can feed from anything else that lists
+tables, columns and keys (`TableSpec`).
+
+### Data-model analysis
+
+The questions a data analyst brings to a big model, each answered in the left sidebar (one panel
+at a time, `Esc` closes it) by a pure contract function a host can call on its own. Every one
+also works in the interactive HTML export — see **Interactive HTML**.
+
+- **Field consistency** (Key usage). A name stored more than one way — `uuid` in one table,
+  `varchar(36)` in another, nullable in 3 of 42 — wears a *mixed* badge; *Inconsistent only*
+  lists just those. Pick one and the panel lists **how it is stored**, each way with its tables;
+  pick a way and the canvas narrows to its tables. Types are compared by family
+  (`normalizeType`, `sameType`, `DEFAULT_TYPE_ALIASES` — `int4` is `integer`, `varchar(36)` is
+  `string(36)`); `fieldUsage(doc, { typeAliases, strictTypes })` reports `variants` and
+  `consistent` per name.
+- **Data-model checks** join the architecture rules in **Checks**: tables without a primary key,
+  undeclared references (`customer_id` with no line to a customer table — with a one-click
+  **Fix** that draws it), key type mismatches, references to nothing in the model, compositions
+  with an optional key, near-duplicate column names, columns stored inconsistently, polymorphic
+  references, field lists an import cut short, columns that look personal but carry no
+  sensitive tag (with a **Fix** that tags the row — see *Governance*), the declared-against-observed
+  checks under *Data statistics*, and (opt-in) naming conventions. The architecture rules leave
+  a data model alone where they would misread it: a loop of foreign keys is not a "synchronous
+  cycle", however its lines are drawn. Tune them with
+  `dataModelLintRules({ referencePatterns, typeAliases, naming, severity })` in `registry.lintRules`.
+  The menu lists the first 30 findings; its first item, **Show all N in a panel**, opens them all
+  in the sidebar: filter by severity or text, grouped by rule, each a jump, *Ignore* (tags the
+  field or table `lint-ignore:<rule>`, undoable), *Fix*, and *Download CSV*.
+- **Impact** (a table's or a field's menu → *Show impact*): what depends on it — every table a
+  change or a delete reaches, nearest first, with the key that reached it; what a delete would
+  **cascade** to and which keys would **block** it; *Dependencies* flips the question. Hover a
+  table to light the chain. `impactOf(doc, { nodeId, fieldId? }, { direction, maxDepth, via })`,
+  `impactChain`, `impactHeadline`.
+- **Neighbourhood** (node menu → *Focus neighbourhood*): the table and everything within 1–3
+  joins, out, in or both, over keys only or any line; the canvas dims to it and any table in the
+  list can become the focus. `neighbourhood(doc, ids, depth, { direction, edgeFilter })`.
+- **SQL from a route.** Every route in the paths panel has *SQL*: the `SELECT … JOIN …` that walks
+  it, in ANSI, PostgreSQL, Snowflake, BigQuery, MySQL or SQL Server, with inner or left joins
+  chosen from the keys' nullability (or forced), and warnings where a hop has no key, a join fans
+  out (twice over is called out), or a reference is polymorphic. The HTML page remembers the reader's dialect.
+  `routeSql(doc, walk, { dialect, join, select })`.
+- **Model structure** (View → *Model structure*): **Hubs** ranks tables by betweenness — how many
+  shortest routes between other tables run through them (sampled, and saying so, past 1,500
+  tables); point at one and the canvas dims to it and its neighbours. **Bridges** lists the tables
+  and keys whose loss splits the model ("without it: 3 pieces") and the tables no key joins.
+  **Domains** suggests clusters, by Louvain (deterministic: document order breaks every tie). A
+  table pointed at from all over the model — `users`, `accounts`, audit tables — belongs to no one
+  domain and would pull them together, so it is recognised by where its keys go (joined to five
+  or more tables spread over three or more domains, none holding half), listed as **shared**, and
+  the rest clustered again; a table at the centre of its own domain (AdventureWorks' `Product`)
+  has most of its keys at home and stays in it. A split no better than "all one domain" is not
+  offered. Each domain is named after its most
+  central table, with its keys inside and out and the partition's modularity; tables joined only
+  through shared ones are listed apart. *Colour tables by domain* outlines every card in its
+  domain's colour (a view, never the document; shared tables stay uncoloured), a domain in the
+  list dims the canvas to it, and *Select* selects its tables so `⌘G` can group them. Tables whose
+  keys lead mostly into another group than their own are listed as misplaced.
+  `modelStructure(doc, { sharedThreshold })` (the fewest tables a shared one must be joined to,
+  default 5), `summarizeStructure(doc, structure)`.
+- **Governance** (View → *Governance*): how documented the model is (tables and fields described,
+  fields labelled, tables owned), owners and their tables, sensitive columns by tag (`pii`,
+  `pii:<category>`, `sensitive`, `confidential`, `secret`), the tables within two key hops of one,
+  and — with lineage — sensitive values flowing into columns that are not tagged. Because an
+  untagged model would otherwise count nothing, it also lists columns that **look sensitive but
+  are not tagged** — names saying an email, a phone number, a date of birth, a national or
+  government id, a person's name, an address, an IP address, a card, a bank account or a
+  credential (`password_hash` → `secret`) — each with the tag to give it (`pii:email`…). A name
+  has to end with the personal word (`contact_email` is an email, `email_promotion` a preference
+  about one), and a key can be personal (`PhoneNumber` in a composite key). The same suggestions are an *info* check whose **Fix** tags
+  the row; `lint-ignore:dm-untagged-sensitive` on a column or table says "looked, not personal".
+  Keys, references and flags about the data (`email_verified`, `has_phone`) are left alone.
+  `sensitivityHints(doc, { rules })`, `DEFAULT_SENSITIVITY_RULES`. Tables an
+  import cut short are flagged, since their numbers are lower bounds. The **data dictionary**
+  downloads from the panel or from Export (*Data dictionary (.md)*, *(.csv)*): every table and
+  field with its type, key, references, tags and `description` (a new optional field on rows),
+  plus *Nulls* and *Distinct* when the model was profiled.
+  `governanceReport(doc)`, `dataDictionary(doc)`, `dictionaryMarkdown`, `dictionaryCsv`.
+- **Data statistics** — what profiling found, not what the schema declares. A table's
+  `data.model.profile` is `{ rowCount, profiledAt, lastModified, columns: { <name>: { nullRate,
+  distinct, min, max, orphanRate } } }` (rates are shares, 0..1); a folder import reads it from an
+  entity's `forensics.json` → `dataProfile`, and a host can set it directly. Each field record
+  then carries its `profile`; the field grid adds *Nulls* and *Distinct* columns for a profiled
+  table (in the editor and the HTML export), the dictionary adds them too, and three checks compare
+  declared against observed: a required or key column with nulls, a unique (or one-column key)
+  column with fewer distinct values than rows, and foreign-key values that match no row of the
+  table they reference. `tableProfile(node)`, `FieldRecord.profile`.
+- **Schema changes** (Compare → *Schema changes*): the column-level diff against the baseline —
+  tables and columns added, removed or renamed (a guess, with confidence), and a column's type,
+  nullability, key, uniqueness, references, label, formula or description changed; references
+  added or dropped — each rated **breaking**, **caution** or **safe**,
+  filterable, with a Markdown download; Export offers a self-contained *Schema change report
+  (HTML)* while comparing. `schemaDiff(base, current)`, `schemaDiffMarkdown`.
+- **Saved analyses.** Routes, key usage, key coverage, impact and neighbourhood panels have
+  **Save…**: a title, a note, and what it said when saved. They live in the document's validated
+  `analyses` list (saving is an undoable edit; Compare ignores them; a folder import keeps them in
+  `.better-diagrams/overrides.json`). The toolbar's **Analyses** menu lists them with what each
+  says now and how far that **drifted** ("was 44%, now 51%"), opens one (restoring the panel's
+  state — view state only), renames and deletes. `getAnalyses()` / `openAnalysis(id)` on the ref;
+  `validateAnalyses`, `analysisDrift` in the contract.
+- **Column lineage.** Where a column's values come from is not a relationship, so it is its own
+  validated collection, `lineage: [{ id, from: FieldRef, to: FieldRef, transform?, job? }]` — never
+  an edge, invisible to route search, coverage and impact. Analyses → *Import lineage…* reads
+  [OpenLineage](https://openlineage.io) run events with the `columnLineage` facet (a JSON array,
+  one event, `{ events }`, or NDJSON), matching datasets to tables by entity name, label or id
+  (`public.orders` → `orders`) and columns by name; *Remove lineage* takes it out again. A column
+  a link names gets *Trace lineage* on its menu: upstream to what it is computed from, downstream
+  to what it feeds, 1–3 links or all, with each transform and job; the rows are marked, other
+  tables dim, and the links are drawn row to row over the canvas — to the card standing for a
+  table folded into a chip or a level down — and pointing at a column brightens its chain. A
+  column a link names but its table no longer lists is marked *not in the model* (the link is
+  kept: a table an import cut short may simply not list it). `traceLineage(lineage, ref, { direction, maxDepth })`, `lineageChain`,
+  `sensitiveLineage(doc)`, `importOpenLineage(doc, events, { resolveDataset })`, `mergeLineage`.
 
 ## Infrastructure zones
 
@@ -1153,6 +1327,7 @@ The schema and editor cover C4's notational essentials:
 | **Arrange modes** | Arrange: *Left to right* (default, proximity-based) or *Untangle lines* (fewest crossings, lanes for long lines); stored as `settings.arrange`, applied on pick, one `⌘Z` undoes both |
 | **Notation** — symbols and numbers / crow's foot / UML | View: how a line's ends draw cardinality; `settings.notation`. UML shows the end glyphs a crow's-foot symbol would replace |
 | **Enumerations** | Kind `enum`: a record whose rows are the allowed values, «enumeration» style; Insert ▸ Enumeration |
+| **Tasks** | Kind `task`: a ticket with `storyPoints`, `assignees` and a `done` check; prerequisite and dependency lines; a People legend. See [Task graphs](#task-graphs) |
 | **Field flags** — unique, derived | `field.unique` wears a UQ badge and exports as Mermaid `UK`; `field.derived` takes UML's leading slash. The folder importer sets both from `unique` and `formula`/`calculated` |
 | **Row tags** | `field.tags`: free labels on a row, each an uppercase badge after the name (`ro` → RO, `pii` → PII) in the canvas and image exports, in the Mermaid ER comment, and a Tags column in the field grid. Two are known everywhere: `ro` (not writeable) and `hidden` (not readable by the reading principal — the row dims instead of badging). Edited per row in the inspector, comma-separated; the folder importer sets `ro` from `updateable: false`, `hidden` from `visible: false`, and copies a field's own `tags` |
 | **Junction tables** | Arrange ▸ Collapse junction tables: a table keyed by two foreign keys becomes one `*`–`*` line named after it, its other rows noted on the line; `junctionTables` / `collapseJunctions` in the contract |
@@ -1162,6 +1337,158 @@ The schema and editor cover C4's notational essentials:
 Zone **Supports** is editable in place: chips toggle registered providers, the free-text input
 adds any provider by name (neutral colour until the host registers it), and custom entries can
 be removed the same way.
+
+## Task graphs
+
+A work plan is an ordinary architecture document whose nodes are **tasks**. Kind `task` adds
+three optional fields, all stored only when set:
+
+```jsonc
+{
+  "id": "login", "label": "Build login page", "kind": "task",
+  "description": "OAuth + magic link",   // may span lines; the card shows two
+  "storyPoints": 3,                       // the estimate — "Task · 3 pts" in the card's header
+  "assignees": ["Ana", "Ravi"],           // names, compared exactly
+  "done": true,                           // only when finished
+  "stage": "in-progress",                 // or "in-review": where open work stands
+  "priority": "p1",                       // p0 (most urgent) … p3
+  "date": "2026-06-15"                    // the due date
+}
+```
+
+On the canvas a task gets:
+
+- **A done check.** A check rides the card's top edge near its right corner, and it is the one
+  place a card says whether the task can move:
+  - **Open white circle:** the task can be done now. Clicking it marks the task done: the
+    circle becomes a green disc with a white tick, the card fades and the summary is struck
+    through.
+  - **Circle struck through** (warn ink, a not-allowed cursor): the task is **blocked**. It
+    waits on a task that isn't done, and the check refuses the click until that task is done.
+    Its tooltip names what it waits on. The inspector's Status can still close it by hand.
+
+  Clicking a check doesn't select the card, and each toggle is one undo step. A reader
+  (`readOnly`) and Compare see the state but can't change it.
+- **Assignee tabs.** One tab per person hangs from the card's bottom edge, coloured stably per
+  name. When they don't all fit, the rest fold into a "+N" tab.
+
+Two kinds of line join tasks, and both mean "finish this first":
+
+| Line | How | Drawn |
+|---|---|---|
+| **Prerequisite** | An ordinary edge, A → B: A comes before B, and the arrow points at the next task | Always |
+| **Dependency** | `"relation": "dependency"` (dashed sky), for work elsewhere in the plan | Only while either end is hovered or selected, or the line itself is selected. This doesn't need `edgesOnHover` and leaves other lines alone |
+
+New lines start as prerequisites. The inspector of a line between two tasks has a
+**Prerequisite / Dependency** switch. Blocking reads one-way lines only: a `both` or `none`
+direction states no order, and a self-loop is ignored. Two open tasks waiting on each other
+are both blocked. `blockedTasks(doc)` and `taskAssignees(doc)` are the pure versions, in
+`contract/tasks.ts`.
+
+**People.** The legend lists everyone on a task, with a count. Each name works two ways, and
+both are views: they work for readers too and are never saved.
+
+- **Hover** previews the person: every task card that isn't theirs is muted, and lines and
+  other nodes stay as they are.
+- **Click** focuses on the person: their task cards stay as they are, and every other node is
+  muted. So is every line that doesn't touch one of their tasks; a line that does stays,
+  whoever is at its other end. Click again to clear it.
+
+Hovering someone else while one person is in focus previews them, and moving the pointer away
+brings the focus back. In a task's inspector, the **Assignees** picker
+offers everyone already in the document, and you can type a new name.
+
+**Planning, delegation and tracking.**
+
+- **Status and priority.** An open task's `stage` (to do, in progress, in review) and its
+  `priority` show as pills in its header. In the inspector, Status runs To do → In progress →
+  In review → Done; Done is the same as the corner check, and checking a task done clears its
+  stage.
+- **Ready.** An open task that hasn't started and waits on nothing is **ready**: what someone
+  could pick up now. It has an open check and no status pill. The Plan legend counts them, and
+  View → Tasks → Ready shows only them.
+- **Due dates.** A task's `date` is its due date, labelled "Due". It turns amber once it passes
+  with the task still open. Unlike an architecture element's date, it doesn't put the task on
+  the timeline: work due in November is on the plan today.
+- **Milestones.** `kind: "milestone"` is a rose diamond for a checkpoint such as a release or
+  a sign-off. It shows **Reached** once everything feeding it is done. Until then, any task
+  waiting on it is blocked, and a milestone whose date passes unreached is overdue.
+- **Capacity.**
+  - *Per person:* View → **Team capacity…** sets each person's limit in story points
+    (`settings.capacity`). The People legend shows each person's open points against it, in
+    warn colour past it.
+  - *Per sprint or phase:* `capacity` on a group (the inspector's Capacity field) caps its
+    points.
+- **Roll-ups.** A group holding tasks shows "8/21 pts" with a bar (tasks are counted instead
+  when nothing is estimated). It turns warn-coloured past its capacity.
+- **The Plan legend.** Progress for the whole plan, then counts of what's ready, blocked and
+  overdue. Each count is a toggle that keeps only those tasks bright.
+- **Task filter.** View → Tasks keeps one kind of task bright: Open, Ready, In progress,
+  Blocked or Overdue.
+- **Critical path.** View → **Show critical path** lights the chain of prerequisites with the
+  most work left: open points, or 1 per unestimated task. That chain decides when the plan can
+  finish.
+- **Plan checks.** These sit in the Checks panel alongside the architecture checks; unassigned
+  and unestimated only start once the plan assigns or estimates anything:
+  - deadlocked tasks (a prerequisite loop)
+  - overdue work
+  - a task due before something it waits on
+  - unassigned tasks
+  - unestimated tasks
+  - a person over capacity
+  - a phase over capacity
+- **Compare.** A task line reads, for example, "+3 tasks · 2 done · scope +8 pts".
+- **Reports.** Export → **Task report (.md)** is a status report: progress, what needs
+  attention, in progress, ready, milestones, a table by person, and done. **Tasks (.csv)** has
+  one row per task.
+- **Import from a tracker.** Import a `.csv` or `.tsv` from Jira, Linear or GitHub, or paste
+  one into the Welcome box. Columns are recognised by name:
+  - summary or title, key, description;
+  - assignees, story points or estimate, status, priority, due date, labels;
+  - a sprint, cycle, epic or parent becomes a group;
+  - "blocked by", "depends on" and "blocks", including Jira's issue-link columns, become
+    prerequisite arrows.
+- **Library functions.** All of it is pure in `contract/tasks.ts`, `task-lint.ts`,
+  `task-report.ts` and `import/task-csv.ts`:
+  - `readyTasks`, `overdueWork`, `workDone`, `taskWorkload`, `taskRollups`, `planProgress`
+  - `criticalPath`, `taskDeadlocks`, `taskChanges`
+  - `taskLintRules`, `taskReportMarkdown`, `tasksCsv`
+
+The interactive HTML export keeps all of this live as checks change. A check struck through
+opens once what it waits on is done (and refuses a click until then), and Reached recounts.
+Roll-ups, the Plan row and each person's open work recount too. Due dates go amber against
+today's date, and a page or editor left open past midnight re-counts on its own.
+
+**Tidy** ranks by prerequisites only. A dependency is a long-range link, so it doesn't pull its
+ends into neighbouring columns. Each task is spaced as its card plus its tabs.
+
+**Task flow preset.** The Welcome screen's type picker has a third option, *Task flow*. It's an
+architecture document set up as a plan: the copy button gives a prompt that steers the model
+toward tasks, and *Insert Task Manually* starts the canvas with one. Once a document holds a
+task, **Insert ▸ Task** heads the menu.
+
+**Exports.** PNG, PDF, SVG and HTML draw the check, estimate, Blocked mark, tabs and
+strike-through, plus a People section in the legend. A picture has no hover, so dependency lines
+are drawn like any other line and no person is picked.
+
+**The interactive HTML export is live.**
+
+- **Done checks:** click a task's corner check, or Tab to it and press Space. The check, the
+  strike-through, the card's fade and every Blocked mark follow.
+- **People legend:** hover a person to preview them; click to focus on them. This works on
+  every drill-down level.
+- **Remembered:** checks are kept in the browser that made them, keyed by the file's path, and
+  the header says "Unsaved changes" until they're saved.
+- **Saving in Chrome and Edge:** **Save to file…** asks you to pick the exported `.html` once.
+  The page then re-reads that file, checks it's the same export, rewrites only its small state
+  block, and saves it back. After that every check saves on its own. The browser remembers the
+  file, and on a later visit your first check asks for permission again.
+- **Saving in other browsers:** these can't write files, so Save asks you to pick the export
+  and downloads a copy with your checks in, to put in its place.
+- **Snapshot:** the export never writes back to the diagram it came from.
+
+The SVG carries each task's states as parts (`data-part`), stamped with the export-time
+state, so the page looks right even where a preview strips its scripts.
 
 ## Sequence mode
 
@@ -1221,16 +1548,38 @@ described above — which clouds and which of their resources the copied contrac
 seeded with the open document's own — rather than copying blind; sequence files have no
 provider vocabulary to scope, so they copy straight to the clipboard.
 
-**Auto-save to the repo, while developing.** `npm run dev` mounts a small dev-only route
-(`example/vite-plugin-templates.js`) that writes every open file to `templates/scratch/` at
-the repo root, one plain `.json` per document, debounced. Renaming a file renames the JSON and
-deletes the old one; deleting a file deletes it. `scratch/` is git-ignored — it's rewritten
-every session — while `templates/examples/` is tracked, curated, and read-only to the app:
-drop a template there (or copy one up from scratch) and it's loadable but never overwritten.
-Both folders appear under **Settings → Templates**, re-read each time the menu opens. The
-files are ordinary templates — the same shape Import and the paste box accept. The route
-exists only in the dev server: a built app finds nothing there and carries on with
-localStorage, which is still the app's own source of truth.
+**Live files on disk, while developing.** `npm run dev` mounts a small dev-only route
+(`example/vite-plugin-templates.js`) that keeps every open file in sync with a plain `.json`
+at the repo root, one per document:
+
+- **Opening** a file from **Settings → Templates** (`templates/examples/` or
+  `templates/scratch/`) opens it as its own workspace file, **bound** to that file. If it's
+  already open, the app switches to it.
+- **Editing in the app** saves back to the bound file, debounced to about a second, with a
+  last write as the tab closes. A file made in the app has no file yet, so it's written to
+  `templates/scratch/` under its name. Renaming that file renames the JSON; deleting it
+  deletes the JSON. A bound file stays put when renamed, and an example is never deleted.
+- **Editing on disk** — in an editor, a script, or an AI agent — reloads the open file live:
+  the dev server watches both folders and tells the app over Vite's HMR socket. **The file on
+  disk wins.** An outside edit replaces the app's copy, including an app edit still waiting
+  to be saved. The app's own saves aren't announced back, so they never bounce.
+- **At startup** each open file's disk copy is read before anything is written, and a copy
+  edited while the app was closed wins there too.
+- **Linked folders** bring in a diagram that lives with another project, outside this repo:
+  `BD_LINKED_DIRS=~/work/tracker npm run dev` (several folders are separated like `PATH`,
+  `~/a:~/b`). Each one gets its own **Linked /** section in Settings → Templates and its files
+  behave like examples: bound on open, saved back, reloaded on outside edits, never deleted.
+  A linked folder that doesn't exist is skipped, never created. A JSON file there that isn't a
+  diagram (a `package.json`, say) is listed but can't be opened, and the server refuses to
+  write over it. Start the server without a link and any file bound to that folder shows a
+  warning: its edits stay in the browser, and the disk copy replaces them once it's linked again.
+
+A conflict needs both sides to change the same file within about a second. When it happens,
+whichever write reaches the disk last is kept. `scratch/` is git-ignored; `templates/examples/`
+is tracked, so editing an opened example in the app shows up in `git diff`. The files are
+ordinary templates — the same shape Import and the paste box accept. The route and the
+watcher exist only in the dev server: a built app finds nothing there and carries on with
+localStorage, which is still its source of truth.
 
 **AI is optional, per editor.** Pass the same `generate` function the architecture editor takes
 (`createProxyGenerator` works unchanged — the sequence system prompt travels with each request)
@@ -1244,8 +1593,11 @@ tabs.
 **Checks** is an architecture lint. `lintTemplate(template, rules)` is a pure contract function
 run on every committed edit; findings appear in the toolbar's **Checks** menu (error-first) and
 clicking one selects and centres the offenders — drilling to the level that shows them when they
-are folded into a chip or a level down, and revealing them when the provider selection is hiding
-them, so a finding is never a dead click. Built-in rules: unconnected components,
+are folded into a chip or a level down, and ghosting them in when the provider selection is hiding
+them (a read-only viewer, who has no ghost toggle to undo that with, is told why instead: the
+canvas never travels to a box that will not be there). A rule naming only edges is aimed at the
+line's ends, a line having no position of its own; one naming nothing at all (a finding about the
+whole document, like the example below) leaves the view where it is. Built-in rules: unconnected components,
 synchronous cycles, external systems reaching datastores directly (error), partially-missing
 team ownership, unlabeled cross-team edges, and active components depending on
 deprecated/retired ones. Hosts add or remove rules through the registry:
@@ -1343,6 +1695,38 @@ JS scrub by comparing numbers and toggling classes, never re-rendering. This exp
 with later elements hidden — a slice would leave the file nothing to scrub. An undated document
 exports as a plain viewer (fit + fullscreen, no bar). `buildTimelineHtml` is exported for
 servers and custom exporters.
+
+The architecture editor's page also carries the editor's **search and relationship analysis**.
+The header's search box (`⌘K`) matches every node on every level — id, label, description,
+kind, tags — then every field, drawn as a row or not. Enter walks the matches, drilling to the
+level that shows each one, and a field hit marks its row or opens the field grid on a field
+the card doesn't draw. Click a row for the field menu (*Pin for search*, *View all fields*,
+*Follow reference*, *Show references*, *Copy name*); right-click a node for *Pin table for
+search*, *View all fields* and *Show references*, and ⇧/⌘-click several to *Show paths
+between N tables*. A plain click on a card with a level still drills. The pin strip, the
+**paths panel** (routes with their hop keys, keys most routes use, keys joining the pins,
+tables between, the corridor, Between/Reachable dimming for three or more pins), the
+**references panel**, **Key usage** (the header's *Key usage* button, shown when the model
+has tables) and the read-only **field grid** (filter, sort, download CSV) behave as they do in
+the editor, and `Esc` settles them before it steps out a level. The panels take turns in a
+left sidebar, as in the editor; the page can't pan out from under it, so while it is open the
+picture lays out beside it rather than under it. The data-model analyses come too: the field menu's *Show impact* and *Trace lineage* (with its
+row-to-row lines), the node menu's *Focus neighbourhood* and *Show impact*, *SQL* on every
+route, field consistency in Key usage, a header **Checks** button (findings computed when the
+file was made — a host's rules are functions and cannot run in the page), and in the ⋯ menu
+**Governance**, **Model structure** (computed at export) and *Download data dictionary (CSV)*.
+A document with saved analyses gets an **Analyses** button that re-runs each over the page's
+own copy of the model, drift included; *Copy link to this analysis* writes the routes, key
+usage, impact or neighbourhood on show into the address (`#/<level>?a=…`), so a hosted copy
+can be linked straight to it. None of this is a copy: the page inlines the
+editor's own `computeRouteView`, `keyReferences`, `searchFields`, `fieldUsage` /
+`usageCoverage`, `impactOf`, `routeSql`, `traceLineage` and stand-in rule, bundled into
+`src/react/html-explorer-runtime.generated.ts` — run `npm run build:explorer -w
+@mosphere/better-diagrams` after editing them; a unit test fails while the bundle is stale.
+The page carries a slice of the document (ids, labels, rows, and the field data a data-model
+import keeps — never the rest of a `data` bag). A server building its own page passes
+`explorer: htmlExplorerData(template, registry, palette)` to `buildTimelineHtml` or
+`buildMultiViewHtml`, and draws its SVGs with `fieldHits: true` so rows can be clicked.
 
 Timeline mode is **fully editable** — drag, connect, insert, and inspect as normal while
 scrubbed. The cursor is applied as a display pass over the canvas the editor already holds

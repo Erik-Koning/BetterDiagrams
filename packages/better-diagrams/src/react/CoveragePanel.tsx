@@ -33,6 +33,8 @@ export interface CoveragePanelProps {
   onHoverKey: (ref: FieldRef | null) => void;
   onClear: () => void;
   onClose: () => void;
+  /** Keep this analysis with the model (a saved analysis). Absent, no Save button. */
+  onSave?: () => void;
 }
 
 /** More bars than this and the list says how many it left out. */
@@ -55,6 +57,7 @@ export function CoveragePanel({
   onHoverKey,
   onClear,
   onClose,
+  onSave,
 }: CoveragePanelProps) {
   const { reached, total, fraction, byKey, unreachable } = coverage;
   const reachable = total - unreachable;
@@ -71,6 +74,11 @@ export function CoveragePanel({
     <div className="as-coverage" role="region" aria-label="Key coverage">
       <div className="as-panel__head">
         <h2 className="as-panel__title">Key coverage</h2>
+        {onSave ? (
+          <button type="button" className="as-btn" title="Keep this analysis with the model, to open and re-run later" onClick={onSave}>
+            Save…
+          </button>
+        ) : null}
         <button type="button" className="as-btn as-btn--icon" onClick={onClose} aria-label="Close coverage panel">
           <UiIcon name="close" />
         </button>

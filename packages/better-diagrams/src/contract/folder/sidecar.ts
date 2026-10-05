@@ -16,6 +16,8 @@ import type { DiagramNode, DiagramTemplate, ValidateOptions } from "../schema";
 import { validateTemplate } from "../schema";
 import { validatePresentation, type DiagramPresentation } from "../presentation";
 import type { DiagramPath } from "../paths";
+import type { SavedAnalysis } from "../analyses";
+import type { LineageLink } from "../lineage-links";
 import {
   OVERRIDES_FORMAT,
   type FolderOverrides,
@@ -55,6 +57,9 @@ export function validateOverrides(raw: unknown): FolderOverrides {
     if (Object.keys(nodes).length) out.nodes = nodes;
   }
   if (Array.isArray(raw.paths) && raw.paths.length) out.paths = raw.paths as DiagramPath[];
+  // Repaired by validateTemplate once applied, like paths.
+  if (Array.isArray(raw.analyses) && raw.analyses.length) out.analyses = raw.analyses as SavedAnalysis[];
+  if (Array.isArray(raw.lineage) && raw.lineage.length) out.lineage = raw.lineage as LineageLink[];
   return out;
 }
 
@@ -110,7 +115,7 @@ export function applyOverrides(
   warn: (w: ImportWarning) => void,
   validate?: ValidateOptions,
 ): DiagramTemplate {
-  if (!overrides || (!overrides.nodes && !overrides.paths)) return template;
+  if (!overrides || (!overrides.nodes && !overrides.paths && !overrides.analyses && !overrides.lineage)) return template;
   const byId = new Set(template.nodes.map((n) => n.id));
   const nodes = template.nodes.map((n) => {
     const o = overrides.nodes?.[n.id];
@@ -132,7 +137,16 @@ export function applyOverrides(
     const override = new Map(overrides.paths.map((p) => [p.id, p]));
     paths = [...paths.filter((p) => !override.has(p.id)), ...overrides.paths];
   }
-  return validateTemplate({ ...template, nodes, ...(paths.length ? { paths } : {}) }, validate);
+  let analyses = template.analyses ?? [];
+  if (overrides.analyses?.length) {
+    const override = new Set(overrides.analyses.map((a) => a.id));
+    analyses = [...analyses.filter((a) => !override.has(a.id)), ...overrides.analyses];
+  }
+  const lineage = overrides.lineage?.length ? overrides.lineage : (template.lineage ?? []);
+  return validateTemplate(
+    { ...template, nodes, ...(paths.length ? { paths } : {}), ...(analyses.length ? { analyses } : {}), ...(lineage.length ? { lineage } : {}) },
+    validate,
+  );
 }
 
 /**
@@ -163,6 +177,8 @@ export function collectOverrides(
   }
   if (Object.keys(nodes).length) out.nodes = nodes;
   if (template.paths?.length) out.paths = template.paths.map((p) => ({ ...p }));
+  if (template.analyses?.length) out.analyses = template.analyses.map((a) => ({ ...a }));
+  if (template.lineage?.length) out.lineage = template.lineage.map((l) => ({ ...l }));
   return out;
 }
 
