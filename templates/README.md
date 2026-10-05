@@ -49,8 +49,11 @@ changes on every edit, so promote anything you want to keep into `examples/`.
 
 ## Linked folders — outside the repo
 
-A diagram that belongs to another project can stay there. Name its folder
-when starting the dev server:
+A diagram that belongs to another project can stay there. Link its folder from
+**Settings → Templates → Link a folder…**: type the path, or press **Browse…**
+for the system's folder dialog (the dev server shows it, so it learns the real
+path). Links are remembered in `linked.json` here, which is git-ignored. Or
+name folders when starting the dev server:
 
 ```sh
 BD_LINKED_DIRS=~/work/tracker npm run dev        # several: ~/work/tracker:~/notes
@@ -59,6 +62,10 @@ BD_LINKED_DIRS=~/work/tracker npm run dev        # several: ~/work/tracker:~/not
 Its `.json` diagrams appear under **Linked / tracker** in the menu and are live
 like `examples/`: edits in the app save back to the original file, and edits
 made there (by an editor, a script, an agent working in that project) reload
-in the app. The app never deletes a file in a linked folder, never creates a
-linked folder that isn't there, and never writes over a JSON file that isn't a
-diagram — a `package.json` beside the diagram is listed but can't be opened.
+in the app. The app never deletes a file in a linked folder, never recreates a
+linked folder that has gone, and never writes over a JSON file that isn't a
+diagram: a `package.json` beside the diagram is listed but can't be opened.
+
+If the folder moves, the files bound to it stop syncing and a warning says so;
+**Re-link…** points them at the folder's new place, and asks before choosing
+between your edits and the file when the two differ.

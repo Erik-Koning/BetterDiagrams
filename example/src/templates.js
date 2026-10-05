@@ -22,8 +22,10 @@ export const isSavable = (folder) => SAVABLE.has(folder) || folder.startsWith(LI
  * Is the disk store reachable? Probed once at mount, and the answer is what
  * decides whether the UI mentions templates at all — an editor that offers to
  * save somewhere it cannot write is worse than one that stays quiet.
- * Resolves to `{ dirs, linked, templates }`, each template carrying its
- * `folder`; `linked` is `[{ folder, name, dir, display }]`, one per linked folder.
+ * Resolves to `{ dirs, linked, picker, templates }`, each template carrying
+ * its `folder`; `linked` is `[{ folder, name, dir, display, source, missing }]`,
+ * one per linked folder; `picker` says whether the server can show a folder
+ * dialog.
  */
 export async function probeTemplates() {
   try {
@@ -34,10 +36,6 @@ export async function probeTemplates() {
   } catch {
     return null;
   }
-}
-
-export async function listTemplates() {
-  return (await probeTemplates())?.templates ?? [];
 }
 
 const pathOf = (folder, file) => `${ROUTE}/${encodeURIComponent(folder)}/${encodeURIComponent(file)}`;
@@ -64,7 +62,12 @@ export async function readFolderTree(name) {
   }
 }
 
-/** Auto-save's write — to scratch, or back to the file a document was opened from. */
+/**
+ * Auto-save's write — to scratch, or back to the file a document was opened
+ * from. Resolves to `{ ok, status, error }`: `status` 0 is no server at all
+ * (a restart, a built app), anything else is the server refusing — a linked
+ * folder gone missing (404), a file there that isn't a diagram (409).
+ */
 export async function writeTemplate(folder, file, doc) {
   try {
     const res = await fetch(pathOf(folder, file), {
@@ -72,9 +75,43 @@ export async function writeTemplate(folder, file, doc) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(doc),
     });
-    return res.ok;
+    if (res.ok) return { ok: true, status: res.status };
+    const body = await res.json().catch(() => null);
+    return { ok: false, status: res.status, error: body?.error ?? res.statusText };
   } catch {
-    return false;
+    return { ok: false, status: 0, error: "the dev server isn't answering" };
+  }
+}
+
+/**
+ * Link a folder outside the repo. `{ dir }` links a typed path; `{ pick: true,
+ * near }` has the dev server show the system's folder dialog (opening near
+ * `near`); `replaces` names the link a re-link takes over from. Resolves to
+ * the server's answer — `{ link, linked, templates, … }` once linked,
+ * `{ cancelled }` or `{ unsupported }` from the dialog — or `{ error }`.
+ */
+export async function linkFolder(body) {
+  try {
+    const res = await fetch(`${ROUTE}/links`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const answer = await res.json().catch(() => null);
+    return res.ok && answer ? answer : { error: answer?.error ?? res.statusText };
+  } catch {
+    return { error: "the dev server isn't answering" };
+  }
+}
+
+/** Unlink a folder linked from the app. Resolves to the new listing, or `{ error }`. */
+export async function unlinkFolder(folder) {
+  try {
+    const res = await fetch(`${ROUTE}/links/${encodeURIComponent(folder)}`, { method: "DELETE" });
+    const answer = await res.json().catch(() => null);
+    return res.ok && answer ? answer : { error: answer?.error ?? res.statusText };
+  } catch {
+    return { error: "the dev server isn't answering" };
   }
 }
 
@@ -102,14 +139,24 @@ export function flushTemplate(folder, file, doc) {
  * unsubscribe. A built app has no socket, so this quietly does nothing.
  */
 const changeListeners = new Set();
+const linksListeners = new Set();
 if (import.meta.hot) {
   import.meta.hot.on("better-diagrams:template", (data) => {
     for (const listener of changeListeners) listener(data);
+  });
+  import.meta.hot.on("better-diagrams:links", (data) => {
+    for (const listener of linksListeners) listener(data);
   });
 }
 export function onTemplateChange(listener) {
   changeListeners.add(listener);
   return () => changeListeners.delete(listener);
+}
+
+/** Hear about a linked folder vanishing under the dev server — moved, renamed, deleted. */
+export function onLinksChange(listener) {
+  linksListeners.add(listener);
+  return () => linksListeners.delete(listener);
 }
 
 /** Auto-save's delete, for a renamed or removed workspace file. Scratch only. */

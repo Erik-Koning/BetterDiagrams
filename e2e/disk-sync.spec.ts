@@ -6,11 +6,11 @@
  * so nothing here touches the repo's templates/ — and links a second
  * temporary folder the way `BD_LINKED_DIRS` links one outside the repo.
  */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { BrowserContext, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import { E2E_LINKED_DIR, E2E_TEMPLATES_DIR } from "./templates-dir";
+import { E2E_LINKED_DIR, E2E_LINKS_ROOT, E2E_PICK_DIR, E2E_TEMPLATES_DIR } from "./templates-dir";
 
 test.use({ diskTemplates: true });
 
@@ -89,8 +89,19 @@ test.beforeEach(async ({ context, request }, testInfo) => {
   await seedWorkspace(context, `${base}-seed`);
 });
 
-test.afterEach(() => {
+/** Folders a test linked from the app — unlinked and removed after it. */
+let linkedDirs: string[] = [];
+
+test.afterEach(async ({ request }) => {
   for (const path of created) rmSync(path, { force: true });
+  if (linkedDirs.length) {
+    const listing = await (await request.get("/__templates")).json().catch(() => null);
+    for (const link of (listing?.linked ?? []) as { folder: string; dir: string; source: string }[]) {
+      if (linkedDirs.includes(link.dir) && link.source === "saved") await request.delete(`/__templates/links/${link.folder}`);
+    }
+    for (const dir of linkedDirs) if (dir !== E2E_PICK_DIR) rmSync(dir, { recursive: true, force: true });
+    linkedDirs = [];
+  }
 });
 
 /** Write a plan file into a templates folder and open it in the app. */
@@ -243,6 +254,13 @@ test("a linked folder is never deleted from, never written over a non-diagram, a
     const escaped = await request.put(`/__templates/${linkedId}/${name}`, { data: plan("Escape") });
     expect(escaped.status(), name).toBe(400);
   }
+
+  // A text/plain POST is what another site can send without a CORS preflight.
+  const crossSite = await request.post("/__templates/links", {
+    headers: { "content-type": "text/plain" },
+    data: JSON.stringify({ dir: E2E_LINKS_ROOT }),
+  });
+  expect(crossSite.status()).toBe(415);
 });
 
 test("a file bound to a linked folder the server isn't linking says its edits stay in the browser", async ({ studio, page }) => {
@@ -262,4 +280,125 @@ test("a file bound to a linked folder the server isn't linking says its edits st
   await page.reload();
   const warning = page.locator("[data-sonner-toast]").filter({ hasText: "Stranded plan isn't synced to disk" });
   await expect(warning).toContainText("~/gone/tracker");
+});
+
+/** The links the app saved, as the dev server keeps them across restarts. */
+const savedLinks = (): string[] => {
+  try {
+    return JSON.parse(readFileSync(join(E2E_TEMPLATES_DIR, "linked.json"), "utf8")).linked;
+  } catch {
+    return [];
+  }
+};
+
+/** A folder of its own for a test to link, holding one plan. */
+function planFolder(name: string) {
+  const dir = join(E2E_LINKS_ROOT, name);
+  mkdirSync(dir, { recursive: true });
+  linkedDirs.push(dir);
+  const file = `${base}.json`;
+  writeFileSync(join(dir, file), JSON.stringify(plan(`Linked ${base}`), null, 2));
+  return { dir, file };
+}
+
+const strandedToast = (page: Page) => page.locator("[data-sonner-toast]").filter({ hasText: "isn't synced to disk" });
+
+test("a folder linked from the menu lists its diagrams live, is kept for the next run, and unlinks", async ({ studio, page }) => {
+  const { dir, file } = planFolder(base);
+  await studio.goto();
+  await page.getByRole("button", { name: "Settings" }).click();
+  const menu = page.getByRole("menu", { name: "Settings" });
+  await menu.getByRole("menuitem").filter({ hasText: "Link a folder…" }).click();
+  await menu.getByLabel("Folder path").fill(dir);
+  await menu.getByRole("button", { name: "Link", exact: true }).click();
+  await expect(menu.getByText(`Linked / ${base}`, { exact: true })).toBeVisible();
+  expect(savedLinks()).toContain(dir);
+
+  await studio.openTemplate(file);
+  await expect(title(page, "design")).toHaveText("Design");
+  await page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox").click();
+  await expect.poll(() => (nodeOf(read(join(dir, file)), "design") as { done?: boolean }).done).toBe(true);
+
+  // Unlinking stops the sync; the file it was bound to stays where it is.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await menu.getByRole("menuitem").filter({ hasText: `Unlink ${base}` }).click();
+  await expect.poll(savedLinks).not.toContain(dir);
+  await expect
+    .poll(async () => {
+      const ws = await studio.workspace();
+      return ws.files.find((f) => f.id === ws.activeId);
+    })
+    .not.toHaveProperty("disk");
+  expect(existsSync(join(dir, file))).toBe(true);
+});
+
+test("a linked folder that moves strands its files, and Re-link binds them to where it is now — asking when the copies differ", async ({
+  studio,
+  page,
+  request,
+}) => {
+  const { dir: before, file } = planFolder(`${base}-before`);
+  const after = join(E2E_LINKS_ROOT, `${base}-after`);
+  linkedDirs.push(after);
+  expect((await request.post("/__templates/links", { data: { dir: before } })).status()).toBe(200);
+  await studio.goto();
+  await studio.openTemplate(file);
+  await page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox").click();
+  await expect.poll(() => (nodeOf(read(join(before, file)), "design") as { done?: boolean }).done).toBe(true);
+
+  renameSync(before, after);
+  // Edited while the folder is lost: this save can't land, and says why.
+  await page.locator('.react-flow__node[data-id="build"]').getByRole("checkbox").click();
+  const stranded = strandedToast(page);
+  await expect(stranded).toContainText("is missing");
+
+  await stranded.getByRole("button", { name: "Re-link…" }).click();
+  const form = page.getByRole("form", { name: "Re-link folder" });
+  await form.getByLabel("Folder path").fill(after);
+  await form.getByRole("button", { name: "Re-link", exact: true }).click();
+
+  // The browser has Build done, the moved file doesn't: the person picks.
+  const conflict = page.locator("[data-sonner-toast]").filter({ hasText: "differs from" });
+  await conflict.getByRole("button", { name: "Keep my edits" }).click();
+  await expect.poll(() => (nodeOf(read(join(after, file)), "build") as { done?: boolean }).done).toBe(true);
+  await expect(stranded).toHaveCount(0);
+  // The saved link moved with it.
+  expect(savedLinks()).toContain(after);
+  expect(savedLinks()).not.toContain(before);
+});
+
+test("Browse… links the folder the system dialog picks, and a re-link whose copies match rebinds quietly", async ({ studio, page }) => {
+  // The stand-in dialog always "picks" E2E_PICK_DIR (see playwright.config.ts).
+  const file = `${base}.json`;
+  const path = join(E2E_PICK_DIR, file);
+  created.push(path);
+  linkedDirs.push(E2E_PICK_DIR);
+  const doc = plan(`Picked ${base}`);
+  writeFileSync(path, JSON.stringify(doc, null, 2));
+
+  await studio.goto();
+  await page.evaluate(
+    ({ file, doc }) => {
+      const key = "better-diagrams:workspace";
+      const ws = JSON.parse(localStorage.getItem(key)!);
+      ws.files.push({ id: "lost", name: "Lost plan", kind: "architecture", doc, disk: { folder: "linked-lost-111111", file, display: "~/lost" } });
+      ws.activeId = "lost";
+      localStorage.setItem(key, JSON.stringify(ws));
+    },
+    { file, doc },
+  );
+  await page.reload();
+  await strandedToast(page).getByRole("button", { name: "Re-link…" }).click();
+  await page.getByRole("form", { name: "Re-link folder" }).getByRole("button", { name: "Browse…" }).click();
+
+  // (Not "Re-linked": the warning itself says "until it's re-linked".)
+  await expect(page.locator("[data-sonner-toast]").filter({ hasText: "syncs again" })).toBeVisible();
+  await expect(page.locator("[data-sonner-toast]").filter({ hasText: "differs from" })).toHaveCount(0);
+  await expect(strandedToast(page)).toHaveCount(0);
+  await expect
+    .poll(async () => ((await studio.workspace()).files.find((f) => f.id === "lost") as { disk?: { folder: string } }).disk?.folder)
+    .toMatch(/^linked-better-diagrams-e2e-pick-/);
+
+  await page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox").click();
+  await expect.poll(() => (nodeOf(read(path), "design") as { done?: boolean }).done).toBe(true);
 });

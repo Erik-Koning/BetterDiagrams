@@ -1565,14 +1565,24 @@ at the repo root, one per document:
   to be saved. The app's own saves aren't announced back, so they never bounce.
 - **At startup** each open file's disk copy is read before anything is written, and a copy
   edited while the app was closed wins there too.
-- **Linked folders** bring in a diagram that lives with another project, outside this repo:
-  `BD_LINKED_DIRS=~/work/tracker npm run dev` (several folders are separated like `PATH`,
-  `~/a:~/b`). Each one gets its own **Linked /** section in Settings → Templates and its files
-  behave like examples: bound on open, saved back, reloaded on outside edits, never deleted.
-  A linked folder that doesn't exist is skipped, never created. A JSON file there that isn't a
-  diagram (a `package.json`, say) is listed but can't be opened, and the server refuses to
-  write over it. Start the server without a link and any file bound to that folder shows a
-  warning: its edits stay in the browser, and the disk copy replaces them once it's linked again.
+- **Linked folders** bring in a diagram that lives with another project, outside this repo.
+  **Settings → Templates → Link a folder…** takes a typed path, or **Browse…** has the dev
+  server show the system's folder dialog. The browser can't do this itself, because its folder
+  pickers never reveal where a folder is. Links are kept in `templates/linked.json`
+  (git-ignored) across restarts. `BD_LINKED_DIRS=~/work/tracker npm run dev` adds more
+  (several are separated like `PATH`). Each folder gets its own **Linked /** section, and its
+  files behave like examples: bound on open, saved back, reloaded on outside edits, never
+  deleted. A JSON file there that isn't a diagram (a `package.json`, say) is listed but can't
+  be opened, and the server refuses to write over it.
+- **A lost link is re-linked, not lost.** When a linked folder is moved, renamed or deleted
+  (noticed live, through the watcher), or isn't linked by this run, files bound to it are
+  *stranded*: a warning names them, their edits stay in the browser, and the folder is never
+  recreated. **Re-link…** on the warning, or in the menu, picks where the folder is now. Each
+  file binds to the file with the same name there, quietly if the two copies match. If they
+  differ, it asks whether to keep your edits or use the file, because either side may hold
+  work. **Stop syncing** keeps them as ordinary files instead, and **Unlink** drops a folder
+  linked from the menu. A save that fails for any other reason says so once, until one goes
+  through.
 
 A conflict needs both sides to change the same file within about a second. When it happens,
 whichever write reaches the disk last is kept. `scratch/` is git-ignored; `templates/examples/`
