@@ -293,6 +293,35 @@ describe("timelineView — architecture", () => {
   });
 });
 
+describe("a task's date is when it's due, not when it arrives", () => {
+  const plan = () =>
+    validateTemplate({
+      version: 1,
+      nodes: [
+        node({ id: "phase", kind: "group", date: "2026-05-01" }),
+        node({ id: "svc", date: "2026-03-02" }),
+        node({ id: "loose", kind: "task", date: "2026-09-30" }),
+        node({ id: "inner", kind: "task", parentId: "phase", date: "2026-09-30" }),
+        node({ id: "ship", kind: "milestone", date: "2026-12-01" }),
+      ],
+      edges: [{ id: "e", source: "loose", target: "ship", label: "", style: "solid", color: "slate" }],
+    });
+
+  it("adds no timeline stop", () => {
+    expect(templateTimeline(plan()).stops).toEqual(["2026-03-02", "2026-05-01"]);
+  });
+
+  it("never puts work in the future — only a dated container above it does", () => {
+    const dates = effectiveNodeDates(plan());
+    expect(dates.get("loose")).toBeUndefined();
+    expect(dates.get("ship")).toBeUndefined();
+    expect(dates.get("inner")).toBe("2026-05-01");
+    const view = timelineView(plan(), "2026-03-02", "dim");
+    expect([...view.future.nodes].sort()).toEqual(["inner", "phase"]);
+    expect(view.future.edges.size).toBe(0);
+  });
+});
+
 describe("sequenceTimelineView", () => {
   const flow = (): SequenceTemplate =>
     validateSequence({

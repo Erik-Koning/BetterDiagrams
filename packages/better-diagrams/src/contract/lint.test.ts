@@ -80,6 +80,29 @@ describe("no-cycles", () => {
     expect(found[0].message).toContain("A → B → C → A");
   });
 
+  it("ignores a loop of keys between tables, however the lines are drawn", () => {
+    const table = (id: string, fields: string[]) =>
+      node({ id, kind: "table", fields: [{ id: "id", name: "id", key: "pk" }, ...fields.map((f) => ({ id: f, name: f, key: "fk" }))] });
+    // Drawn in the editor: solid, forward, anchored at the key rows.
+    const keys = doc(
+      [table("users", ["default_address_id"]), table("addresses", ["user_id"])],
+      [
+        edge({ id: "e1", source: "users", target: "addresses", startField: "default_address_id", endField: "id" }),
+        edge({ id: "e2", source: "addresses", target: "users", startField: "user_id", endField: "id" }),
+      ],
+    );
+    expect(byRule(lintTemplate(keys), "no-cycles")).toHaveLength(0);
+    // Said to be a relationship, anchored or not.
+    const owned = doc(
+      [node({ id: "a" }), node({ id: "b" })],
+      [
+        edge({ id: "e1", source: "a", target: "b", relation: "composition" }),
+        edge({ id: "e2", source: "b", target: "a", relation: "composition" }),
+      ],
+    );
+    expect(byRule(lintTemplate(owned), "no-cycles")).toHaveLength(0);
+  });
+
   it("ignores cycles broken by an async (dashed) hop", () => {
     const t = doc(
       [node({ id: "a" }), node({ id: "b" })],
@@ -206,5 +229,23 @@ describe("lintTemplate", () => {
     const rules = { ...BUILTIN_LINT_RULES };
     delete rules["no-orphans"];
     expect(byRule(lintTemplate(t, rules), "no-orphans")).toHaveLength(0);
+  });
+});
+
+describe("tasks", () => {
+  it("are work items, not components: no owner wanted, unlinked is fine, a loop is not a call cycle", () => {
+    const t = doc(
+      [
+        node({ id: "svc", team: "Platform" }),
+        node({ id: "a", kind: "task" }),
+        node({ id: "b", kind: "task" }),
+        node({ id: "backlog", kind: "task" }),
+      ],
+      [edge({ id: "ab", source: "a", target: "b" }), edge({ id: "ba", source: "b", target: "a" })],
+    );
+    const findings = lintTemplate(t);
+    expect(byRule(findings, "missing-owner")).toHaveLength(0);
+    expect(byRule(findings, "no-orphans").map((f) => f.nodeIds)).toEqual([["svc"]]);
+    expect(byRule(findings, "no-cycles")).toHaveLength(0);
   });
 });

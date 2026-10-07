@@ -138,7 +138,14 @@ export interface FieldData {
   createable?: boolean;
   updateable?: boolean;
   tags?: string[];
+  description?: string;
   relationship?: { kind: string; referenceTo: string[]; relationshipName?: string | null };
+}
+
+/** A field's documentation: its description, else the platform's help text. */
+function fieldDescription(f: EntityField): string | undefined {
+  const text = typeof f.description === "string" && f.description.trim() ? f.description : f.inlineHelpText;
+  return typeof text === "string" && text.trim() ? text.trim() : undefined;
 }
 
 export function fieldData(f: EntityField): FieldData {
@@ -158,6 +165,7 @@ export function fieldData(f: EntityField): FieldData {
     ...(f.createable !== undefined ? { createable: f.createable } : {}),
     ...(f.updateable !== undefined ? { updateable: f.updateable } : {}),
     ...(tags.length ? { tags } : {}),
+    ...(fieldDescription(f) ? { description: fieldDescription(f) } : {}),
     ...(f.relationship
       ? {
           relationship: {

@@ -45,18 +45,12 @@ test.describe("picture exports", () => {
 test.describe("marketing without gradients", () => {
   test("flattens the cards on screen and strips gradients from the SVG export", async ({ page, studio }) => {
     await studio.goto();
-    const gradientsToggle = page.getByLabel("Gradients", { exact: true });
-    // Technical has none to switch off, so the host does not offer it.
-    await expect(gradientsToggle).toHaveCount(0);
-
-    await page.getByLabel("Marketing", { exact: true }).check();
+    // The host opens in marketing with the gradients off, so the toggle is
+    // offered and unticked, and the cards start flat.
     await expect(studio.root).toHaveClass(/as-root--marketing/);
-    await expect(gradientsToggle).toBeChecked();
-    const card = studio.root.locator(".as-node:not(.as-node--shaped)").first();
-    await expect(card).toHaveCSS("background-image", /linear-gradient/);
-
-    await gradientsToggle.uncheck();
+    await expect(await studio.setting("Gradients")).not.toBeChecked();
     await expect(studio.root).toHaveClass(/as-root--no-gradients/);
+    const card = studio.root.locator(".as-node:not(.as-node--shaped)").first();
     await expect(card).toHaveCSS("background-image", "none");
     // The flat coat is a colour, not the transparent a bare `background:`
     // reset would leave.
@@ -74,10 +68,15 @@ test.describe("marketing without gradients", () => {
     expect(flat).not.toMatch(/<linearGradient/);
     expect(flat).toMatch(/<feDropShadow /);
 
-    // And back on: the same export carries them again.
-    await gradientsToggle.check();
+    // And on: the same export carries them.
+    await (await studio.setting("Gradients")).check();
     await expect(studio.root).not.toHaveClass(/as-root--no-gradients/);
     await expect(card).toHaveCSS("background-image", /linear-gradient/);
     expect(await svgOf()).toMatch(/<linearGradient/);
+
+    // Technical has none to switch off, so the host does not offer it there.
+    await (await studio.setting("Marketing")).uncheck();
+    await expect(studio.root).not.toHaveClass(/as-root--marketing/);
+    await expect(page.getByLabel("Gradients", { exact: true })).toHaveCount(0);
   });
 });

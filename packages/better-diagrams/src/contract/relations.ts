@@ -97,6 +97,17 @@ export const RELATION_KINDS: Record<string, RelationKindDef> = {
     color: "emerald",
     endHead: "triangle",
   },
+  // Not a data-model kind: the long-range link of a task graph (tasks.ts).
+  // Dashed sky is the one style/colour pair no kind above wears, and it
+  // states no cardinality — a dependency is between two pieces of work, not
+  // two row sets. The editor keeps it hidden until either end is hovered or
+  // selected; the arrow points at the task that waits.
+  dependency: {
+    label: "Dependency",
+    description: "Waits on work elsewhere in the plan — shown when either task is hovered or selected",
+    style: "dashed",
+    color: "sky",
+  },
 };
 
 /** The order a legend and a picker list the built-ins in. */
@@ -107,6 +118,7 @@ export const RELATION_KIND_ORDER: readonly string[] = [
   "hierarchy",
   "polymorphic",
   "generalization",
+  "dependency",
 ];
 
 /** What an unregistered kind draws as: the plain reference line, named after its id. */

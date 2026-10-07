@@ -132,6 +132,11 @@ export interface ExportContext<TDoc = DiagramTemplate> {
    * exporter ignores it for the same reason it ignores `mode`.
    */
   gradients?: boolean;
+  /**
+   * The compare baseline while Compare is open — what a change report is
+   * against. Absent otherwise.
+   */
+  diffBase?: TDoc;
 }
 
 export interface ExportResult {
@@ -153,6 +158,11 @@ export interface ExporterDef<TDoc = DiagramTemplate> {
    * the file it produces would have nothing left to scrub.
    */
   fullDocument?: boolean;
+  /**
+   * Whether the Export menu offers it for this document; absent means always.
+   * A data dictionary needs tables; a schema change report needs a baseline.
+   */
+  available?(ctx: { template: TDoc; diffBase?: TDoc }): boolean;
   /**
    * Produce a file to download, or return void/undefined if the exporter
    * delivered the result itself (clipboard, postMessage, a network upload).

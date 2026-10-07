@@ -146,6 +146,34 @@ export type { RelationKindDef } from "./relations";
 export { junctionTables, collapseJunctions } from "./junctions";
 export type { JunctionTable } from "./junctions";
 
+// ── Task graphs (work items, who holds them, what waits on what) ────────────
+export {
+  TASK_KIND,
+  MILESTONE_KIND,
+  DEPENDENCY_RELATION,
+  isWorkItem,
+  isTaskLink,
+  prerequisites,
+  workDone,
+  blockedTasks,
+  readyTasks,
+  overdueWork,
+  taskAssignees,
+  taskWorkload,
+  planProgress,
+  taskRollups,
+  rollupLabel,
+  rollupFraction,
+  criticalPath,
+  taskDeadlocks,
+  taskChanges,
+} from "./tasks";
+export type { TaskDocument, TaskAssignee, TaskWorkload, TaskRollup, TaskChanges } from "./tasks";
+export { taskLintRules } from "./task-lint";
+export type { TaskLintOptions } from "./task-lint";
+export { taskReportMarkdown, tasksCsv } from "./task-report";
+export type { TaskReportOptions } from "./task-report";
+
 // ── Fields (rows plus what the data bag knows about them) ───────────────────
 export {
   fieldKey,
@@ -157,12 +185,16 @@ export {
   fieldOutEdges,
   fieldInEdges,
   referencedKey,
+  keyResolver,
   hasField,
   buildFieldIndex,
   searchFields,
   keyFields,
   edgeKeyOf,
+  documentFieldRecords,
+  tableProfile,
 } from "./fields";
+export { csvText } from "./csv";
 export type {
   FieldRef,
   Pin,
@@ -174,6 +206,8 @@ export type {
   FieldIndex,
   FieldIndexEntry,
   FieldHit,
+  ColumnProfile,
+  TableProfile,
 } from "./fields";
 
 // ── Key coverage (how much of a model a set of keys reaches) ────────────────
@@ -186,6 +220,57 @@ export type {
   MinimalCoverOptions,
   MinimalCoverResult,
 } from "./coverage";
+
+// ── Key usage (which tables carry a field, by name) ─────────────────────────
+export { fieldUsage, searchFieldUsage, usageCoverage, usageHeadline, variantSummary, inconsistencySummary } from "./key-usage";
+export type { FieldUsage, FieldUsageIndex, FieldUsageOptions, FieldVariant, UsageCoverage, UsageOptions } from "./key-usage";
+// When two column types are the same type.
+export { normalizeType, sameType, DEFAULT_TYPE_ALIASES } from "./type-families";
+export type { TypeFamily } from "./type-families";
+// Schema-quality checks (part of the built-in lint rules; tune with the factory).
+export { dataModelLintRules, DEFAULT_REFERENCE_PATTERNS } from "./data-model-lint";
+export type { DataModelLintOptions } from "./data-model-lint";
+// What depends on a table or a key, and what a change would reach.
+export { impactOf, impactChain, impactHeadline } from "./impact";
+export type { ImpactOptions, ImpactNode, ImpactResult } from "./impact";
+// What changed between two versions of a model, column by column.
+export { schemaDiff, schemaDiffMarkdown } from "./schema-diff";
+export type { SchemaDiff, SchemaDiffOptions, ColumnChange, ColumnAspect, ChangeImpact, FieldSnapshot } from "./schema-diff";
+// The model as a document, and the governance numbers.
+export { dataDictionary, dictionaryMarkdown, dictionaryCsv, governanceReport, DEFAULT_SENSITIVE_TAG } from "./dictionary";
+export type { DictionaryTable, GovernanceReport } from "./dictionary";
+// Hubs, bridges and suggested domains: the shape of a model.
+export { modelStructure, summarizeStructure } from "./structure";
+export type { ModelStructure, StructureOptions, StructureSummary, TableMetrics, Domain } from "./structure";
+// Saved analyses: questions kept with the model, re-run after it changes.
+export { validateAnalyses, analysisId, analysisDrift, ANALYSIS_KINDS, ANALYSIS_KIND_LABEL, MAX_ANALYSES } from "./analyses";
+export type { SavedAnalysis, SavedAnalysisBody, SavedAnalysisKind, SavedAnalysisMeta } from "./analyses";
+// Column lineage: which column is made from which (kept apart from edges).
+export {
+  validateLineage,
+  MAX_LINEAGE,
+  traceLineage,
+  lineageChain,
+  lineageHeadline,
+  sensitiveLineage,
+  importOpenLineage,
+  parseOpenLineageEvents,
+  mergeLineage,
+} from "./lineage";
+export type { LineageLink, LineageColumn, LineageTrace, OpenLineageImport, OpenLineageOptions } from "./lineage";
+// Loading a schema: a SQL script or a dbt project, as an editable document.
+export { buildTableModel } from "./import/table-model";
+export type { TableSpec, ColumnSpec, ForeignKeySpec, SchemaImport, SchemaImportWarning, TableModelOptions } from "./import/table-model";
+export { importSqlDdl, parseSqlDdl, looksLikeSqlDdl } from "./import/sql-ddl";
+export type { ParsedDdl } from "./import/sql-ddl";
+export { importDbt, isDbtManifest } from "./import/dbt";
+export type { DbtArtifacts } from "./import/dbt";
+// Columns that look personal but carry no sensitive tag.
+export { sensitivityHints, DEFAULT_SENSITIVITY_RULES } from "./sensitivity";
+export type { SensitivityHint, SensitivityRule } from "./sensitivity";
+// A route between tables as the SQL that walks it.
+export { routeSql, sqlTableName, SQL_DIALECTS } from "./route-sql";
+export type { RouteSql, RouteSqlOptions, RouteSqlWarning, RouteSqlWarningKind, SqlDialect, HopMultiplicity } from "./route-sql";
 
 // ── Paths (named flows the reader can light up) ──────────────────────────────
 export { PATH_COLOR_CYCLE, pathColor, resolvePath } from "./paths";
@@ -333,7 +418,7 @@ export type { JsonRepairResult, JsonRepairOptions, JsonApproximation } from "./j
 
 // ── Lint ─────────────────────────────────────────────────────────────────────
 export { BUILTIN_LINT_RULES, lintTemplate, LINT_IGNORE_TAG, lintIgnored } from "./lint";
-export type { LintSeverity, LintIssue, LintRuleDef, LintFinding } from "./lint";
+export type { LintSeverity, LintIssue, LintRuleDef, LintFinding, LintFix } from "./lint";
 
 // ── Diff ─────────────────────────────────────────────────────────────────────
 export {

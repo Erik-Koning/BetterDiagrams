@@ -65,6 +65,9 @@ import {
   MAX_NODE_FIELDS,
   NODE_OUTLINES,
   NODE_STATUSES,
+  TASK_PRIORITIES,
+  type TaskPriority,
+  type TaskStage,
   NODE_TEXT_ALIGNS,
   NODE_TEXT_VALIGNS,
   DEFAULT_CONTAINER_OPACITY,
@@ -121,9 +124,9 @@ import {
   type ZoneNodeData,
 } from "../contract/schema";
 import { pathColor, type DiagramPath } from "../contract/paths";
-import { applyOutsideView, applyPathView, buildPathGlowIndex, canvasStandIns, keptOnCanvas, representatives, transientPathColors } from "./path-view";
+import { applyOutsideView, applyPathView, buildPathGlowIndex, canvasStandIns, documentNodeId, keptOnCanvas, representatives, transientPathColors } from "./path-view";
 import { FieldPathPanel } from "./FieldPathPanel";
-import { computeRouteView, structureSignature, type RouteView } from "./field-routes";
+import { computeRouteView, litRoutes, ROUTE_CAP, structureSignature, type RouteView } from "./field-routes";
 import { ReferencePanel } from "./ReferencePanel";
 import { walkToPath } from "../contract/graph";
 import {
@@ -186,7 +189,42 @@ import { inlineContents, nestContents } from "../contract/nesting";
 import { importFolder } from "../contract/folder";
 import { buildFieldIndex, fieldKey, fieldRecords, hasField, keyFields, keyReferences, referencedKey, referencesTo, sameFieldRef, searchFields, type FieldRef, type FieldTarget, type KeyLink, type Pin } from "../contract/fields";
 import { keyCoverage, marginalGains, minimalKeyCover, storesFields, type CoverageScope } from "../contract/coverage";
+import { ANALYSIS_KIND_LABEL, analysisDrift, analysisId, type SavedAnalysis, type SavedAnalysisBody, type SavedAnalysisKind } from "../contract/analyses";
+import { readAnalysis } from "./saved-analyses";
+import { SaveAnalysisDialog, SavedAnalysesMenu } from "./SavedAnalyses";
+import { importOpenLineage, mergeLineage } from "../contract/lineage";
+import { LineageOverlay } from "./LineageOverlay";
+import { importSqlDdl, looksLikeSqlDdl } from "../contract/import/sql-ddl";
+import { importTaskCsv, looksLikeTaskCsv, type TaskCsvImport } from "../contract/import/task-csv";
+import { importDbt, isDbtManifest } from "../contract/import/dbt";
+import type { SchemaImport } from "../contract/import/table-model";
 import { CoveragePanel } from "./CoveragePanel";
+import { fieldUsage, searchFieldUsage, usageCoverage } from "../contract/key-usage";
+import { KeyUsagePanel } from "./KeyUsagePanel";
+import { useAnalysisSidebar, type AnalysisMask, type AnalysisState } from "./analysis-sidebar";
+import { routeSql } from "../contract/route-sql";
+import {
+  DEPENDENCY_RELATION,
+  MILESTONE_KIND,
+  TASK_KIND,
+  blockedTasks,
+  criticalPath,
+  isWorkItem,
+  overdueWork,
+  planProgress,
+  readyTasks,
+  rollupFraction,
+  rollupLabel,
+  taskAssignees,
+  taskChanges,
+  taskRollups,
+  taskWorkload,
+  workDone,
+  type TaskAssignee,
+  type TaskDocument,
+} from "../contract/tasks";
+import { assigneeSwatch, assigneeSwatches, swatchColor } from "./shapes";
+import { CapacityModal } from "./CapacityModal";
 import { FieldGridModal } from "./FieldGridModal";
 import { copyText } from "./copy-text";
 import { PinStrip } from "./FieldPins";
@@ -226,7 +264,8 @@ import { relationDressing } from "../contract/relations";
 import { NODE_TYPES } from "./nodes";
 import { EDGE_TYPES } from "./edges";
 import { topDropTarget } from "./dangling";
-import { StudioContext } from "./context";
+import { StudioContext, useStudio } from "./context";
+import { useToday } from "./today";
 import {
   modeClassName,
   modeLayoutOptions,
@@ -256,6 +295,7 @@ const DEFAULT_EDGE_OPTIONS = { zIndex: EDGE_Z_INDEX };
 const SELECT_ELEVATION = 100_000;
 /** A stable empty list, so a path-less document does not re-run every memo keyed on it. */
 const EMPTY_PATHS: readonly DiagramPath[] = [];
+const EMPTY_ANALYSES: readonly SavedAnalysis[] = [];
 
 /**
  * How far a SELECTED edge floats — above a selected node, so its endpoint and
@@ -269,6 +309,8 @@ const ALIGN_TOL = 6;
 
 /** No row marked — one shared empty set, so an unchanged "nothing" never re-renders the rows. */
 const NO_FIELDS: ReadonlySet<string> = new Set();
+/** Findings the Checks menu lists before it points at the panel. */
+const CHECKS_MENU_CAP = 30;
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 
@@ -292,6 +334,9 @@ export interface StudioSlotContext {
   /** The keys the coverage panel is scoring; see {@link StudioHandle.getCoverageKeys}. */
   coverageKeys: FieldRef[];
   setCoverageKeys: (refs: readonly FieldRef[]) => void;
+  /** The field names the key-usage panel is scoring; see {@link StudioHandle.getUsageKeys}. */
+  usageKeys: string[];
+  setUsageKeys: (names: readonly string[]) => void;
 }
 
 /**
@@ -343,6 +388,24 @@ export interface StudioHandle {
   setCoverageKeys: (refs: readonly FieldRef[]) => void;
   /** Open (or close) the key-coverage panel. */
   openCoverage: (open?: boolean) => void;
+  /**
+   * The field names the key-usage panel scores, lowercased — view state like
+   * the coverage keys, mirrored by `onKeyUsageChange`. A name no table
+   * carries is kept (an undo may bring it back) and simply scores nothing.
+   */
+  getUsageKeys: () => string[];
+  setUsageKeys: (names: readonly string[]) => void;
+  /** Open (or close) the key-usage panel in the left sidebar. */
+  openKeyUsage: (open?: boolean) => void;
+  /** The document's saved analyses (`template.analyses`), in order. */
+  getAnalyses: () => SavedAnalysis[];
+  /**
+   * Open a saved analysis by id: set the view state its panel reads (pins,
+   * usage picks, coverage keys, an impact subject, a neighbourhood focus) and
+   * open that panel. View state only — nothing enters the document. Returns
+   * false when the document has no analysis with that id.
+   */
+  openAnalysis: (id: string) => boolean;
 }
 
 /**
@@ -399,6 +462,15 @@ export interface ArchitectureStudioProps {
   /** Show the React Flow minimap. Defaults to true. */
   minimap?: boolean;
   /**
+   * Hide every connection until the pointer is over a node it touches.
+   * Default `false`. On, the canvas shows cards alone; hovering a node draws
+   * its lines, hovering a group draws its members' lines, and the lines of a
+   * selected node or a selected connection stay visible — so a click pins a
+   * node's wiring while the pointer moves on. A view setting only: the
+   * document, the inspector and every export still carry every connection.
+   */
+  edgesOnHover?: boolean;
+  /**
    * Show the welcome/import modal over a brand-new document (or an empty
    * workspace): brand mark, "Insert Node Manually", "Copy Schema & System
    * Prompt", and a paste-JSON editor. Defaults to true; suppressed while
@@ -454,6 +526,8 @@ export interface ArchitectureStudioProps {
   onPinsChange?: (pins: Pin[]) => void;
   /** Fires with the coverage panel's chosen keys on mount (empty) and whenever they change. */
   onCoverageChange?: (keys: FieldRef[]) => void;
+  /** Fires with the key-usage panel's picked field names on mount (empty) and whenever they change. */
+  onKeyUsageChange?: (names: string[]) => void;
   /** Extra toolbar content, rendered after the built-in buttons. */
   toolbarExtras?: ReactNode | ((ctx: StudioSlotContext) => ReactNode);
   /** Extra inspector content, rendered when something is selected. */
@@ -661,7 +735,23 @@ const TYPED_FIELDS = new Set([
   "startLabel",
   "endLabel",
   "fields",
+  "storyPoints",
+  "capacity",
 ]);
+
+/** What the View menu's task filter can keep: each a set of tasks, the rest receding. */
+type TaskFilterKind = "open" | "ready" | "started" | "blocked" | "overdue";
+const TASK_FILTERS: ReadonlyArray<[TaskFilterKind, string, string]> = [
+  ["open", "Open", "Every task not done"],
+  ["ready", "Ready", "Open, not started, waiting on nothing — what someone could pick up now"],
+  ["started", "In progress", "In progress or in review"],
+  ["blocked", "Blocked", "Waiting on unfinished work"],
+  ["overdue", "Overdue", "Past the due date and not done"],
+];
+
+/** No people yet — one shared empty list, so the legend's memo holds. */
+const EMPTY_PEOPLE: TaskAssignee[] = [];
+const EMPTY_NAMES: readonly string[] = [];
 
 /**
  * What an inspector writes: the fields to set, or a function of the element's
@@ -705,6 +795,7 @@ function StudioInner({
   generate,
   filename = "architecture",
   minimap = true,
+  edgesOnHover = false,
   welcome = true,
   legend = true,
   defaultShowHidden = false,
@@ -723,6 +814,7 @@ function StudioInner({
   onActivePathsChange,
   onPinsChange,
   onCoverageChange,
+  onKeyUsageChange,
   toolbarExtras,
   inspectorExtras,
   className,
@@ -877,7 +969,7 @@ function StudioInner({
    * menu closes whichever other menu was open — no two-menus-at-once states.
    */
   const [openMenu, setOpenMenu] = useState<
-    "files" | "insert" | "arrange" | "view" | "paths" | "checks" | "export" | null
+    "files" | "insert" | "arrange" | "view" | "paths" | "analyses" | "checks" | "export" | null
   >(null);
   /**
    * What a press and a drag on the canvas mean. See CANVAS_TOOLS in chrome.tsx.
@@ -967,6 +1059,12 @@ function StudioInner({
   const [hoverRoute, setHoverRoute] = useState<number | null>(null);
   const [stickyRoute, setStickyRoute] = useState<number | null>(null);
   /**
+   * Past the first few routes, the rest — in the list, on the canvas, in
+   * the legend — show only on request. Held as the view it was asked for,
+   * so a new view (other pins, the direction toggled) folds them back.
+   */
+  const [routesExpandedFor, setRoutesExpandedFor] = useState<RouteView | null>(null);
+  /**
    * The key under the pointer in "Keys most routes use", and the one clicked:
    * every route through it lights. A kept key and a kept route are two
    * answers to "what stays lit", so keeping one lets go of the other.
@@ -981,6 +1079,21 @@ function StudioInner({
   const [coverageHover, setCoverageHover] = useState<FieldRef | null>(null);
   /** What the last "Find smallest set" said about its answer; cleared when the keys change by hand. */
   const [smallest, setSmallest] = useState<{ optimal: boolean; truncated: boolean } | null>(null);
+  /**
+   * The key-usage panel (left sidebar): which field names are picked, how a
+   * table is counted, and what the search says. View state, like coverage.
+   */
+  const [usageOpen, setUsageOpen] = useState(false);
+  const [usageQuery, setUsageQuery] = useState("");
+  const [usageKeysOnly, setUsageKeysOnly] = useState(false);
+  const [usageInconsistentOnly, setUsageInconsistentOnly] = useState(false);
+  /** One way a picked name is stored, focused — the list and the canvas narrow to its tables. */
+  const [usageVariant, setUsageVariant] = useState<{ id: string; family: string } | null>(null);
+  const [usageKeys, setUsageKeysState] = useState<string[]>([]);
+  const usageKeysRef = useRef<string[]>([]);
+  const [usageMatch, setUsageMatch] = useState<"any" | "all">("any");
+  const [usageTargets, setUsageTargets] = useState(false);
+  const [usageHover, setUsageHover] = useState<string | null>(null);
   const [showTeams, setShowTeams] = useState(true);
   const [showLinks, setShowLinks] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
@@ -1006,6 +1119,10 @@ function StudioInner({
   >(null);
   /** The container the dragged node would land in, highlighted while it moves. */
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  /** The node under the pointer — only tracked while `edgesOnHover` is on. */
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  /** Dormant twins of the view edges, keyed by the edge object they came from. */
+  const dormantEdgeCache = useRef(new WeakMap<Edge, Edge>());
 
   /** Narrow picture exports to the selection. See `runDirectExport`. */
   const [exportSelectionOnly, setExportSelectionOnly] = useState(false);
@@ -1912,31 +2029,190 @@ function StudioInner({
   useEffect(() => {
     if (refPanel && !hasField(template, refPanel)) setRefPanel(null);
   }, [template, refPanel]);
-  /** The found routes as transient paths — all of them, or the hovered/kept one alone. */
+  // The Generate panel shares the slot and is drawn below the references
+  // and paths panels in it: when it SHOWS, it must close both, or its button
+  // would light up with nothing to show. Only when it shows — a failed save
+  // or export also sets `panelOpen`, and with no generator its error goes to
+  // the error bar instead, so closing the reader's panel would buy nothing.
+  // The pins stay; Show paths brings the same view back.
+  const generateShows = panelOpen && !!generate && !readOnly;
+  useEffect(() => {
+    if (!generateShows) return;
+    setRefPanel(null);
+    setPathPanelOpen(false);
+  }, [generateShows]);
+  const routesExpanded = routesExpandedFor !== null && routesExpandedFor === routeView;
+  const setRoutesExpanded = useCallback((expanded: boolean) => setRoutesExpandedFor(expanded ? routeView : null), [routeView]);
+  /**
+   * The shown routes as transient paths — the first few or all of them, or
+   * the hovered/kept one alone, or what a hovered/kept key lights. Which
+   * walks is `litRoutes`, the one rule the HTML export lights by too.
+   */
   const transientPaths = useMemo(() => {
-    if (!routeView || routeView.kind !== "pair") return [];
-    const only = hoverRoute ?? stickyRoute;
-    // A key the current routes don't use (kept, then the direction toggled)
-    // lights nothing through it — it falls through to the routes instead.
-    const litKey = hoverKey ?? stickyKey;
-    const keyEdges = litKey ? routeView.keyUse?.keys.find((k) => fieldKey(k.ref) === litKey)?.edges : undefined;
-    const throughKey = keyEdges ? new Set(keyEdges) : null;
-    return routeView.routes
-      .map((route, i) => ({ route, i }))
-      .filter(({ route, i }) =>
-        throughKey
-          ? route.walk.edges.some((e) => throughKey.has(e))
-          : only === null || only >= routeView.routes.length || only === i,
-      )
-      .map(({ route, i }) =>
-        walkToPath(templateRef.current, route.walk, { id: `~route:${i}`, title: route.title, color: route.color }),
-      );
-  }, [routeView, hoverRoute, stickyRoute, hoverKey, stickyKey]);
+    if (!routeView) return [];
+    const doc = templateRef.current;
+    const label = (id: string) => doc.nodes.find((n) => n.id === id)?.label ?? id;
+    const focus = { expanded: routesExpanded, hoverRoute, stickyRoute, hoverKey, stickyKey };
+    return litRoutes(routeView, focus, label, routeColors[0] ?? "sky").map((lit) =>
+      walkToPath(doc, lit.walk, { id: `~${lit.id}`, title: lit.title, color: lit.color }),
+    );
+  }, [routeView, routesExpanded, hoverRoute, stickyRoute, hoverKey, stickyKey, routeColors]);
+  // What overdue is measured against — a new day re-counts without an edit.
+  const today = useToday();
+  // Architecture, data-model and plan lint — pure over the document, so it
+  // re-runs per committed edit and can never touch what persists. And once a
+  // day: the plan checks read today's date for what's overdue.
+  const findings = useMemo(
+    () => lintTemplate(template, registry.lintRules),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- today re-runs it at midnight
+    [template, registry, today],
+  );
+  // The sidebar's data-model analyses (neighbourhood, impact, checks, …):
+  // one hook owns their state and results; the studio places the panel and
+  // takes the mask. Navigation and the finding jump go through refs — they
+  // are declared later.
+  const analysisNavigate = useCallback((id: string) => navigateToNodeRef.current(id), []);
+  const analysisNodeLabel = useCallback((id: string) => templateRef.current.nodes.find((n) => n.id === id)?.label ?? id, []);
+  const jumpToFindingRef = useRef<(finding: LintFinding) => void>(() => {});
+  const analysisJump = useCallback((finding: LintFinding) => jumpToFindingRef.current(finding), []);
+  const ruleInfo = useCallback(
+    (rule: string) => {
+      const def = registry.lintRules[rule];
+      return { label: def?.label ?? rule, ...(def?.description ? { description: def.description } : {}) };
+    },
+    [registry],
+  );
+  /** Excuse a finding: tag the column it is about (or its table) `lint-ignore:<rule>` — one undoable edit. */
+  const ignoreFinding = useCallback(
+    (finding: LintFinding) => {
+      const doc = templateRef.current;
+      const tag = `lint-ignore:${finding.rule}`;
+      const field = finding.fields?.[0];
+      const withTag = (tags: readonly string[] | undefined) => [...new Set([...(tags ?? []), tag])];
+      let done = false;
+      const nodes = doc.nodes.map((n) => {
+        if (done) return n;
+        if (field && n.id === field.nodeId && n.fields?.some((r) => r.id === field.fieldId)) {
+          done = true;
+          return { ...n, fields: n.fields.map((r) => (r.id === field.fieldId ? { ...r, tags: withTag(r.tags) } : r)) };
+        }
+        // A column the table doesn't draw has no row to tag: the table carries it.
+        if (n.id === (field?.nodeId ?? finding.nodeIds?.[0])) {
+          done = true;
+          return { ...n, tags: withTag(n.tags) };
+        }
+        return n;
+      });
+      if (!done) return;
+      applyTemplate({ ...doc, nodes }, { fit: false });
+      showToast(`Ignored — tagged ${tag}`);
+    },
+    [applyTemplate, showToast],
+  );
+  /** Apply a finding's fix: draw the reference a column's name implies, or tag a column. */
+  const fixFinding = useCallback(
+    (finding: LintFinding) => {
+      const fix = finding.fix;
+      if (fix?.kind === "tag-field") {
+        const doc = templateRef.current;
+        let done = false;
+        const nodes = doc.nodes.map((n) => {
+          if (n.id !== fix.field.nodeId || !n.fields?.some((f) => f.id === fix.field.fieldId)) return n;
+          done = true;
+          return { ...n, fields: n.fields.map((f) => (f.id === fix.field.fieldId ? { ...f, tags: [...new Set([...(f.tags ?? []), fix.tag])] } : f)) };
+        });
+        if (!done) return;
+        applyTemplate({ ...doc, nodes }, { fit: false });
+        showToast(`Tagged ${fix.field.fieldId} ${fix.tag}`);
+        return;
+      }
+      if (fix?.kind !== "draw-reference") return;
+      const doc = templateRef.current;
+      const key = referencedKey(doc, { label: "", nodeId: fix.to });
+      const base = `${fix.from.nodeId}::${fix.from.fieldId}::${fix.to}`;
+      let id = base;
+      for (let n = 2; doc.edges.some((e) => e.id === id); n++) id = `${base}-${n}`;
+      const edge = {
+        id,
+        source: fix.from.nodeId,
+        target: fix.to,
+        label: "",
+        ...relationDressing(relationDef(registry, "reference")),
+        relation: "reference",
+        startField: fix.from.fieldId,
+        ...(key ? { endField: key.fieldId } : {}),
+      } as DiagramTemplate["edges"][number];
+      applyTemplate({ ...doc, edges: [...doc.edges, edge] }, { fit: false });
+      showToast(fix.label.replace(/^Draw/, "Drew"));
+    },
+    [applyTemplate, registry, showToast],
+  );
+  // Compare mode's baseline from the toolbar picker (declared here: the
+  // schema-changes analysis below reads it).
+  const [compareTemplate, setCompareTemplate] = useState<DiagramTemplate | null>(null);
+  const navigateToFieldRef = useRef<(ref: FieldRef) => void>(() => {});
+  const analysisNavigateField = useCallback((ref: FieldRef) => navigateToFieldRef.current(ref), []);
+  /** Save an open analysis (declared further down, with the panels it reads). */
+  const saveAnalysisRef = useRef<(kind: SavedAnalysisKind) => void>(() => {});
+  const analysisStateKindRef = useRef<string | undefined>(undefined);
+  /** Select a set of tables (a Model structure domain) — ⌘G then groups them. */
+  const analysisSelect = useCallback((ids: readonly string[]) => {
+    if (!ids.length) return;
+    navigateToNodeRef.current(ids[0]!, { nodes: ids });
+    showToast(`Selected ${ids.length} table${ids.length === 1 ? "" : "s"}${readOnly ? "" : " — ⌘G groups them"}`);
+  }, [readOnly, showToast]);
+  const analysis = useAnalysisSidebar({
+    template,
+    navigateToField: analysisNavigateField,
+    diffBase: diffBase ?? compareTemplate,
+    title: String(template.meta?.title ?? filename),
+    nodeLabel: analysisNodeLabel,
+    navigateToNode: analysisNavigate,
+    findings,
+    ruleInfo,
+    canEdit: !readOnly && !template.meta?.folderFormat,
+    onJumpFinding: analysisJump,
+    onIgnoreFinding: ignoreFinding,
+    onFixFinding: fixFinding,
+    download,
+    selectNodes: analysisSelect,
+    ...(readOnly ? {} : { onSave: () => saveAnalysisRef.current(analysisStateKindRef.current === "neighbourhood" ? "neighbourhood" : "impact") }),
+  });
+  analysisStateKindRef.current = analysis.state?.kind;
   // Several routes lit at once keep their palette colours so they stay
-  // distinguishable; one route singled out (hovered or kept) goes bright.
+  // distinguishable; one route singled out (hovered or kept) goes bright —
+  // and so does an analysis's own walk (an impact chain under the pointer).
+  const glowPaths = useMemo(
+    () => (analysis.paths.length ? [...transientPaths, ...analysis.paths] : transientPaths),
+    [transientPaths, analysis.paths],
+  );
+  /**
+   * The task graph's critical path, lit while View → Show critical path is
+   * on: the chain of prerequisites carrying the most work still to do. A
+   * computed path, so it glows in its own colour — never the "singled out"
+   * route colour a lone route takes — and Compare draws none.
+   */
+  const [showCritical, setShowCritical] = useState(false);
+  /** Whether View → Team capacity… is open. */
+  const [capacityOpen, setCapacityOpen] = useState(false);
+  const criticalWalk = useMemo(
+    () => (showCritical && !(diffBase || compareTemplate) ? criticalPath(template) : null),
+    [showCritical, template, diffBase, compareTemplate],
+  );
+  const criticalPaths = useMemo<DiagramPath[]>(
+    () =>
+      criticalWalk
+        ? [walkToPath(template, criticalWalk, { id: "~critical", title: `Critical path · ${criticalWalk.weight} pts left`, color: "amber" })]
+        : [],
+    [criticalWalk, template],
+  );
   const pathGlowIndex = useMemo(
-    () => buildPathGlowIndex(template, activePathIds, transientPaths, { bright: transientPaths.length === 1 }),
-    [template, activePathIds, transientPaths],
+    () =>
+      buildPathGlowIndex(template, activePathIds, glowPaths, {
+        bright: glowPaths.length === 1,
+        ...(criticalPaths.length ? { steady: criticalPaths } : {}),
+      }),
+    [template, activePathIds, glowPaths, criticalPaths],
   );
   // Key coverage — memoised on structure like the routes, and only while open.
   const coverageResult = useMemo(
@@ -1986,17 +2262,268 @@ function StudioInner({
     () => representatives(template, canvasIdsKey ? canvasIdsKey.split("\n") : []),
     [template, canvasIdsKey],
   );
+  // Key usage — only while its panel is open. Field names and rows are
+  // content, not structure, so it follows the template; one linear pass.
+  const usageIndex = useMemo(() => (usageOpen ? fieldUsage(template) : null), [template, usageOpen]);
+  const usageResults = useMemo(
+    () => (usageIndex ? searchFieldUsage(usageIndex, usageQuery, { keysOnly: usageKeysOnly, inconsistentOnly: usageInconsistentOnly }) : []),
+    [usageIndex, usageQuery, usageKeysOnly, usageInconsistentOnly],
+  );
+  const usageResult = useMemo(
+    () => (usageIndex ? usageCoverage(usageIndex, usageKeys, { match: usageMatch, includeTargets: usageTargets }) : null),
+    [usageIndex, usageKeys, usageMatch, usageTargets],
+  );
+  /**
+   * With names picked (or one hovered) the canvas dims to the tables using
+   * them. A hovered name not yet picked previews the set with it added; a
+   * picked one shows its own share.
+   */
+  const usageMask = useMemo(() => {
+    // A focused variant of a picked name: the tables storing it that way.
+    const variant = usageVariant && usageKeys.includes(usageVariant.id)
+      ? usageIndex?.byId.get(usageVariant.id)?.variants.find((v) => v.family === usageVariant.family)
+      : undefined;
+    if (variant && !usageHover) return new Set(variant.tables.map((t) => t.nodeId));
+    if (!usageIndex || !usageResult || (!usageKeys.length && !usageHover)) return null;
+    const opts = { match: usageMatch, includeTargets: usageTargets };
+    const shown = !usageHover
+      ? usageResult
+      : usageKeys.includes(usageHover)
+        ? usageCoverage(usageIndex, [usageHover], opts)
+        : usageCoverage(usageIndex, [...usageKeys, usageHover], opts);
+    return new Set(shown.covered.map((c) => c.nodeId));
+  }, [usageIndex, usageResult, usageKeys, usageHover, usageMatch, usageTargets, usageVariant]);
+  /** Lines between two tables still lit stay lit; the rest recede with their cards. */
+  const usageKeepEdges = useMemo(
+    () => (usageMask ? new Set(template.edges.filter((e) => usageMask.has(e.source) && usageMask.has(e.target)).map((e) => e.id)) : null),
+    [usageMask, template],
+  );
+  /** Names are matched without regard to case, so a pick is its lowercased name, once. */
+  const setUsageKeys = useCallback((names: readonly string[]) => {
+    const next = [...new Set(names.map((n) => n.trim().toLowerCase()).filter(Boolean))];
+    usageKeysRef.current = next;
+    setUsageKeysState(next);
+  }, []);
+  const toggleUsageKey = useCallback(
+    (id: string) => {
+      const current = usageKeysRef.current;
+      setUsageKeys(current.includes(id) ? current.filter((k) => k !== id) : [...current, id]);
+    },
+    [setUsageKeys],
+  );
   /**
    * One dim mask for the canvas: the coverage panel's while it is showing
-   * something, else the paths panel's reachable set, else nothing — widened
+   * something, else the key-usage panel's, else the paths panel's reachable
+   * set, else nothing — widened
    * to the stand-ins, so a chip hiding a kept table stays bright and a chip
    * hiding none recedes like any other card.
    */
+  /** The one active analysis mask: key usage's, else the open analysis panel's. */
+  const analysisMask = useMemo<AnalysisMask | null>(
+    () => (usageMask ? { keep: usageMask, keepEdges: usageKeepEdges } : analysis.mask),
+    [usageMask, usageKeepEdges, analysis.mask],
+  );
+  // ── Tasks ─────────────────────────────────────────────────────────────────
+
+  /**
+   * The task graph's structure as one string: each task's id, done flag and
+   * people, and each line between two tasks. It is everything the blocked
+   * marks and the People legend read, and nothing a drag or a rename changes
+   * — `template` is rebuilt every frame of a drag and every keystroke of a
+   * label, and a fresh blocked map each time would re-render every card on
+   * the canvas. (The blocked tooltip names tasks through `taskLabelOf`.)
+   */
+  const taskSig = useMemo(() => {
+    const work = template.nodes.filter(isWorkItem);
+    if (!work.length) return "";
+    const ids = new Set(work.map((n) => n.id));
+    return JSON.stringify([
+      work.map((n) => [n.id, n.kind, n.done ? 1 : 0, n.stage ?? "", n.date ?? "", n.assignees ?? [], n.storyPoints ?? null, n.parentId ?? null]),
+      // The containment chain above the work (roll-ups climb it) and any
+      // container's capacity.
+      template.nodes
+        .filter((n) => !ids.has(n.id) && (n.parentId || n.capacity))
+        .map((n) => [n.id, n.parentId ?? null, n.capacity ?? null]),
+      template.edges
+        .filter((e) => ids.has(e.source) && ids.has(e.target))
+        .map((e) => [e.id, e.source, e.target, e.relation ?? "", e.direction ?? ""]),
+      template.settings?.capacity ?? null,
+    ]);
+  }, [template]);
+  const taskGraph = useMemo(() => {
+    if (!taskSig) return null;
+    const [rawWork, rawFrames, rawLinks, capacity] = JSON.parse(taskSig) as [
+      Array<[string, string, number, string, string, string[], number | null, string | null]>,
+      Array<[string, string | null, number | null]>,
+      Array<[string, string, string, string, string]>,
+      Record<string, number> | null,
+    ];
+    const doc: TaskDocument = {
+      nodes: [
+        ...rawWork.map(([id, kind, done, stage, date, assignees, points, parentId]) => ({
+          id,
+          kind,
+          done: !!done,
+          ...(stage ? { stage } : {}),
+          ...(date ? { date } : {}),
+          assignees,
+          ...(points !== null ? { storyPoints: points } : {}),
+          parentId,
+        })),
+        ...rawFrames.map(([id, parentId, cap]) => ({ id, parentId, ...(cap !== null ? { capacity: cap } : {}) })),
+      ],
+      edges: rawLinks.map(([id, source, target, relation, direction]) => ({
+        id,
+        source,
+        target,
+        ...(relation ? { relation } : {}),
+        ...(direction ? { direction } : {}),
+      })),
+      ...(capacity ? { settings: { capacity } } : {}),
+    };
+    const blocked = blockedTasks(doc);
+    const byPerson = new Map<string, Set<string>>();
+    for (const [id, kind, , , , assignees] of rawWork) {
+      if (kind !== TASK_KIND) continue;
+      for (const name of assignees) {
+        if (!byPerson.has(name)) byPerson.set(name, new Set());
+        byPerson.get(name)!.add(id);
+      }
+    }
+    const done = workDone(doc);
+    return {
+      doc,
+      blocked,
+      ready: readyTasks(doc),
+      overdue: overdueWork(doc, today),
+      reached: new Set(rawWork.filter(([id, kind]) => kind === MILESTONE_KIND && done.get(id)).map(([id]) => id)),
+      people: taskAssignees(doc),
+      workload: new Map(taskWorkload(doc).map((w) => [w.name, w])),
+      rollups: taskRollups(doc),
+      plan: planProgress(doc),
+      byPerson,
+    };
+  }, [taskSig, today]);
+  const blockedIds = taskGraph?.blocked;
+  /**
+   * The View menu's task filter: the tasks it keeps bright, every other task
+   * card receding. A view, like the tag filter — never saved.
+   */
+  const [taskFilter, setTaskFilter] = useState<TaskFilterKind | null>(null);
+  // A document without tasks has no plan views to keep: open another plan and
+  // it starts unfiltered, not on a filter left from two files ago.
+  useEffect(() => {
+    if (taskGraph) return;
+    setTaskFilter(null);
+    setShowCritical(false);
+  }, [taskGraph]);
+  const taskFilterIds = useMemo<ReadonlySet<string> | null>(() => {
+    if (!taskFilter || !taskGraph) return null;
+    const tasks = taskGraph.doc.nodes.filter((n) => n.kind === TASK_KIND);
+    switch (taskFilter) {
+      case "open":
+        return new Set(tasks.filter((n) => !n.done).map((n) => n.id));
+      case "ready":
+        return taskGraph.ready;
+      case "started":
+        return new Set(tasks.filter((n) => !n.done && n.stage).map((n) => n.id));
+      case "blocked":
+        return new Set(taskGraph.blocked.keys());
+      case "overdue":
+        return new Set(tasks.filter((n) => taskGraph.overdue.has(n.id)).map((n) => n.id));
+    }
+  }, [taskFilter, taskGraph]);
+  /**
+   * A task's current label by document id, read off the live document. Stable
+   * on purpose: the blocked tooltip asks it when the card renders and again
+   * when the pointer arrives, so a rename upstream never has to re-render
+   * every card to keep the tooltip true.
+   */
+  const taskLabelOf = useCallback(
+    (id: string) => templateRef.current.nodes.find((n) => n.id === id)?.label ?? id,
+    [],
+  );
+  const peopleRows = taskGraph?.people ?? EMPTY_PEOPLE;
+  const assigneeNames = useMemo(() => peopleRows.map((row) => row.name), [peopleRows]);
+  /**
+   * Everyone's colour, assigned across the whole plan at once so no two
+   * people share one — the cards, the legend and the picker all ask here.
+   */
+  const assigneeColorOf = useMemo(() => {
+    const swatches = assigneeSwatches(assigneeNames);
+    return (name: string) => swatchColor(swatches.get(name) ?? assigneeSwatch(name));
+  }, [assigneeNames]);
+  const anyTasks = taskGraph !== null;
+
+  /**
+   * The People legend, in two strengths — both views, like the tag filter:
+   * never in the document, never in undo.
+   *
+   *   click — `assigneeFilter`: the person's FOCUS. Their task cards stay as
+   *           they are; every other node, and every line that doesn't touch
+   *           one of their tasks, recedes. Click again to clear.
+   *   hover — `hoveredPerson`: a quick PREVIEW. Only the task cards that
+   *           aren't theirs recede; lines and everything else stay put.
+   *           Hovering someone other than the focused person previews them
+   *           instead, and leaving the row brings the focus back.
+   *
+   * Both are off while Compare is up, which draws the same canvas and would
+   * inherit the muting.
+   */
+  const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null);
+  const [hoveredPerson, setHoveredPerson] = useState<string | null>(null);
+  useEffect(() => {
+    if (assigneeFilter && !taskGraph?.byPerson.has(assigneeFilter)) setAssigneeFilter(null);
+    if (hoveredPerson && !taskGraph?.byPerson.has(hoveredPerson)) setHoveredPerson(null);
+  }, [assigneeFilter, hoveredPerson, taskGraph]);
+  const comparing = !!(diffBase || compareTemplate);
+  /** The person being previewed — never the one already in focus, whose click wins. */
+  const previewPerson = !comparing && hoveredPerson && hoveredPerson !== assigneeFilter ? hoveredPerson : null;
+  const personPreview = useMemo(
+    () => (previewPerson ? (taskGraph?.byPerson.get(previewPerson) ?? null) : null),
+    [previewPerson, taskGraph],
+  );
+  const focusKeep = !comparing && assigneeFilter ? (taskGraph?.byPerson.get(assigneeFilter) ?? null) : null;
+  /**
+   * Every line touching one of the focused person's tasks, as a string —
+   * whatever is at its other end. Read off the live document, so a line
+   * drawn mid-focus counts; signed, so a drag (which rebuilds `template`
+   * every frame) does not rebuild the mask and re-render every card.
+   */
+  const focusEdgeSig = useMemo(
+    () =>
+      focusKeep
+        ? template.edges
+            .filter((e) => focusKeep.has(e.source) || focusKeep.has(e.target))
+            .map((e) => e.id)
+            .join("\u0000")
+        : "",
+    [template, focusKeep],
+  );
+  /**
+   * The focus as a mask: the person's tasks, and the lines they are part of.
+   * The LAST fallback in the dim chain below, so an open coverage, analysis
+   * or path view says what is bright. Stood down while another person is
+   * previewed — the preview is about cards alone.
+   */
+  const assigneeMask = useMemo<AnalysisMask | null>(() => {
+    if (!focusKeep || previewPerson) return null;
+    return { keep: focusKeep, keepEdges: new Set(focusEdgeSig ? focusEdgeSig.split("\u0000") : []) };
+  }, [focusKeep, focusEdgeSig, previewPerson]);
+
+  /** Whether the person focus is what the dim chain is showing — it is the last fallback. */
+  const personFocus = !!assigneeMask && !coverageMask && !analysisMask && !routeView;
   const dimmedIds = useMemo(() => {
-    const keep = coverageMask ?? routeView?.keep ?? null;
+    const keep = coverageMask ?? analysisMask?.keep ?? routeView?.keep ?? assigneeMask?.keep ?? null;
     return keep ? keptOnCanvas(keep, canvasReps) : null;
-  }, [coverageMask, routeView, canvasReps]);
-  const routeKeepEdges = coverageMask ? coverageKeepEdges : (routeView?.keepEdges ?? null);
+  }, [coverageMask, analysisMask, routeView, assigneeMask, canvasReps]);
+  const routeKeepEdges = coverageMask
+    ? coverageKeepEdges
+    : analysisMask
+      ? analysisMask.keepEdges
+      : routeView
+        ? routeView.keepEdges
+        : (assigneeMask?.keepEdges ?? null);
 
   const allTags = useMemo(() => {
     const out: string[] = [];
@@ -2011,7 +2538,12 @@ function StudioInner({
   const anyLinks = useMemo(() => template.nodes.some((n) => n.url), [template]);
   /** Whether any line states a cardinality or a kind — what the notation choice acts on. */
   const anyCardinality = useMemo(
-    () => template.edges.some((e) => e.startLabel || e.endLabel || e.relation),
+    // A dependency is a task graph's kind of line, not a data model's: it
+    // states no cardinality, so a plan alone offers no notation choice.
+    () =>
+      template.edges.some(
+        (e) => e.startLabel || e.endLabel || (e.relation && e.relation !== DEPENDENCY_RELATION),
+      ),
     [template],
   );
   /** Many-to-many spelled as tables — what *Collapse junction tables* folds into one line each. */
@@ -2023,18 +2555,27 @@ function StudioInner({
 
   // Architecture lint — pure over the document, so it re-runs per committed
   // edit and can never touch what persists.
-  const findings = useMemo(
-    () => lintTemplate(template, registry.lintRules),
-    [template, registry],
-  );
 
   const jumpToFinding = useCallback(
     (finding: LintFinding) => {
+      // (Kept current in jumpToFindingRef below, for the checks panel.)
       const nodeIds = new Set(finding.nodeIds ?? []);
       const edgeIds = new Set(finding.edgeIds ?? []);
+      // A finding about columns marks them, wherever the jump lands.
+      if (finding.fields?.length) setHighlightFields(new Set(finding.fields.map(fieldKey)));
       setNodes((current) => current.map((n) => ({ ...n, selected: nodeIds.has(n.id) })));
       setEdges((current) => current.map((e) => ({ ...e, selected: edgeIds.has(e.id) })));
-      const first = finding.nodeIds?.find((id) => flow.getInternalNode(id));
+      // Where to aim. A rule may name only edges — the shape lint.ts documents
+      // for a host's own rules — and a line has no position of its own, so its
+      // ends stand in for it. They steer the view only; the SELECTION stays
+      // what the rule actually blamed, or an edge-only finding would light up
+      // two boxes it never accused.
+      const aimAt = finding.nodeIds?.length
+        ? finding.nodeIds
+        : templateRef.current.edges
+            .filter((e) => edgeIds.has(e.id))
+            .flatMap((e) => [e.source, e.target]);
+      const first = aimAt.find((id) => flow.getInternalNode(id));
       if (first) {
         const internal = flow.getInternalNode(first)!;
         const abs = internal.internals.positionAbsolute;
@@ -2046,18 +2587,16 @@ function StudioInner({
         });
         return;
       }
-      // Nothing the finding blames is on this canvas: it lives inside a
-      // collapsed group, under the document's fold, or on a level the reader
-      // is not standing on — the shape a big folder import opens in, where
-      // the unconnected entity the lint is complaining about is inside a
-      // chip. Drill to the level that shows it, exactly as the search does,
-      // rather than leaving the menu item doing nothing.
-      const offender = finding.nodeIds?.find((id) =>
-        templateRef.current.nodes.some((n) => n.id === id),
-      );
+      // Nothing to aim at is on this canvas: it lives inside a collapsed
+      // group, under the document's fold, or on a level the reader is not
+      // standing on — the shape a big folder import opens in, where the
+      // unconnected entity the lint is complaining about is inside a chip.
+      // Drill to the level that shows it, exactly as the search does, rather
+      // than leaving the menu item doing nothing.
+      const offender = aimAt.find((id) => templateRef.current.nodes.some((n) => n.id === id));
       if (offender) {
         navigateToNodeRef.current(offender, {
-          nodes: finding.nodeIds,
+          nodes: finding.nodeIds ?? [],
           edges: finding.edgeIds ?? [],
         });
       }
@@ -2065,15 +2604,24 @@ function StudioInner({
     [flow, setNodes, setEdges],
   );
 
+  jumpToFindingRef.current = jumpToFinding;
+
   // ── Compare mode ──────────────────────────────────────────────────────────
   // The baseline can come controlled (the diffBase prop) or from the toolbar
   // file picker. While active, DiffCanvas replaces the editor's <ReactFlow>
   // JSX only — every editor hook and ref keeps running, so entering and
   // leaving compare mode cannot touch the document.
-  const [compareTemplate, setCompareTemplate] = useState<DiagramTemplate | null>(null);
   const activeDiffBase = diffBase ?? compareTemplate;
   const diff = useMemo(
     () => (activeDiffBase ? diffTemplates(activeDiffBase, template) : null),
+    [activeDiffBase, template],
+  );
+  /** Compare's task line: what moved in the plan since the baseline. */
+  const taskDiff = useMemo(
+    () =>
+      activeDiffBase && (activeDiffBase.nodes.some(isWorkItem) || template.nodes.some(isWorkItem))
+        ? taskChanges(activeDiffBase, template)
+        : null,
     [activeDiffBase, template],
   );
 
@@ -2251,6 +2799,97 @@ function StudioInner({
       ),
     };
   }, [nodes, edges, timelineFutureIds, timelineFuture, dropTargetId, pathGlowIndex, routeKeepEdges, template]);
+
+  /**
+   * Whether any line is a task DEPENDENCY — the one kind that stays hidden
+   * until hovered whatever `edgesOnHover` says (see tasks.ts). Without one,
+   * nothing below costs anything.
+   */
+  const anyDependency = useMemo(
+    () => template.edges.some((e) => e.relation === DEPENDENCY_RELATION),
+    [template],
+  );
+  /** Canvas ids a dependency touches — the only nodes whose hover matters for them. */
+  const dependencyEnds = useMemo(() => {
+    const out = new Set<string>();
+    if (!anyDependency) return out;
+    for (const e of viewEdges) {
+      if ((e.data as DiagramEdgeData | undefined)?.relation !== DEPENDENCY_RELATION) continue;
+      out.add(e.source);
+      out.add(e.target);
+    }
+    return out;
+  }, [anyDependency, viewEdges]);
+
+  /**
+   * The edges-on-hover pass, after every other display pass: a connection
+   * shows when the pointer is over a node it touches (or a group holding
+   * one), when either end is selected, or when it is selected itself. The
+   * rest wear `as-edge--dormant`, which the stylesheet fades to nothing.
+   * Kept out of the memo above so a hover costs one map over the edges,
+   * not the timeline and path work too.
+   *
+   * A task DEPENDENCY gets the same treatment with or without the setting —
+   * it is the long-range line of a plan, drawn only for the task you are
+   * looking at — and only for its OWN ends: hovering a group doesn't light
+   * the dependencies of everything inside it. A lit path still draws one.
+   */
+  const displayEdges = useMemo(() => {
+    if (!edgesOnHover && !anyDependency) return viewEdges;
+    const direct = new Set<string>();
+    for (const n of viewNodes) if (n.selected) direct.add(n.id);
+    if (hoveredNodeId) direct.add(hoveredNodeId);
+    let shown: Set<string> = direct;
+    if (edgesOnHover && hoveredNodeId) {
+      shown = new Set(direct);
+      // A group's members: hovering the frame lights the wiring inside it.
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const n of viewNodes) {
+          if (n.parentId && shown.has(n.parentId) && !shown.has(n.id)) {
+            shown.add(n.id);
+            grew = true;
+          }
+        }
+      }
+    }
+    // The class hides the line; the data flag reaches the labels, which
+    // render through a portal outside the edge wrapper (see edges.tsx).
+    // Each dormant edge is built once per source object and reused across
+    // hovers, so moving the pointer re-renders the edges that change and
+    // not every hidden one on the canvas.
+    const cache = dormantEdgeCache.current;
+    return viewEdges.map((e) => {
+      const data = e.data as DiagramEdgeData | undefined;
+      const dependency = data?.relation === DEPENDENCY_RELATION;
+      if (!dependency && !edgesOnHover) return e;
+      const lit = dependency ? direct : shown;
+      if (e.selected || lit.has(e.source) || lit.has(e.target)) return e;
+      if (dependency && data?.pathGlow?.length) return e;
+      let dormant = cache.get(e);
+      if (!dormant) {
+        dormant = {
+          ...e,
+          className: `${e.className ? `${e.className} ` : ""}as-edge--dormant`,
+          data: { ...e.data, dormant: true },
+        };
+        cache.set(e, dormant);
+      }
+      return dormant;
+    });
+  }, [edgesOnHover, anyDependency, viewEdges, viewNodes, hoveredNodeId]);
+
+  /**
+   * Hover is tracked only while something reads it — the setting, or a
+   * dependency to reveal — and, for dependencies alone, only over a node one
+   * touches: in a plan every card is hovered constantly, and each hover is a
+   * studio re-render (see the <ReactFlow> props).
+   */
+  const trackHover = edgesOnHover || anyDependency;
+  useEffect(() => {
+    if (!trackHover) setHoveredNodeId(null);
+  }, [trackHover]);
 
   useEffect(() => {
     timelineAtRef.current = timelineAt;
@@ -2782,6 +3421,12 @@ function StudioInner({
             "opacity",
             "fontSize",
             "team",
+            "assignees",
+            "storyPoints",
+            "done",
+            "stage",
+            "priority",
+            "capacity",
             "status",
             "plain",
           ] as const) {
@@ -3494,9 +4139,23 @@ function StudioInner({
       // A node the provider selection hides has no box to land on however far
       // we drill, so revealing it is what "go there" means — a view toggle
       // (the View menu shows it ticked, and it is how you get back), never a
-      // document edit. Skipped for a read-only viewer: they have no toggle to
-      // undo it with.
-      if (!readOnly && !visibleElements(doc).nodes.has(id)) setShowHidden(true);
+      // document edit. The toast is the house style for a view the canvas
+      // just changed under you: without it, a lint finding or a search hit
+      // sprouts ghosts across the diagram and nothing says why.
+      //
+      // A read-only viewer has no such toggle, so there is nothing to reveal
+      // and nothing to undo it with. Say why instead of fitting the view to a
+      // box that will not be there — moving the canvas to the wrong place is
+      // worse than not moving it, because it reads as the answer.
+      if (!visibleElements(doc).nodes.has(id)) {
+        const label = doc.nodes.find((n) => n.id === id)?.label ?? id;
+        if (readOnly) {
+          showToast(`"${label}" is hidden by the current provider`);
+          return;
+        }
+        setShowHidden(true);
+        showToast(`Showing nodes hidden by the current provider — "${label}" is one`);
+      }
       drillTo(focusPath(doc, id));
       // Post-materialize timer, the applyTemplate precedent: the rebuild
       // effect must run before the node exists to select.
@@ -3518,7 +4177,7 @@ function StudioInner({
         }
       }, 80);
     },
-    [drillTo, flow, setNodes, setEdges, readOnly],
+    [drillTo, flow, setNodes, setEdges, readOnly, showToast],
   );
 
   useEffect(() => {
@@ -3571,11 +4230,41 @@ function StudioInner({
     setPinsState(next);
   }, []);
   const togglePin = useCallback(
-    (ref: Pin) => {
+    (raw: Pin) => {
+      // Resolved before the comparison, as `setPins` resolves before storing:
+      // a ghost's pin must find the table's pin to take it out.
+      const ref: Pin = { ...raw, nodeId: documentNodeOf(raw.nodeId) };
       const current = pinsRef.current;
       setPins(current.some((p) => sameFieldRef(p, ref)) ? current.filter((p) => !sameFieldRef(p, ref)) : [...current, ref]);
     },
     [setPins],
+  );
+  /** Pin several tables at once — or, when every one is already pinned, unpin them all. */
+  const toggleTablePins = useCallback(
+    (ids: readonly string[]) => {
+      const current = pinsRef.current;
+      const isPinned = (id: string) => current.some((p) => !p.fieldId && p.nodeId === id);
+      setPins(
+        ids.every(isPinned)
+          ? current.filter((p) => p.fieldId || !ids.includes(p.nodeId))
+          : [...current, ...ids.filter((id) => !isPinned(id)).map((nodeId) => ({ nodeId }))],
+      );
+    },
+    [setPins],
+  );
+  /** Make these tables THE pins and open the panel on them. */
+  const showPathsBetween = useCallback(
+    (ids: readonly string[]) => {
+      // Pins are view state, outside undo: say what the replace let go of,
+      // so the reader knows what to pin again.
+      const dropped = pinsRef.current.filter((p) => p.fieldId || !ids.includes(p.nodeId)).length;
+      setPins(ids.map((nodeId) => ({ nodeId })));
+      setPathPanelOpen(true);
+      setPanelOpen(false); // the panels share a slot
+      setRefPanel(null);
+      if (dropped) showToast(`Paths between ${ids.length} tables · ${dropped} earlier pin${dropped === 1 ? "" : "s"} replaced`);
+    },
+    [setPins, showToast],
   );
   const setCoverageKeys = useCallback((refs: readonly FieldRef[]) => {
     const next: FieldRef[] = [];
@@ -3601,12 +4290,255 @@ function StudioInner({
   useEffect(() => {
     if (!coverageOpen) setCoverageHover(null);
   }, [coverageOpen]);
+  useEffect(() => {
+    if (!usageOpen) setUsageHover(null);
+  }, [usageOpen]);
+  // The key-usage panel shares the left sidebar with the paths, references
+  // and Generate panels, and answers the same kind of question as key
+  // coverage: whichever opens last wins, and the others close.
+  useEffect(() => {
+    if (refPanel || pathPanelOpen || panelOpen || coverageOpen) setUsageOpen(false);
+  }, [refPanel, pathPanelOpen, panelOpen, coverageOpen]);
+  const closeAnalysis = analysis.close;
+  const openUsagePanel = useCallback((open: boolean) => {
+    setUsageOpen(open);
+    if (!open) return;
+    setRefPanel(null);
+    setPathPanelOpen(false);
+    setPanelOpen(false);
+    setCoverageOpen(false);
+    closeAnalysis();
+  }, [closeAnalysis]);
+  // The analysis panels take the same sidebar: one of them opening closes
+  // the others, and any of the others opening closes it.
+  const openAnalysisState = analysis.open;
+  const openAnalysis = useCallback(
+    (next: AnalysisState) => {
+      openAnalysisState(next);
+      setRefPanel(null);
+      setPathPanelOpen(false);
+      setPanelOpen(false);
+      setUsageOpen(false);
+    },
+    [openAnalysisState],
+  );
+  useEffect(() => {
+    if (refPanel || pathPanelOpen || panelOpen || usageOpen) closeAnalysis();
+  }, [refPanel, pathPanelOpen, panelOpen, usageOpen, closeAnalysis]);
+  // Schema changes are against the compare baseline: leaving Compare closes them.
+  const analysisKind = analysis.state?.kind;
+  useEffect(() => {
+    if (analysisKind === "changes" && !(diffBase ?? compareTemplate)) closeAnalysis();
+  }, [analysisKind, diffBase, compareTemplate, closeAnalysis]);
+
+  // ── Column lineage ──
+  /** Every column a lineage link names — what the field menu offers "Trace lineage" on. */
+  const lineageKeys = useMemo(() => {
+    const out = new Set<string>();
+    for (const l of template.lineage ?? []) out.add(fieldKey(l.from)).add(fieldKey(l.to));
+    return out;
+  }, [template.lineage]);
+  /** Rows marked on the cards: the reader's own marks, and a lineage trace's columns. */
+  const shownHighlights = useMemo(
+    () => (analysis.rowMarks ? new Set([...highlightFields, ...analysis.rowMarks]) : highlightFields),
+    [highlightFields, analysis.rowMarks],
+  );
+  const lineageInputRef = useRef<HTMLInputElement>(null);
+  const importLineage = useCallback(
+    async (file: File) => {
+      const doc = templateRef.current;
+      const result = importOpenLineage(doc, await file.text());
+      if (!result.lineage.length) {
+        showToast(result.events ? "No column lineage in those events matched this model's tables" : "No OpenLineage events in that file");
+        return;
+      }
+      applyTemplate({ ...doc, lineage: mergeLineage(doc.lineage, result.lineage) }, { fit: false });
+      showToast(
+        `Imported ${result.lineage.length} lineage link${result.lineage.length === 1 ? "" : "s"}` +
+          (result.unmatched.length ? ` · ${result.unmatched.length} dataset${result.unmatched.length === 1 ? "" : "s"} matched no table` : ""),
+      );
+    },
+    [applyTemplate, showToast],
+  );
+
+  // ── Saved analyses ──
+  // A question kept with the model: saving one is a document edit (undoable,
+  // reported through onChange); opening one only sets the view state its
+  // panel reads, and opens that panel.
+  const savedAnalyses = template.analyses ?? EMPTY_ANALYSES;
+  const [analysisDialog, setAnalysisDialog] = useState<
+    | { mode: "save"; body: SavedAnalysisBody; headline: string; value?: number; title: string }
+    | { mode: "rename"; id: string; title: string; note: string }
+    | null
+  >(null);
+  /** What the open panel of a kind would save, or null when it is not open (or asks about nothing). */
+  const analysisBodyOf = useCallback(
+    (kind: SavedAnalysisKind): SavedAnalysisBody | null => {
+      const s = analysis.state;
+      switch (kind) {
+        case "impact":
+          return s?.kind === "impact"
+            ? { kind, subject: s.subject, direction: s.direction, via: s.via, ...(s.maxDepth !== null ? { maxDepth: s.maxDepth } : {}) }
+            : null;
+        case "neighbourhood":
+          return s?.kind === "neighbourhood" ? { kind, from: s.from, depth: s.depth, direction: s.direction, keysOnly: s.keysOnly } : null;
+        case "usage":
+          return usageOpen && usageKeys.length ? { kind, names: usageKeys, match: usageMatch, includeTargets: usageTargets } : null;
+        case "coverage":
+          return coverageOpen && coverageKeys.length ? { kind, keys: coverageKeys, scope: coverageScope } : null;
+        case "paths":
+          return pathPanelOpen && pins.length >= 2 ? { kind, pins, undirected: routeUndirected, mode: routeMode } : null;
+      }
+    },
+    [analysis.state, usageOpen, usageKeys, usageMatch, usageTargets, coverageOpen, coverageKeys, coverageScope, pathPanelOpen, pins, routeUndirected, routeMode],
+  );
+  /** The open analysis the Analyses menu would save — the sidebar's first, then coverage, then routes. */
+  const currentAnalysisKind = useMemo(
+    () => (["impact", "neighbourhood", "usage", "coverage", "paths"] as const).find((k) => analysisBodyOf(k) !== null) ?? null,
+    [analysisBodyOf],
+  );
+  const analysisTitleFor = useCallback(
+    (body: SavedAnalysisBody): string => {
+      const label = analysisNodeLabel;
+      const subject =
+        body.kind === "usage"
+          ? body.names.join(", ")
+          : body.kind === "coverage"
+            ? body.keys.map((k) => k.fieldId).join(", ")
+            : body.kind === "impact"
+              ? label(body.subject.nodeId) + (body.subject.fieldId ? `.${body.subject.fieldId}` : "")
+              : body.kind === "neighbourhood"
+                ? body.from.map(label).join(", ")
+                : body.pins.map((p) => label(p.nodeId)).join(" ↔ ");
+      return `${ANALYSIS_KIND_LABEL[body.kind]}: ${subject}`.slice(0, 200);
+    },
+    [analysisNodeLabel],
+  );
+  const saveAnalysis = useCallback(
+    (kind: SavedAnalysisKind) => {
+      if (readOnly) return;
+      const body = analysisBodyOf(kind);
+      if (!body) return;
+      const reading = readAnalysis(templateRef.current, body, analysisNodeLabel);
+      setOpenMenu(null);
+      setAnalysisDialog({ mode: "save", body, headline: reading.headline, ...(reading.value !== undefined ? { value: reading.value } : {}), title: analysisTitleFor(body) });
+    },
+    [readOnly, analysisBodyOf, analysisNodeLabel, analysisTitleFor],
+  );
+  saveAnalysisRef.current = saveAnalysis;
+  const submitAnalysisDialog = useCallback(
+    (title: string, note: string) => {
+      const dialog = analysisDialog;
+      if (!dialog) return;
+      const doc = templateRef.current;
+      const list = doc.analyses ?? [];
+      if (dialog.mode === "save") {
+        const entry = {
+          id: analysisId(title, list),
+          title,
+          ...(note ? { note } : {}),
+          created: new Date().toISOString().slice(0, 10),
+          snapshot: { headline: dialog.headline, ...(dialog.value !== undefined ? { value: dialog.value } : {}) },
+          ...dialog.body,
+        } as SavedAnalysis;
+        applyTemplate({ ...doc, analyses: [...list, entry] }, { fit: false });
+        showToast(`Saved “${title}”`);
+      } else {
+        applyTemplate(
+          { ...doc, analyses: list.map((a) => (a.id === dialog.id ? ({ ...a, title, ...(note ? { note } : { note: undefined }) } as SavedAnalysis) : a)) },
+          { fit: false },
+        );
+      }
+      setAnalysisDialog(null);
+    },
+    [analysisDialog, applyTemplate, showToast],
+  );
+  const deleteSavedAnalysis = useCallback(
+    (a: SavedAnalysis) => {
+      const doc = templateRef.current;
+      applyTemplate({ ...doc, analyses: (doc.analyses ?? []).filter((x) => x.id !== a.id) }, { fit: false });
+      setOpenMenu(null);
+      showToast(`Deleted “${a.title}” — undo brings it back`);
+    },
+    [applyTemplate, showToast],
+  );
+  /** Open a saved analysis: set the view state its panel reads, and open the panel. */
+  const openSavedAnalysis = useCallback(
+    (a: SavedAnalysis) => {
+      setOpenMenu(null);
+      switch (a.kind) {
+        case "paths":
+          setPins(a.pins);
+          setRouteUndirected(a.undirected);
+          setRouteMode(a.mode);
+          setPathPanelOpen(true);
+          setPanelOpen(false);
+          setRefPanel(null);
+          setCoverageOpen(false);
+          break;
+        case "usage":
+          setUsageKeys(a.names);
+          setUsageMatch(a.match);
+          setUsageTargets(a.includeTargets);
+          openUsagePanel(true);
+          break;
+        case "coverage":
+          setCoverageKeys(a.keys);
+          setCoverageScope(a.scope);
+          setCoverageOpen(true);
+          break;
+        case "impact":
+          openAnalysis({ kind: "impact", subject: a.subject, direction: a.direction, via: a.via, maxDepth: a.maxDepth ?? null });
+          break;
+        case "neighbourhood":
+          openAnalysis({ kind: "neighbourhood", from: a.from, depth: a.depth, direction: a.direction, keysOnly: a.keysOnly });
+          break;
+      }
+    },
+    [setPins, setUsageKeys, openUsagePanel, setCoverageKeys, openAnalysis],
+  );
+  /** What each saved analysis says now — computed only while the menu is open. */
+  const analysisReadings = useMemo(() => {
+    const out = new Map<string, { headline: string; drift: string | null }>();
+    if (openMenu !== "analyses") return out;
+    for (const a of savedAnalyses) {
+      const now = readAnalysis(template, a, analysisNodeLabel);
+      out.set(a.id, { headline: now.headline, drift: analysisDrift(a.kind, a.snapshot, now) });
+    }
+    return out;
+  }, [openMenu, savedAnalyses, template, analysisNodeLabel]);
 
   /** Go to a field: its node's level, selected and centred, with the row marked. */
   const navigateToField = useCallback(
     (ref: FieldRef) => {
       navigateToNode(ref.nodeId);
       setHighlightFields(new Set([fieldKey(ref)]));
+    },
+    [navigateToNode],
+  );
+  /**
+   * A pin chip, wherever one is drawn — the strip above the canvas, the
+   * references panel's subject, the paths panel's pins. One callback so a
+   * chip means the same thing in all three: a field pin lands on its row,
+   * a table pin on the table.
+   */
+  navigateToFieldRef.current = navigateToField;
+  const jumpToPin = useCallback(
+    (pin: Pin) =>
+      pin.fieldId
+        ? navigateToField({ nodeId: pin.nodeId, fieldId: pin.fieldId })
+        : navigateToNode(pin.nodeId),
+    [navigateToField, navigateToNode],
+  );
+  /**
+   * Go to what a CANVAS id stands for — the inspector names an edge's two
+   * ends, and on a drilled level an end can be a ghost or the boundary
+   * frame, which stand in for a document node rather than being one.
+   */
+  const navigateToCanvasNode = useCallback(
+    (id: string) => {
+      const docId = documentNodeId(id);
+      if (docId) navigateToNode(docId);
     },
     [navigateToNode],
   );
@@ -3638,6 +4570,22 @@ function StudioInner({
     [navigateToNode],
   );
   /**
+   * The marks *Show references* leaves: the key itself, its table, and every
+   * row pointing at it with the table that holds it. Shared with the panel's
+   * subject chip — the way back has to restore the same answer the way in
+   * drew, and two copies of this would drift.
+   */
+  const referenceMarks = useCallback((ref: Pin) => {
+    const refs = referencesTo(templateRef.current, ref);
+    const marks = new Set<string>([fieldKey(ref), fieldKey({ nodeId: ref.nodeId })]);
+    for (const r of refs) {
+      marks.add(fieldKey({ nodeId: r.nodeId }));
+      if (r.fieldId) marks.add(fieldKey(r));
+    }
+    return { marks, refs };
+  }, []);
+
+  /**
    * The other direction: light everything that points AT a key — its own
    * row, every foreign-key row landing on it, and the tables those rows sit
    * in, so a reference from across the canvas still shows. A table (no
@@ -3646,12 +4594,7 @@ function StudioInner({
    */
   const showReferences = useCallback(
     (ref: Pin) => {
-      const refs = referencesTo(templateRef.current, ref);
-      const marks = new Set<string>([fieldKey(ref), fieldKey({ nodeId: ref.nodeId })]);
-      for (const r of refs) {
-        marks.add(fieldKey({ nodeId: r.nodeId }));
-        if (r.fieldId) marks.add(fieldKey(r));
-      }
+      const { marks, refs } = referenceMarks(ref);
       setHighlightFields(marks);
       setRefPanel({ ...ref });
       setPathPanelOpen(false);
@@ -3663,7 +4606,23 @@ function StudioInner({
           : "Nothing points at it",
       );
     },
-    [showToast],
+    [referenceMarks, showToast],
+  );
+
+  /**
+   * The references panel's subject chip. Goes to what the panel is about and
+   * puts its OWN marks back — following a row leaves the canvas marked with
+   * that join instead, and a plain field jump would mark the single row,
+   * quietly discarding the "everything points here" answer on the way back
+   * to the thing it is an answer about. No toast: this is a return, not a
+   * new query, and the panel's lists already say the count.
+   */
+  const jumpToRefSubject = useCallback(
+    (pin: Pin) => {
+      navigateToNode(pin.nodeId);
+      setHighlightFields(referenceMarks(pin).marks);
+    },
+    [navigateToNode, referenceMarks],
   );
   const pinnedFields = useMemo(() => new Set(pins.map(fieldKey)), [pins]);
   /** "Account · AccountId" — what a chip and a menu caption call a field; a table pin is the label alone. */
@@ -3786,8 +4745,18 @@ function StudioInner({
       getCoverageKeys: () => coverageKeysRef.current,
       setCoverageKeys,
       openCoverage: (open = true) => setCoverageOpen(open),
+      getUsageKeys: () => usageKeysRef.current,
+      setUsageKeys,
+      openKeyUsage: (open = true) => openUsagePanel(open),
+      getAnalyses: () => (templateRef.current.analyses ?? []).map((a) => ({ ...a })),
+      openAnalysis: (id: string) => {
+        const a = templateRef.current.analyses?.find((x) => x.id === id);
+        if (!a) return false;
+        openSavedAnalysis(a);
+        return true;
+      },
     }),
-    [drillToLevel, navigateToNode, setActivePaths, setPins, navigateToField, setCoverageKeys],
+    [drillToLevel, navigateToNode, setActivePaths, setPins, navigateToField, setCoverageKeys, setUsageKeys, openUsagePanel, openSavedAnalysis],
   );
 
   // Mirrors for a host rendering its own breadcrumbs or path list. Keyed by
@@ -3825,6 +4794,14 @@ function StudioInner({
     lastCoverageReported.current = key;
     onCoverageChange(coverageKeys.map((k) => ({ ...k })));
   }, [coverageKeys, onCoverageChange]);
+  const lastUsageReported = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onKeyUsageChange) return;
+    const key = usageKeys.join("\u0001");
+    if (key === lastUsageReported.current) return;
+    lastUsageReported.current = key;
+    onKeyUsageChange([...usageKeys]);
+  }, [usageKeys, onKeyUsageChange]);
 
   // Compare mode owns the whole canvas — entering it exits any drill.
   useEffect(() => {
@@ -3926,7 +4903,7 @@ function StudioInner({
   const closeContext = useCallback(() => setContextMenu(null), []);
 
   const toggleMenu = useCallback(
-    (id: "files" | "insert" | "arrange" | "view" | "paths" | "checks" | "export") => {
+    (id: "files" | "insert" | "arrange" | "view" | "paths" | "analyses" | "checks" | "export") => {
       setToolsOpen(false);
       setOpenMenu((current) => (current === id ? null : id));
     },
@@ -4047,7 +5024,15 @@ function StudioInner({
         // The mode goes with it, and its gradient setting: a picture exported
         // out of marketing mode has to come back dressed the way the screen
         // was dressing it.
-        const result = await exporter.run({ template: subject, registry, filename, palette: exportPalette, mode: studioMode, gradients });
+        const result = await exporter.run({
+          template: subject,
+          registry,
+          filename,
+          palette: exportPalette,
+          mode: studioMode,
+          gradients,
+          ...(activeDiffBase ? { diffBase: activeDiffBase } : {}),
+        });
         if (result) {
           download(result.blob, result.filename);
           showToast(`Exported ${result.filename}`);
@@ -4057,7 +5042,7 @@ function StudioInner({
         setPanelOpen(true);
       }
     },
-    [registry, template, filename, exportPalette, studioMode, gradients, showToast, timelineActive, timelineAt, timelineFuture, focusId, exportSelectionOnly, selectedDocNodeIds, selectedZoneIds],
+    [registry, template, filename, exportPalette, studioMode, gradients, showToast, timelineActive, timelineAt, timelineFuture, focusId, exportSelectionOnly, selectedDocNodeIds, selectedZoneIds, activeDiffBase],
   );
 
   const stateAxes = useMemo(() => templateStateAxes(template), [template]);
@@ -4126,11 +5111,70 @@ function StudioInner({
     [pendingExport, runDirectExport, filename, stateAxes, template, registry, exportPalette, studioMode, gradients, showToast, focusId],
   );
 
+  /** A schema read from SQL or dbt: laid out, applied, its warnings in the notes bar. */
+  const applySchemaImport = useCallback(
+    (result: SchemaImport, source: string) => {
+      if (!result.template.nodes.some((n) => n.kind === "table")) {
+        setError(`No tables could be read from ${source}`);
+        setPanelOpen(true);
+        return;
+      }
+      applyTemplate(layoutIfUnpositioned(result.template, modeLayoutOptions(studioMode)));
+      setError("");
+      const notes = result.warnings.map((w) => (w.line ? `line ${w.line}: ${w.message}` : w.message));
+      if (result.stats.skipped) notes.push(`${result.stats.skipped} other statement${result.stats.skipped === 1 ? "" : "s"} (settings, grants, sequences, functions…) skipped`);
+      setImportNotes(notes);
+      showToast(
+        `Imported ${result.stats.tables} table${result.stats.tables === 1 ? "" : "s"} · ${result.stats.foreignKeys} key${result.stats.foreignKeys === 1 ? "" : "s"} from ${source}` +
+          (result.warnings.length ? ` · ${result.warnings.length} note${result.warnings.length === 1 ? "" : "s"}` : ""),
+      );
+    },
+    [applyTemplate, studioMode, showToast],
+  );
+
+  /**
+   * A tracker's CSV export (Jira, Linear, GitHub…) as the document: its
+   * issues as tasks, its blocking links as prerequisites, its sprints or
+   * epics as groups — laid out, with what couldn't be read noted.
+   */
+  const applyTaskImport = useCallback(
+    (result: TaskCsvImport, name: string) => {
+      if (!result.stats.tasks) {
+        showToast(`No tasks could be read from ${name}`);
+        return;
+      }
+      applyTemplate(layoutIfUnpositioned(validateTemplate(result.template, registryOpts(registry)), modeLayoutOptions(studioMode)));
+      setImportNotes(result.warnings.map((w) => (w.line ? `line ${w.line}: ${w.message}` : w.message)));
+      const { tasks, links, groups } = result.stats;
+      showToast(`Imported ${tasks} task${tasks === 1 ? "" : "s"} · ${links} link${links === 1 ? "" : "s"}${groups ? ` · ${groups} group${groups === 1 ? "" : "s"}` : ""}`);
+    },
+    [applyTemplate, registry, studioMode, showToast],
+  );
+
   const loadFile = useCallback(
     async (file: File) => {
       try {
         const text = await file.text();
+        // A tracker's export: tasks, not tables — read by its columns.
+        if (/\.(csv|tsv)$/i.test(file.name)) {
+          applyTaskImport(importTaskCsv(text, { title: file.name.replace(/\.(csv|tsv)$/i, "") }), file.name);
+          return;
+        }
+        // A schema script: its tables and keys become the document.
+        if (/\.sql$/i.test(file.name) || (!/^\s*[{[]/.test(text) && looksLikeSqlDdl(text))) {
+          applySchemaImport(importSqlDdl(text, { title: file.name.replace(/\.sql$/i, "") }), file.name);
+          return;
+        }
+        if (looksLikeTaskCsv(text)) {
+          applyTaskImport(importTaskCsv(text, { title: file.name.replace(/\.[^.]+$/, "") }), file.name);
+          return;
+        }
         const raw = JSON.parse(text);
+        // A dbt manifest on its own (no catalog: the project's declared types).
+        if (isDbtManifest(raw)) {
+          applySchemaImport(importDbt({ manifest: raw }), file.name);
+          return;
+        }
         // A layout file re-dresses the CURRENT document — it carries no
         // architecture of its own.
         if (raw?.format === PRESENTATION_FORMAT) {
@@ -4174,7 +5218,7 @@ function StudioInner({
         setPanelOpen(true);
       }
     },
-    [registry, applyTemplate, showToast],
+    [registry, applyTemplate, showToast, applySchemaImport, applyTaskImport],
   );
 
   /**
@@ -4185,15 +5229,37 @@ function StudioInner({
    */
   const loadFolder = useCallback(
     async (list: readonly File[]) => {
-      const picked = list.filter(
-        (f) => /\.(json|ya?ml|md)$/i.test(f.name) && f.size <= 5 * 1024 * 1024,
-      );
       // `webkitRelativePath` always begins with the picked directory's own
       // name; that segment is the root, not a folder inside it.
       const inside = (f: File) => {
         const rel = f.webkitRelativePath || f.name;
         return rel.includes("/") ? rel.slice(rel.indexOf("/") + 1) : rel;
       };
+      // A dbt project's target/ (or the project, holding target/): the
+      // manifest says what it builds, the catalog beside it what the
+      // warehouse says. Manifests run large, so no size limit here.
+      const manifestFile = list
+        .filter((f) => /(^|\/)manifest\.json$/i.test(inside(f)) && !inside(f).includes(".better-diagrams"))
+        .sort((a, b) => inside(a).length - inside(b).length)[0];
+      if (manifestFile) {
+        try {
+          const manifest = JSON.parse(await manifestFile.text());
+          if (isDbtManifest(manifest)) {
+            const dir = inside(manifestFile).slice(0, -"manifest.json".length);
+            const catalogFile = list.find((f) => inside(f) === `${dir}catalog.json`);
+            const catalog = catalogFile ? JSON.parse(await catalogFile.text()) : undefined;
+            applySchemaImport(importDbt({ manifest, ...(catalog ? { catalog } : {}) }), catalogFile ? "the dbt manifest and catalog" : "the dbt manifest");
+            return;
+          }
+        } catch (err) {
+          setError(`Could not read ${inside(manifestFile)}: ${(err as Error).message}`);
+          setPanelOpen(true);
+          return;
+        }
+      }
+      const picked = list.filter(
+        (f) => /\.(json|ya?ml|md)$/i.test(f.name) && f.size <= 5 * 1024 * 1024,
+      );
       const files = new Map<string, string>();
       await Promise.all(
         picked.map(async (f) => {
@@ -4241,7 +5307,7 @@ function StudioInner({
         setPanelOpen(true);
       }
     },
-    [registry, applyTemplate, showToast],
+    [registry, applyTemplate, showToast, applySchemaImport],
   );
 
   /**
@@ -4365,6 +5431,13 @@ function StudioInner({
   const refineSystemPrompt = useMemo(
     () => promptForCloudSelection(registry, referencedClouds, { geometry: false }),
     [registry, referencedClouds],
+  );
+  // The Task flow preset's prompts: the same vocabulary, steered toward a
+  // plan of tasks. No clouds — a work plan has no infrastructure to scope.
+  const taskSystemPrompt = useMemo(() => promptForCloudSelection(registry, [], { focus: "tasks" }), [registry]);
+  const taskSystemPromptContent = useMemo(
+    () => promptForCloudSelection(registry, [], { focus: "tasks", geometry: false }),
+    [registry],
   );
 
   // ── Welcome modal ─────────────────────────────────────────────────────────
@@ -4550,24 +5623,42 @@ function StudioInner({
   }, [metaTitle, activeFile?.id, activeFile?.name, onFileRename, applyTemplate]);
 
   const handleWelcomeDismiss = useCallback(
-    (name: string) => {
+    (name: string, opts?: { preset?: "tasks" }) => {
       setWelcomeOpen(false);
+      const tasks = opts?.preset === "tasks";
       // With no files at all, "manually" still needs a file to land in. The
       // latch keeps that brand-new blank file from greeting all over again,
       // and the node waits for the file to exist rather than landing in the
-      // document that is about to be replaced.
+      // document that is about to be replaced. A task flow's file is born
+      // holding its first task, since there is no studio yet to add one.
       if (zeroFiles && onFileCreate) {
         suppressNextWelcome();
-        onFileCreate({ name, kind: "architecture" });
+        onFileCreate({
+          name,
+          kind: "architecture",
+          ...(tasks
+            ? {
+                doc: validateTemplate(
+                  {
+                    version: 1,
+                    meta: { title: name },
+                    nodes: [{ id: "task-1", label: "First task", kind: TASK_KIND, x: 80, y: 80 }],
+                    edges: [],
+                  },
+                  registryOpts(registry),
+                ),
+              }
+            : {}),
+        });
         return;
       }
       // The button says "Insert Node Manually", so insert one. It used to
       // just close the modal, leaving an empty canvas and a promise unkept —
       // and a first node is exactly what someone who picked "manually" is
-      // about to make anyway.
-      if (!readOnly) addNode("service");
+      // about to make anyway. Under the Task flow preset, that's a task.
+      if (!readOnly) addNode(tasks ? TASK_KIND : "service");
     },
-    [zeroFiles, onFileCreate, readOnly, addNode],
+    [zeroFiles, onFileCreate, readOnly, addNode, registry],
   );
 
   const runGenerate = useCallback(
@@ -4775,6 +5866,8 @@ function StudioInner({
   /** What a node is called, for the bar that says what a line joins. */
   const nodeLabelOf = (id: string): string =>
     ((nodes.find((n) => n.id === id)?.data as DiagramNodeData | undefined)?.label ?? id);
+  const nodeKindOf = (id: string): string | undefined =>
+    (nodes.find((n) => n.id === id)?.data as DiagramNodeData | undefined)?.kind as string | undefined;
 
   /** What the collapsed inspector pill says the selection is. */
   const inspectorSummary = ((): string => {
@@ -5266,7 +6359,7 @@ function StudioInner({
   // they could not, and why, are commented at the point of divergence.
 
   /** Any dialog is up, so the canvas is not what the keyboard is aimed at. */
-  const modalOpen = welcomeOpen || !!pendingExport || !!pendingNest || !!fieldGrid;
+  const modalOpen = welcomeOpen || !!pendingExport || !!pendingNest || !!fieldGrid || capacityOpen;
 
   /**
    * Whether a keystroke on `window` was meant for THIS editor.
@@ -5571,6 +6664,14 @@ function StudioInner({
           setCoverageOpen(false);
           return;
         }
+        if (usageOpen) {
+          setUsageOpen(false);
+          return;
+        }
+        if (analysis.state) {
+          closeAnalysis();
+          return;
+        }
         // The references panel and the marks it came with are one thing: a
         // way out of the panel is a way out of the marks.
         if (refPanel) {
@@ -5614,7 +6715,7 @@ function StudioInner({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, pathPanelOpen, refPanel, closeRefPanel, coverageOpen, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
+  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, pathPanelOpen, refPanel, closeRefPanel, coverageOpen, usageOpen, analysis.state, closeAnalysis, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
 
   // ── Zone resize gesture ───────────────────────────────────────────────────
   //
@@ -5685,8 +6786,10 @@ function StudioInner({
       setPins,
       coverageKeys,
       setCoverageKeys,
+      usageKeys,
+      setUsageKeys,
     }),
-    [template, registry, applyTemplate, focusStack, drillToLevel, activePathIds, setActivePaths, pins, setPins, coverageKeys, setCoverageKeys],
+    [template, registry, applyTemplate, focusStack, drillToLevel, activePathIds, setActivePaths, pins, setPins, coverageKeys, setCoverageKeys, usageKeys, setUsageKeys],
   );
   const renderSlot = (slot: ArchitectureStudioProps["toolbarExtras"]) =>
     typeof slot === "function" ? slot(slotContext) : slot;
@@ -5708,6 +6811,42 @@ function StudioInner({
     }
     return counts;
   }, [childCountsSig]);
+
+  /**
+   * The document tables a multi-selection stands for, for the menu's pin
+   * items: ghosts resolved to their tables, frames and zones left out, and a
+   * group holding children left out — a route runs between tables, and a
+   * pin on the group around them would search from nothing.
+   */
+  const selectedTables = useMemo(() => {
+    if (selectedNodeIds.length < 2) return [];
+    const known = new Set(template.nodes.map((n) => n.id));
+    const out: string[] = [];
+    for (const raw of selectedNodeIds) {
+      if (isZoneNodeId(raw) || isBoundaryNodeId(raw)) continue;
+      const id = documentNodeOf(raw);
+      if (!known.has(id) || out.includes(id) || (childCounts.get(id) ?? 0) > 0) continue;
+      out.push(id);
+    }
+    return out;
+  }, [selectedNodeIds, template, childCounts]);
+
+  /**
+   * The keys the node menu's "Show references" counts, for the one table it
+   * is open on. Memoised on structure like the panel's own list: a large
+   * model makes this a full pass over every table's data, and the menu
+   * would otherwise pay it again on every re-render while it is open.
+   */
+  const menuRefSubject =
+    contextMenu?.kind === "node" && selectedNodeIds.length === 1 && selectedFieldCount
+      ? documentNodeOf(selectedNodeIds[0]!)
+      : null;
+  const menuRefs = useMemo(
+    () => (menuRefSubject ? keyReferences(templateRef.current, { nodeId: menuRefSubject }) : null),
+    // `structureSig` stands in for the template on purpose (see the routes memo).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [menuRefSubject, structureSig],
+  );
 
   /**
    * What the selected node affords about nesting, or nothing. A container
@@ -5754,14 +6893,57 @@ function StudioInner({
       showToast,
       onFieldClick: openFieldMenu,
       pinnedFields,
-      highlightFields,
+      highlightFields: shownHighlights,
       dimmedIds,
+      domainTint: analysis.tint,
+      blockedIds,
+      taskLabelOf,
+      assigneeColorOf,
+      personPreview,
+      personFocus,
+      overdueIds: taskGraph?.overdue,
+      reachedIds: taskGraph?.reached,
+      rollups: taskGraph?.rollups,
+      taskFilterIds,
+      today,
       notation,
     }),
-    [registry, readOnly, studioMode, tagFilter, showTeams, showLinks, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast, openFieldMenu, pinnedFields, highlightFields, dimmedIds, notation],
+    [registry, readOnly, studioMode, tagFilter, showTeams, showLinks, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast, openFieldMenu, pinnedFields, shownHighlights, dimmedIds, analysis.tint, blockedIds, taskLabelOf, assigneeColorOf, personPreview, personFocus, taskGraph, taskFilterIds, today, notation],
   );
   const rootStyle = { ...themeToStyle(theme), ...style };
   const modeClass = modeClassName(studioMode, gradients);
+
+  // The Insert menu's task entry. A plan reaches for it every time, so once
+  // the document holds a task it heads the menu; until then it sits with the
+  // other building blocks.
+  const insertTaskItem = (
+    <button
+      type="button"
+      role="menuitem"
+      className="as-menu__item"
+      onClick={() => {
+        addNode(TASK_KIND);
+        setOpenMenu(null);
+      }}
+    >
+      <div className="as-menu__label">Task</div>
+      <div className="as-menu__hint">A ticket — summary, points, assignees, a done check</div>
+    </button>
+  );
+  const insertMilestoneItem = (
+    <button
+      type="button"
+      role="menuitem"
+      className="as-menu__item"
+      onClick={() => {
+        addNode(MILESTONE_KIND);
+        setOpenMenu(null);
+      }}
+    >
+      <div className="as-menu__label">Milestone</div>
+      <div className="as-menu__hint">A checkpoint — reached when everything feeding it is done</div>
+    </button>
+  );
 
   return (
     <StudioContext.Provider value={studioContext}>
@@ -5827,6 +7009,8 @@ function StudioInner({
                 onToggle={() => toggleMenu("insert")}
                 menuClassName="as-menu--left"
               >
+                {anyTasks ? insertTaskItem : null}
+                {anyTasks ? insertMilestoneItem : null}
                 <button
                   type="button"
                   role="menuitem"
@@ -5887,6 +7071,8 @@ function StudioInner({
                   <div className="as-menu__label">Text</div>
                   <div className="as-menu__hint">A free-floating annotation</div>
                 </button>
+                {anyTasks ? null : insertTaskItem}
+                {anyTasks ? null : insertMilestoneItem}
                 <div className="as-menu__sep" role="separator" />
                 {(
                   [
@@ -6212,9 +7398,9 @@ function StudioInner({
           {true ? (
             <div className="as-toolbar__group">
               <ToolbarMenu
-                label={`View${tagFilter.length ? ` (${tagFilter.length})` : ""}`}
-                title="Hidden nodes, team badges, and tag filtering"
-                active={tagFilter.length > 0 || showHidden}
+                label={`View${tagFilter.length + (taskFilter ? 1 : 0) ? ` (${tagFilter.length + (taskFilter ? 1 : 0)})` : ""}`}
+                title="Hidden nodes, team badges, tag and task filtering"
+                active={tagFilter.length > 0 || showHidden || !!taskFilter || showCritical}
                 open={openMenu === "view"}
                 onToggle={() => toggleMenu("view")}
                 menuClassName="as-menu--left"
@@ -6355,6 +7541,43 @@ function StudioInner({
                     ) : null}
                   </>
                 ) : null}
+                {anyTasks ? (
+                  <>
+                    {/* The plan's views: keep one kind of task bright, light the
+                        chain that decides the finish, and set what each person
+                        can take on. Views, except capacity — a document setting. */}
+                    <div className="as-menu__caption">Tasks</div>
+                    <label className="as-menu__check" title="Every task at full strength">
+                      <input type="radio" checked={!taskFilter} onChange={() => setTaskFilter(null)} />
+                      All tasks
+                    </label>
+                    {TASK_FILTERS.map(([kind, label, hint]) => (
+                      <label key={kind} className="as-menu__check" title={hint}>
+                        <input type="radio" checked={taskFilter === kind} onChange={() => setTaskFilter(kind)} />
+                        {label}
+                      </label>
+                    ))}
+                    <label className="as-menu__check" title="Light the chain of prerequisites with the most work left — what decides when the plan can finish">
+                      <input type="checkbox" checked={showCritical} onChange={() => setShowCritical((on) => !on)} />
+                      Show critical path
+                    </label>
+                    {!readOnly ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="as-menu__item"
+                        onClick={() => {
+                          setCapacityOpen(true);
+                          setOpenMenu(null);
+                        }}
+                      >
+                        <div className="as-menu__label">Team capacity…</div>
+                        <div className="as-menu__hint">Story points each person can take on</div>
+                      </button>
+                    ) : null}
+                    <div className="as-menu__sep" role="separator" />
+                  </>
+                ) : null}
                 {anyTables ? (
                   <>
                     <div className="as-menu__caption">Keys</div>
@@ -6369,6 +7592,44 @@ function StudioInner({
                     >
                       <div className="as-menu__label">{coverageOpen ? "Hide key coverage" : "Key coverage"}</div>
                       <div className="as-menu__hint">How much of the model a set of keys reaches</div>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="as-menu__item"
+                      onClick={() => {
+                        openUsagePanel(!usageOpen);
+                        setOpenMenu(null);
+                      }}
+                    >
+                      <div className="as-menu__label">{usageOpen ? "Hide key usage" : "Key usage"}</div>
+                      <div className="as-menu__hint">Which tables carry a field, and what share of the model</div>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="as-menu__item"
+                      onClick={() => {
+                        if (analysis.state?.kind === "governance") closeAnalysis();
+                        else openAnalysis({ kind: "governance" });
+                        setOpenMenu(null);
+                      }}
+                    >
+                      <div className="as-menu__label">{analysis.state?.kind === "governance" ? "Hide governance" : "Governance"}</div>
+                      <div className="as-menu__hint">Documented, owned, sensitive — and the data dictionary</div>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="as-menu__item"
+                      onClick={() => {
+                        if (analysis.state?.kind === "structure") closeAnalysis();
+                        else openAnalysis({ kind: "structure", tab: "hubs", tint: false, domain: null });
+                        setOpenMenu(null);
+                      }}
+                    >
+                      <div className="as-menu__label">{analysis.state?.kind === "structure" ? "Hide model structure" : "Model structure"}</div>
+                      <div className="as-menu__hint">Hubs, the keys holding it together, suggested domains</div>
                     </button>
                   </>
                 ) : null}
@@ -6466,6 +7727,77 @@ function StudioInner({
             </div>
           ) : null}
 
+          {/* Saved analyses: questions kept with the model. Offered once there
+              is one, or something to ask one about — not while comparing. */}
+          {!activeDiffBase && (savedAnalyses.length || (!readOnly && anyTables)) ? (
+            <div className="as-toolbar__group">
+              <ToolbarMenu
+                label={`Analyses${savedAnalyses.length ? ` (${savedAnalyses.length})` : ""}`}
+                title="Save the open analysis, or open a saved one"
+                open={openMenu === "analyses"}
+                onToggle={() => toggleMenu("analyses")}
+                menuClassName="as-menu--left"
+              >
+                <SavedAnalysesMenu
+                  analyses={savedAnalyses}
+                  readings={analysisReadings}
+                  current={currentAnalysisKind ? ANALYSIS_KIND_LABEL[currentAnalysisKind] : null}
+                  canEdit={!readOnly}
+                  onSaveCurrent={() => currentAnalysisKind && saveAnalysis(currentAnalysisKind)}
+                  onOpen={openSavedAnalysis}
+                  onRename={(a) => {
+                    setOpenMenu(null);
+                    setAnalysisDialog({ mode: "rename", id: a.id, title: a.title, note: a.note ?? "" });
+                  }}
+                  onDelete={deleteSavedAnalysis}
+                />
+                {!readOnly ? (
+                  <>
+                    <div className="as-menu__caption">Lineage{template.lineage?.length ? ` · ${template.lineage.length} links` : ""}</div>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="as-menu__item"
+                      onClick={() => {
+                        setOpenMenu(null);
+                        lineageInputRef.current?.click();
+                      }}
+                    >
+                      <div className="as-menu__label">Import lineage…</div>
+                      <div className="as-menu__hint">OpenLineage events with column lineage (JSON or NDJSON)</div>
+                    </button>
+                    {template.lineage?.length ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="as-menu__item"
+                        onClick={() => {
+                          setOpenMenu(null);
+                          applyTemplate({ ...templateRef.current, lineage: [] }, { fit: false });
+                          showToast("Lineage removed — undo brings it back");
+                        }}
+                      >
+                        <div className="as-menu__label">Remove lineage</div>
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
+              </ToolbarMenu>
+              <input
+                ref={lineageInputRef}
+                type="file"
+                accept="application/json,.json,.ndjson,.jsonl"
+                className="as-sr-only"
+                aria-label="OpenLineage events"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void importLineage(file);
+                  event.target.value = "";
+                }}
+              />
+            </div>
+          ) : null}
+
           {/* Global scenario control — drives every zone that offers the
               provider, for the "show me the all-AWS build" case. */}
           {scenarioProviders.length > 1 && !readOnly ? (
@@ -6523,7 +7855,7 @@ function StudioInner({
               /* The one place a toolbar icon earns its keep: whether the
                  document is clean is readable without opening anything. */
               icon={findings.length ? "warning" : "shield"}
-              title="Architecture lint — governance findings for this document"
+              title="Checks — architecture and data-model findings for this document"
               active={findings.some((f) => f.severity === "error")}
               open={openMenu === "checks"}
               onToggle={() => toggleMenu("checks")}
@@ -6532,7 +7864,21 @@ function StudioInner({
               {findings.length === 0 ? (
                 <div className="as-menu__caption">All checks pass</div>
               ) : (
-                findings.map((finding, i) => (
+                [
+                  <button
+                    key="all"
+                    type="button"
+                    role="menuitem"
+                    className="as-menu__item"
+                    onClick={() => {
+                      openAnalysis({ kind: "checks", severity: "all", query: "" });
+                      setOpenMenu(null);
+                    }}
+                  >
+                    <div className="as-menu__label">Show all {findings.length} in a panel</div>
+                    <div className="as-menu__hint">Grouped by rule, filtered, ignored, fixed, downloaded</div>
+                  </button>,
+                  ...findings.slice(0, CHECKS_MENU_CAP).map((finding, i) => (
                   <button
                     key={`${finding.rule}:${i}`}
                     type="button"
@@ -6551,7 +7897,11 @@ function StudioInner({
                     </div>
                     <div className="as-menu__hint">{finding.message}</div>
                   </button>
-                ))
+                  )),
+                  findings.length > CHECKS_MENU_CAP ? (
+                    <div key="more" className="as-menu__caption">… and {findings.length - CHECKS_MENU_CAP} more in the panel</div>
+                  ) : null,
+                ]
               )}
             </ToolbarMenu>
           </div>
@@ -6646,6 +7996,9 @@ function StudioInner({
               ) : null}
               {registry.exporterOrder.map((key) => {
                 const exporter = registry.exporters[key];
+                // Some formats only mean something for some documents (a
+                // dictionary needs tables, a change report a baseline).
+                if (exporter.available && !exporter.available({ template, ...(activeDiffBase ? { diffBase: activeDiffBase } : {}) })) return null;
                 return (
                   <button
                     key={key}
@@ -6663,13 +8016,18 @@ function StudioInner({
 
             {!readOnly ? (
               <>
-                <button type="button" className="as-btn" onClick={() => fileInputRef.current?.click()}>
+                <button
+                  type="button"
+                  className="as-btn"
+                  title="Open a document (.json), a SQL schema script (.sql) or a dbt manifest.json"
+                  onClick={() => fileInputRef.current?.click()}
+                >
                   Import
                 </button>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="application/json,.json"
+                  accept="application/json,.json,.sql,application/sql,.csv,text/csv,.tsv"
                   className="as-sr-only"
                   onChange={(event) => {
                     const file = event.target.files?.[0];
@@ -6680,7 +8038,7 @@ function StudioInner({
                 <button
                   type="button"
                   className="as-btn"
-                  title="Import a folder-format tree — a data-model export, or a Folder (.zip) export unzipped"
+                  title="Import a folder: a data-model export, a Folder (.zip) export unzipped, or a dbt project's target/ (manifest.json and catalog.json)"
                   onClick={() => folderInputRef.current?.click()}
                 >
                   Import folder
@@ -6777,9 +8135,33 @@ function StudioInner({
             <span className="as-diffbar__chip as-diffbar__chip--changed">
               ~{diff.summary.changed}
             </span>
+            {taskDiff ? (
+              <span className="as-diffbar__tasks" title="What moved in the plan since the baseline">
+                {[
+                  taskDiff.added.length ? `+${taskDiff.added.length} task${taskDiff.added.length === 1 ? "" : "s"}` : "",
+                  taskDiff.removed.length ? `−${taskDiff.removed.length} removed` : "",
+                  taskDiff.closed.length ? `${taskDiff.closed.length} done` : "",
+                  taskDiff.reopened.length ? `${taskDiff.reopened.length} reopened` : "",
+                  taskDiff.scope ? `scope ${taskDiff.scope > 0 ? "+" : "−"}${Math.abs(taskDiff.scope)} pts` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "No task changes"}
+              </span>
+            ) : null}
             <span className="as-diffbar__note">
               vs baseline — read-only view; the document is untouched
             </span>
+            {anyTables ? (
+              <button
+                type="button"
+                className={`as-btn${analysis.state?.kind === "changes" ? " as-btn--on" : ""}`}
+                aria-pressed={analysis.state?.kind === "changes"}
+                title="Column by column: what changed, and what it breaks"
+                onClick={() => (analysis.state?.kind === "changes" ? closeAnalysis() : openAnalysis({ kind: "changes", impact: "all" }))}
+              >
+                Schema changes
+              </button>
+            ) : null}
             {!diffBase ? (
               <button type="button" className="as-btn" onClick={() => setCompareTemplate(null)}>
                 Exit compare
@@ -6805,7 +8187,7 @@ function StudioInner({
           <PinStrip
             pins={pins}
             labelOf={fieldLabel}
-            onJump={(pin) => (pin.fieldId ? navigateToField({ nodeId: pin.nodeId, fieldId: pin.fieldId }) : navigateToNode(pin.nodeId))}
+            onJump={jumpToPin}
             onRemove={togglePin}
             onClear={() => setPins([])}
             pathsOpen={pathPanelOpen}
@@ -6852,6 +8234,7 @@ function StudioInner({
               nodeLabel={(id) => template.nodes.find((n) => n.id === id)?.label ?? id}
               onFollow={followLink}
               onNavigateField={navigateToField}
+              onJump={jumpToRefSubject}
               onClose={closeRefPanel}
             />
           ) : pathPanelOpen && routeView && !activeDiffBase ? (
@@ -6868,12 +8251,18 @@ function StudioInner({
               onHoverRoute={setHoverRoute}
               stickyRoute={stickyRoute}
               onPickRoute={pickRoute}
+              routesExpanded={routesExpanded}
+              onRoutesExpandedChange={setRoutesExpanded}
               hoverKey={hoverKey}
               onHoverKey={setHoverKey}
               stickyKey={stickyKey}
               onPickKey={pickKey}
               onNavigate={navigateToNode}
+              onJumpToPin={jumpToPin}
               onClose={() => setPathPanelOpen(false)}
+              sqlFor={(walk, opts) => routeSql(templateRef.current, walk, opts)}
+              onCopySql={(text) => void copyText(text).then((ok) => showToast(ok ? "SQL copied" : "Could not copy — select the SQL instead"))}
+              {...(!readOnly && pins.length >= 2 ? { onSave: () => saveAnalysis("paths") } : {})}
             />
           ) : aiPanelVisible ? (
             <div className="as-panel">
@@ -6957,6 +8346,37 @@ function StudioInner({
                 with the schema generated from this editor's registry.
               </p>
             </div>
+          ) : usageOpen && usageIndex && usageResult && !activeDiffBase ? (
+            <KeyUsagePanel
+              index={usageIndex}
+              results={usageResults}
+              query={usageQuery}
+              onQueryChange={setUsageQuery}
+              keysOnly={usageKeysOnly}
+              onKeysOnlyChange={setUsageKeysOnly}
+              inconsistentOnly={usageInconsistentOnly}
+              onInconsistentOnlyChange={setUsageInconsistentOnly}
+              variantFocus={usageVariant && usageKeys.includes(usageVariant.id) ? usageVariant : null}
+              onVariantFocus={setUsageVariant}
+              chosen={usageKeys}
+              onToggle={toggleUsageKey}
+              onClear={() => setUsageKeys([])}
+              match={usageMatch}
+              onMatchChange={setUsageMatch}
+              includeTargets={usageTargets}
+              onIncludeTargetsChange={setUsageTargets}
+              coverage={usageResult}
+              nodeLabel={(id) => template.nodes.find((n) => n.id === id)?.label ?? id}
+              onHover={setUsageHover}
+              onNavigate={(id, fields) => {
+                navigateToNode(id);
+                setHighlightFields(fields.length ? new Set(fields.map(fieldKey)) : NO_FIELDS);
+              }}
+              onClose={() => setUsageOpen(false)}
+              {...(!readOnly && usageKeys.length ? { onSave: () => saveAnalysis("usage") } : {})}
+            />
+          ) : analysis.element && (!activeDiffBase || analysis.state?.kind === "changes") ? (
+            analysis.element
           ) : null}
 
           {/* The Select tool's rubber band. Positioned and shown imperatively
@@ -6969,7 +8389,19 @@ function StudioInner({
           ) : (
           <ReactFlow
             nodes={viewNodes}
-            edges={viewEdges}
+            edges={displayEdges}
+            onNodeMouseEnter={
+              trackHover
+                ? (_, node) => {
+                    if (edgesOnHover || dependencyEnds.has(node.id)) setHoveredNodeId(node.id);
+                  }
+                : undefined
+            }
+            onNodeMouseLeave={
+              trackHover
+                ? (_, node) => setHoveredNodeId((current) => (current === node.id ? null : current))
+                : undefined
+            }
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -7066,6 +8498,7 @@ function StudioInner({
             proOptions={{ hideAttribution: false }}
           >
             <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} color="var(--as-grid-dot)" />
+            <LineageOverlay links={analysis.lineageLinks} reps={canvasReps} />
             {/* Drawn in flow coordinates so the guide stays on the line it
                 names at any zoom. */}
             {dragGuides ? (
@@ -7105,7 +8538,7 @@ function StudioInner({
                 both — React Flow stacks nothing, so a second top-right panel
                 would sit on top of the first. Corner-anchored so it reads as
                 a map key. */}
-            {legend && (legendRows.length || relationRows.length || activePaths.length || transientPaths.length) ? (
+            {legend && (legendRows.length || relationRows.length || activePaths.length || transientPaths.length || criticalPaths.length || anyTasks) ? (
               <Panel position="top-right" className="as-legend">
                 {legendRows.length ? (
                   <>
@@ -7171,6 +8604,132 @@ function StudioInner({
                         <span className="as-legend__label">{path.title}</span>
                       </div>
                     ))}
+                    {routeView && routeView.routes.length > ROUTE_CAP ? (
+                      <button
+                        type="button"
+                        className="as-legend__expand"
+                        aria-expanded={routesExpanded}
+                        onClick={() => setRoutesExpanded(!routesExpanded)}
+                      >
+                        {routesExpanded ? "Show fewer" : `Show all ${routeView.routes.length} routes`}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {criticalWalk ? (
+                  <div
+                    className={legendRows.length || relationRows.length || activePaths.length || transientPaths.length ? "as-legend__section" : undefined}
+                    role="group"
+                    aria-label="Critical path"
+                  >
+                    <p className="as-legend__title">Critical path</p>
+                    <div className="as-legend__row" title="The chain of prerequisites with the most work left — what decides when the plan can finish">
+                      <span className="as-legend__swatch" style={{ "--as-legend-color": "var(--as-edge-amber)" } as CSSProperties} />
+                      <span className="as-legend__label">
+                        {criticalWalk.weight} pts left · {criticalWalk.nodes.length} steps
+                      </span>
+                    </div>
+                  </div>
+                ) : null}
+                {taskGraph ? (
+                  // The plan at a glance: how far it has come, and the tasks
+                  // worth a look — each count a shortcut to the View filter.
+                  <div
+                    className={
+                      legendRows.length || relationRows.length || activePaths.length || transientPaths.length || criticalWalk
+                        ? "as-legend__section"
+                        : undefined
+                    }
+                    role="group"
+                    aria-label="Plan"
+                  >
+                    <p className="as-legend__title">Plan</p>
+                    {taskGraph.plan.tasks ? (
+                      <div className="as-legend__plan" title={`${taskGraph.plan.done} of ${taskGraph.plan.tasks} tasks done`}>
+                        <span className="as-legend__bar" aria-hidden="true">
+                          <span style={{ width: `${Math.round(rollupFraction(taskGraph.plan) * 100)}%` }} />
+                        </span>
+                        <span className="as-legend__count">{rollupLabel(taskGraph.plan)}</span>
+                      </div>
+                    ) : null}
+                    <div className="as-legend__states">
+                      {/* The worth-a-look counts, and whichever filter is on —
+                          kept here even at 0, or picked from the View menu, so
+                          the receded canvas always has its way back. */}
+                      {(
+                        [
+                          ["open", taskGraph.plan.tasks - taskGraph.plan.done, "open"],
+                          ["ready", taskGraph.ready.size, "ready"],
+                          ["started", taskGraph.doc.nodes.filter((n) => n.kind === TASK_KIND && !n.done && n.stage).length, "in progress"],
+                          ["blocked", taskGraph.blocked.size, "blocked"],
+                          ["overdue", [...taskGraph.overdue].filter((id) => taskGraph.doc.nodes.some((n) => n.id === id && n.kind === TASK_KIND)).length, "overdue"],
+                        ] as const
+                      )
+                        .filter(([kind, count]) => taskFilter === kind || (count > 0 && kind !== "open" && kind !== "started"))
+                        .map(([kind, count, label]) => (
+                          <button
+                            key={kind}
+                            type="button"
+                            className={`as-legend__state as-legend__state--${kind}${taskFilter === kind ? " as-legend__state--on" : ""}`}
+                            aria-pressed={taskFilter === kind}
+                            title={taskFilter === kind ? "Show every task" : `Show only the ${label} tasks`}
+                            onClick={() => setTaskFilter(taskFilter === kind ? null : kind)}
+                          >
+                            {count} {label}
+                            {taskFilter === kind ? (
+                              <span className="as-legend__state-clear" aria-hidden="true">
+                                ×
+                              </span>
+                            ) : null}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                ) : null}
+                {peopleRows.length ? (
+                  // Everyone on a task, each a toggle: pick one and their tasks
+                  // stay bright while the rest recede. A view, so it works for
+                  // a reader as well as an editor.
+                  <div className="as-legend__section" role="group" aria-label="People">
+                    <p className="as-legend__title">People</p>
+                    {peopleRows.map((row) => {
+                      const on = assigneeFilter === row.name;
+                      // What they hold now: open points when the plan estimates,
+                      // else open tasks — against their capacity, when set.
+                      const load = taskGraph?.workload.get(row.name);
+                      const byPoints = (taskGraph?.plan.points ?? 0) > 0;
+                      const held = load ? (byPoints ? load.openPoints : load.openTasks) : row.tasks;
+                      // Capacity is in points, so it's shown only beside points.
+                      const count = byPoints && load?.capacity !== undefined ? `${held}/${load.capacity}` : String(held);
+                      return (
+                        <button
+                          key={row.name}
+                          type="button"
+                          className={`as-legend__row as-legend__row--person${on ? " as-legend__row--on" : ""}`}
+                          aria-pressed={on}
+                          title={
+                            on
+                              ? "Show everyone's tasks"
+                              : `Focus on ${row.name}'s tasks — ${row.done} of ${row.tasks} done${
+                                  load ? ` · ${load.openPoints} open pts${load.capacity !== undefined ? ` of ${load.capacity} capacity` : ""}` : ""
+                                }${load?.over ? " — over capacity" : ""}`
+                          }
+                          onClick={() => setAssigneeFilter(on ? null : row.name)}
+                          onMouseEnter={() => setHoveredPerson(row.name)}
+                          onMouseLeave={() => setHoveredPerson((current) => (current === row.name ? null : current))}
+                        >
+                          <span
+                            className="as-legend__swatch as-legend__swatch--person"
+                            style={{ "--as-legend-color": assigneeColorOf(row.name) } as CSSProperties}
+                          />
+                          <span className="as-legend__name">{row.name}</span>
+                          <span className={`as-legend__count${load?.over ? " as-legend__count--over" : ""}`}>
+                            {count}
+                            {byPoints ? " pts" : ""}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 ) : null}
               </Panel>
@@ -7211,6 +8770,7 @@ function StudioInner({
                 relevantProviders={referencedProviderSet}
                 fieldsOf={edgeEndFields}
                 labelOf={nodeLabelOf}
+                onNavigate={navigateToCanvasNode}
                 onPatchNodes={patchNodes}
                 onPatchEdges={patchEdges}
                 onPatchZone={patchZone}
@@ -7221,6 +8781,8 @@ function StudioInner({
                 onDuplicate={duplicateSelection}
                 onDelete={deleteSelection}
                 onGroup={groupSelection}
+                kindOf={nodeKindOf}
+                assigneeOptions={assigneeNames}
               />
               {renderSlot(inspectorExtras)}
             </InspectorBar>
@@ -7269,6 +8831,7 @@ function StudioInner({
                   onEditFieldFocused={() => setEditField(null)}
                   viewFieldsCount={selectedFieldCount}
                   onViewFields={(nodeId) => setFieldGrid({ nodeId })}
+                  assigneeOptions={assigneeNames}
                 />
               ) : null}
               {selectedEdge && isGhostEdgeId(selectedEdge.id) ? (
@@ -7281,8 +8844,10 @@ function StudioInner({
               ) : selectedEdge ? (
                 <EdgeInspector
                   edges={[selectedEdge]}
+                  kindOf={nodeKindOf}
                   fieldsOf={edgeEndFields}
                   labelOf={nodeLabelOf}
+                  onNavigate={navigateToCanvasNode}
                   relevantProviders={[...referencedProviderSet]}
                   registry={registry}
                   onPatch={patchEdges}
@@ -7392,6 +8957,7 @@ function StudioInner({
               onHoverKey={setCoverageHover}
               onClear={() => setCoverageKeys([])}
               onClose={() => setCoverageOpen(false)}
+              {...(!readOnly && coverageKeys.length ? { onSave: () => saveAnalysis("coverage") } : {})}
             />
           ) : null}
           {importNotes.length ? (
@@ -7469,6 +9035,8 @@ function StudioInner({
             parseOther={onFileCreate ? parseLlmSequence : undefined}
             onInsertOther={onFileCreate ? handleWelcomeInsertOther : undefined}
             systemPromptOther={sequencePromptForCopy}
+            systemPromptTasks={taskSystemPrompt}
+            systemPromptTasksContent={taskSystemPromptContent}
             onDismiss={handleWelcomeDismiss}
             lint={welcomeLint}
           />
@@ -7508,6 +9076,17 @@ function StudioInner({
             })()
           : null}
 
+        {analysisDialog ? (
+          <SaveAnalysisDialog
+            heading={analysisDialog.mode === "save" ? "Save analysis" : "Rename analysis"}
+            {...(analysisDialog.mode === "save" ? { headline: analysisDialog.headline } : {})}
+            initialTitle={analysisDialog.title}
+            initialNote={analysisDialog.mode === "rename" ? analysisDialog.note : ""}
+            submitLabel={analysisDialog.mode === "save" ? "Save" : "Rename"}
+            onSubmit={submitAnalysisDialog}
+            onClose={() => setAnalysisDialog(null)}
+          />
+        ) : null}
         {pendingNest ? (
           <NestingModal
             subject={pendingNest}
@@ -7567,6 +9146,20 @@ function StudioInner({
                         close={closeContext}
                       />
                     ) : null}
+                    <ContextItem
+                      label="Show impact"
+                      hint="What depends on it"
+                      onPick={() => openAnalysis({ kind: "impact", subject: { nodeId: ref.nodeId, fieldId: ref.fieldId }, direction: "dependents", maxDepth: null, via: "keys" })}
+                      close={closeContext}
+                    />
+                    {lineageKeys.has(fieldKey(ref)) ? (
+                      <ContextItem
+                        label="Trace lineage"
+                        hint="Where its values come from, and where they go"
+                        onPick={() => openAnalysis({ kind: "lineage", subject: { nodeId: ref.nodeId, fieldId: ref.fieldId }, direction: "both", maxDepth: null })}
+                        close={closeContext}
+                      />
+                    ) : null}
                     {editable ? <ContextItem label="Edit…" onPick={() => setEditField(ref)} close={closeContext} /> : null}
                     <hr className="as-context__rule" />
                     <ContextItem label="Copy name" onPick={() => void copyText(record?.name ?? ref.fieldId)} close={closeContext} />
@@ -7611,6 +9204,52 @@ function StudioInner({
                     close={closeContext}
                   />
                 ) : null}
+                {contextMenu.kind === "node" && selectedTables.length >= 2 ? (
+                  <>
+                    <ContextItem
+                      label={
+                        selectedTables.every((id) => pins.some((p) => !p.fieldId && p.nodeId === id))
+                          ? `Unpin ${selectedTables.length} tables`
+                          : `Pin ${selectedTables.length} tables for search`
+                      }
+                      hint="Paths between them"
+                      onPick={() => toggleTablePins(selectedTables)}
+                      close={closeContext}
+                    />
+                    <ContextItem
+                      label={`Show paths between ${selectedTables.length} tables`}
+                      hint="Pins just these and opens the panel"
+                      onPick={() => showPathsBetween(selectedTables)}
+                      close={closeContext}
+                    />
+                  </>
+                ) : null}
+                {contextMenu.kind === "node" && selectedNodeIds.some((id) => !isZoneNodeId(id) && !isBoundaryNodeId(id)) ? (
+                  <ContextItem
+                    label="Focus neighbourhood"
+                    hint="What is within a join or two"
+                    onPick={() =>
+                      openAnalysis({
+                        kind: "neighbourhood",
+                        from: [...new Set(selectedNodeIds.filter((id) => !isZoneNodeId(id) && !isBoundaryNodeId(id)).map(documentNodeOf))],
+                        depth: 1,
+                        direction: "both",
+                        keysOnly: false,
+                      })
+                    }
+                    close={closeContext}
+                  />
+                ) : null}
+                {contextMenu.kind === "node" && selectedNodeIds.length === 1 && !isZoneNodeId(selectedNodeIds[0]!) ? (
+                  <ContextItem
+                    label="Show impact"
+                    hint="What depends on it, and what a delete reaches"
+                    onPick={() =>
+                      openAnalysis({ kind: "impact", subject: { nodeId: documentNodeOf(selectedNodeIds[0]!) }, direction: "dependents", maxDepth: null, via: "keys" })
+                    }
+                    close={closeContext}
+                  />
+                ) : null}
                 {contextMenu.kind === "node" && selectedFieldCount ? (
                   <ContextItem
                     label="View all fields"
@@ -7622,12 +9261,17 @@ function StudioInner({
                 {contextMenu.kind === "node" && selectedFieldCount
                   ? (() => {
                       const subject = { nodeId: documentNodeOf(selectedNodeIds[0]!) };
-                      const refs = keyReferences(template, subject);
-                      const count = refs.referencedBy.length;
-                      return count || refs.carries.length ? (
+                      // The count is every row the panel will list; the hint
+                      // says which way they run, so "(0)" never opens a full panel.
+                      const refs = menuRefs;
+                      if (!refs) return null;
+                      const pointing = refs.referencedBy.length;
+                      const own = refs.carries.length;
+                      const count = pointing + own;
+                      return count ? (
                         <ContextItem
                           label={`Show references (${count})`}
-                          hint={count ? "Every foreign key pointing here, and its own" : "The foreign keys it carries"}
+                          hint={[pointing ? `${pointing} point${pointing === 1 ? "s" : ""} here` : "", own ? `${own} of its own` : ""].filter(Boolean).join(" · ")}
                           onPick={() => showReferences(subject)}
                           close={closeContext}
                         />
@@ -7677,6 +9321,24 @@ function StudioInner({
           </div>
         ) : null}
         {shortcutsOpen ? <ShortcutsModal onClose={() => setShortcutsOpen(false)} /> : null}
+        {capacityOpen ? (
+          <CapacityModal
+            people={taskGraph ? taskWorkload(taskGraph.doc) : []}
+            colorOf={assigneeColorOf}
+            onClose={() => setCapacityOpen(false)}
+            onSave={(capacity) => {
+              setCapacityOpen(false);
+              if (readOnly) return;
+              const { capacity: _old, ...rest } = templateRef.current.settings ?? {};
+              const settings = Object.keys(capacity).length ? { ...rest, capacity } : rest;
+              applyTemplate(
+                { ...templateRef.current, ...(Object.keys(settings).length ? { settings } : { settings: undefined }) },
+                { fit: false },
+              );
+              showToast("Team capacity saved");
+            }}
+          />
+        ) : null}
         {pendingReplace ? (
           <Modal
             title={`Replace this diagram with “${pendingReplace.name}”?`}
@@ -7735,10 +9397,13 @@ function DateSection({
   date,
   what,
   label,
+  caption = "Date",
   clearable = !!date,
   onChange,
 }: {
   date?: string;
+  /** The section's caption — "Due" for a plan's tasks and milestones. */
+  caption?: string;
   /** What carries the date — "Node", "Edge", "Zone". Names the control. */
   what: string;
   label: string;
@@ -7751,7 +9416,7 @@ function DateSection({
   onChange: (date: string | undefined) => void;
 }) {
   return (
-    <InspectorSection caption="Date">
+    <InspectorSection caption={caption}>
       <input
         className="as-input as-inspector__date"
         type="date"
@@ -7942,6 +9607,7 @@ function MultiInspector({
   relevantProviders,
   fieldsOf,
   labelOf,
+  onNavigate,
   onPatchNodes,
   onPatchEdges,
   onPatchZone,
@@ -7952,9 +9618,15 @@ function MultiInspector({
   onDuplicate,
   onDelete,
   onGroup,
+  kindOf,
+  assigneeOptions,
 }: {
   /** The selected document nodes (ghosts and boundary frames already excluded). */
   nodes: readonly Node[];
+  /** A node's kind by canvas id — see EdgeInspector. */
+  kindOf: (nodeId: string) => string | undefined;
+  /** Everyone on a task in the document — see NodeInspector. */
+  assigneeOptions: readonly string[];
   edges: readonly Edge[];
   zoneIds: string[];
   registry: ResolvedRegistry;
@@ -7963,6 +9635,8 @@ function MultiInspector({
   relevantProviders: ReadonlySet<string>;
   fieldsOf: (nodeId: string) => readonly NodeField[];
   labelOf: (nodeId: string) => string;
+  /** One selected line still names its two ends, and each is a way there. */
+  onNavigate: (nodeId: string) => void;
   onPatchNodes: (ids: readonly string[], patch: NodePatch) => void;
   onPatchEdges: (ids: readonly string[], patch: EdgePatch) => void;
   onPatchZone: (id: string, patch: Partial<DiagramZone>) => void;
@@ -8041,14 +9715,17 @@ function MultiInspector({
           relevantProviders={relevantProviders}
           lock={false}
           onPatch={onPatchNodes}
+          assigneeOptions={assigneeOptions}
         />
       ) : null}
 
       {edges.length && tab === "edges" ? (
         <EdgeInspector
           edges={edges}
+          kindOf={kindOf}
           fieldsOf={fieldsOf}
           labelOf={labelOf}
+          onNavigate={onNavigate}
           relevantProviders={[...relevantProviders]}
           registry={registry}
           onPatch={onPatchEdges}
@@ -8443,9 +10120,12 @@ function NodeInspector({
   onEditFieldFocused,
   viewFieldsCount = 0,
   onViewFields,
+  assigneeOptions = EMPTY_NAMES,
 }: {
   /** The selection — at least one. */
   nodes: readonly Node[];
+  /** Everyone already on a task anywhere in the document — the assignee picker's offer. */
+  assigneeOptions?: readonly string[];
   /** The row whose name input should take the cursor — the field menu's Edit…. */
   editFieldId?: string;
   onEditFieldFocused?: () => void;
@@ -8478,6 +10158,10 @@ function NodeInspector({
   const allAnnotations = defs.every((d) => d.annotation);
   const noAnnotations = defs.every((d) => !d.annotation);
   const allPlainBoxes = defs.every((d) => !d.container && !d.annotation);
+  const allTasks = datas.every((d) => d.kind === TASK_KIND);
+  const allWork = datas.every((d) => d.kind === TASK_KIND || d.kind === MILESTONE_KIND);
+  // Inside the studio's provider: the plan-wide colours the cards wear.
+  const { assigneeColorOf } = useStudio();
 
   // Provider scoping lives on a zone, so it is offered when the whole
   // selection sits in the same one.
@@ -8526,6 +10210,16 @@ function NodeInspector({
   // to all — so "tag these five pci" is one click.
   const tagUnion = [...new Set(datas.flatMap((d) => d.tags ?? []))];
   const tagsOnAll = tagUnion.filter((tag) => datas.every((d) => d.tags?.includes(tag)));
+  // Assignees work the same way, except the offer is everyone on ANY task in
+  // the document — picking an existing person, not retyping them, is what
+  // keeps "Ana" one colour and one legend row.
+  const assigneeUnion = [...new Set([...assigneeOptions, ...datas.flatMap((d) => d.assignees ?? [])])];
+  const assigneesOnAll = assigneeUnion.filter((name) => datas.every((d) => d.assignees?.includes(name)));
+  const storyPoints = read((d) => d.storyPoints);
+  const done = read((d) => !!d.done);
+  const stage = read((d) => (d.done ? "done" : (d.stage ?? "todo")));
+  const priority = read((d) => d.priority ?? "");
+  const capacity = read((d) => d.capacity);
 
   return (
     <>
@@ -8589,7 +10283,18 @@ function NodeInspector({
               </option>
             ))}
           </select>
-          {single ? (
+          {single && allTasks ? (
+            // A ticket's detail runs to sentences and lines; the card shows
+            // the first two.
+            <textarea
+              className="as-input as-inspector__desc as-inspector__desc--multi"
+              value={data.description}
+              rows={3}
+              placeholder="Description…"
+              onChange={(event) => patch({ description: event.target.value })}
+              aria-label="Node description"
+            />
+          ) : single ? (
             <input
               className="as-input as-inspector__desc"
               value={data.description}
@@ -8598,6 +10303,69 @@ function NodeInspector({
               aria-label="Node description"
             />
           ) : null}
+        </InspectorSection>
+      ) : null}
+
+      {allTasks ? (
+        <InspectorSection caption="Task">
+          <input
+            className="as-input as-inspector__points"
+            type="number"
+            min={0}
+            step="any"
+            value={storyPoints.mixed ? "" : (storyPoints.value ?? "")}
+            placeholder={storyPoints.mixed ? "Mixed" : "Points"}
+            onChange={(event) => {
+              const n = Number.parseFloat(event.target.value);
+              patch({ storyPoints: Number.isFinite(n) && n >= 0 ? n : undefined });
+            }}
+            aria-label="Story points"
+            title="Estimate in story points — shown in the card's header"
+          />
+          <select
+            className="as-select"
+            value={stage.mixed ? "" : stage.value}
+            onChange={(event) => {
+              const next = event.target.value;
+              if (!next) return;
+              // Done is the corner check; the others are an open task's stage.
+              patch(
+                next === "done"
+                  ? { done: true, stage: undefined }
+                  : { done: undefined, stage: next === "todo" ? undefined : (next as TaskStage) },
+              );
+            }}
+            aria-label="Task status"
+            title="Where the task stands — to do, in progress, in review, or done"
+          >
+            <MixedOption when={stage.mixed} />
+            <option value="todo">To do</option>
+            <option value="in-progress">In progress</option>
+            <option value="in-review">In review</option>
+            <option value="done">Done</option>
+          </select>
+          <select
+            className="as-select"
+            value={priority.mixed ? "" : priority.value}
+            onChange={(event) => patch({ priority: (event.target.value || undefined) as TaskPriority | undefined })}
+            aria-label="Priority"
+            title="How urgent — P0 the most; shown as a badge on the card"
+          >
+            <MixedOption when={priority.mixed} />
+            <option value="">No priority</option>
+            {TASK_PRIORITIES.map((p) => (
+              <option key={p} value={p}>
+                {p.toUpperCase()}
+              </option>
+            ))}
+          </select>
+          <SharedCheck
+            checked={done.value}
+            mixed={done.mixed}
+            label="Done"
+            title="Finished — the card's corner check turns green, and the tasks waiting on it are no longer blocked"
+            onChange={(checked) => patch(checked ? { done: true, stage: undefined } : { done: undefined })}
+          />
         </InspectorSection>
       ) : null}
 
@@ -8704,6 +10472,26 @@ function NodeInspector({
             title="Wrap the label across lines, growing the box to fit"
             // One ellipsised line is the default, so only the opt-IN is stored.
             onChange={(checked) => patch({ wrap: checked ? true : undefined })}
+          />
+        </InspectorSection>
+      ) : null}
+
+      {/* A sprint's or phase's capacity — what its task roll-up is weighed against. */}
+      {allContainers ? (
+        <InspectorSection caption="Capacity">
+          <input
+            className="as-input as-inspector__points"
+            type="number"
+            min={0}
+            step="any"
+            value={capacity.mixed ? "" : (capacity.value ?? "")}
+            placeholder={capacity.mixed ? "Mixed" : "No limit"}
+            onChange={(event) => {
+              const n = Number.parseFloat(event.target.value);
+              patch({ capacity: Number.isFinite(n) && n > 0 ? n : undefined });
+            }}
+            aria-label="Capacity in story points"
+            title="Story points this sprint or phase can hold — its roll-up warns past it"
           />
         </InspectorSection>
       ) : null}
@@ -8837,6 +10625,33 @@ function NodeInspector({
         />
       ) : null}
 
+      {allTasks ? (
+        <ChipListEditor
+          caption="Assignees"
+          ariaLabel="Assignees"
+          addPlaceholder="+ person…"
+          options={assigneeUnion}
+          active={assigneesOnAll}
+          colorOf={assigneeColorOf ?? ((name) => swatchColor(assigneeSwatch(name)))}
+          customIds={new Set(assigneeUnion)}
+          onToggle={(name) =>
+            assigneesOnAll.includes(name)
+              ? patch((d) => {
+                  const next = (d.assignees ?? []).filter((a) => a !== name);
+                  return { assignees: next.length ? next : undefined };
+                })
+              : patch((d) => ({
+                  assignees: d.assignees?.includes(name) ? d.assignees : [...(d.assignees ?? []), name],
+                }))
+          }
+          onAdd={(name) =>
+            patch((d) => ({
+              assignees: d.assignees?.includes(name) ? d.assignees : [...(d.assignees ?? []), name],
+            }))
+          }
+        />
+      ) : null}
+
       {noAnnotations ? (
         <InspectorSection caption="Team">
           <input
@@ -8852,11 +10667,14 @@ function NodeInspector({
       <DateSection
         date={date.mixed ? undefined : date.value}
         clearable={datas.some((d) => !!d.date)}
-        what="Node"
+        what={allWork ? "Due" : "Node"}
+        caption={allWork ? "Due" : "Date"}
         label={
           date.mixed
             ? "Mixed — pick one date for all"
-            : "When this node lands. Undated means it is always there."
+            : allWork
+              ? "When this is due. It shows overdue once the date passes unfinished."
+              : "When this node lands. Undated means it is always there."
         }
         onChange={(next) => patch({ date: next })}
       />
@@ -9123,22 +10941,67 @@ function FieldsEditor({
  * drops only what names ONE line: its label, its step number, and which row
  * of which box it attaches to.
  */
+/**
+ * The two kinds of line between tasks, as a two-way switch: a PREREQUISITE
+ * is an ordinary arrow, always drawn; a DEPENDENCY links work elsewhere in
+ * the plan and is drawn only while either task is hovered or selected.
+ * `null` is a selection of both.
+ */
+function TaskLinkSwitch({
+  value,
+  onChange,
+}: {
+  value: "prerequisite" | "dependency" | null;
+  onChange: (next: "prerequisite" | "dependency") => void;
+}) {
+  return (
+    <InspectorSection caption="Link">
+      <span className="as-inspector__group" role="group" aria-label="Link type">
+        <button
+          type="button"
+          className={`as-btn${value === "prerequisite" ? " as-btn--on" : ""}`}
+          aria-pressed={value === "prerequisite"}
+          title="Finish the first task before the one the arrow points at — always drawn"
+          onClick={() => onChange("prerequisite")}
+        >
+          Prerequisite
+        </button>
+        <button
+          type="button"
+          className={`as-btn${value === "dependency" ? " as-btn--on" : ""}`}
+          aria-pressed={value === "dependency"}
+          title="Waits on work elsewhere in the plan — drawn only while either task is hovered or selected"
+          onClick={() => onChange("dependency")}
+        >
+          Dependency (on hover)
+        </button>
+      </span>
+    </InspectorSection>
+  );
+}
+
 function EdgeInspector({
   edges,
   fieldsOf,
   labelOf,
+  onNavigate,
   relevantProviders,
   registry,
   onPatch,
   onSwapEnds,
   onClearRoutes,
+  kindOf,
 }: {
   /** The selection — at least one. */
   edges: readonly Edge[];
+  /** A node's kind by canvas id — tells a line between two tasks from any other. */
+  kindOf?: (nodeId: string) => string | undefined;
   /** Rows of a node — what an end may attach to. */
   fieldsOf: (nodeId: string) => readonly NodeField[];
   /** What a node is called, so the bar can say what a line joins. */
   labelOf: (nodeId: string) => string;
+  /** Go to one end by its canvas id — the studio resolves what it stands for. */
+  onNavigate: (nodeId: string) => void;
   relevantProviders: readonly string[];
   registry: ResolvedRegistry;
   onPatch: (ids: readonly string[], patch: EdgePatch) => void;
@@ -9166,6 +11029,10 @@ function EdgeInspector({
   const anyEndRows = edges.some((e) => fieldsOf(e.source).length || fieldsOf(e.target).length);
   const anyEndLabels = datas.some((d) => d.startLabel || d.endLabel);
   const anyRelation = datas.some((d) => d.relation);
+  // Every line joins two tasks: it is a prerequisite or a dependency, and
+  // that switch replaces the data-model cardinality controls.
+  const allTaskLinks =
+    !!kindOf && edges.every((e) => kindOf(e.source) === TASK_KIND && kindOf(e.target) === TASK_KIND);
   const routed = edges.filter((e) => (e.data as DiagramEdgeData | undefined)?.points?.length);
 
   const tech = read((d) => d.tech ?? "");
@@ -9194,11 +11061,27 @@ function EdgeInspector({
           the line and drawing it again, losing its label and its route. */}
       <InspectorSection caption={single ? "Between" : "Connections"}>
         {single ? (
-          <span
-            className="as-inspector__ends"
-            title={`${labelOf(edge.source)} → ${labelOf(edge.target)}`}
-          >
-            {labelOf(edge.source)} → {labelOf(edge.target)}
+          // Each end is a way there. Selecting a line is how you ask what it
+          // joins, and on anything bigger than a screenful the answer named
+          // two boxes you then had to go and find.
+          <span className="as-inspector__ends">
+            <button
+              type="button"
+              className="as-inspector__endjump"
+              title={`Go to ${labelOf(edge.source)}`}
+              onClick={() => onNavigate(edge.source)}
+            >
+              {labelOf(edge.source)}
+            </button>
+            <span aria-hidden="true"> → </span>
+            <button
+              type="button"
+              className="as-inspector__endjump"
+              title={`Go to ${labelOf(edge.target)}`}
+              onClick={() => onNavigate(edge.target)}
+            >
+              {labelOf(edge.target)}
+            </button>
           </span>
         ) : null}
         <button
@@ -9330,10 +11213,35 @@ function EdgeInspector({
         ) : null}
       </InspectorSection>
 
+      {allTaskLinks ? (
+        <TaskLinkSwitch
+          value={relation.mixed ? null : relation.value === DEPENDENCY_RELATION ? "dependency" : "prerequisite"}
+          onChange={(next) => {
+            const dressing = relationDressing(relationDef(registry, DEPENDENCY_RELATION));
+            if (next === "dependency") {
+              patch({ relation: DEPENDENCY_RELATION, ...dressing });
+              return;
+            }
+            // Back to an ordinary line. The dependency look comes off only
+            // where the line still wears it — a hand-recoloured line keeps
+            // its colour.
+            patch((d) =>
+              d.relation !== DEPENDENCY_RELATION
+                ? {}
+                : {
+                    relation: undefined,
+                    ...(d.style === dressing.style ? { style: "solid" as const } : {}),
+                    ...(d.color === dressing.color ? { color: "slate" as const } : {}),
+                  },
+            );
+          }}
+        />
+      ) : null}
+
       {/* Cardinality and the rows each end attaches to. Offered where it means
           something — either endpoint has rows, or this edge already carries
           end labels — rather than on every architecture connection. */}
-      {anyEndRows || anyEndLabels || anyRelation ? (
+      {!allTaskLinks && (anyEndRows || anyEndLabels || anyRelation) ? (
         <InspectorSection caption="Ends">
           {/* What kind of relationship the line is. Choosing one dresses the
               line the way the legend shows that kind — style, colour, end
@@ -9351,7 +11259,9 @@ function EdgeInspector({
           >
             <MixedOption when={relation.mixed} />
             <option value="">relation: none</option>
-            {registry.relationOrder.map((id) => (
+            {/* A dependency is a task graph's line (see the switch above), so a
+                data model's picker offers it only to a line already wearing it. */}
+            {registry.relationOrder.filter((id) => id !== DEPENDENCY_RELATION || relation.value === id).map((id) => (
               <option key={id} value={id} title={registry.relationKinds[id]?.description}>
                 {registry.relationKinds[id]?.label ?? id}
               </option>
@@ -9610,8 +11520,13 @@ function viewSignatureOf(
 
 /** The longest prefix of the focus stack whose nodes still exist in `doc`. */
 /** Pins whose field (or table) still exists. */
-/** The document node a canvas node stands for: a ghost's source, else itself. */
-const documentNodeOf = (id: string): string => (isGhostNodeId(id) ? ghostSourceId(id) : id);
+/**
+ * The document node a canvas node stands for — a ghost's source, the
+ * boundary frame's component — else itself. `documentNodeId` is the one
+ * rule; this keeps the id when it names no document node (a zone), so a
+ * caller that already excluded zones gets a string back.
+ */
+const documentNodeOf = (id: string): string => documentNodeId(id) ?? id;
 
 function prunePins(doc: DiagramTemplate, pins: readonly Pin[]): Pin[] {
   return pins.filter((p) => hasField(doc, p));

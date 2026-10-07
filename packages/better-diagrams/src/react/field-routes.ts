@@ -11,7 +11,7 @@
  */
 import type { DiagramTemplate, EdgeColor } from "../contract/schema";
 import { between, fieldPaths, keyFrequency, reachableFrom, type GraphWalk, type KeyFrequencyResult } from "../contract/graph";
-import { edgeKeyOf, keysBetween, type KeyLink, type Pin } from "../contract/fields";
+import { edgeKeyOf, fieldKey, keysBetween, type FieldDocument, type KeyLink, type Pin } from "../contract/fields";
 
 export interface RouteQuery {
   pins: readonly Pin[];
@@ -53,9 +53,9 @@ export interface RouteView {
   /** Two pins only: which keys the routes have in common. */
   keyUse: KeyFrequencyResult | null;
   /**
-   * Two pins only: the keys joining the pinned tables directly, either way
-   * round — including references the document draws no line for, which no
-   * route can travel but a reader asking "how do these join" still wants.
+   * The keys joining any two pins directly, either way round, pair by pair in
+   * pin order — including references the document draws no line for, which
+   * no route can travel but a reader asking "how do these join" still wants.
    */
   directKeys: KeyLink[];
 }
@@ -63,7 +63,25 @@ export interface RouteView {
 /** Pairwise mode looks at the first this-many pins (28 pairs). */
 export const PAIRWISE_PIN_CAP = 8;
 
-export function computeRouteView(doc: DiagramTemplate, query: RouteQuery, colors: readonly EdgeColor[]): RouteView {
+/** Routes shown — listed, lit, in the legend — before the reader asks for all of them. */
+export const ROUTE_CAP = 4;
+
+/**
+ * Which routes are shown: all of them once expanded, else the first few,
+ * plus a kept one beyond them — it is lit and framed, and its row is the
+ * way to let it go.
+ */
+export function shownRouteIndices(count: number, expanded: boolean, sticky: number | null): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < count; i++) if (expanded || i < ROUTE_CAP || i === sticky) out.push(i);
+  return out;
+}
+
+/**
+ * Reads only the structural slice (`FieldDocument`), so a `DiagramTemplate`
+ * serves, and so does the trimmed copy the interactive HTML export carries.
+ */
+export function computeRouteView(doc: FieldDocument, query: RouteQuery, colors: readonly EdgeColor[]): RouteView {
   const { undirected, mode } = query;
   const pins = query.pins.slice(0, PAIRWISE_PIN_CAP);
   const pinsIgnored = Math.max(0, query.pins.length - pins.length);
@@ -162,8 +180,88 @@ export function computeRouteView(doc: DiagramTemplate, query: RouteQuery, colors
     constrainedFallback: fallback,
     pinsIgnored,
     keyUse: null,
-    directKeys: [],
+    directKeys: keysAmong(doc, pins),
   };
+}
+
+/** `keysBetween` for every pair of pins, each key once. */
+function keysAmong(doc: FieldDocument, pins: readonly Pin[]): KeyLink[] {
+  const out: KeyLink[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < pins.length; i++) {
+    for (let j = i + 1; j < pins.length; j++) {
+      for (const link of keysBetween(doc, pins[i], pins[j])) {
+        const key = `${fieldKey(link.from)}\u0001${fieldKey(link.to)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(link);
+      }
+    }
+  }
+  return out;
+}
+
+/** A walk the canvas lights for the path panel, in the colour it wears. */
+export interface LitWalk {
+  /** Stable while the view stands: `route:<index in view.routes>`, or `key:<index>` for a key's own line. */
+  id: string;
+  walk: GraphWalk;
+  title: string;
+  color: EdgeColor;
+}
+
+/** Where the reader's pointer and clicks are in the path panel. */
+export interface RouteFocus {
+  expanded: boolean;
+  hoverRoute: number | null;
+  stickyRoute: number | null;
+  hoverKey: string | null;
+  stickyKey: string | null;
+}
+
+/**
+ * The walks the canvas lights for a route view: the shown routes, or the one
+ * hovered or kept alone; with a key hovered or kept, every shown route
+ * through it. A key joining two pins directly lights its own line when no
+ * shown route travels it — against the arrows, past the routes shown, or
+ * between two of three or more pins, where no routes are listed at all — in
+ * `keyColor`. One walk lit is one singled out: callers draw it bright.
+ *
+ * Stated without the canvas, so the editor and the interactive HTML export
+ * light the same walks from one rule.
+ */
+export function litRoutes(
+  view: RouteView,
+  focus: RouteFocus,
+  label: (id: string) => string,
+  keyColor: EdgeColor,
+): LitWalk[] {
+  const litKey = focus.hoverKey ?? focus.stickyKey;
+  const direct = litKey ? view.directKeys.filter((l) => l.edgeId !== undefined && fieldKey(l.from) === litKey) : [];
+  const ownLines = (): LitWalk[] =>
+    direct.map((l, i) => ({
+      id: `key:${i}`,
+      walk: { nodes: [l.from.nodeId, l.to.nodeId], edges: [l.edgeId!] },
+      title: `${label(l.from.nodeId)}.${l.from.fieldId} → ${label(l.to.nodeId)}`,
+      color: keyColor,
+    }));
+  if (view.kind !== "pair") return ownLines();
+  const shown = new Set(shownRouteIndices(view.routes.length, focus.expanded, focus.stickyRoute));
+  const only = focus.hoverRoute ?? focus.stickyRoute;
+  // A key the current routes don't use (kept, then the direction toggled)
+  // lights nothing through it — it falls through to the routes instead.
+  const keyEdges = litKey ? view.keyUse?.keys.find((k) => fieldKey(k.ref) === litKey)?.edges : undefined;
+  const throughKey = keyEdges || direct.length ? new Set([...(keyEdges ?? []), ...direct.map((l) => l.edgeId!)]) : null;
+  const onRoutes = view.routes
+    .map((route, i) => ({ route, i }))
+    .filter(({ route, i }) =>
+      shown.has(i) &&
+      (throughKey
+        ? route.walk.edges.some((e) => throughKey.has(e))
+        : only === null || only >= view.routes.length || only === i),
+    )
+    .map(({ route, i }) => ({ id: `route:${i}`, walk: route.walk, title: route.title, color: route.color }));
+  return onRoutes.length || !direct.length ? onRoutes : ownLines();
 }
 
 /**

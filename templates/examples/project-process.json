@@ -1,0 +1,583 @@
+{
+  "version": 1,
+  "nodes": [
+    {
+      "id": "discover",
+      "label": "1 · Discover",
+      "kind": "group",
+      "icon": "none",
+      "description": "",
+      "parentId": null,
+      "zoneId": null,
+      "color": "#38bdf8",
+      "x": 0,
+      "y": 0,
+      "w": 526,
+      "h": 514,
+      "fontSize": 13
+    },
+    {
+      "id": "design",
+      "label": "2 · Design",
+      "kind": "group",
+      "icon": "none",
+      "description": "",
+      "parentId": null,
+      "zoneId": null,
+      "color": "#a78bfa",
+      "x": 606,
+      "y": 0,
+      "w": 276,
+      "h": 674,
+      "fontSize": 13
+    },
+    {
+      "id": "build",
+      "label": "3 · Build",
+      "kind": "group",
+      "icon": "none",
+      "description": "",
+      "parentId": null,
+      "zoneId": null,
+      "color": "#34d399",
+      "x": 962,
+      "y": 0,
+      "w": 526,
+      "h": 354,
+      "fontSize": 13
+    },
+    {
+      "id": "launch",
+      "label": "4 · Launch",
+      "kind": "group",
+      "icon": "none",
+      "description": "",
+      "parentId": null,
+      "zoneId": null,
+      "color": "#f59e0b",
+      "x": 1568,
+      "y": 0,
+      "w": 526,
+      "h": 514,
+      "fontSize": 13
+    },
+    {
+      "id": "kickoff",
+      "label": "Kickoff & scope",
+      "kind": "task",
+      "icon": "none",
+      "description": "Goals, budget, timeline,\nsign-off owners",
+      "parentId": "discover",
+      "zoneId": null,
+      "assignees": [
+        "Ana"
+      ],
+      "storyPoints": 1,
+      "done": true,
+      "x": 153,
+      "y": 52,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "interviews",
+      "label": "Stakeholder interviews",
+      "kind": "task",
+      "icon": "none",
+      "description": "Sales, support, marketing",
+      "parentId": "discover",
+      "zoneId": null,
+      "assignees": [
+        "Ana",
+        "Lena"
+      ],
+      "storyPoints": 3,
+      "done": true,
+      "x": 28,
+      "y": 212,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "audit",
+      "label": "Analytics & content audit",
+      "kind": "task",
+      "icon": "none",
+      "description": "Top pages, dead pages,\nconversion baseline",
+      "parentId": "discover",
+      "zoneId": null,
+      "assignees": [
+        "Ravi"
+      ],
+      "storyPoints": 3,
+      "done": true,
+      "x": 278,
+      "y": 212,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "goals",
+      "label": "Define goals & KPIs",
+      "kind": "task",
+      "icon": "none",
+      "description": "Leads +30%, bounce −15%",
+      "parentId": "discover",
+      "zoneId": null,
+      "assignees": [
+        "Ana"
+      ],
+      "storyPoints": 2,
+      "done": true,
+      "x": 153,
+      "y": 372,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "ia",
+      "label": "Sitemap & IA",
+      "kind": "task",
+      "icon": "none",
+      "description": "Navigation, page types,\nURL structure",
+      "parentId": "design",
+      "zoneId": null,
+      "assignees": [
+        "Lena"
+      ],
+      "storyPoints": 3,
+      "done": true,
+      "x": 28,
+      "y": 52,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "wireframes",
+      "label": "Wireframes",
+      "kind": "task",
+      "icon": "none",
+      "description": "Home, product, pricing,\ncontact",
+      "parentId": "design",
+      "zoneId": null,
+      "assignees": [
+        "Lena"
+      ],
+      "storyPoints": 5,
+      "x": 28,
+      "y": 212,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "visual",
+      "label": "Visual design",
+      "kind": "task",
+      "icon": "none",
+      "description": "Design system + key pages",
+      "parentId": "design",
+      "zoneId": null,
+      "assignees": [
+        "Priya"
+      ],
+      "storyPoints": 5,
+      "done": true,
+      "x": 28,
+      "y": 372,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "review",
+      "label": "Design review",
+      "kind": "task",
+      "icon": "none",
+      "description": "Stakeholder sign-off",
+      "parentId": "design",
+      "zoneId": null,
+      "assignees": [
+        "Ana",
+        "Priya"
+      ],
+      "storyPoints": 1,
+      "done": true,
+      "x": 28,
+      "y": 532,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "cms",
+      "label": "Set up CMS",
+      "kind": "task",
+      "icon": "none",
+      "description": "Content models, roles,\npreview environments",
+      "parentId": "build",
+      "zoneId": null,
+      "assignees": [
+        "Ravi"
+      ],
+      "storyPoints": 5,
+      "x": 28,
+      "y": 52,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "components",
+      "label": "Front-end components",
+      "kind": "task",
+      "icon": "none",
+      "description": "Built from the design system",
+      "parentId": "build",
+      "zoneId": null,
+      "assignees": [
+        "Mo",
+        "Priya"
+      ],
+      "storyPoints": 8,
+      "x": 278,
+      "y": 52,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "content",
+      "label": "Content migration",
+      "kind": "task",
+      "icon": "none",
+      "description": "Rewrite + move 120 pages",
+      "parentId": "build",
+      "zoneId": null,
+      "assignees": [
+        "Sam",
+        "Lena"
+      ],
+      "storyPoints": 8,
+      "x": 28,
+      "y": 212,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "integrations",
+      "label": "Forms & CRM integration",
+      "kind": "task",
+      "icon": "none",
+      "description": "Lead forms → CRM, consent",
+      "parentId": "build",
+      "zoneId": null,
+      "assignees": [
+        "Ravi",
+        "Mo"
+      ],
+      "storyPoints": 3,
+      "x": 278,
+      "y": 212,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "qa",
+      "label": "QA & accessibility",
+      "kind": "task",
+      "icon": "none",
+      "description": "WCAG 2.2 AA, browsers,\nperformance budget",
+      "parentId": "launch",
+      "zoneId": null,
+      "assignees": [
+        "Sam"
+      ],
+      "storyPoints": 3,
+      "x": 28,
+      "y": 52,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "redirects",
+      "label": "SEO redirects",
+      "kind": "task",
+      "icon": "none",
+      "description": "301 map for every old URL",
+      "parentId": "launch",
+      "zoneId": null,
+      "assignees": [
+        "Ravi"
+      ],
+      "storyPoints": 2,
+      "x": 278,
+      "y": 52,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "golive",
+      "label": "Go live",
+      "kind": "task",
+      "icon": "none",
+      "description": "DNS cut-over, monitoring",
+      "parentId": "launch",
+      "zoneId": null,
+      "assignees": [
+        "Ana",
+        "Ravi"
+      ],
+      "storyPoints": 1,
+      "x": 153,
+      "y": 212,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    },
+    {
+      "id": "retro",
+      "label": "Post-launch review",
+      "kind": "task",
+      "icon": "none",
+      "description": "KPIs at 30 days, retro",
+      "parentId": "launch",
+      "zoneId": null,
+      "assignees": [
+        "Ana"
+      ],
+      "storyPoints": 2,
+      "x": 153,
+      "y": 372,
+      "w": 220,
+      "h": 96,
+      "fontSize": 13
+    }
+  ],
+  "edges": [
+    {
+      "id": "kickoff-interviews",
+      "source": "kickoff",
+      "target": "interviews",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "kickoff-audit",
+      "source": "kickoff",
+      "target": "audit",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "interviews-goals",
+      "source": "interviews",
+      "target": "goals",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "audit-goals",
+      "source": "audit",
+      "target": "goals",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "goals-ia",
+      "source": "goals",
+      "target": "ia",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "ia-wireframes",
+      "source": "ia",
+      "target": "wireframes",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "wireframes-visual",
+      "source": "wireframes",
+      "target": "visual",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "visual-review",
+      "source": "visual",
+      "target": "review",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "ia-cms",
+      "source": "ia",
+      "target": "cms",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "review-components",
+      "source": "review",
+      "target": "components",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "cms-content",
+      "source": "cms",
+      "target": "content",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "cms-integrations",
+      "source": "cms",
+      "target": "integrations",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "components-qa",
+      "source": "components",
+      "target": "qa",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "content-qa",
+      "source": "content",
+      "target": "qa",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "integrations-qa",
+      "source": "integrations",
+      "target": "qa",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "content-redirects",
+      "source": "content",
+      "target": "redirects",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "qa-golive",
+      "source": "qa",
+      "target": "golive",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "redirects-golive",
+      "source": "redirects",
+      "target": "golive",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "golive-retro",
+      "source": "golive",
+      "target": "retro",
+      "label": "",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "audit-retro",
+      "source": "audit",
+      "target": "retro",
+      "label": "",
+      "labelT": 0.5,
+      "style": "dashed",
+      "color": "sky",
+      "relation": "dependency"
+    },
+    {
+      "id": "goals-retro",
+      "source": "goals",
+      "target": "retro",
+      "label": "",
+      "labelT": 0.5,
+      "style": "dashed",
+      "color": "sky",
+      "relation": "dependency"
+    },
+    {
+      "id": "cms-components",
+      "source": "cms",
+      "target": "components",
+      "label": "",
+      "labelT": 0.5,
+      "style": "dashed",
+      "color": "sky",
+      "relation": "dependency"
+    },
+    {
+      "id": "audit-redirects",
+      "source": "audit",
+      "target": "redirects",
+      "label": "",
+      "labelT": 0.5,
+      "style": "dashed",
+      "color": "sky",
+      "relation": "dependency"
+    }
+  ],
+  "meta": {
+    "title": "Website relaunch",
+    "versionTag": "Q4 plan"
+  }
+}

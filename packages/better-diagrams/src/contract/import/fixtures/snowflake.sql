@@ -1,0 +1,15 @@
+create or replace TABLE ANALYTICS.CORE.CUSTOMERS (
+	ID NUMBER(38,0) NOT NULL autoincrement start 1 increment 1 noorder,
+	EMAIL VARCHAR(16777216) NOT NULL COMMENT 'Login',
+	SSN VARCHAR(11) WITH MASKING POLICY ANALYTICS.POLICIES.MASK_SSN,
+	primary key (ID)
+)COMMENT='People who buy'
+;
+create or replace TABLE ANALYTICS.CORE.ORDERS (
+	ID NUMBER(38,0) NOT NULL,
+	CUSTOMER_ID NUMBER(38,0),
+	AMOUNT NUMBER(12,2),
+	constraint PK_ORDERS primary key (ID),
+	constraint FK_ORDERS_CUSTOMER foreign key (CUSTOMER_ID) references ANALYTICS.CORE.CUSTOMERS(ID)
+);
+create or replace view ANALYTICS.CORE.BIG_ORDERS as select * from ANALYTICS.CORE.ORDERS where AMOUNT > 100;

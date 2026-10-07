@@ -134,6 +134,13 @@ test.describe("editing several things at once", () => {
     const from = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     await studio.page.mouse.move(from.x, from.y);
     await studio.page.mouse.down();
+    // Pulled hard past the box's floor first: the handle stops, the pointer
+    // does not, so the gesture is left running from well outside a node whose
+    // handles are only up because it is hovered. They have to survive that —
+    // unmounting the resizer here would strand the drag with no end, and the
+    // size would never be committed.
+    await studio.page.mouse.move(from.x - 300, from.y - 300, { steps: 10 });
+    await expect(gamma.locator(".react-flow__resize-control.handle")).toHaveCount(4);
     await studio.page.mouse.move(from.x + 80, from.y + 40, { steps: 10 });
     await studio.page.mouse.up();
 

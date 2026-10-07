@@ -23,8 +23,20 @@
  * custom kinds are the host's own to lint.
  */
 import type { DiagramNode, DiagramTemplate } from "./schema";
+import { edgeFieldIds, type FieldRef } from "./fields";
+import { dataModelLintRules } from "./data-model-lint";
+import { taskLintRules } from "./task-lint";
+import { TASK_KIND } from "./tasks";
 
 export type LintSeverity = "error" | "warning" | "info";
+
+/**
+ * A fix for a finding, applied as one undoable edit: draw the reference a
+ * column's name implies, to that table's key; or give a column a tag.
+ */
+export type LintFix =
+  | { kind: "draw-reference"; label: string; from: FieldRef; to: string }
+  | { kind: "tag-field"; label: string; field: FieldRef; tag: string };
 
 /** One problem a rule found. The rule id and default severity are stamped on by `lintTemplate`. */
 export interface LintIssue {
@@ -32,6 +44,10 @@ export interface LintIssue {
   /** Offending nodes — the editor selects and centres these on click. */
   nodeIds?: string[];
   edgeIds?: string[];
+  /** Offending columns — the editor marks these rows when it goes to the finding. */
+  fields?: FieldRef[];
+  /** A fix the editor can apply as one undoable edit; the HTML export shows findings only. */
+  fix?: LintFix;
   /** Overrides the rule's default severity for this one finding. */
   severity?: LintSeverity;
 }
@@ -64,36 +80,32 @@ const isPoint = (n: DiagramNode) => n.kind === "point";
 const FLOWCHART_KINDS = new Set(["decision", "terminator", "io"]);
 const isFlowchart = (n: DiagramNode) => FLOWCHART_KINDS.has(n.kind as string);
 
+/**
+ * A work item (tasks.ts) is not a system either: it is held by assignees,
+ * not owned by a team, and an unlinked one is an ordinary backlog entry.
+ */
+const isTask = (n: DiagramNode) => n.kind === TASK_KIND;
+
 const isLeaf = (n: DiagramNode) => !isAnnotation(n) && !isContainer(n) && !isPoint(n);
 /** A real architecture element: something a team could own and operate. */
-const isComponent = (n: DiagramNode) => isLeaf(n) && !isFlowchart(n);
+const isComponent = (n: DiagramNode) => isLeaf(n) && !isFlowchart(n) && !isTask(n);
 const isSunset = (n: DiagramNode) => n.status === "deprecated" || n.status === "retired";
 
-/**
- * Tag that opts one element out of linting: `lint-ignore` silences every rule
- * on it, `lint-ignore:no-orphans` silences one.
- *
- * A tag rather than a schema field because that is where "this is deliberate,
- * stop telling me" already lives in this document, it survives every
- * round-trip, and it shows in the tag filter — so a reader can see at a glance
- * what has been excused and why the Checks count is what it is.
- */
-export const LINT_IGNORE_TAG = "lint-ignore";
-
-export function lintIgnored(n: DiagramNode, rule: string): boolean {
-  const tags = n.tags;
-  if (!tags?.length) return false;
-  return tags.some((t) => {
-    const tag = t.trim().toLowerCase();
-    return tag === LINT_IGNORE_TAG || tag === `${LINT_IGNORE_TAG}:${rule.toLowerCase()}`;
-  });
-}
+// The ignore tag lives in its own module so rule sets built outside this file
+// (the data-model rules) share it without importing this one.
+export { LINT_IGNORE_TAG, lintIgnored } from "./lint-ignore";
+import { lintIgnored } from "./lint-ignore";
 
 function nodeMap(template: DiagramTemplate): Map<string, DiagramNode> {
   return new Map(template.nodes.map((n) => [n.id, n]));
 }
 
-export const BUILTIN_LINT_RULES: Record<string, LintRuleDef> = {
+/**
+ * The built-in rules: the architecture rules below, and the data-model rules
+ * (data-model-lint.ts) with their defaults. Those consider tables only, so an
+ * architecture document never hears from them.
+ */
+const ARCHITECTURE_RULES: Record<string, LintRuleDef> = {
   "no-orphans": {
     label: "Unconnected component",
     description: "A component nothing talks to is usually a mistake or leftover.",
@@ -105,6 +117,7 @@ export const BUILTIN_LINT_RULES: Record<string, LintRuleDef> = {
         .filter(
           (n) =>
             isLeaf(n) &&
+            !isTask(n) &&
             !connected.has(n.id) &&
             !parents.has(n.id) &&
             !lintIgnored(n, "no-orphans"),
@@ -131,6 +144,13 @@ export const BUILTIN_LINT_RULES: Record<string, LintRuleDef> = {
         // plain association (no call at all) and "both" is a mutual link the
         // author drew deliberately as ONE edge, not a cycle we discovered.
         if ((e.direction ?? "forward") !== "forward") continue;
+        // A key between two tables is not a call: a loop of foreign keys is an
+        // ordinary data model, however the line happens to be drawn (one drawn
+        // in the editor is solid until someone says otherwise).
+        if (e.relation || edgeFieldIds(e).start !== undefined) continue;
+        // A line between tasks is "finish this first", not a call — a loop of
+        // them is a deadlocked plan, which the cards already show as Blocked.
+        if (byId.get(e.source)?.kind === TASK_KIND || byId.get(e.target)?.kind === TASK_KIND) continue;
         if (byId.get(e.source) && lintIgnored(byId.get(e.source)!, "no-cycles")) continue;
         if (!adjacency.has(e.source)) adjacency.set(e.source, []);
         adjacency.get(e.source)!.push(e.target);
@@ -272,6 +292,8 @@ export const BUILTIN_LINT_RULES: Record<string, LintRuleDef> = {
     },
   },
 };
+
+export const BUILTIN_LINT_RULES: Record<string, LintRuleDef> = { ...ARCHITECTURE_RULES, ...dataModelLintRules(), ...taskLintRules() };
 
 /** Run a rule table over a document. Findings come back most-severe first. */
 export function lintTemplate(

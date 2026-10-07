@@ -28,6 +28,7 @@
  */
 import type { DiagramNode, DiagramTemplate } from "./schema";
 import type { SeqActivation, SeqFragment, SeqNote, SequenceTemplate } from "./sequence";
+import { isWorkItem } from "./tasks";
 
 // ─── The stored value ────────────────────────────────────────────────────────
 
@@ -299,6 +300,10 @@ export function isOverdue(
  * ancestor chain. A node inside a group planned for June cannot be on the
  * canvas in March, whatever its own date says.
  *
+ * A task's or milestone's own date is when it is DUE, not when it arrives —
+ * work due in November is on the plan today — so it takes no part here; only
+ * a dated container above it does.
+ *
  * Guarded against parent cycles so it is safe on hand-built input, the same
  * way `absolutePosition` is — validation breaks cycles, this file does not
  * assume validation ran.
@@ -311,10 +316,11 @@ export function effectiveNodeDates(
 
   const resolve = (node: DiagramNode, seen: Set<string>): DiagramDate | undefined => {
     if (resolved.has(node.id)) return resolved.get(node.id);
-    if (seen.has(node.id)) return node.date; // cycle — stop at own date
+    const own = isWorkItem(node) ? undefined : node.date;
+    if (seen.has(node.id)) return own; // cycle — stop at own date
     seen.add(node.id);
     const parent = node.parentId ? byId.get(node.parentId) : undefined;
-    const value = laterDate(node.date, parent ? resolve(parent, seen) : undefined);
+    const value = laterDate(own, parent ? resolve(parent, seen) : undefined);
     resolved.set(node.id, value);
     return value;
   };
@@ -413,10 +419,14 @@ export function timelineView(
   return { template: sliced, future: noFuture(), futureCount };
 }
 
-/** Every date in an architecture document, elements without one included. */
+/**
+ * Every date in an architecture document, elements without one included —
+ * but not a task's or milestone's due date, which says when work must be
+ * done, not when it appears (see effectiveNodeDates).
+ */
 export function templateTimeline(template: DiagramTemplate): Timeline {
   return buildTimeline([
-    ...template.nodes.map((n) => n.date),
+    ...template.nodes.map((n) => (isWorkItem(n) ? undefined : n.date)),
     ...template.edges.map((e) => e.date),
     ...(template.zones ?? []).map((z) => z.date),
   ]);

@@ -26,6 +26,7 @@
 import { pointInZone } from "./zones";
 import { COLLAPSED_SIZE, CONTAINER_KINDS, visibleElements } from "./schema";
 import type { ArrangeMode, DiagramNode, DiagramTemplate } from "./schema";
+import { ASSIGNEE_STRIP_HEIGHT, DEPENDENCY_RELATION, hasAssigneeStrip } from "./tasks";
 
 /**
  * Provider ALTERNATES, mapped to the one that stands in for the set.
@@ -337,9 +338,10 @@ function layoutGroup(
   items: Sized[],
   edges: ReadonlyArray<Link>,
   opts: LayoutMetrics,
+  tethers: ReadonlyArray<Link> = [],
 ): { placed: Placed[]; width: number; height: number } {
   if (!items.length) return { placed: [], width: 0, height: 0 };
-  if (opts.mode === "untangle") return layoutUntangled(items, edges, opts);
+  if (opts.mode === "untangle") return layoutUntangled(items, edges, opts, tethers);
 
   const ids = new Set(items.map((i) => i.id));
   const internal = edges.filter((e) => ids.has(e.source) && ids.has(e.target) && e.source !== e.target);
@@ -513,6 +515,7 @@ function layoutUntangled(
   items: Sized[],
   edges: ReadonlyArray<Link>,
   opts: LayoutMetrics,
+  tethers: ReadonlyArray<Link> = [],
 ): { placed: Placed[]; width: number; height: number } {
   const ids = new Set(items.map((i) => i.id));
   const seen = new Set<string>();
@@ -527,6 +530,14 @@ function layoutUntangled(
 
   const degree = new Map<string, number>();
   for (const e of internal) {
+    degree.set(e.source, (degree.get(e.source) ?? 0) + 1);
+    degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
+  }
+  // A tether (a task dependency) sets no rank and orders nothing, but a box
+  // it touches is not a box "no line touches": it joins the flow — at rank 0
+  // when nothing else places it — instead of being parked after the last rank.
+  for (const e of tethers) {
+    if (!ids.has(e.source) || !ids.has(e.target) || e.source === e.target) continue;
     degree.set(e.source, (degree.get(e.source) ?? 0) + 1);
     degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
   }
@@ -850,8 +861,21 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
     template.nodes.filter((n) => n.collapsed && containerKindSet.has(n.kind as string)).map((n) => n.id),
   );
   for (const n of template.nodes) {
-    sizes.set(n.id, chipped.has(n.id) ? { ...COLLAPSED_SIZE } : { w: n.w, h: n.h });
+    // A task's assignee tabs hang below its box, so it is SPACED by box and
+    // tabs together — or the card under it would sit on the tabs. Only
+    // containers ever store their spacing size, so the task's own stays put.
+    const h = hasAssigneeStrip(n) ? n.h + ASSIGNEE_STRIP_HEIGHT : n.h;
+    sizes.set(n.id, chipped.has(n.id) ? { ...COLLAPSED_SIZE } : { w: n.w, h });
   }
+
+  // What the ranking follows. A dependency is a task graph's LONG-range link
+  // — hidden until hovered, precisely because it joins work far apart — so
+  // letting it pull its ends into adjacent ranks would undo the point of
+  // drawing it that way. Prerequisites (ordinary lines) set the flow; a
+  // dependency only TETHERS its ends, so a task linked by nothing else still
+  // joins the flow rather than being parked after it.
+  const rankEdges = template.edges.filter((e) => e.relation !== DEPENDENCY_RELATION);
+  const tethers = template.edges.filter((e) => e.relation === DEPENDENCY_RELATION);
 
   /** The members one layout pass should actually rank, in document order. */
   const rankable = (members: DiagramNode[]): DiagramNode[] =>
@@ -882,8 +906,9 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
     const members = rankable(buckets.get(key)!);
     const result = layoutGroup(
       members.map((n) => ({ id: n.id, ...sizes.get(n.id)! })),
-      template.edges,
+      rankEdges,
       opts,
+      tethers,
     );
     for (const p of result.placed) {
       // Group children are positioned relative to the group's own top-left.
@@ -913,8 +938,9 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
     if (!members.length) return zone;
     const result = layoutGroup(
       members.map((n) => ({ id: n.id, ...sizes.get(n.id)! })),
-      template.edges,
+      rankEdges,
       opts,
+      tethers,
     );
     for (const p of result.placed) {
       positions.set(p.id, {
@@ -939,8 +965,9 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
   if (rootMembers.length) {
     const result = layoutGroup(
       rootMembers.map((n) => ({ id: n.id, ...sizes.get(n.id)! })),
-      template.edges,
+      rankEdges,
       opts,
+      tethers,
     );
     // Drop the root flow below the zones so the two don't overlap.
     const zoneBottom = grownZones.length

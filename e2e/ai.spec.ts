@@ -13,8 +13,13 @@ const json = (route: Route, status: number, body: unknown) =>
   route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
 test.describe("AI generation through the host's proxy route", () => {
-  test("generate replaces the diagram with the model's reply", async ({ page, studio }) => {
+  // The host opens with the panel withheld; every case here needs it on.
+  test.beforeEach(async ({ studio }) => {
     await studio.goto();
+    await (await studio.setting("AI panel")).check();
+  });
+
+  test("generate replaces the diagram with the model's reply", async ({ page, studio }) => {
     const requests: GenerateRequest[] = [];
     await page.route("**/api/diagram", (route) => {
       requests.push(route.request().postDataJSON());
@@ -41,7 +46,6 @@ test.describe("AI generation through the host's proxy route", () => {
   });
 
   test("refine sends the current document and applies the edited reply", async ({ page, studio }) => {
-    await studio.goto();
     const requests: GenerateRequest[] = [];
     await page.route("**/api/diagram", (route) => {
       const request: GenerateRequest = route.request().postDataJSON();
@@ -69,7 +73,6 @@ test.describe("AI generation through the host's proxy route", () => {
   });
 
   test("shows the server's error message in the panel and leaves the diagram alone", async ({ page, studio }) => {
-    await studio.goto();
     await page.route("**/api/diagram", (route) => json(route, 503, { error: "Model unavailable" }));
 
     await studio.root.getByRole("button", { name: "AI" }).click();
@@ -82,12 +85,11 @@ test.describe("AI generation through the host's proxy route", () => {
     await expect(studio.saveButton).toHaveText("Save");
   });
 
-  test("the host can withhold the generator, which removes the AI button", async ({ page, studio }) => {
-    await studio.goto();
+  test("the host can withhold the generator, which removes the AI button", async ({ studio }) => {
     const ai = studio.root.getByRole("button", { name: "AI" });
 
     await expect(ai).toBeVisible();
-    await page.getByLabel("AI panel", { exact: true }).uncheck();
+    await (await studio.setting("AI panel")).uncheck();
     await expect(ai).toBeHidden();
   });
 });

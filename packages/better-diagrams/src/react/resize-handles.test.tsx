@@ -6,7 +6,7 @@
  * pointer journeys that reach (or must not reach) them.
  */
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ArchitectureStudio } from "./ArchitectureStudio";
 import { validateTemplate, type DiagramTemplate } from "../contract/schema";
 
@@ -75,6 +75,46 @@ describe("resize handles", () => {
     fireEvent.pointerLeave(wrapper(container, "card"));
     // Still there: selection is the touch route, where there is no hover.
     expect(handles(container, "card")).toBe(4);
+  });
+
+  it("never reach a derived stand-in — a ghost's size is not the document's to keep", async () => {
+    // Drilling in derives a `ghost:` stand-in for every outside element an
+    // edge reaches. Its size comes from `renderSize` and `liftScopedReactFlow`
+    // drops it on the way back, so a resize of one snaps back on the next
+    // derive. Frames and notes are checked here because only cards excluded
+    // them before hover made them reachable without a click.
+    const SCOPED = doc({
+      nodes: [
+        { id: "P", label: "Parent", kind: "service", x: 100, y: 100 },
+        { id: "c1", label: "Child", kind: "service", parentId: "P", x: 28, y: 52 },
+        { id: "G", label: "Other", kind: "group", x: 600, y: 100, w: 400, h: 300 },
+        { id: "g1", label: "In G", kind: "service", parentId: "G", x: 28, y: 52 },
+        { id: "note", label: "A note", kind: "text", x: 600, y: 500 },
+      ],
+      edges: [
+        { id: "toG", source: "c1", target: "G" },
+        { id: "toNote", source: "c1", target: "note" },
+      ],
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={SCOPED} onChange={() => {}} />);
+    await mounted(container, "P");
+
+    fireEvent.doubleClick(screen.getByText("Parent"));
+    await waitFor(() =>
+      expect(screen.getByRole("navigation", { name: "Diagram level" })).toBeInTheDocument(),
+    );
+    await mounted(container, "ghost:G", "ghost:note", "boundary:P");
+
+    for (const id of ["ghost:G", "ghost:note"]) {
+      fireEvent.pointerEnter(wrapper(container, id));
+      fireEvent.click(wrapper(container, id));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(handles(container, id), `${id} offers no resize`).toBe(0);
+    }
+    // Nor the boundary frame: it is derived from what it wraps.
+    fireEvent.pointerEnter(wrapper(container, "boundary:P"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(handles(container, "boundary:P")).toBe(0);
   });
 
   it("never reach a locked node, nor any node of a read-only diagram", async () => {

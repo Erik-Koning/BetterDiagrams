@@ -13,11 +13,25 @@
  * player never re-renders anything: it compares numbers and toggles classes,
  * which is what makes a few hundred lines of inline vanilla JS enough.
  *
+ * Search and relationship analysis (the `explorer` option) are the one part
+ * that is not hand-written here: that script is the editor's own analysis,
+ * bundled — see html-explorer.ts.
+ *
  * DOM-free string building, so the same function serves tests, a server, and
  * the browser exporters.
  */
 import type { ExportPalette } from "./draw";
 import { DARK_EXPORT_PALETTE } from "./draw";
+import {
+  explorerCss,
+  explorerMenuMarkup,
+  explorerOverlayMarkup,
+  explorerScripts,
+  explorerSearchMarkup,
+  explorerStripMarkup,
+  type HtmlExplorerData,
+} from "./html-explorer";
+import { htmlTaskCss, htmlTaskMarkup, htmlTaskScripts, type HtmlTaskData } from "./html-tasks";
 
 /**
  * One of the document's paths, resolved for the player: members by the tag
@@ -45,10 +59,23 @@ export interface TimelineHtmlOptions {
   accent?: string;
   /** Named flows the reader can light up from the menu. Omit for none. */
   paths?: HtmlPathEntry[];
+  /**
+   * Search and relationship analysis — the editor's search box, pins, the
+   * paths and references panels, the field grid — from `htmlExplorerData`.
+   * Omit for a page without them.
+   */
+  explorer?: HtmlExplorerData;
+  /**
+   * Task graphs, live: corner checks that toggle, the People legend's
+   * preview and focus, and saving checks into the file — from
+   * `htmlTaskData`, with the SVG drawn under `taskHits`. Omit for a page
+   * without tasks, which stays exactly the page it was.
+   */
+  tasks?: HtmlTaskData;
 }
 
 /** Rough perceptual luminance test — enough to pick between two accents. */
-function isLightHex(hex: string): boolean {
+export function isLightHex(hex: string): boolean {
   const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
   if (!m) return false;
   const [r, g, b] = [m[1], m[2], m[3]].map((h) => Number.parseInt(h, 16));
@@ -82,6 +109,7 @@ export function buildTimelineHtml(opts: TimelineHtmlOptions): string {
   const hasPaths = paths.length > 0;
   const pathsJson = JSON.stringify(paths).replace(/</g, "\\u003c");
   const light = isLightHex(palette.bg);
+  const explorer = opts.explorer;
   // Everything path-shaped is emitted only when there is a path to light, so
   // a document without any produces exactly the page it always did.
   const pathCss = hasPaths
@@ -172,8 +200,9 @@ export function buildTimelineHtml(opts: TimelineHtmlOptions): string {
       path.members.forEach(function (m) {
         (groupsByEl[m.el] || []).forEach(function (g) {
           if (hasOverlay(g, path.id)) return;
-          // The element's own first path: an edge's line, a node's body.
-          var src = g.querySelector("path:not([data-path])");
+          // The element's own first path: an edge's line, a node's body —
+          // never an overlay, this player's or the explorer's (data-x).
+          var src = g.querySelector("path:not([data-path]):not([data-x])");
           if (!src) return;
           var isEdge = m.el.indexOf("edge:") === 0;
           g.insertBefore(overlay(src, isEdge ? "bd-glowline" : "bd-glowbody", path, m, false), g.firstChild);
@@ -317,7 +346,7 @@ export function buildTimelineHtml(opts: TimelineHtmlOptions): string {
   .bd-el { transition: opacity 160ms; }
   .bd-dim { opacity: 0.22; filter: grayscale(1); }
   .bd-hidden { display: none; }
-  ${pathCss}`;
+  ${pathCss}${explorer ? explorerCss(palette, accent, explorer.routeColor, light) : ""}${opts.tasks ? htmlTaskCss(palette, accent) : ""}`;
 
   // The player. Plain script, no modules, nothing external; every hook is
   // looked up by id so the markup above stays the single source of structure.
@@ -497,25 +526,25 @@ ${pathJs}
   <header class="bd-bar">
     <span class="bd-title">${title}</span>
     <span class="bd-sub">interactive export</span>
-    <span class="bd-spacer"></span>
+    <span class="bd-spacer"></span>${explorer ? explorerSearchMarkup : ""}${opts.tasks ? htmlTaskMarkup : ""}
     <button class="bd-btn bd-btn--icon" id="bd-full" title="Full screen" aria-label="Full screen">&#x26F6;</button>
     <div class="bd-menuwrap">
       <button class="bd-btn bd-btn--icon" id="bd-menu" title="Presentation options" aria-haspopup="menu" aria-label="Presentation options">&#8943;</button>
       <div class="bd-menu" id="bd-dropdown" hidden>${modeSection}${pathsSection}
         <label><input type="checkbox" id="bd-fit" checked /> Fit to window</label>
-        <button class="bd-menubtn" id="bd-full2">Full screen</button>
+        <button class="bd-menubtn" id="bd-full2">Full screen</button>${explorer ? explorerMenuMarkup : ""}
       </div>
     </div>
-  </header>${timelineBar}
+  </header>${timelineBar}${explorer ? explorerStripMarkup : ""}
   <main class="bd-stage fit" id="bd-stage">${pathLegend}
 ${opts.svg}
-  </main>
+  </main>${explorer ? explorerOverlayMarkup : ""}
 <script>
 (function () {
 ${js}
 })();
 </script>
-</body>
+${explorer ? explorerScripts(explorer) : ""}${opts.tasks ? htmlTaskScripts(opts.tasks) : ""}</body>
 </html>
 `;
 }
@@ -546,6 +575,9 @@ export interface MultiViewHtmlOptions {
   palette?: Partial<ExportPalette>;
   accent?: string;
   paths?: HtmlPathEntry[];
+  explorer?: HtmlExplorerData;
+  /** See `TimelineHtmlOptions.tasks`. */
+  tasks?: HtmlTaskData;
 }
 
 /**
@@ -629,6 +661,10 @@ export function buildMultiViewHtml(opts: MultiViewHtmlOptions): string {
   }
   var byHash = {};
   Object.keys(VIEWS).forEach(function (key) { byHash[hashOf(key)] = key; });
+  // A hash may carry a query after the level ("#/orders?a=…", a shared
+  // analysis the explorer reads); the level is what comes before it.
+  function levelHash() { var h = location.hash, q = h.indexOf("?"); return q < 0 ? h : h.slice(0, q); }
+  function hashQuery() { var h = location.hash, q = h.indexOf("?"); return q < 0 ? "" : h.slice(q); }
   function renderCrumbs() {
     var view = VIEWS[current];
     crumbbar.textContent = "";
@@ -661,10 +697,14 @@ export function buildMultiViewHtml(opts: MultiViewHtmlOptions): string {
     requestAnimationFrame(function () { inc.classList.remove("bd-view--enter"); });
     current = key;
     renderCrumbs();
-    if (!fromHash && location.hash !== hashOf(key)) location.hash = hashOf(key);
+    if (!fromHash && levelHash() !== hashOf(key)) location.hash = hashOf(key) + hashQuery();
+    // For anything else on the page following the level — the explorer.
+    document.dispatchEvent(new CustomEvent("bd:view", { detail: key }));
   }
+  // …and the way it asks for one: a search hit or a route on another level.
+  document.addEventListener("bd:show", function (e) { show(e.detail); });
   window.addEventListener("hashchange", function () {
-    var key = byHash[location.hash];
+    var key = byHash[levelHash()];
     if (key !== undefined) show(key, true);
   });
   document.addEventListener("keydown", function (e) {
@@ -686,7 +726,7 @@ export function buildMultiViewHtml(opts: MultiViewHtmlOptions): string {
     });
   });
   renderCrumbs();
-  if (byHash[location.hash] !== undefined) show(byHash[location.hash], true);
+  if (byHash[levelHash()] !== undefined) show(byHash[levelHash()], true);
   `;
 
   const page = buildTimelineHtml({
@@ -696,6 +736,8 @@ export function buildMultiViewHtml(opts: MultiViewHtmlOptions): string {
     palette: opts.palette,
     accent: opts.accent,
     paths: opts.paths,
+    explorer: opts.explorer,
+    tasks: opts.tasks,
   });
 
   return page

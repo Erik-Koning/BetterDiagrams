@@ -33,6 +33,8 @@ import { normalizeDate, type DiagramDate } from "./timeline";
 import { parseLlmJsonReport } from "./json-repair";
 import { wrappedLineCount } from "./text";
 import { validatePaths, type DiagramPath, type PathGlow } from "./paths";
+import { validateAnalyses, type SavedAnalysis } from "./analyses";
+import { validateLineage, type LineageLink } from "./lineage-links";
 import { uncrossSideSlots, type Box, type EndSlots, type SideSlotEdge } from "./geometry";
 import { RELATION_KIND_ORDER } from "./relations";
 export type { EndSlots } from "./geometry";
@@ -54,6 +56,8 @@ export const NODE_KINDS = [
   "decision", // flow-chart branch — renders as a diamond
   "terminator", // flow-chart start/end — renders as a stadium
   "io", // flow-chart input/output — renders as a parallelogram
+  "task", // a unit of work — summary, story points, assignees, a done check
+  "milestone", // a checkpoint in a plan — reached when everything feeding it is done
   // Language models, by weight class. Three kinds rather than one with a
   // size field: what a reader needs at a glance is whether this box is a
   // 1B router or a frontier model, and a kind is what the eye reads.
@@ -225,6 +229,8 @@ export interface NodeField {
   unique?: boolean;
   /** Computed rather than stored — a formula field, a UML derived attribute. Renders with UML's leading slash. */
   derived?: boolean;
+  /** What the field means — documentation, not drawn on the row; the grid, the dictionary and checks read it. */
+  description?: string;
   /**
    * Free labels on the row, the node's `tags` one level down — filterable
    * in the editor, a small badge each on the canvas and in image exports.
@@ -361,6 +367,14 @@ export type GroupContents = (typeof GROUP_CONTENTS)[number];
  * own so it never runs through a box in between, and nodes are nudged level
  * with what they connect to so lines run straight. See `DiagramSettings`.
  */
+/** An open task's workflow stage; absent is "to do", and done is the corner check. */
+export const TASK_STAGES = ["in-progress", "in-review"] as const;
+export type TaskStage = (typeof TASK_STAGES)[number];
+
+/** A task's priority, most urgent first. */
+export const TASK_PRIORITIES = ["p0", "p1", "p2", "p3"] as const;
+export type TaskPriority = (typeof TASK_PRIORITIES)[number];
+
 export const ARRANGE_MODES = ["flow", "untangle"] as const;
 export type ArrangeMode = (typeof ARRANGE_MODES)[number];
 
@@ -435,6 +449,11 @@ export const KIND_DEFAULT_SIZE: Record<string, { w: number; h: number }> = {
   table: { w: 230, h: 96 },
   // Values are single words, so an enumeration needs less width than a table.
   enum: { w: 180, h: 96 },
+  // A ticket: a summary that should not ellipsise at two words, plus the
+  // eyebrow's points and a line of description.
+  task: { w: 200, h: 84 },
+  // A diamond, like a decision: squarer, so the label still fits inside.
+  milestone: { w: 170, h: 96 },
   default: { w: 170, h: 76 },
 };
 
@@ -504,6 +523,38 @@ export interface DiagramNode {
    * riding the node's top edge, coloured stably per team name.
    */
   team?: string;
+  /**
+   * People working on this — on a `task`, drawn as a tab per name hanging
+   * under the card, coloured stably per person and listed in the legend's
+   * People section. Names are compared exactly: "Ana" and "ana" are two
+   * people. Accepted on any kind so changing a node's kind loses nothing;
+   * only a task draws them.
+   */
+  assignees?: string[];
+  /**
+   * Estimate in story points, shown in a task's eyebrow ("Task · 3 pts").
+   * Not `points` — that key is an edge's waypoints, and Compare ignores it
+   * as layout.
+   */
+  storyPoints?: number;
+  /**
+   * The task is finished: its corner check is green, the card fades, and
+   * the tasks waiting on it stop being blocked. Stored only when true.
+   */
+  done?: boolean;
+  /**
+   * Where an open task stands in its workflow: absent is "to do", and a
+   * done task has finished with it (checking it done clears this). Drawn in
+   * the eyebrow and filterable. See TASK_STAGES.
+   */
+  stage?: TaskStage;
+  /** How urgent a task is, P0 the most. A badge in the eyebrow. See TASK_PRIORITIES. */
+  priority?: TaskPriority;
+  /**
+   * How many story points a container — a sprint, a phase — can hold. Its
+   * roll-up reads "18/20 pts" against it and warns past it. Containers only.
+   */
+  capacity?: number;
   /**
    * Lifecycle stage: proposed/planned/stubbed render with dotted/dashed/
    * construction outlines, dark with a hazard-tape outline, deprecated/
@@ -672,6 +723,12 @@ export interface DiagramSettings {
   arrange?: ArrangeMode;
   /** How cardinality is drawn — see `NOTATIONS`. Absent means "both". */
   notation?: Notation;
+  /**
+   * Story points each person can take on, by name — what the People legend
+   * and the plan checks weigh their open work against. A person without an
+   * entry has no limit.
+   */
+  capacity?: Record<string, number>;
 }
 
 export interface DiagramTemplate {
@@ -711,6 +768,19 @@ export interface DiagramTemplate {
    */
   paths?: DiagramPath[];
   /**
+   * Saved analyses — questions kept with the model to open and re-run; see
+   * `analyses.ts`. Optional and omitted when empty, like `paths`; ignored by
+   * Compare, since they are not architecture.
+   */
+  analyses?: SavedAnalysis[];
+  /**
+   * Column lineage — which column's values are made from which, by what job
+   * and transform; see `lineage.ts`. Kept apart from `edges` on purpose:
+   * lineage is not a relationship, and route search, coverage and impact
+   * over keys never see it. Optional and omitted when empty.
+   */
+  lineage?: LineageLink[];
+  /**
    * Rendering preferences for the whole document — see `DiagramSettings`.
    * Optional and omitted when empty, so a document that never set one
    * round-trips byte-identical.
@@ -736,6 +806,8 @@ const TEMPLATE_KEY_MAP: Record<keyof DiagramTemplate, true> = {
   nodes: true,
   edges: true,
   paths: true,
+  analyses: true,
+  lineage: true,
   settings: true,
 };
 export const TEMPLATE_KEYS: readonly string[] = Object.keys(TEMPLATE_KEY_MAP);
@@ -744,6 +816,7 @@ const SETTINGS_KEY_MAP: Record<keyof DiagramSettings, true> = {
   groupContents: true,
   arrange: true,
   notation: true,
+  capacity: true,
 };
 export const SETTINGS_KEYS: readonly string[] = Object.keys(SETTINGS_KEY_MAP);
 
@@ -772,6 +845,12 @@ const NODE_KEY_MAP: Record<keyof DiagramNode, true> = {
   tags: true,
   url: true,
   team: true,
+  assignees: true,
+  storyPoints: true,
+  done: true,
+  stage: true,
+  priority: true,
+  capacity: true,
   status: true,
   date: true,
   locked: true,
@@ -818,6 +897,7 @@ const FIELD_KEY_MAP: Record<keyof NodeField, true> = {
   required: true,
   unique: true,
   derived: true,
+  description: true,
   tags: true,
 };
 export const NODE_FIELD_KEYS: readonly string[] = Object.keys(FIELD_KEY_MAP);
@@ -905,6 +985,13 @@ export interface PromptOptions {
    * not presentation. Default true (the full inline form).
    */
   geometry?: boolean;
+  /**
+   * "tasks" appends a section steering the model toward a task graph —
+   * every node a `task`, prerequisites as ordinary arrows — for the Task
+   * flow preset. The vocabulary is unchanged: a task graph is an ordinary
+   * architecture document.
+   */
+  focus?: "tasks";
 }
 
 /**
@@ -941,6 +1028,7 @@ Rules:
 - "point" = the bare endpoint of a dangling arrow: a tiny dot an edge can end on, for an arrow into empty space (a dependency on something that doesn't exist yet). label ""${geo ? ", w=h=12" : ""}; use ONLY as an edge's source/target, and only when the user asks for an open-ended/abstract arrow.
 - FLOW CHARTS: "terminator" (stadium) for start/end, "decision" (diamond) for branches — label its outgoing edges "yes"/"no" — "io" (parallelogram) for input/output, "service" for process steps. An edge may target its own source ("source"==="target") to draw a retry/self loop. Use these kinds only for flow charts, not architecture.
 - LANGUAGE MODELS: "lm-small" (on-device or a few B params), "lm-medium" (self-hosted mid-size), "llm" (frontier, typically hosted) — pick by the weight class the design depends on, and name the actual model in the description ("Phi-3 mini", "Llama 3 8B", "Claude Opus 5"). When the box is the cloud SERVICE hosting a model rather than the model itself, prefer that provider's own model kind where one is listed below.
+- TASKS: "task" = a unit of work, like a ticket. label = the summary; description = the detail (may span lines); "storyPoints" = the estimate as a number; "assignees" = the people's names as written ("Ana","Ravi"); "done":true only for finished work; "stage":"in-progress"|"in-review" for open work that has started; "priority":"p0"…"p3" when the user ranks urgency; "date" is a task's due date. "milestone" = a checkpoint (a release, a sign-off) that is reached when everything feeding it is done; give it a "date" and no assignees. A "group" of tasks is a phase or sprint; "capacity" on it caps its story points, and settings.capacity {"Name": points} caps each person's open points. An ordinary edge A→B means A is a PREREQUISITE of B (the arrow points at the next task); "relation":"dependency" marks a dependency on a task elsewhere in the plan, drawn only when either end is hovered. Use "task" only for work planning, and omit storyPoints/assignees/done when the user gives none.
 - Edge "startHead"/"endHead" (${EDGE_HEADS.join("|")}) override the glyph at each end when the user asks for UML-style notation (hollow "diamond" at the source = aggregation, "diamond-filled" at the source = composition, hollow "triangle" at the target = generalization/inheritance, "open" arrow = dependency); omit for normal arrows.
 - ${geo ? "Regular nodes: w 160-200, h 64-84. Pick" : "Pick"} a fitting icon. description is an optional one-line tech detail (C4 style, e.g. "Node.js / Express").
 - Edge style semantics: dashed = async/event-driven, dotted = cache/optional/telemetry, solid = synchronous. Vary color by concern (e.g. amber = data, violet = messaging).${geo ? " labelT (0.15-0.85) slides the label along the arrow to avoid collisions." : ""}
@@ -953,7 +1041,7 @@ Rules:
 - A "group" may also be styled as a purely visual grouping frame: "fill":false drops its background, "outline":"none" drops its border, "outline":"dotted"/"solid" changes it (default dashed), and "color" is an "#rrggbb" ink the background tint derives from. Use "fill":false with "outline":"none" only when the user explicitly wants an invisible/abstract grouping box.
 - Node/edge/zone "date" = when that piece lands or landed, as "YYYY-MM-DD". Set it ONLY when the user gives a roadmap, phases, quarters, or a migration order; omit it everywhere else. Undated elements are treated as always present, so a phased plan dates the new pieces and leaves today's system undated. A node inside a group is never shown before the group, so date the group with its earliest phase.
 - parentId may reference ANY existing node. A child of a "group" renders inside its frame. A child of any other node is that component's INTERNAL decomposition (the next C4 level) — shown only when the user drills into that component, never on the parent's own diagram. Do NOT decompose a component into children unless the user explicitly asks for its internal detail. Never create a parent cycle.
-- DATA MODELS: an entity/table is a node of kind "table" whose columns are "fields" — {id, name, type, key:"pk"/"fk"/"pfk", required, unique, derived, tags}; "unique" marks a unique column, "derived" a computed/formula one; omit both when false. "tags" is an optional list of short labels on the row ("ro" = read-only, "hidden" = not readable by the reader, or anything the user asks for such as "pii"); omit when none. An enumeration or picklist is a node of kind "enum" whose "fields" are its values (name only). Field ids are unique within their node.${geo ? " Give a table w 200-260; the editor grows its height to fit the rows, so h is only a hint." : ""} A relationship is an ordinary edge between the two tables: name the columns it joins with "startField"/"endField" (field ids on the source and target), and put cardinality in "startLabel"/"endLabel" ("1", "0..1", "0..*", "1..*") — these render as crow's-foot symbols, so write real cardinalities there rather than prose. Say what KIND of relationship it is with "relation": "composition" when the child cannot exist without the parent (owned, cascade delete), "reference" for an ordinary foreign key, "hierarchy" when a table points at itself, "polymorphic" when the target varies per row — "aggregation" for shared ownership (the part outlives the whole), "generalization" from a subtype to the type it extends (record types, table inheritance) — and dress the line to match (composition: solid rose with "startHead":"diamond-filled", "*" → "1"; aggregation: solid sky with "startHead":"diamond", "*" → "0..1"; reference: dashed slate, "*" → "0..1", or "*" → "1" when the foreign key is required; hierarchy: dashed violet; polymorphic: dotted amber; generalization: solid emerald with "endHead":"triangle" and no cardinality). Omit "relation" on an architecture edge. Use "fields" ONLY for data modelling — an ordinary architecture node omits the key entirely. Subject areas are "group" parents, exactly as elsewhere.
+- DATA MODELS: an entity/table is a node of kind "table" whose columns are "fields" — {id, name, type, key:"pk"/"fk"/"pfk", required, unique, derived, description, tags}; "unique" marks a unique column, "derived" a computed/formula one; omit both when false. "description" is one short sentence saying what the column means (not drawn on the row); omit it when there is nothing to add to the name. "tags" is an optional list of short labels on the row ("ro" = read-only, "hidden" = not readable by the reader, or anything the user asks for such as "pii"); omit when none. An enumeration or picklist is a node of kind "enum" whose "fields" are its values (name only). Field ids are unique within their node.${geo ? " Give a table w 200-260; the editor grows its height to fit the rows, so h is only a hint." : ""} A relationship is an ordinary edge between the two tables: name the columns it joins with "startField"/"endField" (field ids on the source and target), and put cardinality in "startLabel"/"endLabel" ("1", "0..1", "0..*", "1..*") — these render as crow's-foot symbols, so write real cardinalities there rather than prose. Say what KIND of relationship it is with "relation": "composition" when the child cannot exist without the parent (owned, cascade delete), "reference" for an ordinary foreign key, "hierarchy" when a table points at itself, "polymorphic" when the target varies per row — "aggregation" for shared ownership (the part outlives the whole), "generalization" from a subtype to the type it extends (record types, table inheritance) — and dress the line to match (composition: solid rose with "startHead":"diamond-filled", "*" → "1"; aggregation: solid sky with "startHead":"diamond", "*" → "0..1"; reference: dashed slate, "*" → "0..1", or "*" → "1" when the foreign key is required; hierarchy: dashed violet; polymorphic: dotted amber; generalization: solid emerald with "endHead":"triangle" and no cardinality). Omit "relation" on an architecture edge. Use "fields" ONLY for data modelling — an ordinary architecture node omits the key entirely. Subject areas are "group" parents, exactly as elsewhere.
 - ZONES are infra backgrounds, drawn behind everything, in ABSOLUTE canvas coordinates (never relative). Provider ids: ${providers}. Omit the "zones" key entirely unless the request actually involves infrastructure or hosting.
 - Zone "color" (optional) is the OUTLINE hex; the background derives from it automatically. It may carry "/NN" percent alpha for fill strength ("#38bdf8/22"). Omit for the provider's default colour. Zone "outline" (optional): dashed for logical/planned boundaries, dotted for soft groupings, none for a pure background wash; omit for solid.
 - A zone's "providers" lists every provider it could run on; "provider" is the one shown. Use a higher "z" for a small zone that sits on top of a bigger one (e.g. a third-party SaaS island inside a cloud region).
@@ -965,13 +1053,20 @@ Rules:
     geo
       ? "Lay out left-to-right by request flow, spread vertically, no overlapping nodes. 6-14 nodes per level (a component's children form their own level with their own budget)."
       : 'NEVER emit x/y/w/h on nodes, or labelT/routing/start/end/points on edges — placement and line routing are managed outside this document and are preserved across your edits. KEEP EVERY EXISTING ID EXACTLY as given (ids are how elements keep their places); give new elements new ids. Array order = rough left-to-right flow. 6-14 nodes per level (a component\'s children form their own level with their own budget).'
-  } Keep JSON compact.${
+  } Keep JSON compact.${opts.focus === "tasks" ? `\n${TASK_FOCUS_RULES}` : ""}${
     opts.extraRules ? `\n${opts.extraRules}` : ""
   }`;
 }
 
-/** The prompt for the built-in vocabulary, with no registry extensions. */
-export const DIAGRAM_SYSTEM_PROMPT = buildSystemPrompt();
+/** What `focus: "tasks"` appends: the brief for a task graph. */
+const TASK_FOCUS_RULES = `TASK FLOW: this diagram is a work plan, not an architecture. Make every work item a "task" node (no zones, no services) and connect prerequisites with ordinary edges pointing at the task they unblock, so chains read left to right. Use "relation":"dependency" only for a link to a task far away in the plan that would clutter the picture as a line. Group tasks with a "group" node for a phase, sprint or epic when the user describes one (give a sprint a "capacity"), and mark checkpoints — a release, a sign-off — with a "milestone" node fed by the tasks it needs. Example node: {"id":"login","label":"Build login page","kind":"task","description":"OAuth + magic link","storyPoints":3,"assignees":["Ana"]}.`;
+
+/**
+ * The prompt for the built-in vocabulary, with no registry extensions.
+ * Marked pure so a bundle that never reads it (the HTML export's inline
+ * explorer, a host's backend) can drop the prompt text entirely.
+ */
+export const DIAGRAM_SYSTEM_PROMPT = /* @__PURE__ */ buildSystemPrompt();
 
 // ─── Runtime validation ──────────────────────────────────────────────────────
 
@@ -1060,6 +1155,8 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
       const tags = stringList(n.tags);
       const url = safeUrl(n.url);
       const team = typeof n.team === "string" ? n.team.trim() : "";
+      const assignees = stringList(n.assignees);
+      const storyPoints = storyPointsOf(n.storyPoints);
       // Unparseable dates are dropped rather than kept verbatim: the whole
       // timeline orders by string comparison, and one malformed value would
       // sort somewhere arbitrary instead of failing visibly.
@@ -1106,6 +1203,15 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         ...(tags && tags.length ? { tags } : {}),
         ...(url ? { url } : {}),
         ...(team ? { team } : {}),
+        ...(assignees ? { assignees } : {}),
+        ...(storyPoints !== undefined ? { storyPoints } : {}),
+        // Open is the default, so only a finished task says anything — and a
+        // finished task has left its workflow, so its stage goes with it.
+        ...(n.done === true ? { done: true } : {}),
+        ...(n.done !== true && TASK_STAGES.includes(n.stage as TaskStage) ? { stage: n.stage as TaskStage } : {}),
+        ...(TASK_PRIORITIES.includes(n.priority as TaskPriority) ? { priority: n.priority as TaskPriority } : {}),
+        // A sprint's or phase's capacity — a frame concept, like collapse.
+        ...(containerSet.has(kind) && storyPointsOf(n.capacity) ? { capacity: storyPointsOf(n.capacity) } : {}),
         ...(date ? { date } : {}),
         // `active` is the default — stripping it keeps old documents
         // byte-identical through a load/save round-trip.
@@ -1288,6 +1394,13 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
   }
   const settings = validateSettings(r.settings);
   if (settings) out.settings = settings;
+  // Judged against the final node ids, like paths: a node that left takes
+  // its references with it, and an analysis about nothing goes too.
+  const finalIds = new Set(nodes.map((n) => n.id));
+  const analyses = validateAnalyses(r.analyses, { nodeIds: finalIds });
+  if (analyses.length) out.analyses = analyses;
+  const lineage = validateLineage(r.lineage, { nodeIds: finalIds });
+  if (lineage.length) out.lineage = lineage;
   return out;
 }
 
@@ -1325,6 +1438,14 @@ function validateSettings(raw: unknown): DiagramSettings | undefined {
   }
   if (NOTATIONS.includes(r.notation as Notation)) {
     out.notation = r.notation as Notation;
+  }
+  if (r.capacity && typeof r.capacity === "object" && !Array.isArray(r.capacity)) {
+    const capacity: Record<string, number> = {};
+    for (const [name, value] of Object.entries(r.capacity as Record<string, unknown>)) {
+      const points = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+      if (name.trim() && Number.isFinite(points) && points > 0) capacity[name.trim()] = points;
+    }
+    if (Object.keys(capacity).length) out.capacity = capacity;
   }
   return Object.keys(out).length ? out : undefined;
 }
@@ -1436,6 +1557,9 @@ export const MAX_NODE_FIELDS = 500;
  * Returns undefined for "no rows", so a node without them round-trips
  * byte-identical to what it was before fields existed.
  */
+/** A row's description is documentation, not an essay: longer text is cut here. */
+const MAX_FIELD_DESCRIPTION = 2000;
+
 function validateFields(raw: unknown): NodeField[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const seen = new Set<string>();
@@ -1451,6 +1575,7 @@ function validateFields(raw: unknown): NodeField[] | undefined {
     while (seen.has(id)) id = `${rawId || slugifyFieldId(name)}_${bump++}`;
     seen.add(id);
     const type = typeof f.type === "string" ? f.type.trim() : "";
+    const description = typeof f.description === "string" ? f.description.trim().slice(0, MAX_FIELD_DESCRIPTION) : "";
     const tags = validateFieldTags(f.tags);
     out.push({
       id,
@@ -1462,6 +1587,7 @@ function validateFields(raw: unknown): NodeField[] | undefined {
       ...(f.required === true ? { required: true } : {}),
       ...(f.unique === true ? { unique: true } : {}),
       ...(f.derived === true ? { derived: true } : {}),
+      ...(description ? { description } : {}),
       ...(tags.length ? { tags } : {}),
     });
     if (out.length === MAX_NODE_FIELDS) break;
@@ -2343,6 +2469,16 @@ function idOf(raw: unknown): string | null {
  * comes back as undefined, so "no list" and "list of nothing" stay the same
  * thing to every caller.
  */
+/**
+ * A story-point estimate: a finite number, zero or more. A numeric string
+ * ("3", "0.5") is what a hand-edited file or a model often writes, so it is
+ * read as the number it spells; anything else is dropped rather than kept.
+ */
+function storyPointsOf(raw: unknown): number | undefined {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() ? Number(raw) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
 function stringList(raw: unknown): string[] | undefined {
   const items = Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : null;
   if (!items) return undefined;
@@ -2606,6 +2742,12 @@ export type DiagramNodeData = {
   tags?: string[];
   url?: string;
   team?: string;
+  assignees?: string[];
+  storyPoints?: number;
+  done?: boolean;
+  stage?: TaskStage;
+  priority?: TaskPriority;
+  capacity?: number;
   status?: NodeStatus;
   plain?: boolean;
   locked?: boolean;
@@ -2698,6 +2840,12 @@ export type DiagramEdgeData = {
    * cannot reach it. The flag is how the label learns to fade with its line.
    */
   future?: boolean;
+  /**
+   * Edges-on-hover display flag (see `ArchitectureStudioProps.edgesOnHover`):
+   * nothing is pointing at this edge, so its line and its labels are not
+   * drawn. Set on the view, never persisted — like `future`.
+   */
+  dormant?: boolean;
   /**
    * Set only by the path view pass: this edge is on one or more LIT paths.
    * View-only, like `future`, and on the data for the same reason — the glow
@@ -3045,6 +3193,12 @@ export function toReactFlow(
           ...(n.tags?.length ? { tags: n.tags } : {}),
           ...(n.url ? { url: n.url } : {}),
           ...(n.team ? { team: n.team } : {}),
+          ...(n.assignees?.length ? { assignees: n.assignees } : {}),
+          ...(n.storyPoints !== undefined ? { storyPoints: n.storyPoints } : {}),
+          ...(n.done ? { done: true } : {}),
+          ...(n.stage ? { stage: n.stage } : {}),
+          ...(n.priority ? { priority: n.priority } : {}),
+          ...(n.capacity !== undefined ? { capacity: n.capacity } : {}),
           ...(n.status ? { status: n.status } : {}),
           ...(n.date ? { date: n.date } : {}),
           ...(n.plain ? { plain: true } : {}),
@@ -3208,6 +3362,10 @@ export function fromReactFlow(
     paths?: DiagramPath[];
     /** The document's settings — ride through like `paths`; absent, `base.settings` serves. */
     settings?: DiagramSettings;
+    /** The document's saved analyses — ride through like `paths`; absent, `base.analyses` serves. */
+    analyses?: SavedAnalysis[];
+    /** The document's column lineage — rides through like `paths`; absent, `base.lineage` serves. */
+    lineage?: LineageLink[];
     /**
      * The document the React Flow state was derived from.
      *
@@ -3285,6 +3443,12 @@ export function fromReactFlow(
       tags: n.data?.tags,
       url: n.data?.url,
       team: n.data?.team,
+      assignees: n.data?.assignees,
+      storyPoints: n.data?.storyPoints,
+      done: n.data?.done,
+      stage: n.data?.stage,
+      priority: n.data?.priority,
+      capacity: n.data?.capacity,
       status: n.data?.status,
       date: n.data?.date,
       plain: n.data?.plain,
@@ -3399,6 +3563,8 @@ export function fromReactFlow(
       : [];
   const carriedPaths = opts.paths ?? opts.base?.paths;
   const carriedSettings = opts.settings ?? opts.base?.settings;
+  const carriedAnalyses = opts.analyses ?? opts.base?.analyses;
+  const carriedLineage = opts.lineage ?? opts.base?.lineage;
   return validateTemplate(
     {
       version: 1,
@@ -3408,6 +3574,8 @@ export function fromReactFlow(
       edges: builtEdges,
       ...(carriedPaths?.length ? { paths: carriedPaths } : {}),
       ...(carriedSettings ? { settings: carriedSettings } : {}),
+      ...(carriedAnalyses?.length ? { analyses: carriedAnalyses } : {}),
+      ...(carriedLineage?.length ? { lineage: carriedLineage } : {}),
     },
     opts,
   );

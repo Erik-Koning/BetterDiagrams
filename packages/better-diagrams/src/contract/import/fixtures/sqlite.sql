@@ -1,0 +1,14 @@
+PRAGMA foreign_keys=OFF;
+BEGIN TRANSACTION;
+CREATE TABLE IF NOT EXISTS "artists" (
+  "id" INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+  "name" TEXT NOT NULL
+);
+CREATE TABLE albums (
+  id INTEGER PRIMARY KEY,
+  artist_id INTEGER REFERENCES artists(id) ON DELETE CASCADE,
+  title,
+  period TEXT
+);
+CREATE UNIQUE INDEX "albums_title" ON "albums" ("title");
+COMMIT;

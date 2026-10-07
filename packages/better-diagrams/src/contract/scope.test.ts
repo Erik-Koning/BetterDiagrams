@@ -379,3 +379,19 @@ describe("drillableIds / focusPath", () => {
     expect(focusPath(DOC, "auth-inner")).toEqual(["pay", "auth"]);
   });
 });
+
+describe("task ghosts", () => {
+  it("carry the real task's check, estimate and people onto another level", () => {
+    const t = validateTemplate({
+      version: 1,
+      nodes: [
+        node({ id: "epic", label: "Epic", x: 0, y: 0 }),
+        node({ id: "inner", parentId: "epic", kind: "task", x: 20, y: 20 }),
+        node({ id: "outside", kind: "task", x: 400, y: 0, done: true, storyPoints: 2, assignees: ["Ana"] }),
+      ],
+      edges: [{ id: "e", source: "outside", target: "inner", label: "", style: "solid", color: "slate" }],
+    });
+    const ghost = scopedView(t, "epic").nodes.find((n) => n.id === `${GHOST_NODE_PREFIX}outside`)!;
+    expect(ghost).toMatchObject({ done: true, storyPoints: 2, assignees: ["Ana"] });
+  });
+});

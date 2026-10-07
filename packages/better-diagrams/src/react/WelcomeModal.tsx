@@ -9,6 +9,8 @@
  * Manually" — this can never trap the user.
  */
 import { useEffect, useRef, useState } from "react";
+import { looksLikeSqlDdl } from "../contract/import/sql-ddl";
+import { looksLikeTaskCsv } from "../contract/import/task-csv";
 import { BrandMark, Modal } from "./chrome";
 import { JsonCodeEditor } from "./JsonCodeEditor";
 import { CloudScopePicker, scopeFor, type CloudScope } from "./CloudScopePicker";
@@ -44,7 +46,12 @@ export interface WelcomeModalProps {
   /** Parse + validate pasted text; throws with a user-facing message. */
   parse: (text: string) => unknown;
   onInsert: (doc: unknown, name: string) => void;
-  onDismiss: (name: string) => void;
+  /**
+   * "Insert Node Manually", Escape, or the backdrop. `preset` is "tasks"
+   * when the picker sat on Task flow, so the host can start the plan with a
+   * task rather than a service box.
+   */
+  onDismiss: (name: string, opts?: { preset?: "tasks" }) => void;
   /**
    * Schema lint for the JSON editor. Absent, a builtin-vocabulary spec for
    * `kind` is used; the architecture studio passes a registry-aware one.
@@ -93,6 +100,15 @@ export interface WelcomeModalProps {
   /** Content-form prompt for the other kind — same menu, other side of the picker. */
   systemPromptOtherContent?: string;
   /**
+   * The Task flow preset's prompt. Supplying it adds a "Task flow" option to
+   * the type picker: an ARCHITECTURE document (same parse, lint and insert)
+   * set up as a plan of tasks — this prompt on the copy button, and a task
+   * as the first node when inserted by hand. Absent, no such option.
+   */
+  systemPromptTasks?: string;
+  /** Content-form prompt for Task flow — elements only. */
+  systemPromptTasksContent?: string;
+  /**
    * Pin the picker to `kind`, rendered but disabled — for reopening the
    * modal as a JSON editor over an existing file, whose type must not be
    * silently rewritten by a paste.
@@ -105,6 +121,19 @@ const ARCH_PLACEHOLDER = JSON.stringify({ version: 1, nodes: [], edges: [] }, nu
 const MAX_NOTICES = 6;
 
 const SEQ_PLACEHOLDER = JSON.stringify({ version: 1, participants: [], messages: [] }, null, 2);
+
+const TASK_PLACEHOLDER = JSON.stringify(
+  {
+    version: 1,
+    nodes: [{ id: "login", label: "Build login page", kind: "task", storyPoints: 3, assignees: ["Ana"] }],
+    edges: [],
+  },
+  null,
+  2,
+);
+
+/** What the type picker offers: the two document kinds, and Task flow — an architecture document set up as a plan. */
+type PickedKind = WelcomeModalProps["kind"] | "tasks";
 
 /** Builtin-vocabulary fallback when the studio doesn't pass a registry-aware spec. */
 const DEFAULT_ARCH_LINT = buildArchitectureLint();
@@ -155,6 +184,10 @@ const ARCHITECTURE_ONLY_KEYS = ["nodes", "edges", "zones"];
  * (ambiguous, empty, or not JSON-shaped enough for the regex fallback).
  */
 export function sniffKind(text: string): WelcomeModalProps["kind"] | null {
+  // A schema script is a data model: an architecture document.
+  if (looksLikeSqlDdl(text)) return "architecture";
+  // A tracker's CSV export: a task graph, which is an architecture document.
+  if (looksLikeTaskCsv(text)) return "architecture";
   try {
     const raw = JSON.parse(text) as Record<string, unknown> | null;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -192,6 +225,8 @@ export function WelcomeModal({
   onInsertOther,
   systemPromptOther,
   systemPromptOtherContent,
+  systemPromptTasks,
+  systemPromptTasksContent,
   lockKind,
 }: WelcomeModalProps) {
   const [name, setName] = useState(defaultName);
@@ -209,7 +244,11 @@ export function WelcomeModal({
   /** Whether the copy button's form picker is open. See its comment below. */
   const [copyFormOpen, setCopyFormOpen] = useState(false);
   const [copied, setCopied] = useState<null | "full" | "content">(null);
-  const [pickedKind, setPickedKind] = useState<WelcomeModalProps["kind"]>(kind);
+  const [pickedKind, setPickedKind] = useState<PickedKind>(kind);
+  // Task flow IS an architecture document; everything that parses, lints or
+  // routes the insert reads the kind underneath.
+  const pickedDocKind: WelcomeModalProps["kind"] = pickedKind === "tasks" ? "architecture" : pickedKind;
+  const tasksPicked = pickedKind === "tasks";
   /** A manual pick wins over auto-detect for the rest of the session. */
   const [kindTouched, setKindTouched] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -218,10 +257,16 @@ export function WelcomeModal({
   const otherEnabled = !!parseOther && !!onInsertOther;
 
   const finalName = () => name.trim() || defaultName;
+  /** Close without inserting — telling the host when Task flow was the pick. */
+  const dismiss = () => (tasksPicked ? onDismiss(finalName(), { preset: "tasks" }) : onDismiss(finalName()));
 
   // The content form exists only when the host supplied it — that presence
   // is what turns the copy button into a two-option hover menu.
-  const contentPromptAvailable = !!(pickedKind === kind ? systemPromptContent : systemPromptOtherContent);
+  const contentPromptAvailable = !!(tasksPicked
+    ? systemPromptTasksContent
+    : pickedKind === kind
+      ? systemPromptContent
+      : systemPromptOtherContent);
 
   const handleCopy = async (form: "full" | "content" = "full") => {
     // Only pass options the caller asked for: a host that offers no resource
@@ -233,8 +278,11 @@ export function WelcomeModal({
       Object.keys(opts).length
         ? promptForClouds?.(scope.clouds, opts)
         : promptForClouds?.(scope.clouds);
-    const prompt =
-      pickedKind === kind
+    const prompt = tasksPicked
+      ? form === "content"
+        ? (systemPromptTasksContent ?? systemPromptTasks ?? systemPrompt)
+        : (systemPromptTasks ?? systemPrompt)
+      : pickedKind === kind
         ? form === "content"
           ? (scoped() ?? systemPromptContent ?? systemPrompt)
           : (scoped() ?? systemPrompt)
@@ -253,13 +301,13 @@ export function WelcomeModal({
 
   const handleInsert = () => {
     try {
-      if (pickedKind === kind) onInsert(parse(text), finalName());
+      if (pickedDocKind === kind) onInsert(parse(text), finalName());
       else onInsertOther?.(parseOther?.(text), finalName());
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // The hint only nags when the picker COULDN'T solve it — otherwise
       // auto-detect has already switched and the error is about something else.
-      const hint = lockKind || !otherEnabled ? kindHint(pickedKind, text) : "";
+      const hint = lockKind || !otherEnabled ? kindHint(pickedDocKind, text) : "";
       setError(message + hint);
       // Real content loss? Offer the lossy rescue next to the error — applying
       // it stays the user's call, so the guesses can be reviewed before Insert.
@@ -278,7 +326,7 @@ export function WelcomeModal({
   return (
     <Modal
       title="Get started"
-      onClose={() => onDismiss(finalName())}
+      onClose={dismiss}
       cardClassName="as-modal__card--wide"
       hideTitle
     >
@@ -299,14 +347,20 @@ export function WelcomeModal({
         ) : null}
 
         <div className="as-welcome__kind" role="group" aria-label="Diagram type">
-          {(["architecture", "sequence"] as const).map((option) => {
-            const isOther = option !== kind;
+          {(systemPromptTasks
+            ? (["architecture", "tasks", "sequence"] as const)
+            : (["architecture", "sequence"] as const)
+          ).map((option: PickedKind) => {
+            const docKind = option === "tasks" ? "architecture" : option;
+            const isOther = docKind !== kind;
             const disabled = !!lockKind || (isOther && !otherEnabled);
             const title = lockKind
               ? "This dialog edits the current file — its type is fixed"
               : isOther && !otherEnabled
-                ? `This host can't create ${option} files`
-                : undefined;
+                ? `This host can't create ${docKind} files`
+                : option === "tasks"
+                  ? "A plan of tasks — an architecture diagram whose nodes are tickets with points, people and a done check"
+                  : undefined;
             return (
               <button
                 key={option}
@@ -320,7 +374,7 @@ export function WelcomeModal({
                   setKindTouched(true);
                 }}
               >
-                {option === "architecture" ? "Architecture" : "Sequence"}
+                {option === "architecture" ? "Architecture" : option === "tasks" ? "Task flow" : "Sequence"}
               </button>
             );
           })}
@@ -340,9 +394,9 @@ export function WelcomeModal({
           <button
             type="button"
             className="as-btn as-welcome__cta"
-            onClick={() => onDismiss(finalName())}
+            onClick={dismiss}
           >
-            <span>Insert Node Manually</span>
+            <span>{tasksPicked ? "Insert Task Manually" : "Insert Node Manually"}</span>
             <UiIcon name="chevronRight" size={14} className="as-welcome__arrow" />
           </button>
           {/* Hover (or keyboard focus) reveals the form picker; a plain click
@@ -423,12 +477,12 @@ export function WelcomeModal({
                 if (sniffed && (sniffed === kind || otherEnabled)) setPickedKind(sniffed);
               }
             }}
-            placeholder={pickedKind === "sequence" ? SEQ_PLACEHOLDER : ARCH_PLACEHOLDER}
+            placeholder={pickedKind === "sequence" ? SEQ_PLACEHOLDER : tasksPicked ? TASK_PLACEHOLDER : ARCH_PLACEHOLDER}
             ariaLabel="Diagram JSON"
             lint={
-              pickedKind === kind
+              pickedDocKind === kind
                 ? (lint ?? (kind === "sequence" ? SEQUENCE_LINT : DEFAULT_ARCH_LINT))
-                : pickedKind === "sequence"
+                : pickedDocKind === "sequence"
                   ? SEQUENCE_LINT
                   : DEFAULT_ARCH_LINT
             }

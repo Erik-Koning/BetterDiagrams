@@ -26,7 +26,7 @@ const doc = (edge: Record<string, unknown>): DiagramTemplate =>
 
 describe("the vocabulary", () => {
   it("draws an identifying relationship solid and the rest dashed or dotted, each in its own colour", () => {
-    expect(RELATION_KIND_ORDER).toEqual(["composition", "aggregation", "reference", "hierarchy", "polymorphic", "generalization"]);
+    expect(RELATION_KIND_ORDER).toEqual(["composition", "aggregation", "reference", "hierarchy", "polymorphic", "generalization", "dependency"]);
     // UML's glyphs: a filled diamond owns, a hollow one shares, a hollow triangle points at the type extended.
     expect(RELATION_KINDS.composition).toMatchObject({ style: "solid", color: "rose", startHead: "diamond-filled", startLabel: "*", endLabel: "1" });
     expect(RELATION_KINDS.aggregation).toMatchObject({ style: "solid", color: "sky", startHead: "diamond", startLabel: "*", endLabel: "0..1" });
@@ -36,6 +36,10 @@ describe("the vocabulary", () => {
     expect(RELATION_KINDS.reference).toMatchObject({ style: "dashed", color: "slate", startLabel: "*", endLabel: "0..1" });
     expect(RELATION_KINDS.hierarchy).toMatchObject({ style: "dashed", color: "violet" });
     expect(RELATION_KINDS.polymorphic).toMatchObject({ style: "dotted", color: "amber" });
+    // A task graph's long-range link: the one dashed-sky pair, and no cardinality — it joins work, not row sets.
+    expect(RELATION_KINDS.dependency).toMatchObject({ style: "dashed", color: "sky" });
+    expect(RELATION_KINDS.dependency!.startLabel).toBeUndefined();
+    expect(RELATION_KINDS.dependency!.endLabel).toBeUndefined();
     // Every kind has words a legend can show and a tooltip can explain.
     for (const def of Object.values(RELATION_KINDS)) {
       expect(def.label).toBeTruthy();
@@ -62,7 +66,7 @@ describe("resolveRelationKinds", () => {
     expect(kinds.ownership).toMatchObject({ label: "Ownership", style: "dashed", color: "emerald" });
     expect(kinds.polymorphic).toBeUndefined();
     // Built-ins keep their order; additions follow.
-    expect(order).toEqual(["composition", "aggregation", "reference", "hierarchy", "generalization", "ownership"]);
+    expect(order).toEqual(["composition", "aggregation", "reference", "hierarchy", "generalization", "dependency", "ownership"]);
   });
 
   it("names an unlabelled addition after its id", () => {
@@ -100,8 +104,8 @@ describe("the relation field", () => {
   });
 
   it("is offered to the model, with a registry's extra kinds appended", () => {
-    expect(buildSystemPrompt()).toContain('"relation":"composition|aggregation|reference|hierarchy|polymorphic|generalization"');
-    expect(buildSystemPrompt({ relations: ["ownership"] })).toContain('"relation":"composition|aggregation|reference|hierarchy|polymorphic|generalization|ownership"');
+    expect(buildSystemPrompt()).toContain('"relation":"composition|aggregation|reference|hierarchy|polymorphic|generalization|dependency"');
+    expect(buildSystemPrompt({ relations: ["ownership"] })).toContain('"relation":"composition|aggregation|reference|hierarchy|polymorphic|generalization|dependency|ownership"');
     expect(buildSystemPrompt()).toContain('Omit "relation" on an architecture edge');
   });
 });

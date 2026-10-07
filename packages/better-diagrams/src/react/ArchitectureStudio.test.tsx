@@ -1955,6 +1955,67 @@ describe("ArchitectureStudio", () => {
     );
   });
 
+  it("tells a read-only viewer why a hidden offender cannot be shown", async () => {
+    const user = userEvent.setup();
+    // Same document as the reveal case, but read-only: there is no ghost
+    // toggle to turn on, so there is nothing to reveal and no way back.
+    const zoned = validateTemplate({
+      version: 1,
+      zones: [{ id: "cloud", label: "Cloud", x: 0, y: 0, w: 900, h: 400, providers: ["aws", "gcp"], provider: "gcp" }],
+      nodes: [
+        { id: "lambda", label: "Scheduler", kind: "service", icon: "box", description: "", parentId: null, zoneId: "cloud", providers: ["aws"], x: 60, y: 60, w: 170, h: 76 },
+      ],
+      edges: [],
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={zoned} readOnly />);
+
+    await user.click(screen.getByRole("button", { name: /Checks \(/ }));
+    await user.click(screen.getByRole("menuitem", { name: /Unconnected component/ }));
+
+    // It says why rather than fitting the view to a box that is not there.
+    expect(await screen.findByText(/"Scheduler" is hidden by the current provider/)).toBeInTheDocument();
+    expect(container.querySelector('[data-id="lambda"]')).toBeNull();
+  });
+
+  it("aims an edge-only finding at the line's ends", async () => {
+    const user = userEvent.setup();
+    // Both ends folded into a chip, so the finding has nothing on this canvas
+    // to aim at — a line has no position of its own, so only its ends can say
+    // where it is.
+    const doc: DiagramTemplate = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "core", label: "Core", kind: "group", icon: "none", description: "", parentId: null, collapsed: true, x: 0, y: 0, w: 600, h: 300 },
+        { id: "web", label: "Web", kind: "service", icon: "globe", description: "", parentId: "core", x: 30, y: 60, w: 170, h: 76 },
+        { id: "db", label: "Ledger", kind: "database", icon: "database", description: "", parentId: "core", x: 330, y: 60, w: 170, h: 76 },
+      ],
+      edges: [{ id: "skips", source: "web", target: "db", label: "", style: "solid", color: "slate" }],
+    });
+    // The shape lint.ts documents for a host's own rules: an edge, no nodes.
+    const registry = {
+      lintRules: {
+        "no-direct-db": {
+          label: "Services must not skip the API layer",
+          severity: "error" as const,
+          check: () => [{ message: "Web reaches Ledger directly", edgeIds: ["skips"] }],
+        },
+      },
+    };
+    const { container } = mount(<ArchitectureStudio defaultValue={doc} registry={registry} />);
+    expect(container.querySelector('[data-id="web"]')).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /Checks \(/ }));
+    await user.click(screen.getByRole("menuitem", { name: /skip the API layer/ }));
+
+    // It drills to the level that draws the line…
+    await waitFor(() => expect(container.querySelector('[data-id="web"]')).not.toBeNull());
+    // …and selects the line, and only the line: the rule accused no box.
+    await waitFor(() =>
+      expect(container.querySelector('.react-flow__edge[data-id="skips"]')?.classList.contains("selected")).toBe(true),
+    );
+    expect(container.querySelectorAll(".react-flow__node.selected")).toHaveLength(0);
+  });
+
   it("reveals an offender the provider selection is hiding", async () => {
     const user = userEvent.setup();
     // "lambda" is only on AWS; the zone is showing GCP, so the canvas does not
@@ -1967,7 +2028,8 @@ describe("ArchitectureStudio", () => {
       ],
       edges: [],
     });
-    const { container } = mount(<ArchitectureStudio defaultValue={zoned} />);
+    const onChange = vi.fn();
+    const { container } = mount(<ArchitectureStudio defaultValue={zoned} onChange={onChange} />);
     expect(container.querySelector('[data-id="lambda"]')).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /Checks \(/ }));
@@ -1978,10 +2040,14 @@ describe("ArchitectureStudio", () => {
         true,
       ),
     );
+    expect(await screen.findByText(/Showing nodes hidden by the current provider/)).toBeInTheDocument();
     // Through the ghost toggle, so the View menu says why it is on screen and
     // the reader can put it back.
     await user.click(screen.getByRole("button", { name: /^View/ }));
     expect(screen.getByRole("checkbox", { name: /Show hidden nodes/ })).toBeChecked();
+    // Revealing is a VIEW change. Emitting here would write a ghosted node
+    // into the host's document for the crime of clicking a lint finding.
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("boxes text notes by default and lets the Outline toggle opt out", async () => {

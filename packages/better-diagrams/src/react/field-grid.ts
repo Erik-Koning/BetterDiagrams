@@ -3,6 +3,7 @@
  * and the two text exports. No DOM, so it is tested without one.
  */
 import type { FieldRecord } from "../contract/fields";
+import { csvText } from "../contract/csv";
 
 export type GridColumn =
   | "key"
@@ -15,7 +16,9 @@ export type GridColumn =
   | "externalId"
   | "unique"
   | "tags"
-  | "formula";
+  | "formula"
+  | "nulls"
+  | "distinct";
 
 export interface GridColumnDef {
   id: GridColumn;
@@ -40,6 +43,24 @@ export const GRID_COLUMNS: readonly GridColumnDef[] = [
   { id: "tags", title: "Tags", width: 120 },
   { id: "formula", title: "Formula", width: 260, mono: true },
 ];
+
+/** Observed numbers, shown when a profiling run supplied them (`FieldRecord.profile`). */
+export const PROFILE_COLUMNS: readonly GridColumnDef[] = [
+  { id: "nulls", title: "Nulls", width: 72, align: "center" },
+  { id: "distinct", title: "Distinct", width: 88, align: "center" },
+];
+
+/** The grid's columns for these records: the profile's two only when some record has one. */
+export function gridColumnsFor(records: readonly FieldRecord[]): readonly GridColumnDef[] {
+  return records.some((r) => r.profile) ? [...GRID_COLUMNS, ...PROFILE_COLUMNS] : GRID_COLUMNS;
+}
+
+/** "2.5%", "0%", "<0.1%" — a null rate as a reader wants it. */
+export function percentText(rate: number): string {
+  if (rate === 0) return "0%";
+  if (rate < 0.001) return "<0.1%";
+  return `${Math.round(rate * 1000) / 10}%`;
+}
 
 export const MIN_COLUMN_WIDTH = 48;
 export const MAX_COLUMN_WIDTH = 600;
@@ -71,6 +92,10 @@ export function cellText(record: FieldRecord, col: GridColumn): string {
       return (record.tags ?? []).join(", ");
     case "formula":
       return record.formula ?? "";
+    case "nulls":
+      return record.profile?.nullRate !== undefined ? percentText(record.profile.nullRate) : "";
+    case "distinct":
+      return record.profile?.distinct !== undefined ? record.profile.distinct.toLocaleString("en-US") : "";
   }
 }
 
@@ -102,6 +127,11 @@ function sortKey(record: FieldRecord, col: GridColumn): number | string {
       return record.key ? { pk: 3, pfk: 2, fk: 1 }[record.key] : 0;
     case "fk":
       return (record.fk[0]?.label ?? "").toLowerCase();
+    // Numbers, largest first; a column without one last.
+    case "nulls":
+      return record.profile?.nullRate ?? -1;
+    case "distinct":
+      return record.profile?.distinct ?? -1;
     default:
       return cellText(record, col).toLowerCase();
   }
@@ -136,18 +166,13 @@ export function sortRecords(
   return keyed.map((k) => k.record);
 }
 
-const escapeCsv = (text: string): string =>
-  /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-
 /** Header + rows, RFC 4180 quoting, CRLF line ends. */
-export function toCsv(records: readonly FieldRecord[], cols: readonly GridColumnDef[] = GRID_COLUMNS): string {
-  const lines = [cols.map((c) => escapeCsv(c.title)).join(",")];
-  for (const r of records) lines.push(cols.map((c) => escapeCsv(cellText(r, c.id))).join(","));
-  return `${lines.join("\r\n")}\r\n`;
+export function toCsv(records: readonly FieldRecord[], cols: readonly GridColumnDef[] = gridColumnsFor(records)): string {
+  return csvText(cols.map((c) => c.title), records.map((r) => cols.map((c) => cellText(r, c.id))));
 }
 
 /** Header + rows, tab-separated — what a spreadsheet pastes as a table. Tabs and newlines inside a cell become spaces. */
-export function toTsv(records: readonly FieldRecord[], cols: readonly GridColumnDef[] = GRID_COLUMNS): string {
+export function toTsv(records: readonly FieldRecord[], cols: readonly GridColumnDef[] = gridColumnsFor(records)): string {
   const clean = (text: string) => text.replace(/[\t\r\n]+/g, " ");
   const lines = [cols.map((c) => clean(c.title)).join("\t")];
   for (const r of records) lines.push(cols.map((c) => clean(cellText(r, c.id))).join("\t"));

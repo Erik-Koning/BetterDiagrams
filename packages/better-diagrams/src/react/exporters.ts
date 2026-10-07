@@ -34,14 +34,26 @@ import { CLOUD_NODE_KINDS } from "./cloud-kinds";
 // Imports `./registry-types`, not `./registry` — registry.ts imports
 // BUILTIN_EXPORTERS from here, so depending on it directly would be a cycle.
 import type { ExportContext, ExporterDef, ResolvedRegistry } from "./registry-types";
-import { emitOptions, emitTemplate, paletteRecord, type ExportPalette, type PictureOptions } from "./draw";
+import { DARK_EXPORT_PALETTE, drawnElements, emitOptions, emitTemplate, paletteRecord, type ExportPalette, type PictureOptions } from "./draw";
 import { levelLabel } from "./chrome";
 import {
   buildMultiViewHtml,
   buildTimelineHtml,
+  isLightHex,
   type HtmlPathEntry,
   type ViewEntry,
 } from "./html-export";
+import { explorerDocument, explorerLevel, FINDINGS_CAP, type ExplorerLevel, type HtmlExplorerData } from "./html-explorer";
+import { hasTasks, htmlTaskData } from "./html-tasks";
+import { taskReportMarkdown, tasksCsv } from "../contract/task-report";
+import { lintTemplate } from "../contract/lint";
+import { storesFields } from "../contract/coverage";
+import { dataDictionary, dictionaryCsv, dictionaryMarkdown, governanceReport } from "../contract/dictionary";
+import { modelStructure, summarizeStructure } from "../contract/structure";
+import { schemaDiff } from "../contract/schema-diff";
+import { buildSchemaReportHtml } from "./schema-report-html";
+import { transientPathColors } from "./path-view";
+import { DARK_THEME, LIGHT_THEME } from "./theme";
 import { pathColor, resolvePath } from "../contract/paths";
 import {
   blobToUint8,
@@ -108,6 +120,61 @@ function htmlPathEntries(
       })),
     };
   });
+}
+
+// ─── Interactive HTML: search and relationship analysis ──────────────────────
+
+/**
+ * What the interactive HTML page's search and relationship analysis read
+ * (see html-explorer.ts): the document's structural slice, what each level's
+ * SVG draws — the root, and one level per drillable node, exactly the levels
+ * the page pre-renders — the drill stack that shows each nested node, and
+ * the route colours in the export palette's hues.
+ */
+export function htmlExplorerData(
+  template: DiagramTemplate,
+  registry: ResolvedRegistry,
+  palette: Partial<ExportPalette> = {},
+): HtmlExplorerData {
+  const { containerKinds } = registry;
+  const levels: Record<string, ExplorerLevel> = { "": explorerLevel(drawnElements(template, containerKinds)) };
+  for (const focusId of drillableIds(template)) {
+    levels[focusId] = explorerLevel(drawnElements(scopedView(template, focusId, { containerKinds }), containerKinds));
+  }
+  const homes: Record<string, string[]> = {};
+  for (const n of template.nodes) {
+    const stack = focusPath(template, n.id);
+    if (stack.length) homes[n.id] = stack;
+  }
+  const light = isLightHex(palette.bg ?? DARK_EXPORT_PALETTE.bg);
+  // Checks run here, not in the page: a host's rules are functions.
+  const findings = lintTemplate(template, registry.lintRules);
+  const rules: NonNullable<HtmlExplorerData["rules"]> = {};
+  for (const f of findings) {
+    const def = registry.lintRules[f.rule];
+    rules[f.rule] ??= { label: def?.label ?? f.rule, ...(def?.description ? { description: def.description } : {}) };
+  }
+  return {
+    doc: explorerDocument(template),
+    levels,
+    homes,
+    // Where the editor starts them with nothing lit: past the document's own
+    // paths, so a route never wears a path's colour.
+    routeColors: transientPathColors(10, [], (template.paths ?? []).length),
+    edgeHex: { ...EDGE_COLOR_HEX, ...paletteRecord(palette.edgeColors) },
+    routeColor: palette.routeColor ?? ((light ? LIGHT_THEME.routeColor : DARK_THEME.routeColor) as string),
+    ...(template.nodes.some(storesFields) ? { governance: governanceReport(template) } : {}),
+    ...(template.nodes.filter(storesFields).length >= 2 ? { structure: summarizeStructure(template, modelStructure(template)) } : {}),
+    ...(template.analyses?.length ? { analyses: template.analyses } : {}),
+    ...(findings.length
+      ? {
+          // A fix acts on the document; the page cannot, so findings travel without one.
+          findings: findings.slice(0, FINDINGS_CAP).map(({ fix: _fix, ...f }) => f),
+          ...(findings.length > FINDINGS_CAP ? { findingsTruncated: findings.length - FINDINGS_CAP } : {}),
+          rules,
+        }
+      : {}),
+  };
 }
 
 // ─── C4-PlantUML ─────────────────────────────────────────────────────────────
@@ -646,7 +713,7 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
   },
   html: {
     label: "Interactive HTML",
-    hint: "Self-contained page — drill between levels, scrub the timeline",
+    hint: "Self-contained page — search, trace relationships, drill between levels, scrub the timeline",
     // The page carries its own scrubber, so it needs every element and every
     // date — a hide-mode slice would leave it nothing to scrub.
     fullDocument: true,
@@ -654,19 +721,90 @@ export const BUILTIN_EXPORTERS: Record<string, ExporterDef> = {
       const title = String(template.meta?.title ?? filename);
       const stops = templateTimeline(template).stops;
       const paths = htmlPathEntries(template, palette);
+      const explorer = htmlExplorerData(template, registry, palette);
+      // A task graph comes alive in the page: checks toggle, the People legend
+      // previews and focuses, and checks can be saved back into the file.
+      const tasks = hasTasks(template)
+        ? htmlTaskData(template, explorer.levels, {
+            fileName: `${filename}.html`,
+            containerKinds: registry.containerKinds,
+            inks: {
+              faint: palette?.textFaint ?? DARK_EXPORT_PALETTE.textFaint,
+              warn: palette?.warn ?? DARK_EXPORT_PALETTE.warn ?? "#fa8072",
+            },
+          })
+        : undefined;
+      // Rows are drawn as targets too, so the page can pin, mark and open
+      // them — and a task's states as parts, so the page can change them.
+      const dress = { mode, gradients, fieldHits: true, ...(tasks ? { taskHits: true } : {}) };
       // Any nesting makes the page multi-view: one pre-rendered SVG per
       // drillable level, clickable in place. A flat document keeps the
-      // original single-view page byte-for-byte.
+      // single-view page.
       const page = drillableIds(template).length
-        ? buildMultiViewHtml({ views: buildDrillViews(template, registry, palette, { mode, gradients }), title, stops, palette, paths })
+        ? buildMultiViewHtml({ views: buildDrillViews(template, registry, palette, dress), title, stops, palette, paths, explorer, tasks })
         : buildTimelineHtml({
-            svg: renderTemplateToSvg(template, registry, palette, { mode, gradients }),
+            svg: renderTemplateToSvg(template, registry, palette, dress),
             title,
             stops,
             palette,
             paths,
+            explorer,
+            tasks,
           });
       return { blob: new Blob([page], { type: "text/html" }), filename: `${filename}.html` };
+    },
+  },
+  "tasks-md": {
+    label: "Task report (.md)",
+    hint: "Status report — progress, what's late or blocked, what's ready, who holds what",
+    fullDocument: true,
+    available: ({ template }) => hasTasks(template),
+    run({ template, filename }) {
+      return {
+        blob: new Blob([taskReportMarkdown(template)], { type: "text/markdown" }),
+        filename: `${filename}-report.md`,
+      };
+    },
+  },
+  "tasks-csv": {
+    label: "Tasks (.csv)",
+    hint: "Every task as a row — status, points, people, due date, what blocks it",
+    fullDocument: true,
+    available: ({ template }) => hasTasks(template),
+    run({ template, filename }) {
+      return { blob: new Blob([tasksCsv(template)], { type: "text/csv" }), filename: `${filename}-tasks.csv` };
+    },
+  },
+  "dictionary-md": {
+    label: "Data dictionary (.md)",
+    hint: "Every table and field, documented — for a wiki or a review",
+    fullDocument: true,
+    available: ({ template }) => template.nodes.some(storesFields),
+    run({ template, filename }: ExportContext) {
+      const title = `${String(template.meta?.title ?? filename)} — data dictionary`;
+      return { blob: new Blob([dictionaryMarkdown(dataDictionary(template), title)], { type: "text/markdown" }), filename: `${filename}-dictionary.md` };
+    },
+  },
+  "dictionary-csv": {
+    label: "Data dictionary (.csv)",
+    hint: "A row per field — for a spreadsheet or a catalogue",
+    fullDocument: true,
+    available: ({ template }) => template.nodes.some(storesFields),
+    run({ template, filename }: ExportContext) {
+      return { blob: new Blob([dictionaryCsv(dataDictionary(template))], { type: "text/csv" }), filename: `${filename}-dictionary.csv` };
+    },
+  },
+  "schema-report": {
+    label: "Schema change report (HTML)",
+    hint: "What changed against the baseline, column by column, and what breaks",
+    fullDocument: true,
+    available: ({ template, diffBase }) => !!diffBase && template.nodes.some(storesFields),
+    run({ template, diffBase, filename, palette }: ExportContext) {
+      if (!diffBase) throw new Error("Open Compare against a baseline first");
+      const diff = schemaDiff(diffBase, template);
+      const label = (id: string) => template.nodes.find((n) => n.id === id)?.label ?? diffBase.nodes.find((n) => n.id === id)?.label ?? id;
+      const page = buildSchemaReportHtml({ diff, label, title: `${String(template.meta?.title ?? filename)} — schema changes`, palette });
+      return { blob: new Blob([page], { type: "text/html" }), filename: `${filename}-schema-changes.html` };
     },
   },
   template: {

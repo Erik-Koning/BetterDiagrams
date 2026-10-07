@@ -1,0 +1,28 @@
+{
+  "metadata": { "dbt_schema_version": "https://schemas.getdbt.com/dbt/catalog/v1.json" },
+  "nodes": {
+    "model.jaffle_shop.customers": {
+      "unique_id": "model.jaffle_shop.customers",
+      "metadata": { "type": "BASE TABLE", "schema": "MARTS", "name": "CUSTOMERS", "database": "ANALYTICS", "comment": null },
+      "columns": {
+        "CUSTOMER_ID": { "type": "NUMBER", "index": 1, "name": "CUSTOMER_ID", "comment": null },
+        "FIRST_NAME": { "type": "TEXT", "index": 2, "name": "FIRST_NAME", "comment": null },
+        "EMAIL": { "type": "TEXT", "index": 3, "name": "EMAIL", "comment": null },
+        "NUMBER_OF_ORDERS": { "type": "NUMBER", "index": 4, "name": "NUMBER_OF_ORDERS", "comment": null }
+      },
+      "stats": { "row_count": { "id": "row_count", "label": "Row Count", "value": 935, "include": true } }
+    },
+    "model.jaffle_shop.orders": {
+      "unique_id": "model.jaffle_shop.orders",
+      "metadata": { "type": "BASE TABLE", "schema": "MARTS", "name": "ORDERS", "database": "ANALYTICS", "comment": null },
+      "columns": {
+        "ORDER_ID": { "type": "NUMBER", "index": 1, "name": "ORDER_ID", "comment": null },
+        "CUSTOMER_ID": { "type": "NUMBER", "index": 2, "name": "CUSTOMER_ID", "comment": null },
+        "STATUS": { "type": "TEXT", "index": 3, "name": "STATUS", "comment": null },
+        "AMOUNT": { "type": "NUMBER", "index": 4, "name": "AMOUNT", "comment": null }
+      },
+      "stats": { "row_count": { "id": "row_count", "value": 4210, "include": true } }
+    }
+  },
+  "sources": {}
+}

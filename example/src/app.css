@@ -389,6 +389,55 @@ body {
   color: var(--shell-text-dim);
 }
 
+/* A view setting in the menu: the same drawn box as the bar's chips, laid
+   out as a menu row — label after the box, the whole row a hit target. */
+.app__dropdown-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--shell-text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+}
+
+.app__dropdown-check:hover {
+  background: var(--shell-hover);
+}
+
+.app__dropdown-check input[type="checkbox"] {
+  appearance: none;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1.5px solid var(--shell-text-dim);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.app__dropdown-check input[type="checkbox"]:checked {
+  border-color: var(--shell-accent);
+  color: var(--shell-accent);
+  /* The same two-arm tick as the bar's chips — see `.app__toggle`. */
+  background-image:
+    linear-gradient(45deg, transparent 32%, currentcolor 32%, currentcolor 68%, transparent 68%),
+    linear-gradient(135deg, transparent 40%, currentcolor 40%, currentcolor 60%, transparent 60%);
+  background-position: 1.8px 5.2px, 3.6px 3px;
+  background-size: 3px 3px, 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.app__dropdown-check input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--shell-accent);
+  outline-offset: 1px;
+}
+
 .app__dropdown-note {
   padding: 4px 8px 6px;
   font-size: 11px;
@@ -602,4 +651,84 @@ body {
   .app * {
     transition: none !important;
   }
+}
+
+/* Link a folder… — the form that takes over the top of the Settings menu.
+   A path field, the server's Browse… beside it, then Cancel / Link. */
+.app__link-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(340px, calc(100vw - 32px));
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--shell-border-2);
+}
+
+.app__link-row {
+  display: flex;
+  gap: 6px;
+  padding: 0 8px;
+}
+
+.app__link-row--end {
+  justify-content: flex-end;
+}
+
+.app__link-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--shell-control-h);
+  padding: 0 8px;
+  border: 1px solid var(--shell-border-2);
+  border-radius: 6px;
+  background: var(--shell-bg);
+  color: var(--shell-text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.app__link-input:focus-visible {
+  outline: 2px solid var(--shell-accent);
+  outline-offset: 0;
+  border-color: transparent;
+}
+
+.app__link-btn {
+  flex: none;
+  height: var(--shell-control-h);
+  padding: 0 10px;
+  border: 1px solid var(--shell-border-2);
+  border-radius: 6px;
+  background: none;
+  color: var(--shell-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.app__link-btn:hover:not(:disabled) {
+  background: var(--shell-hover);
+}
+
+.app__link-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.app__link-btn--primary {
+  border-color: var(--shell-accent);
+  background: var(--shell-accent-wash);
+}
+
+.app__link-error {
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #f87171;
+}
+
+.app[data-theme="light"] .app__link-error {
+  color: #b91c1c;
 }

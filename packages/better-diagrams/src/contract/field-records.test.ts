@@ -17,6 +17,8 @@ import {
   fieldRecords,
   hasField,
   referencedKey,
+  keyResolver,
+  documentFieldRecords,
   sameFieldRef,
   searchFields,
 } from "./fields";
@@ -81,6 +83,25 @@ describe("referencedKey", () => {
   });
 });
 
+describe("keyResolver", () => {
+  it("answers exactly as referencedKey does, for every reference in a folder-imported model", async () => {
+    const files = await readFolderToFileMap(fileURLToPath(new URL("./folder/fixtures/datamodel-mini", import.meta.url)));
+    const model = importFolder(files).template;
+    const resolve = keyResolver(model);
+    let checked = 0;
+    for (const records of documentFieldRecords(model).values()) {
+      for (const r of records) {
+        for (const target of r.fk) {
+          expect(resolve(target), `${r.id} → ${target.label}`).toEqual(referencedKey(model, target));
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(5);
+    expect(resolve({ label: "region" })).toBeNull();
+  });
+});
+
 describe("fieldRecords", () => {
   it("lists rows first, then data-only fields, and says which is which", () => {
     const records = fieldRecords(contact, doc);
@@ -96,6 +117,7 @@ describe("fieldRecords", () => {
     expect(byId.account_id).toMatchObject({ label: "Account ID", type: "→ account", key: "fk" });
     expect(byId.email).toEqual({
       id: "email", name: "email", label: "Email", type: "email", row: false, fk: [], visible: false, tags: ["hidden"],
+      storageType: "email", nullable: true,
     });
     expect(byId.score).toMatchObject({ required: true, unique: true, externalId: true, formula: "amount * 2", type: "double" });
     expect(byId.id).toMatchObject({ key: "pk" });
@@ -119,6 +141,31 @@ describe("fieldRecords", () => {
     expect(byId.order_id).toMatchObject({ key: "pfk", type: "→ order" });
     expect(byId.note.key).toBeUndefined();
     expect(byId.note.required).toBeUndefined();
+  });
+
+  it("says what a field stores, whether it may be empty, and what it means — never the display arrow", () => {
+    const node = {
+      id: "n",
+      fields: [
+        { id: "owner_id", name: "owner_id", type: "→ user", key: "fk" as const, required: true },
+        { id: "sku", name: "sku", type: "varchar(40)", description: "Stock-keeping unit" },
+      ],
+      data: { model: { fields: [
+        { name: "owner_id", type: "reference", nullable: false, description: "Who owns it" },
+        { name: "note", type: "string", nullable: true },
+        { name: "blank", type: "string" },
+      ] } },
+    };
+    const byId = Object.fromEntries(fieldRecords(node).map((r) => [r.id, r]));
+    // The data's type is the stored one; the row's arrow is only what is shown.
+    expect(byId.owner_id).toMatchObject({ type: "→ user", storageType: "reference", nullable: false, description: "Who owns it" });
+    expect(byId.sku).toMatchObject({ storageType: "varchar(40)", description: "Stock-keeping unit" });
+    expect(byId.sku.nullable).toBeUndefined();
+    expect(byId.note.nullable).toBe(true);
+    expect(byId.blank.nullable).toBeUndefined();
+    // A row whose only type is the arrow stores nothing we can name.
+    const arrowOnly = fieldRecords({ id: "m", fields: [{ id: "x_id", name: "x_id", type: "→ x" }] })[0]!;
+    expect(arrowOnly.storageType).toBeUndefined();
   });
 
   it("resolves reference targets from anchored edges and from the name index", () => {

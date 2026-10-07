@@ -12,6 +12,7 @@ import type { ZoneBox } from "../contract/schema";
 import type { FieldRef } from "../contract/fields";
 import type { ResolvedRegistry } from "./registry-types";
 import type { StudioMode } from "./theme";
+import type { TaskRollup } from "../contract/tasks";
 
 export interface StudioContextValue {
   registry: ResolvedRegistry;
@@ -114,6 +115,49 @@ export interface StudioContextValue {
    * (dimmed, never hidden), and combined with it.
    */
   dimmedIds: ReadonlySet<string> | null;
+  /**
+   * A colour per node id — the Model structure panel's "Colour tables by
+   * domain". A display pass only: the card wears an outline in it; nothing
+   * reaches the document. Absent or null, no card is outlined.
+   */
+  domainTint?: ReadonlyMap<string, string> | null;
+  /**
+   * Open tasks waiting on open tasks, each mapped to the ids of the tasks it
+   * waits on — `blockedTasks` over the whole document, so a task blocked by
+   * work on another level still says so. Absent, no card is blocked.
+   */
+  blockedIds?: ReadonlyMap<string, readonly string[]>;
+  /** A task's current label by document id — for naming blockers. Stable. */
+  taskLabelOf?: (id: string) => string;
+  /** Work past its date and unfinished — a task due, a milestone not reached. */
+  overdueIds?: ReadonlySet<string>;
+  /** Today as `YYYY-MM-DD`, turning over at midnight — what a date chip is late against. */
+  today?: string;
+  /** Milestones reached: everything feeding them is done. */
+  reachedIds?: ReadonlySet<string>;
+  /** Containers holding tasks, by id: their progress against any capacity. */
+  rollups?: ReadonlyMap<string, TaskRollup>;
+  /**
+   * The View menu's task filter, as the tasks it keeps: every other task
+   * card recedes. Null (no filter) keeps them all.
+   */
+  taskFilterIds?: ReadonlySet<string> | null;
+  /**
+   * A person's colour, as a CSS colour — assigned across the whole plan so
+   * two people never share one (see `assigneeSwatches`). Absent, a name
+   * falls back to its own preferred slot.
+   */
+  assigneeColorOf?: (name: string) => string;
+  /**
+   * While a person is hovered in the People legend: the ids of their tasks.
+   * Every OTHER task card recedes; other nodes and the lines are left alone.
+   */
+  personPreview?: ReadonlySet<string> | null;
+  /**
+   * Whether `dimmedIds` currently comes from a person focused in the People
+   * legend — whose mute drains a card's colour, not just its detail.
+   */
+  personFocus?: boolean;
   /**
    * How a line's ends draw their cardinality — the document's
    * `settings.notation`, "both" when it says nothing. See `NOTATIONS`.

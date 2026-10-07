@@ -8,7 +8,7 @@
  * Which renderer a kind uses is decided by the registry (`container` /
  * `annotation` flags), not by a hard-coded list — see `toReactFlow`.
  */
-import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import {
   Handle,
   NodeResizer,
@@ -25,7 +25,20 @@ import { DateChip } from "./chrome";
 import { isOverdue } from "../contract/timeline";
 import { kindDef, iconPaths } from "./registry-types";
 import { ZoneNode } from "./ZoneNode";
-import { silhouettePath, teamColor } from "./shapes";
+import {
+  ASSIGNEE_GAP,
+  assigneeSwatch,
+  fitChips,
+  formatPoints,
+  silhouettePath,
+  swatchColor,
+  teamColor,
+} from "./shapes";
+import { MILESTONE_KIND, TASK_KIND, hasAssigneeStrip, rollupFraction, rollupLabel, type TaskRollup } from "../contract/tasks";
+
+/** The words an open task's stage reads as on its card. */
+const STAGE_LABELS: Record<string, string> = { "in-progress": "In progress", "in-review": "In review" };
+import { approxTextWidth } from "../contract/text";
 import { groupContentBox, shapeMinHeight } from "./resize";
 import { useResizeHandles } from "./resize-handles";
 import {
@@ -328,7 +341,7 @@ export const ShapeNode = memo(function ShapeNode({
   width,
   height,
 }: NodeProps<ShapeNodeType>) {
-  const { registry, readOnly, mode, tagFilter, showTeams, showLinks, requestCommit, navigateFile, drillInto, navigateToNode, childCounts, dimmedIds, pinnedFields, highlightFields } = useStudio();
+  const { registry, readOnly, mode, tagFilter, showTeams, showLinks, requestCommit, navigateFile, drillInto, navigateToNode, childCounts, dimmedIds, pinnedFields, highlightFields, domainTint, blockedIds, taskLabelOf, personPreview, personFocus, overdueIds, reachedIds, taskFilterIds, today } = useStudio();
   const { updateNodeData } = useReactFlow();
   const def = kindDef(registry, data.kind);
   const paths = iconPaths(registry, data.icon);
@@ -387,9 +400,27 @@ export const ShapeNode = memo(function ShapeNode({
   const tableTagged = tagFilter.length > 0 && meetsFilter(data.tags, tagFilter);
   const rowTagged = tagFilter.length > 0 && !!data.fields?.some((f) => meetsFilter(f.tags, tagFilter));
   const rowsFiltered = rowTagged && !tableTagged;
-  const dimmed =
-    (tagFilter.length > 0 && !tableTagged && !rowTagged) ||
-    (dimmedIds !== null && !dimmedIds.has(docId));
+  // A work item: the corner check (open, blocked or done), the estimate and
+  // the assignee tabs belong to the task kind alone, whatever another kind's
+  // data happens to carry (see tasks.ts).
+  const isTask = data.kind === TASK_KIND;
+  // The People legend: a hovered person keeps their task cards and mutes
+  // every other one; a focused person (the dim chain's keep set) mutes every
+  // node that isn't theirs. Either way the mute drains colour as well as
+  // detail — it is a deliberate look at one person's work.
+  const outsideKeep = dimmedIds !== null && !dimmedIds.has(docId);
+  const personMuted = (isTask && !!personPreview && !personPreview.has(docId)) || (!!personFocus && outsideKeep);
+  // View → Tasks filter: the tasks it doesn't keep recede, like a tag filter.
+  const filteredOut = isTask && !!taskFilterIds && !taskFilterIds.has(docId);
+  const dimmed = (tagFilter.length > 0 && !tableTagged && !rowTagged) || outsideKeep || personMuted || filteredOut;
+  const done = isTask && !!data.done;
+  const blockers = isTask && !done ? blockedIds?.get(docId) : undefined;
+  const isMilestone = data.kind === MILESTONE_KIND;
+  const reached = isMilestone && !!reachedIds?.has(docId);
+  // Work's date is a due date: it is overdue when it passes unfinished,
+  // whatever the lifecycle status says (which is about systems, not tasks).
+  const isWork = isTask || isMilestone;
+  const overdue = isWork ? !!overdueIds?.has(docId) : isOverdue(data.date, data.status, today);
 
   const style = {
     // A colour stored on the node wins over the kind's registry accent: it is
@@ -403,6 +434,7 @@ export const ShapeNode = memo(function ShapeNode({
     ...(data.fontSize && data.fontSize !== DEFAULT_FONT_SIZE
       ? { "--as-node-font": `${data.fontSize}px` }
       : {}),
+    ...(domainTint?.get(docId) ? { "--as-node-domain": domainTint.get(docId) } : {}),
     ...(sil
       ? { paddingTop: 6 + sil.contentTop, paddingInline: 12 + sil.contentInlinePad }
       : {}),
@@ -416,6 +448,8 @@ export const ShapeNode = memo(function ShapeNode({
     data.ghost || scopeGhost ? "as-ghost" : "",
     scopeGhost ? "as-node--scope-ghost" : "",
     dimmed ? "as-node--dimmed" : "",
+    personMuted ? "as-node--person-muted" : "",
+    domainTint?.get(docId) ? "as-node--domain" : "",
     pinnedFields.has(fieldKey({ nodeId: docId })) ? "as-node--pinned" : "",
     highlightFields.has(fieldKey({ nodeId: docId })) ? "as-node--match" : "",
     // A shown reference marks TABLES (keys ending in an empty field). While
@@ -424,6 +458,9 @@ export const ShapeNode = memo(function ShapeNode({
     // reference or a search hit marks rows only and fades nothing.
     marksTables(highlightFields) && !nodeMarked(highlightFields, docId) ? "as-node--unmarked" : "",
     data.status ? `as-node--status-${data.status}` : "",
+    isTask ? "as-node--task" : "",
+    done ? "as-node--done" : "",
+    blockers?.length ? "as-node--blocked" : "",
     // Text layout. Absent data means the pre-existing look, so no class.
     data.textAlign ? `as-node--align-${data.textAlign}` : "",
     data.textVAlign ? `as-node--valign-${data.textVAlign}` : "",
@@ -501,6 +538,27 @@ export const ShapeNode = memo(function ShapeNode({
                 {data.status}
               </span>
             ) : null}
+            {isTask && data.storyPoints !== undefined ? (
+              <span className="as-node__points">
+                <span className="as-node__statussep"> · </span>
+                {formatPoints(data.storyPoints)}
+              </span>
+            ) : null}
+            {/* A milestone's Reached, or a task's priority then stage. Whether a
+                task can move — Ready or Blocked — is its corner check's to say. */}
+            {reached ? (
+              <span className="as-node__reached" title="Reached — everything feeding it is done">
+                Reached
+              </span>
+            ) : null}
+            {isTask && data.priority ? (
+              <span className={`as-node__priority as-node__priority--${data.priority}`} title={`Priority ${data.priority.toUpperCase()}`}>
+                {data.priority.toUpperCase()}
+              </span>
+            ) : null}
+            {isTask && !done && data.stage ? (
+              <span className={`as-node__stage as-node__stage--${data.stage}`}>{STAGE_LABELS[data.stage]}</span>
+            ) : null}
             {childCount > 0 ? (
               <button
                 type="button"
@@ -529,7 +587,7 @@ export const ShapeNode = memo(function ShapeNode({
           />
           {data.description ? <div className="as-node__desc">{data.description}</div> : null}
           {data.fields?.length ? <FieldList nodeId={docId} fields={data.fields} rowsFiltered={rowsFiltered} /> : null}
-          <DateChip date={data.date} prefix="Lands" overdue={isOverdue(data.date, data.status)} />
+          <DateChip date={data.date} prefix={isWork ? "Due" : "Lands"} overdue={overdue} />
         </div>
         {!showLinks ? null : data.url?.startsWith("file:") ? (
           navigateFile ? (
@@ -561,13 +619,38 @@ export const ShapeNode = memo(function ShapeNode({
             ↗
           </a>
         ) : null}
+        {isTask ? (
+          <TaskCheck
+            done={done}
+            label={data.label}
+            blockers={blockers}
+            labelOf={taskLabelOf}
+            // A ghost stands in for a task on another level, and Compare and
+            // a viewer can't edit — they show the state without offering it.
+            onToggle={
+              readOnly || scopeGhost
+                ? undefined
+                : () => {
+                    // Done leaves the workflow: its stage goes with it.
+                    updateNodeData(id, done ? { done: undefined } : { done: true, stage: undefined });
+                    requestCommit();
+                  }
+            }
+          />
+        ) : null}
         {data.locked ? (
           <span className="as-node__lock" title="Locked" aria-label="Locked">
             🔒
           </span>
         ) : null}
         {data.ghost ? <span className="as-ghost__badge">{data.providers?.join(" · ")}</span> : null}
-        {data.team && showTeams ? (
+        {hasAssigneeStrip(data) ? (
+          <AssigneeStrip
+            assignees={data.assignees!}
+            team={showTeams ? data.team : undefined}
+            width={w}
+          />
+        ) : data.team && showTeams ? (
           <span
             className="as-node__team"
             style={{ "--as-team-color": teamColor(data.team) } as CSSProperties}
@@ -581,11 +664,213 @@ export const ShapeNode = memo(function ShapeNode({
   );
 });
 
+/**
+ * A container's task roll-up: done over total (points, or tasks when nothing
+ * is estimated), a thin progress bar, and the capacity when one is set — in
+ * the warn colour once the frame holds more than it.
+ */
+function RollupBadge({ rollup }: { rollup: TaskRollup }) {
+  const pct = Math.round(rollupFraction(rollup) * 100);
+  const label = rollupLabel(rollup);
+  const capacity = rollup.capacity !== undefined ? ` · cap ${rollup.capacity}` : "";
+  return (
+    <span
+      className={`as-rollup${rollup.over ? " as-rollup--over" : ""}`}
+      title={`${rollup.done} of ${rollup.tasks} tasks done · ${pct}%${
+        rollup.capacity !== undefined ? ` · ${rollup.points} of ${rollup.capacity} pts capacity${rollup.over ? " — over capacity" : ""}` : ""
+      }`}
+    >
+      <span className="as-rollup__bar" aria-hidden="true">
+        <span style={{ width: `${pct}%` }} />
+      </span>
+      {label}
+      {capacity}
+    </span>
+  );
+}
+
+/** "Blocked — waiting on Design, Infra": the blocked check's tooltip. */
+function blockedTitle(blockers: readonly string[], labelOf?: (id: string) => string): string {
+  return `Blocked — waiting on ${blockers.map((id) => labelOf?.(id) ?? id).join(", ")}`;
+}
+
+/**
+ * The task's corner check — the one place a card says whether it can move:
+ * an open circle while it can be done, the circle struck through while it
+ * waits on unfinished work, and on a click a filled green disc with a white
+ * tick. Pressing it toggles `done` and nothing else — the card is not
+ * selected, dragged, or drilled into (a quick double-click would otherwise
+ * reach the card's drill handler).
+ *
+ * A blocked check refuses the click, and its tooltip names what it waits on
+ * (re-read on arrival, so a blocker renamed since the card last rendered is
+ * named as it is now). It stays focusable so a screen reader hears why; the
+ * inspector's status can still close the task by hand. Without `onToggle`
+ * it is a picture of the state, not a control.
+ */
+function TaskCheck({
+  done,
+  label,
+  blockers,
+  labelOf,
+  onToggle,
+}: {
+  done: boolean;
+  label: string;
+  blockers?: readonly string[];
+  labelOf?: (id: string) => string;
+  onToggle?: () => void;
+}) {
+  const blocked = !done && !!blockers?.length;
+  const why = () => blockedTitle(blockers ?? [], labelOf);
+  const className = `as-task__check nodrag${done ? " as-task__check--done" : ""}${blocked ? " as-task__check--blocked" : ""}`;
+  const mark = (
+    <svg viewBox="0 0 22 22" width="22" height="22" aria-hidden="true">
+      {blocked ? (
+        <path className="as-task__slash" d="M4.7 17.3 17.3 4.7" />
+      ) : (
+        <path className="as-task__tick" d="M6.5 11.5 9.8 14.8 15.8 8.2" />
+      )}
+    </svg>
+  );
+  if (!onToggle) {
+    return (
+      <span
+        className={`${className} as-task__check--static`}
+        role="img"
+        aria-label={done ? "Done" : blocked ? why() : "Not done"}
+        title={blocked ? why() : undefined}
+      >
+        {mark}
+      </span>
+    );
+  }
+  const stop = (event: SyntheticEvent) => event.stopPropagation();
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={done}
+      aria-disabled={blocked || undefined}
+      className={className}
+      aria-label={`${label} — ${done ? "done" : blocked ? why() : "not done"}`}
+      title={blocked ? why() : done ? "Done — click to reopen" : "Mark done"}
+      onPointerEnter={
+        blocked
+          ? (event) => {
+              event.currentTarget.title = why();
+            }
+          : undefined
+      }
+      onPointerDown={stop}
+      onDoubleClick={stop}
+      onKeyDown={stop}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (!blocked) onToggle();
+      }}
+    >
+      {mark}
+    </button>
+  );
+}
+
+/**
+ * The people on a task, one tab each hanging under the card's bottom edge,
+ * coloured per person. As many as fit the card's width show; the rest fold
+ * into a "+N" tab whose tooltip names them. The owning team, when there is
+ * one, rides at the strip's far end rather than on top of the tabs.
+ *
+ * What fits is MEASURED: whenever the names, the team or the card's width
+ * change, one pass renders every tab (before paint, so it is never seen),
+ * reads their real widths, and keeps as many as the strip holds. The shared
+ * text estimate (`fitChips`) is only the fallback where nothing has layout —
+ * a tab squeezed by an estimate that ran short ellipsised every name to its
+ * first letter.
+ */
+function AssigneeStrip({ assignees, team, width }: { assignees: readonly string[]; team?: string; width: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // The mode changes the team pill's face, so it is part of what was measured.
+  const { mode, assigneeColorOf } = useStudio();
+  const colorOf = (name: string) => assigneeColorOf?.(name) ?? swatchColor(assigneeSwatch(name));
+  const key = `${mode}|${width}|${team ?? ""}|${assignees.join("\u0000")}`;
+  const [fit, setFit] = useState<{ key: string; count: number } | null>(null);
+  const measuring = fit?.key !== key;
+  const count = measuring ? assignees.length : fit.count;
+
+  useLayoutEffect(() => {
+    if (!measuring) return;
+    const strip = ref.current;
+    const room = strip?.clientWidth ?? 0;
+    if (!strip || !room) {
+      // No layout (a test DOM, a detached node): the shared estimate.
+      const teamWidth = team ? approxTextWidth(team, 10, "mono") + 16 + ASSIGNEE_GAP : 0;
+      setFit({ key, count: fitChips(assignees, Math.max(0, width - 20 - teamWidth)).shown.length });
+      return;
+    }
+    const tabs = [...strip.querySelectorAll<HTMLElement>(".as-node__assignee:not(.as-node__assignee--more)")];
+    const more = strip.querySelector<HTMLElement>(".as-node__assignee--more");
+    const teamEl = strip.querySelector<HTMLElement>(".as-node__team--strip");
+    const avail = room - (teamEl ? teamEl.offsetWidth + ASSIGNEE_GAP : 0);
+    const reserve = more ? more.offsetWidth + ASSIGNEE_GAP : 0;
+    let used = 0;
+    let shown = 0;
+    for (let i = 0; i < tabs.length; i++) {
+      const w = tabs[i]!.offsetWidth + (i ? ASSIGNEE_GAP : 0);
+      const last = i === tabs.length - 1;
+      if (i > 0 && used + w + (last ? 0 : reserve) > avail) break;
+      used += w;
+      shown = i + 1;
+    }
+    setFit({ key, count: Math.max(1, shown) });
+  }, [measuring, key, assignees, team, width]);
+
+  const shown = assignees.slice(0, count);
+  const hidden = assignees.slice(count);
+  return (
+    <div ref={ref} className={`as-node__assignees${measuring ? " as-node__assignees--measuring" : ""}`}>
+      {shown.map((name) => (
+        <span
+          key={name}
+          className="as-node__assignee"
+          style={{ "--as-assignee-color": colorOf(name) } as CSSProperties}
+          title={`Assigned to ${name}`}
+        >
+          {name}
+        </span>
+      ))}
+      {/* While measuring, the widest "+N" the strip could need is the reserve. */}
+      {measuring && assignees.length > 1 ? (
+        <span className="as-node__assignee as-node__assignee--more" aria-hidden="true">
+          +{assignees.length - 1}
+        </span>
+      ) : hidden.length ? (
+        <span className="as-node__assignee as-node__assignee--more" title={`Also assigned: ${hidden.join(", ")}`}>
+          +{hidden.length}
+        </span>
+      ) : null}
+      {team ? (
+        <span
+          className="as-node__team as-node__team--strip"
+          style={{ "--as-team-color": teamColor(team) } as CSSProperties}
+          title={`Owned by ${team}`}
+        >
+          {team}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 // ─── Group ───────────────────────────────────────────────────────────────────
 
 export const GroupNode = memo(function GroupNode({ id, data, selected }: NodeProps<GroupNodeType>) {
-  const { registry, readOnly, showTeams, requestCommit, focus, drillInto, navigateToNode, childCounts, dimmedIds } = useStudio();
+  const { registry, readOnly, showTeams, requestCommit, focus, drillInto, navigateToNode, childCounts, dimmedIds, rollups, today } = useStudio();
   const { updateNodeData, getNodes, setNodes } = useReactFlow();
+  // A phase's or sprint's progress, when it holds tasks: "8/21 pts" and a
+  // bar, warn-coloured past the capacity set on it.
+  const rollup = rollups?.get(isGhostNodeId(id) ? ghostSourceId(id) : id);
+  const rollupBadge = rollup ? <RollupBadge rollup={rollup} /> : null;
   const def = kindDef(registry, data.kind);
 
   /**
@@ -627,7 +912,13 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
   const childCount = scopeGhost || isBoundary ? 0 : (childCounts.get(id) ?? 0);
   // The host ref goes on the chip as well as the frame: the wrapper's hover
   // listener is attached once, at mount, whichever of the two mounted.
-  const handles = useResizeHandles(!readOnly && !data.locked, selected);
+  //
+  // A scope ghost is excluded exactly as it is on a card: it stands in for a
+  // frame on another level, its size is DERIVED (`renderSize`), and
+  // `liftScopedReactFlow` drops it on the way back — so a resize of one
+  // snaps back on the next derive. Selecting one to find that out was
+  // already a dead end; hovering must not offer it on the way past.
+  const handles = useResizeHandles(!readOnly && !data.locked && !scopeGhost, selected);
   const onDoubleClick = isBoundary
     ? undefined
     : scopeGhost
@@ -744,7 +1035,8 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
           )}
           <span className="as-group-chip__label">{data.label}</span>
           {!scopeGhost ? drillBadge : null}
-          <DateChip date={data.date} inline prefix="Lands" overdue={isOverdue(data.date, data.status)} />
+          <DateChip date={data.date} inline prefix="Lands" overdue={isOverdue(data.date, data.status, today)} />
+          {rollupBadge}
           {teamBadge}
         </div>
       </>
@@ -792,7 +1084,8 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
             }}
           />
           {drillBadge}
-          <DateChip date={data.date} inline prefix="Lands" overdue={isOverdue(data.date, data.status)} />
+          <DateChip date={data.date} inline prefix="Lands" overdue={isOverdue(data.date, data.status, today)} />
+          {rollupBadge}
           {teamBadge}
         </div>
       </div>
@@ -842,7 +1135,10 @@ export const AnnotationNode = memo(function AnnotationNode({
     lineHeight: 1.35,
   } as CSSProperties;
 
-  const handles = useResizeHandles(!readOnly && !data.locked, selected);
+  // A note reached by an edge from inside a focused level is derived as a
+  // ghost too, and a ghost's size is not the document's to keep — the same
+  // exclusion a card and a frame make.
+  const handles = useResizeHandles(!readOnly && !data.locked && !isGhostNodeId(id), selected);
   const onResizeEnd = useCallback(() => {
     handles.onResizeEnd();
     requestCommit();

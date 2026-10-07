@@ -1075,10 +1075,11 @@ export const LabeledEdge = memo(function LabeledEdge({
         // edited label over every other one, permanently. What the edit hides
         // is the static text, one gate further in.
         <ViewportPortal>
-          {/* `as-future` rides the layer itself: the timeline's dimming is a
-              class on the edge WRAPPER, which this text no longer lives in. */}
+          {/* `as-future` and `as-edge--dormant` ride the layer itself: the
+              timeline's dimming and the hover mode's hiding are classes on
+              the edge WRAPPER, which this text no longer lives in. */}
           <svg
-            className={`as-edge__labellayer${data?.future ? " as-future" : ""}`}
+            className={`as-edge__labellayer${data?.future ? " as-future" : ""}${data?.dormant ? " as-edge--dormant" : ""}`}
             style={LABEL_LAYER_STYLE}
           >
             {startLabelAt ? (

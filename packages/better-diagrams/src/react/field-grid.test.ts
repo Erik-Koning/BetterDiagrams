@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { FieldRecord } from "../contract/fields";
-import { GRID_COLUMNS, cellText, fileSlug, filterRecords, sortRecords, toCsv, toTsv } from "./field-grid";
+import { GRID_COLUMNS, cellText, fileSlug, filterRecords, gridColumnsFor, sortRecords, toCsv, toTsv } from "./field-grid";
 
 const rec = (over: Partial<FieldRecord> & { id: string }): FieldRecord => ({
   name: over.id,
@@ -98,5 +98,27 @@ describe("exports", () => {
   it("slugs a label for a filename", () => {
     expect(fileSlug("Case Comment (legacy)")).toBe("case-comment-legacy");
     expect(fileSlug("   ")).toBe("node");
+  });
+});
+
+describe("profile columns", () => {
+  const profiled = [
+    rec({ id: "a", profile: { nullRate: 0.025, distinct: 1200 } }),
+    rec({ id: "b", profile: { nullRate: 0 } }),
+    rec({ id: "c" }),
+    rec({ id: "d", profile: { nullRate: 0.0004, distinct: 3 } }),
+  ];
+
+  it("appear only when some record was profiled", () => {
+    expect(gridColumnsFor(RECORDS)).toBe(GRID_COLUMNS);
+    expect(gridColumnsFor(profiled).map((c) => c.id).slice(-2)).toEqual(["nulls", "distinct"]);
+  });
+
+  it("read as a reader wants them, and sort largest first with the unprofiled last", () => {
+    expect(profiled.map((r) => cellText(r, "nulls"))).toEqual(["2.5%", "0%", "", "<0.1%"]);
+    expect(cellText(profiled[0]!, "distinct")).toBe("1,200");
+    expect(sortRecords(profiled, "nulls", "asc").map((r) => r.id)).toEqual(["a", "d", "b", "c"]);
+    expect(sortRecords(profiled, "distinct", "asc").map((r) => r.id)).toEqual(["a", "d", "b", "c"]);
+    expect(toCsv(profiled).split("\r\n")[0]).toMatch(/,Nulls,Distinct$/);
   });
 });

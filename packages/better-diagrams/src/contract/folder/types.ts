@@ -16,6 +16,8 @@
 import type { DiagramEdge, DiagramNode, DiagramTemplate, ValidateOptions } from "../schema";
 import type { DiagramPresentation } from "../presentation";
 import type { DiagramPath } from "../paths";
+import type { SavedAnalysis } from "../analyses";
+import type { LineageLink } from "../lineage-links";
 
 /** Path (forward slashes, relative to the root, no leading `./`) → UTF-8 text. */
 export type FileMap = ReadonlyMap<string, string>;
@@ -218,6 +220,10 @@ export interface FolderOverrides {
   nodes?: Record<string, NodeOverride>;
   /** Named flows the curator drew — they reference ids, so they live with the overrides. */
   paths?: DiagramPath[];
+  /** Saved analyses — questions about ids, so they live here too. */
+  analyses?: SavedAnalysis[];
+  /** Column lineage — imported from outside the source tree, so it lives with the overrides. */
+  lineage?: LineageLink[];
 }
 
 /** What a dialect can recompute about a node from its `data` alone. */

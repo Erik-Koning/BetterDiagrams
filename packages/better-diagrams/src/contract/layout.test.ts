@@ -210,3 +210,47 @@ describe("arrange modes", () => {
     expect(crossings(first)).toBeLessThanOrEqual(crossings(autoLayout(t)));
   });
 });
+
+describe("task graphs", () => {
+  it("ranks by prerequisites and lets a dependency join tasks far apart", () => {
+    const t = doc(
+      [node("a", { kind: "task" }), node("b", { kind: "task" }), node("c", { kind: "task" })],
+      [edge("a", "b"), { ...edge("c", "a"), relation: "dependency" } as ReturnType<typeof edge>],
+    );
+    const laid = autoLayout(t);
+    const x = (id: string) => laid.nodes.find((n) => n.id === id)!.x;
+    // a → b is a prerequisite chain; c's dependency on a pulls nothing.
+    expect(x("a")).toBeLessThan(x("b"));
+    expect(x("c")).toBe(x("a"));
+  });
+
+  it("leaves room under a task for its assignee tabs", () => {
+    const t = doc(
+      [
+        node("src", { kind: "task" }),
+        node("a", { kind: "task", assignees: ["Ana"] }),
+        node("b", { kind: "task", assignees: ["Ravi"] }),
+      ],
+      [edge("src", "a"), edge("src", "b")],
+    );
+    const laid = autoLayout(t);
+    const [a, b] = ["a", "b"].map((id) => laid.nodes.find((n) => n.id === id)!).sort((p, q) => p.y - q.y);
+    // Stacked in one rank: the gap below the upper card clears its tabs.
+    expect(b!.y - (a!.y + a!.h)).toBeGreaterThanOrEqual(28 + 18);
+    // The cards keep their own size — the tabs are spacing, not box.
+    expect(a!.h).toBe(t.nodes.find((n) => n.id === a!.id)!.h);
+  });
+});
+
+describe("task graphs, untangled", () => {
+  it("keeps a task linked only by a dependency in the flow, not parked after it", () => {
+    const t = doc(
+      [node("a", { kind: "task" }), node("b", { kind: "task" }), node("c", { kind: "task" }), node("infra", { kind: "task" })],
+      [edge("a", "b"), edge("b", "c"), { ...edge("infra", "c"), relation: "dependency" } as ReturnType<typeof edge>],
+    );
+    const laid = autoLayout(t, { mode: "untangle" });
+    const x = (id: string) => laid.nodes.find((n) => n.id === id)!.x;
+    expect(x("infra")).toBe(x("a"));
+    expect(x("infra")).toBeLessThan(x("c"));
+  });
+});
