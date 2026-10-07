@@ -488,4 +488,32 @@ describe("type picker", () => {
     await user.click(screen.getByRole("button", { name: "Insert diagram" }));
     expect(screen.getByRole("alert")).toHaveTextContent(/looks like a sequence document/);
   });
+
+  it("Link a file on disk… is offered only when the host can link, and hands off to it", async () => {
+    const user = userEvent.setup();
+    const onLinkFile = vi.fn();
+    const { unmount } = render(
+      <WelcomeModal
+        kind="architecture"
+        defaultName="Untitled 1"
+        showNameField
+        systemPrompt="THE PROMPT"
+        parse={(text: string) => JSON.parse(text)}
+        onInsert={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Link a file on disk…" })).not.toBeInTheDocument();
+    unmount();
+
+    const props = mountModal({ onLinkFile });
+    // Offered before anything is pasted — it is a way in of its own.
+    expect(screen.queryByRole("button", { name: "Insert diagram" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Link a file on disk…" }));
+    expect(onLinkFile).toHaveBeenCalledTimes(1);
+    // The host closes the modal by opening the linked file; the modal itself
+    // neither inserts nor dismisses, so a cancelled dialog leaves it be.
+    expect(props.onInsert).not.toHaveBeenCalled();
+    expect(props.onDismiss).not.toHaveBeenCalled();
+  });
 });

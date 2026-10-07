@@ -34,6 +34,19 @@ test.describe("task graphs", () => {
     await expect(studio.nodeTitled("Build")).toBeVisible();
   });
 
+  test.describe("Copy schema", () => {
+    test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
+    test("on a plan copies the Task flow schema, with no clouds to ask about", async ({ page }) => {
+      await page.locator(".app__bar").getByRole("button", { name: "Copy schema" }).click();
+      const dialog = page.getByRole("dialog", { name: "Copy task-flow schema & system prompt" });
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByRole("button", { name: "AWS" })).toHaveCount(0);
+      await dialog.getByRole("button", { name: "Copy schema" }).click();
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("TASK FLOW:");
+    });
+  });
+
   test("the corner check marks a task done without selecting it, and unblocks what waits on it", async ({ studio, page }) => {
     // Build waits on Design and Infra: its check is struck through and refuses a click.
     const build = studio.node("build").getByRole("checkbox");

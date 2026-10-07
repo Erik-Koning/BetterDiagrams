@@ -34,6 +34,7 @@ import {
   templatePromptContext,
   themeToStyle,
   importFolder,
+  isWorkItem,
   validateSequence,
   validateTemplate,
 } from "@mosphere/better-diagrams";
@@ -42,8 +43,10 @@ import { registry } from "./extensions.js";
 import {
   LINKED_PREFIX,
   SCRATCH,
+  SYMLINKS,
   flushTemplate,
   isSavable,
+  linkFile,
   linkFolder,
   onLinksChange,
   onTemplateChange,
@@ -52,6 +55,7 @@ import {
   readTemplate,
   removeTemplate,
   templateFile,
+  unlinkFile,
   unlinkFolder,
   writeTemplate,
 } from "./templates.js";
@@ -102,9 +106,12 @@ function diskPaths(files) {
 
 /**
  * A disk file as a person reads it in a toast: a linked folder by its path
- * (`~/work/tracker/plan.json`), a repo folder by its name (`examples/…`).
+ * (`~/work/tracker/plan.json`), a repo folder by its name (`examples/…`), and
+ * a symlink by the file it points at, when the listing in `templates` knows.
  */
-function whereIs(linked, folder, file) {
+function whereIs(linked, folder, file, templates) {
+  const target = folder === SYMLINKS && templates?.find((t) => t.folder === folder && t.file === file)?.target;
+  if (target) return target;
   const link = linked?.find((l) => l.folder === folder);
   return `${link ? link.display : folder}/${file}`;
 }
@@ -483,7 +490,9 @@ export default function App() {
    * Architecture files ASK first: which clouds, and which of their services,
    * the schema should teach. The open document's own clouds seed the answer,
    * but the copy is aimed at the diagram the user is ABOUT to ask for — which
-   * may be on a cloud this document has never mentioned.
+   * may be on a cloud this document has never mentioned. A task plan asks
+   * only which form: its schema is the welcome modal's Task flow one, and a
+   * plan has no clouds to scope.
    */
   const copySchema = useCallback(() => {
     if (active?.kind === "sequence") void copySequenceSchema();
@@ -553,6 +562,8 @@ export default function App() {
   /** null until probed AND reconciled; then `{ examples, scratch, folders }` — the dev server's folders. */
   const [templatesDir, setTemplatesDir] = useState(null);
   const [savedTemplates, setSavedTemplates] = useState([]);
+  const savedTemplatesRef = useRef(savedTemplates);
+  savedTemplatesRef.current = savedTemplates;
   /**
    * The folders linked from outside the repo, as the server last listed them:
    * `[{ folder, name, dir, display, source, missing }]` (see templates.js).
@@ -562,6 +573,8 @@ export default function App() {
   linkedRef.current = linked;
   /** Can the dev server show the system's folder dialog? Without one, linking takes a typed path. */
   const [picker, setPicker] = useState(false);
+  /** …and its file dialog? Link a file… is offered only with one. */
+  const [filePicker, setFilePicker] = useState(false);
   /** id → the disk file it was last synced with and that document's JSON, so an idle app writes nothing. */
   const writtenRef = useRef(new Map());
   /** Ids of files whose last save failed — warned about once, until a save goes through. */
@@ -575,6 +588,7 @@ export default function App() {
     setSavedTemplates(listing.templates ?? []);
     setLinked(listing.linked ?? []);
     setPicker(Boolean(listing.picker));
+    setFilePicker(Boolean(listing.filePicker));
   }, []);
 
   const refreshTemplates = useCallback(async () => {
@@ -688,7 +702,7 @@ export default function App() {
       const adopted = await reconcile(targets);
       for (const a of adopted) {
         const file = workspaceRef.current.files.find((f) => f.id === a.id);
-        toast.info(`Reloaded ${file?.name ?? name} from disk`, { description: whereIs(linkedRef.current, folder, name) });
+        toast.info(`Reloaded ${file?.name ?? name} from disk`, { description: whereIs(linkedRef.current, folder, name, savedTemplatesRef.current) });
       }
     });
   }, [templatesDir, reconcile, refreshTemplates]);
@@ -717,7 +731,7 @@ export default function App() {
         failingRef.current.add(file.id);
         toast.warning(`Couldn't save ${file.name}`, {
           id: `save-failed:${file.id}`,
-          description: `${whereIs(listedLinks, path.folder, path.file)}: ${result.error}. Edits stay in this browser.`,
+          description: `${whereIs(listedLinks, path.folder, path.file, probe?.templates)}: ${result.error}. Edits stay in this browser.`,
           duration: Infinity,
         });
       }
@@ -843,7 +857,7 @@ export default function App() {
       // session started without that link can say which folder it needs.
       const link = linkedRef.current.find((l) => l.folder === entry.folder);
       const path = { folder: entry.folder, file: entry.file, ...(link ? { display: link.display } : {}) };
-      const where = whereIs(linkedRef.current, entry.folder, entry.file);
+      const where = whereIs(linkedRef.current, entry.folder, entry.file, [entry]);
       setSettingsOpen(false);
       const { files: current } = workspaceRef.current;
       const paths = diskPaths(current);
@@ -952,18 +966,19 @@ export default function App() {
   );
 
   /**
-   * Stop syncing every file bound to a folder: each carries on as an ordinary
-   * workspace file, which auto-save writes to scratch. Nothing in the folder
-   * is touched.
+   * Stop syncing every file bound to a folder (or to one `file` in it): each
+   * carries on as an ordinary workspace file, which auto-save writes to
+   * scratch. Nothing in the folder is touched.
    */
   const unbind = useCallback(
-    (folder) => {
-      const bound = workspaceRef.current.files.filter((f) => f.disk?.folder === folder);
+    (folder, file) => {
+      const isBound = (f) => f.disk?.folder === folder && (file === undefined || f.disk.file === file);
+      const bound = workspaceRef.current.files.filter(isBound);
       if (bound.length) {
         updateWorkspace((ws) => ({
           ...ws,
           files: ws.files.map((f) => {
-            if (f.disk?.folder !== folder) return f;
+            if (!isBound(f)) return f;
             const { disk: _unbound, ...rest } = f;
             return rest;
           }),
@@ -1094,6 +1109,58 @@ export default function App() {
     [applyListing, unbind],
   );
 
+  // ── Linking single files ──────────────────────────────────────────────────
+  //
+  // A diagram written in another project — by an agent, a script, someone
+  // else — is one file, and linking its whole folder would list everything
+  // beside it. Link a file… has the dev server show the system's file dialog
+  // and symlink the pick into templates/symlinks/, and the file opens bound
+  // to that link: edits go through it to the file, and the file's own
+  // changes reload here.
+
+  /** Pick a file through the system's dialog, link it, and open it. */
+  const linkDiskFile = useCallback(async () => {
+    const answer = await linkFile({ pick: true });
+    if (answer.cancelled) return;
+    if (answer.unsupported) {
+      setFilePicker(false);
+      toast.error("No file dialog on this system", { description: "Link the folder it's in instead, from Settings → Templates." });
+      return;
+    }
+    if (!answer.entry) {
+      toast.error("Couldn't link that file", { description: answer.error });
+      return;
+    }
+    applyListing(answer);
+    // The blank file the welcome modal greeted makes way for the linked one,
+    // rather than lingering as an empty Untitled beside it.
+    const { files: before, activeId } = workspaceRef.current;
+    const blank = before.find((f) => f.id === activeId && !f.disk && isBlank(f.kind, f.doc));
+    await openTemplate(answer.entry);
+    if (blank) {
+      updateWorkspace((ws) => (ws.activeId === blank.id ? ws : { ...ws, files: ws.files.filter((f) => f.id !== blank.id) }));
+    }
+  }, [applyListing, openTemplate, updateWorkspace]);
+
+  /** Remove a file's link. The file stays where it is; open copies carry on as ordinary files. */
+  const unlinkDiskFile = useCallback(
+    async (entry) => {
+      const answer = await unlinkFile(entry.file);
+      if (answer.error) {
+        toast.error(`Couldn't unlink ${entry.name}`, { description: answer.error });
+        return;
+      }
+      applyListing(answer);
+      const bound = unbind(SYMLINKS, entry.file);
+      toast.success(`Unlinked ${entry.name}`, {
+        description: `${entry.target ?? entry.file} is untouched${
+          bound.length ? `; ${namesOf(bound)} ${bound.length === 1 ? "saves" : "save"} to scratch now` : ""
+        }`,
+      });
+    },
+    [applyListing, unbind],
+  );
+
   // Guard against a stale-looking UI if another tab saves the workspace.
   useEffect(() => {
     const onStorage = (event) => {
@@ -1159,6 +1226,10 @@ export default function App() {
   }, [settingsOpen]);
 
   const isSequence = active?.kind === "sequence";
+  /** A plan of tasks — the same test the editor's task panels and exports use. */
+  const isTaskPlan = !!active && !isSequence && active.doc.nodes.some(isWorkItem);
+  /** Link a file… needs the dev server's file dialog; without one, the editors don't offer it. */
+  const onLinkFile = templatesDir && filePicker ? linkDiskFile : undefined;
   const counts = !active
     ? ""
     : isSequence
@@ -1358,6 +1429,9 @@ export default function App() {
                       ["examples", "Templates / examples", "Curated and tracked — opens live: edits save back, disk edits reload"],
                       ["scratch", "Templates / scratch", "Auto-saved as you work; git-ignored; live like examples"],
                       ["folders", "Templates / folders", "Folder-format trees — imported on open; git-ignored"],
+                      ...(templatesDir.symlinks
+                        ? [[SYMLINKS, "Templates / symlinks", "Links to diagram files in other folders — live like examples; unlinking removes only the link"]]
+                        : []),
                       ...linked.map((l) => [
                         l.folder,
                         `Linked / ${l.name}${l.missing ? " — missing" : ""}`,
@@ -1374,7 +1448,8 @@ export default function App() {
                           <span className="app__dropdown-caption" title={title}>
                             {caption}
                           </span>
-                          {entries.map((entry) => (
+                          {entries.map((entry) => {
+                            const opener = (
                             <button
                               key={`${entry.folder}/${entry.file}`}
                               type="button"
@@ -1397,10 +1472,29 @@ export default function App() {
                                   ? `${entry.file} — ${entry.reason ?? "not readable as JSON"}`
                                   : entry.folder === "folders"
                                     ? `${entry.file}/ · folder format`
-                                    : `${entry.file} · ${entry.nodes} ${entry.kind === "sequence" ? "participants" : "nodes"}`}
+                                    : `${entry.target ?? entry.file} · ${entry.nodes} ${entry.kind === "sequence" ? "participants" : "nodes"}`}
                               </span>
                             </button>
-                          ))}
+                            );
+                            // A symlink carries its own way out, beside it.
+                            return entry.folder === SYMLINKS ? (
+                              <div key={`${entry.folder}/${entry.file}`} className="app__dropdown-row">
+                                {opener}
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  className="app__dropdown-unlink"
+                                  aria-label={`Unlink ${entry.file}`}
+                                  title={`Remove the link — ${entry.target ?? "the file it points at"} stays where it is`}
+                                  onClick={() => void unlinkDiskFile(entry)}
+                                >
+                                  Unlink
+                                </button>
+                              </div>
+                            ) : (
+                              opener
+                            );
+                          })}
                           {link?.missing ? (
                             <button
                               type="button"
@@ -1454,6 +1548,20 @@ export default function App() {
                       Link a folder…
                       <span className="app__dropdown-desc">Diagram JSON that lives with another project, outside this repo</span>
                     </button>
+                    {filePicker ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="app__dropdown-item"
+                        onClick={() => {
+                          setSettingsOpen(false);
+                          void linkDiskFile();
+                        }}
+                      >
+                        Link a file…
+                        <span className="app__dropdown-desc">One diagram from another folder, symlinked into templates/symlinks/</span>
+                      </button>
+                    ) : null}
                   </>
                 ) : null}
                 <span className="app__dropdown-caption">Examples</span>
@@ -1514,6 +1622,7 @@ export default function App() {
               theme={theme}
               mode={studioMode}
               gradients={gradients}
+              onLinkFile={onLinkFile}
               {...fileProps}
             />
           ) : isSequence ? (
@@ -1529,6 +1638,7 @@ export default function App() {
               generate={aiEnabled ? generate : undefined}
               filename={active.name}
               onSelectionChange={setSelection}
+              onLinkFile={onLinkFile}
               {...fileProps}
             />
           ) : (
@@ -1550,6 +1660,7 @@ export default function App() {
               onSelectionChange={setSelection}
               onPinsChange={setPins}
               onCoverageChange={setCoverageKeys}
+              onLinkFile={onLinkFile}
               {...fileProps}
             />
           )}
@@ -1621,27 +1732,42 @@ export default function App() {
         // Same token-carrying wrapper as the Edit-JSON modal below: library
         // modals read --as-* tokens, which live on the studio roots.
         <div style={{ display: "contents", ...themeToStyle(modalTheme) }}>
-          <SchemaCopyModal
-            subtitle={`Scoped for “${active.name}”. Nothing is included that you haven't ticked — leave the clouds off for a provider-neutral schema.`}
-            clouds={copyPromptCtx.cloudOptions}
-            resources={copyPromptCtx.cloudResources}
-            initialClouds={copyPromptCtx.referencedClouds}
-            usedResources={copyPromptCtx.usedResources}
-            buildPrompt={(scope, { geometry }) =>
-              copyPromptCtx.promptForClouds(scope.clouds, {
-                components: scope.components,
-                geometry,
-              })
-            }
-            onCopied={(_text, scope) =>
-              toast.success("Copied the architecture schema", {
-                description: scope.clouds.length
-                  ? `${scope.clouds.join(", ")} — ${scope.components.length} resources. Paste it into your AI agent.`
-                  : "Provider-neutral — name your cloud in your own prompt.",
-              })
-            }
-            onClose={() => setSchemaCopyOpen(false)}
-          />
+          {isTaskPlan ? (
+            <SchemaCopyModal
+              title="Copy task-flow schema & system prompt"
+              subtitle={`For “${active.name}”, a plan of tasks: the schema for tasks, milestones, story points, assignees and prerequisites.`}
+              clouds={[]}
+              buildPrompt={(_scope, { geometry }) => copyPromptCtx.promptForClouds([], { geometry, focus: "tasks" })}
+              onCopied={() =>
+                toast.success("Copied the task-flow schema", {
+                  description: "Paste it into your AI agent to have it plan the work as tasks.",
+                })
+              }
+              onClose={() => setSchemaCopyOpen(false)}
+            />
+          ) : (
+            <SchemaCopyModal
+              subtitle={`Scoped for “${active.name}”. Nothing is included that you haven't ticked — leave the clouds off for a provider-neutral schema.`}
+              clouds={copyPromptCtx.cloudOptions}
+              resources={copyPromptCtx.cloudResources}
+              initialClouds={copyPromptCtx.referencedClouds}
+              usedResources={copyPromptCtx.usedResources}
+              buildPrompt={(scope, { geometry }) =>
+                copyPromptCtx.promptForClouds(scope.clouds, {
+                  components: scope.components,
+                  geometry,
+                })
+              }
+              onCopied={(_text, scope) =>
+                toast.success("Copied the architecture schema", {
+                  description: scope.clouds.length
+                    ? `${scope.clouds.join(", ")} — ${scope.components.length} resources. Paste it into your AI agent.`
+                    : "Provider-neutral — name your cloud in your own prompt.",
+                })
+              }
+              onClose={() => setSchemaCopyOpen(false)}
+            />
+          )}
         </div>
       ) : null}
 

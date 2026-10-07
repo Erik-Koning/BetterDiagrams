@@ -6,11 +6,11 @@
  * so nothing here touches the repo's templates/ — and links a second
  * temporary folder the way `BD_LINKED_DIRS` links one outside the repo.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { BrowserContext, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import { E2E_LINKED_DIR, E2E_LINKS_ROOT, E2E_PICK_DIR, E2E_TEMPLATES_DIR } from "./templates-dir";
+import { E2E_LINKED_DIR, E2E_LINKS_ROOT, E2E_PICK_DIR, E2E_PICK_FILE, E2E_TEMPLATES_DIR } from "./templates-dir";
 
 test.use({ diskTemplates: true });
 
@@ -401,4 +401,59 @@ test("Browse… links the folder the system dialog picks, and a re-link whose co
 
   await page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox").click();
   await expect.poll(() => (nodeOf(read(path), "design") as { done?: boolean }).done).toBe(true);
+});
+
+test("Link a file on disk… symlinks the file the dialog picks and opens it live, in the blank file's place; Unlink removes only the link", async ({
+  studio,
+  page,
+}) => {
+  // The stand-in file dialog always "picks" E2E_PICK_FILE (see playwright.config.ts).
+  const link = join(E2E_TEMPLATES_DIR, "symlinks", basename(E2E_PICK_FILE));
+  const isLink = () => {
+    try {
+      return lstatSync(link).isSymbolicLink();
+    } catch {
+      return false;
+    }
+  };
+  created.push(link, E2E_PICK_FILE);
+  writeFileSync(E2E_PICK_FILE, JSON.stringify(plan(`Linked ${base}`), null, 2));
+
+  await studio.goto();
+  await studio.newFile();
+  await page.getByRole("dialog", { name: "Get started" }).getByRole("button", { name: "Link a file on disk…" }).click();
+  await expect(title(page, "design")).toHaveText("Design");
+  expect(isLink()).toBe(true);
+  expect(realpathSync(link)).toBe(realpathSync(E2E_PICK_FILE));
+  // The blank Untitled made way for it rather than lingering.
+  await expect.poll(async () => (await studio.workspace()).files.map((f) => f.name)).toEqual([`${base}-seed`, `Linked ${base}`]);
+
+  // An edit in the app goes through the link to the file itself...
+  await page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox").click();
+  await expect.poll(() => (nodeOf(read(E2E_PICK_FILE), "design") as { done?: boolean }).done).toBe(true);
+  expect(isLink()).toBe(true);
+  // ...and an edit made where the file lives reloads here, once.
+  editOnDisk(E2E_PICK_FILE, (doc) => {
+    nodeOf(doc, "build").label = "Build it";
+  });
+  await expect(title(page, "build")).toHaveText("Build it");
+  await expect(reloadToasts(page)).toHaveCount(1);
+  // So does a save that replaces the file whole — a temp file renamed over
+  // it, the way many editors and agents write — and the watch survives it.
+  for (const label of ["Ship it", "Ship it now"]) {
+    const doc = read(E2E_PICK_FILE);
+    nodeOf(doc, "ship").label = label;
+    writeFileSync(`${E2E_PICK_FILE}.tmp`, JSON.stringify(doc, null, 2));
+    renameSync(`${E2E_PICK_FILE}.tmp`, E2E_PICK_FILE);
+    await expect(title(page, "ship")).toHaveText(label);
+  }
+
+  // Unlinking takes the link away and leaves the file; the open copy carries on unbound.
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("menu", { name: "Settings" }).getByRole("menuitem", { name: `Unlink ${basename(E2E_PICK_FILE)}` }).click();
+  await expect.poll(isLink).toBe(false);
+  expect(existsSync(E2E_PICK_FILE)).toBe(true);
+  await expect
+    .poll(async () => ((await studio.workspace()).files.find((f) => f.name === `Linked ${base}`) as { disk?: unknown } | undefined)?.disk)
+    .toBeUndefined();
 });

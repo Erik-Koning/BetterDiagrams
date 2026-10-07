@@ -114,6 +114,12 @@ export interface WelcomeModalProps {
    * silently rewritten by a paste.
    */
   lockKind?: boolean;
+  /**
+   * Link a diagram file that lives elsewhere on disk, instead of pasting it.
+   * The host picks and links it and opens it as a file of its own, so the
+   * modal only offers the button, beside Insert diagram. Absent, it doesn't.
+   */
+  onLinkFile?: () => void;
 }
 
 const ARCH_PLACEHOLDER = JSON.stringify({ version: 1, nodes: [], edges: [] }, null, 2);
@@ -228,6 +234,7 @@ export function WelcomeModal({
   systemPromptTasks,
   systemPromptTasksContent,
   lockKind,
+  onLinkFile,
 }: WelcomeModalProps) {
   const [name, setName] = useState(defaultName);
   // Clouds and their resources are one answer: ticking a cloud takes all of
@@ -522,16 +529,31 @@ export function WelcomeModal({
           </div>
         ) : null}
 
-        {text.trim() ? (
+        {text.trim() || onLinkFile ? (
           <div className="as-welcome__insert-row">
+            {/* The JSON may already be a file in another project; linking
+                it keeps that file the one being edited, where a paste would
+                make a copy. */}
+            {onLinkFile ? (
+              <button
+                type="button"
+                className="as-btn as-btn--outline as-welcome__link"
+                title="Pick a diagram JSON file in another folder. It opens as its own file: edits save back to it, and changes made to it there reload here."
+                onClick={onLinkFile}
+              >
+                Link a file on disk…
+              </button>
+            ) : null}
             {/* "Insert diagram", not "Insert": the toolbar behind this modal
                 has an Insert menu of its own, and two controls whose whole
                 accessible name is the same word are two ambiguous targets —
                 the decorative caret that used to tell them apart was never
                 announced. */}
-            <button type="button" className="as-btn as-btn--primary" onClick={handleInsert}>
-              Insert diagram
-            </button>
+            {text.trim() ? (
+              <button type="button" className="as-btn as-btn--primary" onClick={handleInsert}>
+                Insert diagram
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>

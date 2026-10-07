@@ -508,6 +508,13 @@ export interface ArchitectureStudioProps {
   /** Deleted documents the host still holds, offered for recovery. */
   removedFiles?: StudioFile[];
   onFileRestore?: (id: string) => void;
+  /**
+   * Link a diagram file that lives elsewhere on disk. The host does the
+   * picking and the linking (the example app symlinks it into its templates
+   * folder and opens it live); the editor only offers the action, in the
+   * Import menu and on the welcome modal. Absent, neither offers it.
+   */
+  onLinkFile?: () => void;
   onNavigateFile?: (ref: string) => void;
   /**
    * Fires with the {@link StudioSelection} on mount (empty) and whenever it
@@ -808,6 +815,7 @@ function StudioInner({
   onFileDelete,
   removedFiles,
   onFileRestore,
+  onLinkFile,
   onNavigateFile,
   onSelectionChange: onHostSelectionChange,
   onFocusChange,
@@ -969,7 +977,7 @@ function StudioInner({
    * menu closes whichever other menu was open — no two-menus-at-once states.
    */
   const [openMenu, setOpenMenu] = useState<
-    "files" | "insert" | "arrange" | "view" | "paths" | "analyses" | "checks" | "export" | null
+    "files" | "insert" | "arrange" | "view" | "paths" | "analyses" | "checks" | "export" | "import" | null
   >(null);
   /**
    * What a press and a drag on the canvas mean. See CANVAS_TOOLS in chrome.tsx.
@@ -4903,7 +4911,7 @@ function StudioInner({
   const closeContext = useCallback(() => setContextMenu(null), []);
 
   const toggleMenu = useCallback(
-    (id: "files" | "insert" | "arrange" | "view" | "paths" | "analyses" | "checks" | "export") => {
+    (id: "files" | "insert" | "arrange" | "view" | "paths" | "analyses" | "checks" | "export" | "import") => {
       setToolsOpen(false);
       setOpenMenu((current) => (current === id ? null : id));
     },
@@ -8016,14 +8024,57 @@ function StudioInner({
 
             {!readOnly ? (
               <>
-                <button
-                  type="button"
-                  className="as-btn"
-                  title="Open a document (.json), a SQL schema script (.sql) or a dbt manifest.json"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  Import
-                </button>
+                <ToolbarMenu label="Import" open={openMenu === "import"} onToggle={() => toggleMenu("import")}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="as-menu__item"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      fileInputRef.current?.click();
+                    }}
+                  >
+                    <div className="as-menu__label">Open file…</div>
+                    <div className="as-menu__hint">
+                      Replaces this diagram: a document (.json), a SQL schema script (.sql), a dbt manifest.json, or a
+                      tracker's CSV
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="as-menu__item"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      folderInputRef.current?.click();
+                    }}
+                  >
+                    <div className="as-menu__label">Import folder…</div>
+                    <div className="as-menu__hint">
+                      A data-model export, a Folder (.zip) export unzipped, or a dbt project's target/ (manifest.json
+                      and catalog.json)
+                    </div>
+                  </button>
+                  {onLinkFile ? (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="as-menu__item"
+                      onClick={() => {
+                        setOpenMenu(null);
+                        onLinkFile();
+                      }}
+                    >
+                      <div className="as-menu__label">Link a file on disk…</div>
+                      <div className="as-menu__hint">
+                        Diagram JSON from another folder, opened as its own file: edits save back to it
+                      </div>
+                    </button>
+                  ) : null}
+                </ToolbarMenu>
+                {/* The pickers stay mounted outside the menu: a menu row
+                    closes the menu as it clicks one, and the change event
+                    still needs somewhere to land. */}
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -8035,14 +8086,6 @@ function StudioInner({
                     event.target.value = "";
                   }}
                 />
-                <button
-                  type="button"
-                  className="as-btn"
-                  title="Import a folder: a data-model export, a Folder (.zip) export unzipped, or a dbt project's target/ (manifest.json and catalog.json)"
-                  onClick={() => folderInputRef.current?.click()}
-                >
-                  Import folder
-                </button>
                 <input
                   ref={folderInputRef}
                   type="file"
@@ -9038,6 +9081,7 @@ function StudioInner({
             systemPromptTasks={taskSystemPrompt}
             systemPromptTasksContent={taskSystemPromptContent}
             onDismiss={handleWelcomeDismiss}
+            onLinkFile={onLinkFile}
             lint={welcomeLint}
           />
         ) : null}

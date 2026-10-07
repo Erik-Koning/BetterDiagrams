@@ -160,4 +160,19 @@ describe("SchemaCopyModal", () => {
     expect(props.onClose).toHaveBeenCalled();
     expect(writeText).not.toHaveBeenCalled();
   });
+
+  it("with no clouds to scope (a task plan), offers the form alone and copies that", async () => {
+    const user = userEvent.setup();
+    const writeText = stubClipboard();
+    const { buildPrompt } = mount({ clouds: [], resources: undefined, title: "Copy task-flow schema" });
+    expect(screen.getByRole("dialog", { name: "Copy task-flow schema" })).toBeInTheDocument();
+    // No chips to tick, and no "no cloud selected" warning about not ticking them.
+    expect(screen.queryByRole("button", { name: "AWS" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/provider-neutral/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No cloud/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Elements only" }));
+    await user.click(screen.getByRole("button", { name: "Copy schema" }));
+    expect(writeText).toHaveBeenCalledWith("PROMPT[||content]");
+    expect(buildPrompt).toHaveBeenLastCalledWith({ clouds: [], components: [] }, { geometry: false });
+  });
 });

@@ -30,3 +30,5 @@ playwright/.cache/
 templates/scratch/
 # Folders linked from the example app's menu: paths on this machine only.
 templates/linked.json
+# Files linked from the example app's menu: symlinks to paths on this machine only.
+templates/symlinks/

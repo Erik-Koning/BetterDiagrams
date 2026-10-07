@@ -29,7 +29,10 @@ export interface SchemaCopyModalProps {
   title?: string;
   /** One line under it — typically what the scope was seeded from. */
   subtitle?: string;
-  /** Cloud chips to offer, in registry order. */
+  /**
+   * Cloud chips to offer, in registry order. Empty for a schema with no
+   * clouds to scope (a task plan's): the dialog then offers the form alone.
+   */
   clouds: CloudOption[];
   /** Every selectable service; omit for cloud-granularity only. */
   resources?: CloudResourceOption[];
@@ -96,21 +99,24 @@ export function SchemaCopyModal({
   const cloudCount = scope.clouds.filter((cloud) =>
     scope.components.some((id) => resources?.find((r) => r.id === id)?.cloud === cloud),
   ).length;
+  const scoped = clouds.length > 0;
 
   return (
     <Modal title={title} onClose={onClose} cardClassName="as-modal__card--wide">
       <div className="as-schema-copy">
         {subtitle ? <p className="as-schema-copy__subtitle">{subtitle}</p> : null}
 
-        <CloudScopePicker
-          clouds={clouds}
-          resources={resources}
-          value={scope}
-          onChange={setScope}
-          usedResources={usedResources}
-        />
+        {scoped ? (
+          <CloudScopePicker
+            clouds={clouds}
+            resources={resources}
+            value={scope}
+            onChange={setScope}
+            usedResources={usedResources}
+          />
+        ) : null}
 
-        {scope.clouds.length ? null : (
+        {!scoped || scope.clouds.length ? null : (
           <p className="as-schema-copy__note">
             No cloud selected — the copied schema stays provider-neutral and teaches the generic
             kinds only. Name your cloud in your own prompt if the diagram needs one.
@@ -143,8 +149,12 @@ export function SchemaCopyModal({
 
         <div className="as-schema-copy__footer">
           <span className="as-schema-copy__summary">
-            {cloudCount ? `${cloudCount} cloud${cloudCount === 1 ? "" : "s"}` : "No cloud"} ·{" "}
-            {scope.components.length} resource{scope.components.length === 1 ? "" : "s"} ·{" "}
+            {scoped ? (
+              <>
+                {cloudCount ? `${cloudCount} cloud${cloudCount === 1 ? "" : "s"}` : "No cloud"} ·{" "}
+                {scope.components.length} resource{scope.components.length === 1 ? "" : "s"} ·{" "}
+              </>
+            ) : null}
             {prompt.length.toLocaleString()} characters
           </span>
           <div className="as-schema-copy__actions">

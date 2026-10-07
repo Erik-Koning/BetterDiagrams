@@ -11,8 +11,10 @@ const ROUTE = "/__templates";
 
 /** Auto-save's own folder: where a file with no other home is written. */
 export const SCRATCH = "scratch";
+/** Symlinks to single files elsewhere on disk, made by Link a file…. */
+export const SYMLINKS = "symlinks";
 /** Folders a file opened from them is saved back to (see the plugin). */
-export const SAVABLE = new Set([SCRATCH, "examples"]);
+export const SAVABLE = new Set([SCRATCH, "examples", SYMLINKS]);
 /** A folder outside the repo, named in `BD_LINKED_DIRS` — its id starts with this. */
 export const LINKED_PREFIX = "linked-";
 /** Is a file opened from this folder saved back to it? The server still has the last word. */
@@ -25,7 +27,8 @@ export const isSavable = (folder) => SAVABLE.has(folder) || folder.startsWith(LI
  * Resolves to `{ dirs, linked, picker, templates }`, each template carrying
  * its `folder`; `linked` is `[{ folder, name, dir, display, source, missing }]`,
  * one per linked folder; `picker` says whether the server can show a folder
- * dialog.
+ * dialog, and `filePicker` a file one (for Link a file…). A template in
+ * symlinks/ also carries `target`, the file its link points at.
  */
 export async function probeTemplates() {
   try {
@@ -104,6 +107,37 @@ export async function linkFolder(body) {
   }
 }
 
+/**
+ * Link one diagram file from another folder: `{ path }` typed, or `{ pick:
+ * true }` through the system's file dialog. Resolves to `{ entry, templates,
+ * … }` — `entry` is the listing row to open — or `{ cancelled }`,
+ * `{ unsupported }` from the dialog, or `{ error }`.
+ */
+export async function linkFile(body) {
+  try {
+    const res = await fetch(`${ROUTE}/${SYMLINKS}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const answer = await res.json().catch(() => null);
+    return res.ok && answer ? answer : { error: answer?.error ?? res.statusText };
+  } catch {
+    return { error: "the dev server isn't answering" };
+  }
+}
+
+/** Remove a file's link — never the file. Resolves to the new listing, or `{ error }`. */
+export async function unlinkFile(file) {
+  try {
+    const res = await fetch(pathOf(SYMLINKS, file), { method: "DELETE" });
+    const answer = await res.json().catch(() => null);
+    return res.ok && answer ? answer : { error: answer?.error ?? res.statusText };
+  } catch {
+    return { error: "the dev server isn't answering" };
+  }
+}
+
 /** Unlink a folder linked from the app. Resolves to the new listing, or `{ error }`. */
 export async function unlinkFolder(folder) {
   try {
@@ -153,7 +187,7 @@ export function onTemplateChange(listener) {
   return () => changeListeners.delete(listener);
 }
 
-/** Hear about a linked folder vanishing under the dev server — moved, renamed, deleted. */
+/** Hear about a linked folder (or a symlinked file) vanishing under the dev server — moved, renamed, deleted. */
 export function onLinksChange(listener) {
   linksListeners.add(listener);
   return () => linksListeners.delete(listener);

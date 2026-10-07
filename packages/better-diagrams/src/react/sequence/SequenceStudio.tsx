@@ -224,6 +224,8 @@ export interface SequenceStudioProps {
   /** Deleted documents the host still holds, offered for recovery. */
   removedFiles?: StudioFile[];
   onFileRestore?: (id: string) => void;
+  /** Link a diagram file elsewhere on disk — same contract as the architecture editor. */
+  onLinkFile?: () => void;
   /**
    * Fires with the {@link SequenceSelection} on mount (empty) and whenever it
    * changes — so a host that remounts the editor per file never holds a
@@ -311,6 +313,7 @@ function SequenceInner({
   onFileDelete,
   removedFiles,
   onFileRestore,
+  onLinkFile,
   onSelectionChange: onHostSelectionChange,
   toolbarExtras,
   inspectorExtras,
@@ -332,7 +335,7 @@ function SequenceInner({
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialRF.edges as unknown as Edge[]);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
-  const [openMenu, setOpenMenu] = useState<"files" | "insert" | "view" | "export" | null>(null);
+  const [openMenu, setOpenMenu] = useState<"files" | "insert" | "view" | "export" | "import" | null>(null);
   /** The `?` shortcuts sheet — the same one the architecture editor shows. */
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [toast, setToast] = useState("");
@@ -1199,7 +1202,7 @@ function SequenceInner({
   }, [openMenu]);
 
   const toggleMenu = useCallback(
-    (id: "files" | "insert" | "view" | "export") =>
+    (id: "files" | "insert" | "view" | "export" | "import") =>
       setOpenMenu((cur) => (cur === id ? null : id)),
     [],
   );
@@ -1643,9 +1646,36 @@ function SequenceInner({
             </ToolbarMenu>
             {!readOnly ? (
               <>
-                <button type="button" className="as-btn" onClick={() => fileInputRef.current?.click()}>
-                  Import
-                </button>
+                <ToolbarMenu label="Import" open={openMenu === "import"} onToggle={() => toggleMenu("import")}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="as-menu__item"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      fileInputRef.current?.click();
+                    }}
+                  >
+                    <div className="as-menu__label">Open file…</div>
+                    <div className="as-menu__hint">Replaces this diagram with a sequence document (.json)</div>
+                  </button>
+                  {onLinkFile ? (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="as-menu__item"
+                      onClick={() => {
+                        setOpenMenu(null);
+                        onLinkFile();
+                      }}
+                    >
+                      <div className="as-menu__label">Link a file on disk…</div>
+                      <div className="as-menu__hint">
+                        Diagram JSON from another folder, opened as its own file: edits save back to it
+                      </div>
+                    </button>
+                  ) : null}
+                </ToolbarMenu>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -1873,6 +1903,7 @@ function SequenceInner({
             systemPromptOther={DIAGRAM_SYSTEM_PROMPT}
             systemPromptOtherContent={ARCHITECTURE_CONTENT_PROMPT}
             onDismiss={handleWelcomeDismiss}
+            onLinkFile={onLinkFile}
           />
         ) : null}
 

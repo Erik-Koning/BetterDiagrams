@@ -92,6 +92,7 @@ shadow.
 | `filename` | `string` | Base name for exports. Default `"architecture"`. |
 | `files` / `activeFileId` / `onFileSelect` / `onFileCreate` / `onFileRename` / `onFileDelete` | `StudioFile[]`, callbacks | When `files` is provided the brand becomes a **file selector** (switch, new, rename, delete). The host owns all storage — the editor only calls back. Both editors take these. **The file name and the document's `meta.title` are one title with two homes**: renaming the active file writes `meta.title` (committed, emitted, undoable), and a document title arriving any other way — AI generation, import, a controlled `value` — is pushed back out through `onFileRename`, so the dropdown always shows what exports will print. The sync is a reconciler, not two blind pushes: on a mismatch, *which side moved since they last agreed* decides — a title edit (including undo) renames the file, while a **host-side rename** (another tab, the host's own UI, a changed `files` prop) is adopted as the document's new title rather than being reverted; when both moved at once, the document wins. The editor can only do this for the document it holds; a host that stores the other documents should mirror renames into them too (the example app does). Set `StudioFile.empty` and a blank file deletes straight away; anything else asks for confirmation first. `onFileCreate` receives an optional `StudioFileInit` (`{ name?, kind?, doc? }`): the menu's New file row passes nothing, the welcome modal passes a name and — when JSON was inserted — a validated document to seed the file with. |
 | `removedFiles` / `onFileRestore` | `StudioFile[]`, `(id) => void` | Deleted documents the host still holds. The menu grows a **Recently removed…** entry opening a recovery modal. |
+| `onLinkFile` | `() => void` | Offer **Link a file on disk…** in the Import menu and on the welcome modal. The host does the picking and linking (the example app has its dev server show the system's file dialog, symlinks the pick into `templates/symlinks/` and opens it live); the editor only calls back. Both editors take it. |
 | `onNavigateFile` | `(ref) => void` | Fired when a node url with the `file:` prefix (e.g. `file:Order flow`) has its ↗ clicked — resolve by id, then name, and switch documents. |
 | `onSelectionChange` | `(sel) => void` | The canvas selection in **document terms** — ids bucketed by template section (`{ nodes, edges, zones }` here; `{ participants, messages, activations, fragments, notes }` on the sequence editor), so a host can mirror it, e.g. highlight the matching entries of a live JSON view (the example app does exactly this). Fires on mount too, so a host that remounts per file never keeps a stale selection. |
 | `onPinsChange` | `(pins: Pin[]) => void` | The **pins** — a field (`{ nodeId, fieldId }`) or a whole table (`{ nodeId }`) — mirrored like the two above: fires on mount (empty) and on every change. View state — never in the document; a pin is dropped when its node leaves the document. See **Fields beyond the rows** below. |
@@ -169,7 +170,7 @@ an SVG, no `createLinearGradient` on the canvas) — see **Exports** below.
 ### Starting from blank — the welcome modal
 
 A brand-new document (no nodes, edges, or zones; no participants or messages on the sequence
-editor) — or a workspace with zero files — greets with a centred, branded modal offering three
+editor) — or a workspace with zero files — greets with a centred, branded modal offering these
 ways in:
 
 - **Insert Node Manually** — dismisses the modal to build on the canvas (in an empty workspace
@@ -188,6 +189,8 @@ ways in:
   `NODE_KEYS`, …), where `Record<keyof T, true>` maps make the compiler keep them in sync with
   the types. A paste with no coordinates (every node at the origin) is **auto-laid-out** on
   insert instead of stacking at (0,0); any explicitly placed node disables that.
+- **Link a file on disk…** — when the host passes `onLinkFile`: the diagram already exists as a
+  file in another folder, and the host opens that file rather than a pasted copy.
 
 Escape and a backdrop click behave like the manual CTA — the modal never traps. It reappears
 for each new blank file, closes itself the moment the document gains content, and is suppressed
@@ -643,7 +646,7 @@ opts into patching the two curated keys (`diagramName`, `diagramType`) of existi
 files, byte-identical elsewhere. Full mode (`mode: "full"`, the generic writer) round-trips
 `importFolder(exportFolder(t).files) ≡ t` for any document, order included.
 
-In the editor: **Import folder** beside Import picks a directory; the Export menu offers
+In the editor: **Import → Import folder…** picks a directory; the Export menu offers
 **Folder (.zip)** built in, and **Folder sidecar (.zip)** once a host registers the opt-in preset
 (`registry={{ exporters: FOLDER_EXPORTERS }}`) — it only means something for a document that came
 from a folder tree. A node added on the canvas has no source folder, so a sidecar export reports it
@@ -947,7 +950,7 @@ per foreign key anchored at its columns and dressed as the relationship it is: *
 self-reference, *composition* when the key is part of the table's own primary key, *reference*
 otherwise, with the cardinality its nullability and uniqueness say. It is laid out on arrival.
 
-- **A SQL script** — toolbar **Import** takes a `.sql` file (or text that creates or alters
+- **A SQL script** — toolbar **Import → Open file…** takes a `.sql` file (or text that creates or alters
   tables), and the welcome modal takes the same pasted. It reads what `pg_dump --schema-only`,
   `mysqldump -d`, SQL Server's *Script table as*, Snowflake's `GET_DDL`, BigQuery and SQLite
   write: `CREATE TABLE` with column types, `NOT NULL`, defaults, generated columns, inline and
@@ -963,8 +966,8 @@ otherwise, with the cardinality its nullability and uniqueness say. It is laid o
   SQLite scripts (the same 15 tables and 22 keys from each), Pagila's `pg_dump`, and Microsoft's
   AdventureWorks script (71 tables, 90 keys, descriptions on 69 tables).
   `importSqlDdl(sql)`, `parseSqlDdl(sql)`, `looksLikeSqlDdl(text)`.
-- **A dbt project** — **Import folder** on the project's `target/` (or the project) reads
-  `manifest.json` and, when it is there, `catalog.json`; **Import** takes a `manifest.json` on its
+- **A dbt project** — **Import → Import folder…** on the project's `target/` (or the project) reads
+  `manifest.json` and, when it is there, `catalog.json`; **Import → Open file…** takes a `manifest.json` on its
   own. Models (not ephemeral ones), seeds, snapshots and sources become tables; the catalog gives
   column types, order and row counts. Keys come from `primary_key` / `foreign_key` constraints
   (dbt 1.9's `to`/`to_columns` or the older `expression`), then from tests: `relationships` is a
@@ -1583,6 +1586,14 @@ at the repo root, one per document:
   work. **Stop syncing** keeps them as ordinary files instead, and **Unlink** drops a folder
   linked from the menu. A save that fails for any other reason says so once, until one goes
   through.
+- **Linked files** bring in one diagram rather than its whole folder. **Link a file on disk…**
+  (on the welcome modal, in the Import menu, or **Settings → Templates → Link a file…**) has the
+  dev server show the system's file dialog and symlink the pick into `templates/symlinks/`
+  (git-ignored). The file opens bound to its link, in place of the blank file the welcome modal
+  greeted: edits save through the link to the file, and changes made to the file where it lives
+  reload. A file already listed (an example, a linked folder's, linked before) just opens.
+  **Unlink** beside it in the menu removes the link and never the file; a link whose file has
+  moved is listed as missing, and its saves fail rather than recreate the file.
 
 A conflict needs both sides to change the same file within about a second. When it happens,
 whichever write reaches the disk last is kept. `scratch/` is git-ignored; `templates/examples/`

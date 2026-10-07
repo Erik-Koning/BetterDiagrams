@@ -29,6 +29,11 @@
  *                recreated (the app offers a re-link), and a JSON file that
  *                is not a diagram (a package.json, a tsconfig) is listed as
  *                unreadable and never written over.
+ *   symlinks/  — ONE file from another folder, rather than the whole folder:
+ *                the app's Link a file… shows the system's file dialog and
+ *                symlinks the pick in here. Writes go through the link to
+ *                the file itself, the file itself is watched, and
+ *                unlinking removes only the link. Git-ignored.
  *
  * And all are WATCHED: a file changed by another program (an editor, a
  * script, an AI agent) is announced to the open app over Vite's HMR socket
@@ -47,7 +52,20 @@
  */
 import { exec, execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, platform } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
@@ -61,6 +79,8 @@ const IN_REPO = [WRITABLE, "examples"];
 const LINKED_PREFIX = "linked-";
 /** The route segment that links and unlinks folders: `/__templates/links`. */
 const LINKS = "links";
+/** The folder of symlinks to single files elsewhere — and the route segment that makes and removes them. */
+const SYMLINKS = "symlinks";
 /** The HMR event an outside edit is announced with (see templates.js). */
 const CHANGE_EVENT = "better-diagrams:template";
 /** The HMR event a linked folder vanishing (or coming back) is announced with. */
@@ -148,6 +168,15 @@ function describe(dir, folder, file) {
   };
 }
 
+/** Where the symlink at `full` points, as an absolute path — null when it is no symlink. */
+function linkTarget(full) {
+  try {
+    return lstatSync(full).isSymbolicLink() ? resolve(dirname(full), readlinkSync(full)) : null;
+  } catch {
+    return null;
+  }
+}
+
 function listFolder(dirs, folder) {
   const dir = dirs[folder];
   let files;
@@ -158,12 +187,20 @@ function listFolder(dirs, folder) {
   }
   const listed = [];
   for (const file of files) {
+    // A symlink says where it points, so the menu can — and one whose file
+    // has moved says that, rather than "not readable".
+    const target = linkTarget(join(dir, file));
+    const pointsAt = target ? { target: displayOf(target) } : {};
+    if (target && !existsSync(target)) {
+      listed.push({ ...unreadable(folder, file, `links to ${displayOf(target)}, which is missing`), ...pointsAt });
+      continue;
+    }
     // One unreadable file must not take the whole list down — hand-edited
     // JSON is exactly what these folders invite.
     try {
-      listed.push(describe(dir, folder, file));
+      listed.push({ ...describe(dir, folder, file), ...pointsAt });
     } catch {
-      listed.push(unreadable(folder, file, "not readable as JSON"));
+      listed.push({ ...unreadable(folder, file, "not readable as JSON"), ...pointsAt });
     }
   }
   return listed.sort((a, b) => b.updated - a.updated);
@@ -276,20 +313,26 @@ function nearestDir(path) {
 /** The dialog waits on a person; give up only on one long since walked away from. */
 const PICK_TIMEOUT_MS = 10 * 60_000;
 
-/** Can this server show a folder dialog? `BD_FOLDER_PICKER` is a stand-in command (the e2e suite's). */
-const canPick = () => Boolean(process.env.BD_FOLDER_PICKER) || platform() === "darwin" || platform() === "linux";
+/**
+ * The command standing in for each dialog — the e2e suite's, since no dialog
+ * can be clicked in a headless run. It prints the path it "picked".
+ */
+const STAND_IN = { folder: "BD_FOLDER_PICKER", file: "BD_FILE_PICKER" };
+
+/** Can this server show a folder (or file) dialog? */
+const canPick = (what = "folder") => Boolean(process.env[STAND_IN[what]]) || platform() === "darwin" || platform() === "linux";
 
 const appleString = (text) => `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 
 /**
- * Ask for a folder with the operating system's own dialog. A browser's
- * folder picker never tells the page where the folder IS — but this server
- * runs on the same machine as the person using it, so it can ask instead and
- * get a real path back. Resolves to `{ dir }`, `{ cancelled: true }`, or
- * `{ unsupported: true }` where there is no dialog to show (the client then
- * asks for a typed path).
+ * Ask for a folder, or a diagram's `.json` file, with the operating system's
+ * own dialog. A browser's pickers never tell the page where a folder or file
+ * IS — but this server runs on the same machine as the person using it, so it
+ * can ask instead and get a real path back. Resolves to `{ path }`,
+ * `{ cancelled: true }`, or `{ unsupported: true }` where there is no dialog
+ * to show (the client then asks for a typed path, or says so).
  */
-function pickFolder({ prompt, near }) {
+function pick(what, { prompt, near }) {
   const start = near ? nearestDir(near) : null;
   const run = (command, args) =>
     new Promise((done) => {
@@ -300,31 +343,63 @@ function pickFolder({ prompt, near }) {
   const picked = ({ error, stdout }, cancelled) => {
     if (error) {
       if (cancelled(error)) return { cancelled: true };
-      throw new Error(`The folder dialog failed: ${error.message}`);
+      throw new Error(`The ${what} dialog failed: ${error.message}`);
     }
-    return stdout ? { dir: stdout } : { cancelled: true };
+    return stdout ? { path: stdout } : { cancelled: true };
   };
 
-  if (process.env.BD_FOLDER_PICKER) return run(process.env.BD_FOLDER_PICKER).then((r) => picked(r, () => false));
+  const standIn = process.env[STAND_IN[what]];
+  if (standIn) return run(standIn).then((r) => picked(r, () => false));
   if (platform() === "darwin") {
     // `activate` brings osascript's own dialog to the front — it would
     // otherwise open behind the browser that asked for it.
     const location = start ? ` default location (POSIX file ${appleString(start)})` : "";
-    const script = `POSIX path of (choose folder with prompt ${appleString(prompt)}${location})`;
+    const script =
+      what === "file"
+        ? `POSIX path of (choose file with prompt ${appleString(prompt)} of type {"public.json"}${location})`
+        : `POSIX path of (choose folder with prompt ${appleString(prompt)}${location})`;
     return run("osascript", ["-e", "activate", "-e", script]).then((r) =>
       picked({ ...r, stdout: r.stdout.replace(/(.)\/$/, "$1") }, () => /-128/.test(r.stderr)),
     );
   }
   if (platform() === "linux") {
-    return run("zenity", ["--file-selection", "--directory", `--title=${prompt}`, ...(start ? [`--filename=${start}/`] : [])]).then((r) =>
+    const kind = what === "file" ? ["--file-filter=Diagram JSON | *.json"] : ["--directory"];
+    return run("zenity", ["--file-selection", ...kind, `--title=${prompt}`, ...(start ? [`--filename=${start}/`] : [])]).then((r) =>
       r.error?.code === "ENOENT" ? { unsupported: true } : picked(r, (error) => error.code === 1),
     );
   }
   return Promise.resolve({ unsupported: true });
 }
 
+/** A file name a symlink can carry and the route will address: `My plan (v2).json` → `My plan -v2-.json`. */
+function linkName(file) {
+  const stem = basename(file, ".json")
+    .replace(/[^A-Za-z0-9 ._-]+/g, "-")
+    .replace(/^[^A-Za-z0-9]+/, "")
+    .slice(0, 64);
+  return stem || "diagram";
+}
+
+/** Is anything at `path` — a file, a folder, or a link, dangling or not? */
+function lstatOrNull(path) {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/** `realpath`, or the resolved path itself when there is nothing there to resolve. */
+function realOrResolved(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
 /**
- * @param {{ scratch: string, examples: string, folders?: string }} repoDirs absolute folder paths
+ * @param {{ scratch: string, examples: string, folders?: string, symlinks?: string }} repoDirs absolute folder paths
  * @param {{ linked?: string[], linksFile?: string }} [options] `linked`: folders outside the
  *   repo to link (BD_LINKED_DIRS); `linksFile`: where folders linked from the app are kept
  */
@@ -337,13 +412,14 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
       // fresh BD_TEMPLATES_DIR (the e2e suite's) starts with neither.
       mkdirSync(repoDirs.scratch, { recursive: true });
       mkdirSync(repoDirs.examples, { recursive: true });
+      if (repoDirs.symlinks) mkdirSync(repoDirs.symlinks, { recursive: true });
 
       /** id → linked folder. Links come and go while the server runs: Link a folder…, Re-link…, Unlink. */
       const links = new Map();
       /** Every folder the route can address, by the id it is addressed with. */
       const folderDirs = { ...repoDirs };
-      /** Folders the app may write a file it opened back to. Deleting stays scratch-only. */
-      const savable = new Set(IN_REPO);
+      /** Folders the app may write a file it opened back to. Deleting stays scratch-only, but for a symlink. */
+      const savable = new Set(repoDirs.symlinks ? [...IN_REPO, SYMLINKS] : IN_REPO);
       /**
        * Folders this server has asked the watcher for. Never UNwatched:
        * chokidar's unwatch puts a path on an ignore list for good, which would
@@ -392,21 +468,110 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
         }
       }
 
+      /**
+       * A symlinked file's real path → its link in symlinks/. The watcher is
+       * pointed at each file itself, wherever it lives, and reports changes
+       * by that path; this is how one is told back to the app as the link
+       * it opened. Re-read on every listing, so a link made by hand counts.
+       */
+      const symlinkOf = new Map();
+      const trackSymlinks = () => {
+        symlinkOf.clear();
+        if (!repoDirs.symlinks) return;
+        let names;
+        try {
+          names = readdirSync(repoDirs.symlinks).filter((f) => f.endsWith(".json"));
+        } catch {
+          return;
+        }
+        for (const name of names) {
+          const full = join(repoDirs.symlinks, name);
+          const target = linkTarget(full);
+          if (!target || !existsSync(target)) continue;
+          const real = realOrResolved(target);
+          symlinkOf.set(real, full);
+          if (!watchedDirs.has(real)) {
+            server.watcher.add(real);
+            watchedDirs.add(real);
+          }
+        }
+      };
+      trackSymlinks();
+
       /** Everything the menu lists, and the folders it lists them under. */
-      const listing = () => ({
-        dirs: repoDirs,
-        linked: [...links.values()].map((l) => {
-          watch(l.dir); // one that was missing and is back is watched again
-          return { ...l, missing: !isDir(l.dir) };
-        }),
-        picker: canPick(),
-        templates: [
-          ...listFolder(folderDirs, "examples"),
-          ...listFolder(folderDirs, WRITABLE),
-          ...listFolders(repoDirs),
-          ...[...links.keys()].flatMap((id) => listFolder(folderDirs, id)),
-        ],
-      });
+      const listing = () => {
+        trackSymlinks();
+        return {
+          dirs: repoDirs,
+          linked: [...links.values()].map((l) => {
+            watch(l.dir); // one that was missing and is back is watched again
+            return { ...l, missing: !isDir(l.dir) };
+          }),
+          picker: canPick("folder"),
+          filePicker: Boolean(repoDirs.symlinks) && canPick("file"),
+          templates: [
+            ...listFolder(folderDirs, "examples"),
+            ...listFolder(folderDirs, WRITABLE),
+            ...listFolders(repoDirs),
+            ...(repoDirs.symlinks ? listFolder(folderDirs, SYMLINKS) : []),
+            ...[...links.keys()].flatMap((id) => listFolder(folderDirs, id)),
+          ],
+        };
+      };
+
+      /**
+       * Link one diagram file from another folder: a symlink to it in
+       * symlinks/, named after it. Resolves to `{ entry }`, the listing row
+       * the app opens; or `{ error }`. A file the menu already lists — in
+       * examples/, a linked folder, or linked before — is handed back as it
+       * is, never linked twice.
+       */
+      const linkFile = (path) => {
+        const full = resolve(expandHome(path));
+        const shown = displayOf(full);
+        let real;
+        try {
+          real = realpathSync(full);
+        } catch {
+          return { error: `${shown} isn't there` };
+        }
+        if (!statSync(real).isFile()) return { error: `${shown} isn't a file` };
+        if (!real.endsWith(".json")) return { error: `${shown} isn't a .json file` };
+        if (statSync(real).size > MAX_BYTES) return { error: `${shown} is too large to be a diagram` };
+        let doc;
+        try {
+          doc = JSON.parse(readFileSync(real, "utf8"));
+        } catch {
+          return { error: `${shown} isn't valid JSON` };
+        }
+        if (!isDiagram(doc)) return { error: `${shown} is JSON, but not a diagram` };
+
+        trackSymlinks();
+        const linkedAs = symlinkOf.get(real);
+        if (linkedAs) return { entry: listFolder(folderDirs, SYMLINKS).find((t) => t.file === basename(linkedAs)) };
+        const home = Object.entries(folderDirs).find(
+          ([folder, dir]) => folder !== FOLDERS && folder !== SYMLINKS && realOrResolved(dir) === dirname(real),
+        );
+        if (home) {
+          const entry = listFolder(folderDirs, home[0]).find((t) => t.file === basename(real));
+          if (entry && entry.kind !== "unreadable") return { entry };
+        }
+        const root = realOrResolved(dirname(repoDirs.symlinks));
+        if (real.startsWith(root + sep)) return { error: `${shown} is already under Templates` };
+
+        // Named after the file; a name another link holds gets a number.
+        const stem = linkName(real);
+        let name = `${stem}.json`;
+        for (let n = 2; lstatOrNull(join(repoDirs.symlinks, name)); n++) name = `${stem}-${n}.json`;
+        try {
+          symlinkSync(full, join(repoDirs.symlinks, name));
+        } catch (error) {
+          // Windows makes links only with Developer Mode on (or as admin).
+          return { error: `Couldn't make the link: ${error.message}` };
+        }
+        trackSymlinks();
+        return { entry: listFolder(folderDirs, SYMLINKS).find((t) => t.file === name) };
+      };
 
       /** path → the exact text this server last wrote there, so its own writes are not announced. */
       const lastWritten = new Map();
@@ -415,7 +580,10 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
         [...savable].find(
           (folder) => resolve(full).startsWith(resolve(folderDirs[folder]) + sep) && !relative(folderDirs[folder], full).includes(sep),
         );
-      const announce = (full) => {
+      const announce = (path) => {
+        // A symlinked file changed where it lives: it is the link that the
+        // app opened, and the link that the app wrote through.
+        const full = symlinkOf.get(resolve(path)) ?? path;
         const folder = folderOf(full);
         if (!folder || !full.endsWith(".json")) return;
         clearTimeout(pending.get(full));
@@ -449,6 +617,14 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
         watchedDirs.delete(link.dir); // added again once it is back
         server.ws.send({ type: "custom", event: LINKS_EVENT, data: { folder: link.folder } });
       });
+      // The same for a symlinked file moved or deleted where it lives: the
+      // app re-lists, and the menu shows its link as missing.
+      server.watcher.on("unlink", (path) => {
+        const link = symlinkOf.get(resolve(path));
+        if (!link) return;
+        watchedDirs.delete(resolve(path)); // added again once it is back
+        server.ws.send({ type: "custom", event: LINKS_EVENT, data: { folder: SYMLINKS, file: basename(link) } });
+      });
 
       server.middlewares.use(ROUTE, async (req, res) => {
         try {
@@ -480,9 +656,9 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
               let dir = typeof body.dir === "string" ? body.dir.trim() : "";
               if (body.pick) {
                 const prompt = body.replaces ? "Pick the folder that holds the diagram now" : "Pick a folder of diagram JSON to link";
-                const picked = await pickFolder({ prompt, near: typeof body.near === "string" ? body.near : undefined });
-                if (!picked.dir) return json(res, 200, picked);
-                dir = picked.dir;
+                const picked = await pick("folder", { prompt, near: typeof body.near === "string" ? body.near : undefined });
+                if (!picked.path) return json(res, 200, picked);
+                dir = picked.path;
               }
               if (!dir) return json(res, 400, { error: "No folder given" });
               const full = resolve(expandHome(dir));
@@ -509,6 +685,35 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
             res.statusCode = 405;
             return res.end("Method not allowed");
           }
+          // Linking one file. POST { path } links a typed path; POST
+          // { pick: true } asks with the system's file dialog. JSON only, for
+          // the same reason as a folder link.
+          if (folder === SYMLINKS && !name && req.method === "POST") {
+            if (!repoDirs.symlinks) return json(res, 404, { error: "This server links no files" });
+            if (!/^application\/json\b/.test(req.headers["content-type"] ?? "")) {
+              return json(res, 415, { error: "Send the link as application/json" });
+            }
+            const body = JSON.parse((await readBody(req)) || "{}");
+            let path = typeof body.path === "string" ? body.path.trim() : "";
+            if (body.pick) {
+              const picked = await pick("file", { prompt: "Pick a diagram JSON file to link", near: path || undefined });
+              if (!picked.path) return json(res, 200, picked);
+              path = picked.path;
+            }
+            if (!path) return json(res, 400, { error: "No file given" });
+            const linked = linkFile(path);
+            if (!linked.entry) return json(res, 400, { error: linked.error ?? `Couldn't link ${path}` });
+            return json(res, 200, { entry: linked.entry, ...listing() });
+          }
+          // Unlinking one: removes the link and never the file it points at
+          // — nor a plain file someone put in symlinks/ by hand.
+          if (folder === SYMLINKS && req.method === "DELETE" && name && !extra) {
+            const full = safePath(folderDirs, SYMLINKS, name);
+            if (!full) return json(res, 400, { error: `Bad template path: ${path}` });
+            if (!lstatOrNull(full)?.isSymbolicLink()) return json(res, 409, { error: `${name} isn't a link — not deleting it` });
+            unlinkSync(full);
+            return json(res, 200, { ok: true, ...listing() });
+          }
           // A folder-format tree is served whole, as a file map, read-only.
           if (folder === FOLDERS && req.method === "GET") {
             const root = repoDirs[FOLDERS];
@@ -532,10 +737,16 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
           if (req.method === "PUT") {
             if (!savable.has(folder)) return json(res, 403, { error: `${folder}/ is read-only` });
             const link = links.get(folder);
-            if (link) {
+            const pointsAt = folder === SYMLINKS ? linkTarget(full) : null;
+            // Nor write a symlinked file back where it used to be: the
+            // menu shows its link as missing instead.
+            if (pointsAt && !existsSync(pointsAt)) {
+              return json(res, 404, { error: "missing — moved or deleted", missing: true });
+            }
+            if (link || folder === SYMLINKS) {
               // Outside the repo, never recreate a folder that has gone (it
               // was moved, or a drive unmounted): the app offers a re-link.
-              if (!isDir(link.dir)) return json(res, 404, { error: `${link.display} is missing`, missing: true });
+              if (link && !isDir(link.dir)) return json(res, 404, { error: `${link.display} is missing`, missing: true });
               // And write only over a diagram: never over a package.json,
               // and never over a diagram caught half-saved by its editor
               // (the app tries again; the finished save reloads).
@@ -578,7 +789,7 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
       });
       const linkedLog = [...links.values()].map((l) => `, ${l.display} (linked)`).join("");
       logger.info(
-        `  ➜  templates:  ${repoDirs.examples} (examples), ${repoDirs.scratch} (scratch, auto-save)${repoDirs.folders ? `, ${repoDirs.folders} (folders)` : ""}${linkedLog}`,
+        `  ➜  templates:  ${repoDirs.examples} (examples), ${repoDirs.scratch} (scratch, auto-save)${repoDirs.folders ? `, ${repoDirs.folders} (folders)` : ""}${repoDirs.symlinks ? `, ${repoDirs.symlinks} (symlinks)` : ""}${linkedLog}`,
         { timestamp: true },
       );
     },

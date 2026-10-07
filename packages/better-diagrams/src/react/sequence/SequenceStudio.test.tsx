@@ -69,6 +69,21 @@ describe("SequenceStudio", () => {
     expect(latest.participants.at(-1)!.label).toBe("New Participant");
   });
 
+  it("Import is a menu: Open file… opens the picker, and Link a file on disk… is the host's", async () => {
+    const user = userEvent.setup();
+    const onLinkFile = vi.fn();
+    const { container } = mount(<SequenceStudio defaultValue={example} onLinkFile={onLinkFile} />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const click = vi.spyOn(input, "click").mockImplementation(() => undefined);
+
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await user.click(screen.getByRole("menuitem", { name: /^Open file…/ }));
+    expect(click).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await user.click(screen.getByRole("menuitem", { name: /^Link a file on disk…/ }));
+    expect(onLinkFile).toHaveBeenCalledTimes(1);
+  });
+
   it("adds a participant from the N key", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

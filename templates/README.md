@@ -69,3 +69,22 @@ diagram: a `package.json` beside the diagram is listed but can't be opened.
 If the folder moves, the files bound to it stop syncing and a warning says so;
 **Re-link…** points them at the folder's new place, and asks before choosing
 between your edits and the file when the two differ.
+
+## `symlinks/` — single files from other folders, git-ignored
+
+Linking a whole folder lists everything in it. To bring in one diagram that
+lives elsewhere — one an agent wrote in another project, say — use **Link a
+file on disk…**: on the welcome modal of a new file, in the editor's **Import**
+menu, or under **Settings → Templates → Link a file…**. The dev server shows
+the system's file dialog and makes a symlink to the pick here, named after the
+file (a name another link holds gets a number).
+
+The file opens bound to its link and is live like `examples/`: edits in the
+app save through the link to the file itself, and edits made to the file where
+it lives reload in the app. Picking a file the menu already lists (an example,
+a linked folder's, or one linked before) just opens it.
+
+**Unlink** beside a link in the menu removes the link, never the file. If the
+file moves, its link is listed as missing and saves to it fail rather than
+recreate the file; link it again from where it is now. A link made by hand
+(`ln -s ~/work/tracker/plan.json templates/symlinks/`) works the same.

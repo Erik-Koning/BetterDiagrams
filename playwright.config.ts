@@ -1,9 +1,10 @@
 import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
-import { E2E_LINKED_DIR, E2E_LINKS_ROOT, E2E_PICK_DIR, E2E_TEMPLATES_DIR } from "./e2e/templates-dir";
+import { E2E_LINKED_DIR, E2E_LINKS_ROOT, E2E_PICK_DIR, E2E_PICK_FILE, E2E_TEMPLATES_DIR } from "./e2e/templates-dir";
 
 // Before the dev server starts: a linked folder that isn't there starts out missing.
-for (const dir of [E2E_LINKED_DIR, E2E_LINKS_ROOT, E2E_PICK_DIR]) mkdirSync(dir, { recursive: true });
+for (const dir of [E2E_LINKED_DIR, E2E_LINKS_ROOT, E2E_PICK_DIR, dirname(E2E_PICK_FILE)]) mkdirSync(dir, { recursive: true });
 
 /**
  * End-to-end tests drive the example app (`example/`) in a real Chromium.
@@ -54,11 +55,12 @@ export default defineConfig({
     // Its own templates folder, and a linked folder standing in for one
     // outside the repo: the disk-sync spec reads and writes files there,
     // never in the repo's templates/ (see e2e/templates-dir.ts).
-    // The folder dialog is stood in for by a command printing the folder it "picked".
+    // The folder and file dialogs are stood in for by commands printing what they "picked".
     env: {
       BD_TEMPLATES_DIR: E2E_TEMPLATES_DIR,
       BD_LINKED_DIRS: E2E_LINKED_DIR,
       BD_FOLDER_PICKER: `printf '%s' '${E2E_PICK_DIR}'`,
+      BD_FILE_PICKER: `printf '%s' '${E2E_PICK_FILE}'`,
     },
   },
 });

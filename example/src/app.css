@@ -389,6 +389,42 @@ body {
   color: var(--shell-text-dim);
 }
 
+/* A symlinked file's row: the file opens from the row, and Unlink sits at
+   its end, quiet until the row is pointed at. */
+.app__dropdown-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.app__dropdown-row .app__dropdown-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.app__dropdown-unlink {
+  flex: none;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--shell-text-dim);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.app__dropdown-row:hover .app__dropdown-unlink,
+.app__dropdown-unlink:focus-visible {
+  opacity: 1;
+}
+
+.app__dropdown-unlink:hover {
+  background: var(--shell-hover);
+  color: var(--shell-text);
+}
+
 /* A view setting in the menu: the same drawn box as the bar's chips, laid
    out as a menu row — label after the box, the whole row a hit target. */
 .app__dropdown-check {

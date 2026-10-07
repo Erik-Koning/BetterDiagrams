@@ -188,13 +188,14 @@ export class Studio {
   }
 
   /**
-   * Import a template through the toolbar's Import button, accepting the
-   * "Replace this diagram?" question the editor asks whenever the canvas
+   * Import a template through the toolbar's Import → Open file…, accepting
+   * the "Replace this diagram?" question the editor asks whenever the canvas
    * already holds something (an empty canvas, or a layout file, never asks).
    */
   async importFile(path: string): Promise<void> {
     const chooser = this.page.waitForEvent("filechooser");
     await this.root.getByRole("button", { name: "Import", exact: true }).click();
+    await this.root.getByRole("menuitem", { name: /^Open file…/ }).click();
     await (await chooser).setFiles(path);
     const replace = this.page
       .getByRole("dialog", { name: /^Replace this diagram/ })

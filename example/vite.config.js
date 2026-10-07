@@ -16,6 +16,10 @@ import { templatesPlugin } from "./vite-plugin-templates.js";
  *                         only; imported through `importFolder` on the client.
  *                         Git-ignored: drop a data-model export in to try
  *                         it.
+ *   templates/symlinks/ — symlinks to single diagram files elsewhere on disk,
+ *                         made by Link a file… (the welcome modal, Import, or
+ *                         Settings); git-ignored. Live like examples, through
+ *                         the link: edits land in the file it points at.
  * All show up under Settings ▾ → Templates.
  *
  * Plus folders OUTSIDE the repo: linked from the menu (Templates → Link a
@@ -27,7 +31,7 @@ import { templatesPlugin } from "./vite-plugin-templates.js";
  * re-link it.
  */
 //
-// `BD_TEMPLATES_DIR` moves all three somewhere else — the e2e suite points it
+// `BD_TEMPLATES_DIR` moves them all somewhere else — the e2e suite points it
 // at a temporary folder, so a test of the disk sync never touches the repo's.
 const TEMPLATES_ROOT = process.env.BD_TEMPLATES_DIR
   ? resolve(process.env.BD_TEMPLATES_DIR)
@@ -36,6 +40,7 @@ const TEMPLATE_DIRS = {
   examples: join(TEMPLATES_ROOT, "examples"),
   scratch: join(TEMPLATES_ROOT, "scratch"),
   folders: join(TEMPLATES_ROOT, "folders"),
+  symlinks: join(TEMPLATES_ROOT, "symlinks"),
 };
 // `~` is expanded by the plugin: a quoted value arrives with it unexpanded.
 const LINKED_DIRS = (process.env.BD_LINKED_DIRS ?? "")

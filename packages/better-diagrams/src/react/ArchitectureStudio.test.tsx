@@ -3727,6 +3727,30 @@ describe("host access to view state (ref + callbacks)", () => {
     expect(doc.meta.folderFormat.dialect).toBe("generic");
   });
 
+  it("Import is one menu: Open file… and Import folder… open their pickers, and Link a file on disk… is the host's", async () => {
+    const user = userEvent.setup();
+    const { container, unmount } = mount(<ArchitectureStudio defaultValue={HOST_DOC} />);
+    // The pickers stay mounted outside the menu, so a pick lands after it closes.
+    const fileInput = container.querySelector('input[type="file"][accept*=".sql"]') as HTMLInputElement;
+    const folderInput = container.querySelector("input[webkitdirectory]") as HTMLInputElement;
+    const fileClick = vi.spyOn(fileInput, "click").mockImplementation(() => undefined);
+    const folderClick = vi.spyOn(folderInput, "click").mockImplementation(() => undefined);
+    expect(screen.queryByRole("button", { name: "Import folder" })).not.toBeInTheDocument();
+    await fromMenu(user, "Import", /^Open file…/);
+    expect(fileClick).toHaveBeenCalledTimes(1);
+    await fromMenu(user, "Import", /^Import folder…/);
+    expect(folderClick).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    expect(screen.queryByRole("menuitem", { name: /^Link a file on disk…/ })).not.toBeInTheDocument();
+    unmount();
+
+    const onLinkFile = vi.fn();
+    mount(<ArchitectureStudio defaultValue={HOST_DOC} onLinkFile={onLinkFile} />);
+    await fromMenu(user, "Import", /^Link a file on disk…/);
+    expect(onLinkFile).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menuitem", { name: /^Open file…/ })).not.toBeInTheDocument();
+  });
+
   it("ref.navigateTo drills to the level a node lives on and selects it", async () => {
     const ref = { current: null as StudioHandle | null };
     const onSelectionChange = vi.fn();

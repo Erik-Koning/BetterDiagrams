@@ -5096,6 +5096,13 @@ button.as-task__check--blocked {
 .as-welcome__insert-row {
   display: flex;
   justify-content: flex-end;
+  gap: 10px;
+}
+
+/* Linking a file sits at the row's other end from Insert: a way in of its
+   own, not a step after the paste. */
+.as-welcome__link {
+  margin-right: auto;
 }
 
 /* ── File selector ───────────────────────────────────────────────────────── */
