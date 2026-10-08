@@ -5798,6 +5798,51 @@ button.as-task__check--blocked {
   pointer-events: all;
 }
 
+/* The side arrows off a selected card (QuickAddHandles): click one for a
+   connected box on that side. NodeToolbar keeps them screen-sized and stands
+   them off the edge, clear of the connect dot that sits on it. Quiet until
+   pointed at, so a selected card does not shout four buttons at the reader. */
+.as-quick-add__btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--as-border);
+  border-radius: 999px;
+  background: var(--as-surface);
+  color: var(--as-text-dim);
+  box-shadow: var(--as-elev-1);
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+
+.as-quick-add__btn:hover,
+.as-quick-add__btn:focus-visible {
+  border-color: var(--as-accent);
+  background: var(--as-accent);
+  color: var(--as-accent-ink);
+}
+
+.as-quick-add__btn svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* One glyph, pointing out of the side it adds on. */
+.as-quick-add__btn--top svg {
+  transform: rotate(-90deg);
+}
+.as-quick-add__btn--bottom svg {
+  transform: rotate(90deg);
+}
+.as-quick-add__btn--left svg {
+  transform: rotate(180deg);
+}
+
 /* React Flow's zoom column, dressed in the chrome's own button language: a
    floating card of ghost buttons rather than three bordered boxes stacked on
    the canvas. */

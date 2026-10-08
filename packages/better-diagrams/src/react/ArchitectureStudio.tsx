@@ -209,6 +209,7 @@ import {
   TASK_KIND,
   blockedTasks,
   criticalPath,
+  hasAssigneeStrip,
   isWorkItem,
   overdueWork,
   planProgress,
@@ -262,6 +263,8 @@ import type { RegistryExtensions, ResolvedRegistry } from "./registry-types";
 import { kindDef, providerDef, relationDef, zoneInk } from "./registry-types";
 import { relationDressing } from "../contract/relations";
 import { NODE_TYPES } from "./nodes";
+import { QuickAddHandles } from "./QuickAddHandles";
+import { addBeside, type QuickAddSide } from "./quick-add";
 import { EDGE_TYPES } from "./edges";
 import { topDropTarget } from "./dangling";
 import { StudioContext, useStudio } from "./context";
@@ -1614,9 +1617,9 @@ function StudioInner({
 
   // ── Node / edge mutations ─────────────────────────────────────────────────
 
-  const addNode = useCallback(
-    (kind: string) => {
-      if (readOnly) return;
+  /** A brand-new node of `kind` at the origin, with the defaults every way of inserting one shares. */
+  const freshNode = useCallback(
+    (kind: string): Node => {
       const def = kindDef(registry, kind);
       const type = def.container ? "group" : def.annotation ? "annotation" : "shape";
       // A record node starts with its key row, so the box arrives as a table
@@ -1633,20 +1636,10 @@ function StudioInner({
             : // The kind's own default (a decision diamond is squarer than a
               // card), falling back to the ordinary box.
               KIND_DEFAULT_SIZE[kind] ?? { w: 170, h: 76 };
-
-      // Drop the new node at the centre of the *canvas element*, not the
-      // window — this component is often embedded in a panel, so the viewport
-      // centre is usually somewhere else entirely.
-      const rect = canvasRef.current?.getBoundingClientRect();
-      const center = rect
-        ? flow.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
-        : { x: 0, y: 0 };
-      const position = { x: center.x - size.w / 2, y: center.y - size.h / 2 };
-
-      const node: Node = {
+      return {
         id: nextId(kind),
         type,
-        position,
+        position: { x: 0, y: 0 },
         width: size.w,
         height: size.h,
         style: { width: size.w, height: size.h },
@@ -1665,11 +1658,30 @@ function StudioInner({
           ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
         } satisfies DiagramNodeData,
       };
+    },
+    [registry],
+  );
+
+  const addNode = useCallback(
+    (kind: string) => {
+      if (readOnly) return;
+      const node = freshNode(kind);
+      const w = node.width!;
+      const h = node.height!;
+
+      // Drop the new node at the centre of the *canvas element*, not the
+      // window — this component is often embedded in a panel, so the viewport
+      // centre is usually somewhere else entirely.
+      const rect = canvasRef.current?.getBoundingClientRect();
+      const center = rect
+        ? flow.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
+        : { x: 0, y: 0 };
+      node.position = { x: center.x - w / 2, y: center.y - h / 2 };
 
       setNodes((current) => [...current.map((n) => ({ ...n, selected: false })), node]);
       commitLater();
     },
-    [readOnly, registry, flow, setNodes, commitLater],
+    [readOnly, freshNode, flow, setNodes, commitLater],
   );
 
   /**
@@ -3322,6 +3334,31 @@ function StudioInner({
       onConnect({ source: from.id, target: pointNode.id, sourceHandle: null, targetHandle: null });
     },
     [readOnly, flow, onConnect, setNodes],
+  );
+
+  /**
+   * One of a selected card's side arrows (QuickAddHandles): a node of the
+   * same kind on that side, wired from the card, selected, and open for its
+   * name — so a chain is typed out a click and a name at a time.
+   */
+  const quickAdd = useCallback(
+    (sourceId: string, side: QuickAddSide) => {
+      if (readOnly) return;
+      const source = flow.getNode(sourceId);
+      if (!source) return;
+      const fresh = freshNode((source.data as DiagramNodeData).kind);
+      // As a drop decides it — and not at all on a drilled-in canvas, whose
+      // zone boxes live in root space (see onNodeDragStop).
+      const zones = rfFocusRef.current ? [] : (templateRef.current.zones ?? []);
+      setNodes(
+        (current) =>
+          addBeside(current, sourceId, side, fresh, (x, y) => zoneAt(zones, x, y)?.id ?? null) ?? current,
+      );
+      // Through onConnect, like a drawn connection: styled, defaulted, committed.
+      onConnect({ source: sourceId, target: fresh.id, sourceHandle: null, targetHandle: null });
+      setRenamingId(fresh.id);
+    },
+    [readOnly, flow, freshNode, setNodes, onConnect],
   );
 
   const deleteSelection = useCallback(() => {
@@ -5833,6 +5870,20 @@ function StudioInner({
 
   const singleSelected =
     selectedNodeIds.length === 1 ? nodes.find((n) => n.id === selectedNodeIds[0]) : undefined;
+  /**
+   * The card the side arrows stand off: one selected box, under the Cursor
+   * tool, on a canvas that edits. A frame, a note and a loose end have no
+   * "next box of the same kind", and a ghost stands for something that lives
+   * elsewhere.
+   */
+  const quickAddFrom =
+    !readOnly &&
+    tool === "cursor" &&
+    singleSelected?.type === "shape" &&
+    !isGhostNodeId(singleSelected.id) &&
+    !(singleSelected.data as DiagramNodeData).ghost
+      ? singleSelected
+      : undefined;
   /** The selected document nodes and connections, as React Flow holds them. */
   const selectedDocNodes = useMemo(
     () => selectedDocNodeIds.map((id) => nodes.find((n) => n.id === id)).filter((n): n is Node => !!n),
@@ -8542,6 +8593,17 @@ function StudioInner({
           >
             <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} color="var(--as-grid-dot)" />
             <LineageOverlay links={analysis.lineageLinks} reps={canvasReps} />
+            {quickAddFrom ? (
+              <QuickAddHandles
+                // Remounted per card, so a focused arrow does not carry over.
+                key={quickAddFrom.id}
+                nodeId={quickAddFrom.id}
+                kindLabel={kindDef(registry, (quickAddFrom.data as DiagramNodeData).kind).label}
+                // A task's assignee tabs hang one 16px row under its box.
+                hangBelow={hasAssigneeStrip(quickAddFrom.data as DiagramNodeData) ? 16 : 0}
+                onAdd={(side) => quickAdd(quickAddFrom.id, side)}
+              />
+            ) : null}
             {/* Drawn in flow coordinates so the guide stays on the line it
                 names at any zoom. */}
             {dragGuides ? (
