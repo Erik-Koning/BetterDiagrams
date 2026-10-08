@@ -389,8 +389,10 @@ body {
   color: var(--shell-text-dim);
 }
 
-/* A symlinked file's row: the file opens from the row, and Unlink sits at
-   its end, quiet until the row is pointed at. */
+/* A symlinked file's row: the file opens from the row, and its actions sit
+   at its end. Unlink stays quiet until the row is pointed at — where there
+   is a pointer; on a touch screen it is always shown. Re-link…, offered only
+   for a link whose file has moved, is always shown. */
 .app__dropdown-row {
   display: flex;
   align-items: center;
@@ -402,7 +404,7 @@ body {
   min-width: 0;
 }
 
-.app__dropdown-unlink {
+.app__dropdown-action {
   flex: none;
   padding: 4px 8px;
   border: 0;
@@ -412,17 +414,22 @@ body {
   font: inherit;
   font-size: 11px;
   cursor: pointer;
-  opacity: 0;
 }
 
-.app__dropdown-row:hover .app__dropdown-unlink,
-.app__dropdown-unlink:focus-visible {
-  opacity: 1;
-}
-
-.app__dropdown-unlink:hover {
+.app__dropdown-action:hover {
   background: var(--shell-hover);
   color: var(--shell-text);
+}
+
+@media (hover: hover) {
+  .app__dropdown-action--quiet {
+    opacity: 0;
+  }
+
+  .app__dropdown-row:hover .app__dropdown-action--quiet,
+  .app__dropdown-action--quiet:focus-visible {
+    opacity: 1;
+  }
 }
 
 /* A view setting in the menu: the same drawn box as the bar's chips, laid

@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
-import { E2E_LINKED_DIR, E2E_LINKS_ROOT, E2E_PICK_DIR, E2E_PICK_FILE, E2E_TEMPLATES_DIR } from "./e2e/templates-dir";
+import { E2E_LINKED_DIR, E2E_LINKS_ROOT, E2E_PICK_ANSWER, E2E_PICK_DIR, E2E_PICK_FILE, E2E_TEMPLATES_DIR } from "./e2e/templates-dir";
 
 // Before the dev server starts: a linked folder that isn't there starts out missing.
 for (const dir of [E2E_LINKED_DIR, E2E_LINKS_ROOT, E2E_PICK_DIR, dirname(E2E_PICK_FILE)]) mkdirSync(dir, { recursive: true });
@@ -60,7 +60,7 @@ export default defineConfig({
       BD_TEMPLATES_DIR: E2E_TEMPLATES_DIR,
       BD_LINKED_DIRS: E2E_LINKED_DIR,
       BD_FOLDER_PICKER: `printf '%s' '${E2E_PICK_DIR}'`,
-      BD_FILE_PICKER: `printf '%s' '${E2E_PICK_FILE}'`,
+      BD_FILE_PICKER: `cat '${E2E_PICK_ANSWER}' 2>/dev/null || printf '%s' '${E2E_PICK_FILE}'`,
     },
   },
 });

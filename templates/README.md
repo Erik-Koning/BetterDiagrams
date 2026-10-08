@@ -86,5 +86,8 @@ a linked folder's, or one linked before) just opens it.
 
 **Unlink** beside a link in the menu removes the link, never the file. If the
 file moves, its link is listed as missing and saves to it fail rather than
-recreate the file; link it again from where it is now. A link made by hand
+recreate the file. **Re-link…** — on the save warning, or beside the link in
+the menu — points the link at where the file is now; the link keeps its name,
+so what was open from it syncs again (asking first if your copy and the file
+differ). A link made by hand
 (`ln -s ~/work/tracker/plan.json templates/symlinks/`) works the same.

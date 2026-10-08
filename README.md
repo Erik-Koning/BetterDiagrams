@@ -249,6 +249,10 @@ const ctx = templatePromptContext(doc, registry);
   buildPrompt={(scope, { geometry }) =>
     ctx.promptForClouds(scope.clouds, { components: scope.components, geometry })
   }
+  // Optional, for a document with tasks: an Architecture / Task flow choice.
+  // Task flow hides the clouds and copies this; `initialFocus` picks the start.
+  buildTaskPrompt={({ geometry }) => ctx.promptForClouds([], { geometry, focus: "tasks" })}
+  initialFocus="tasks"
   onClose={() => setOpen(false)}
 />
 ```
@@ -1549,7 +1553,10 @@ sequence in place; on a file with content it opens a new blank file of the other
 **Copy schema** button. On an architecture file that button opens the `SchemaCopyModal`
 described above — which clouds and which of their resources the copied contract should teach,
 seeded with the open document's own — rather than copying blind; sequence files have no
-provider vocabulary to scope, so they copy straight to the clipboard.
+provider vocabulary to scope, so they copy straight to the clipboard. A file with tasks or
+milestones is offered the **Task flow** schema too (the welcome modal's), and starts on it when
+they are at least half of what the file draws (frames, text and points aside), so one milestone
+on an architecture doesn't turn its copy into a work plan.
 
 **Live files on disk, while developing.** `npm run dev` mounts a small dev-only route
 (`example/vite-plugin-templates.js`) that keeps every open file in sync with a plain `.json`
@@ -1592,8 +1599,11 @@ at the repo root, one per document:
   (git-ignored). The file opens bound to its link, in place of the blank file the welcome modal
   greeted: edits save through the link to the file, and changes made to the file where it lives
   reload. A file already listed (an example, a linked folder's, linked before) just opens.
-  **Unlink** beside it in the menu removes the link and never the file; a link whose file has
-  moved is listed as missing, and its saves fail rather than recreate the file.
+  **Unlink** beside it in the menu removes the link and never the file. A link whose file has
+  moved is listed as missing, and its saves fail rather than recreate the file; **Re-link…** (on
+  the save warning, or beside the link in the menu) points the link at where the file is now.
+  The link keeps its name, so the open file stays bound and syncs again, asking whether to keep
+  your edits or use the file when the two differ.
 
 A conflict needs both sides to change the same file within about a second. When it happens,
 whichever write reaches the disk last is kept. `scratch/` is git-ignored; `templates/examples/`

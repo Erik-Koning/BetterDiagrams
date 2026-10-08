@@ -37,13 +37,40 @@ test.describe("task graphs", () => {
   test.describe("Copy schema", () => {
     test.use({ permissions: ["clipboard-read", "clipboard-write"] });
 
-    test("on a plan copies the Task flow schema, with no clouds to ask about", async ({ page }) => {
+    test("on a plan starts on the Task flow schema, with no clouds to ask about", async ({ page }) => {
       await page.locator(".app__bar").getByRole("button", { name: "Copy schema" }).click();
-      const dialog = page.getByRole("dialog", { name: "Copy task-flow schema & system prompt" });
-      await expect(dialog).toBeVisible();
+      const dialog = page.getByRole("dialog", { name: "Copy schema & system prompt" });
+      await expect(dialog.getByRole("button", { name: "Task flow" })).toHaveAttribute("aria-pressed", "true");
       await expect(dialog.getByRole("button", { name: "AWS" })).toHaveCount(0);
       await dialog.getByRole("button", { name: "Copy schema" }).click();
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("TASK FLOW:");
+    });
+
+    test("on an architecture with a milestone starts on Architecture, and offers Task flow", async ({ page, studio }, testInfo) => {
+      const file = testInfo.outputPath("mixed.json");
+      await writeFile(
+        file,
+        JSON.stringify({
+          version: 1,
+          nodes: [
+            { id: "api", label: "API", kind: "service", x: 80, y: 120 },
+            { id: "db", label: "Orders DB", kind: "database", x: 480, y: 120 },
+            { id: "launch", label: "Launch", kind: "milestone", x: 880, y: 120 },
+          ],
+          edges: [],
+        }),
+      );
+      await studio.importFile(file);
+      await expect(studio.nodeTitled("Orders DB")).toBeVisible();
+      await page.locator(".app__bar").getByRole("button", { name: "Copy schema" }).click();
+      const dialog = page.getByRole("dialog", { name: "Copy schema & system prompt" });
+      await expect(dialog.getByRole("button", { name: "Architecture" })).toHaveAttribute("aria-pressed", "true");
+      await expect(dialog.getByRole("button", { name: "AWS" })).toBeVisible();
+      await dialog.getByRole("button", { name: "Copy schema" }).click();
+      await expect(page.locator("[data-sonner-toast]").filter({ hasText: "Copied the architecture schema" })).toBeVisible();
+      expect(await page.evaluate(() => navigator.clipboard.readText())).not.toContain("TASK FLOW:");
+      await dialog.getByRole("button", { name: "Task flow" }).click();
+      await expect(dialog.getByRole("button", { name: "AWS" })).toHaveCount(0);
     });
   });
 

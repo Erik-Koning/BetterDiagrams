@@ -28,6 +28,9 @@ export const E2E_PICK_DIR = join(tmpdir(), "better-diagrams-e2e-pick");
 
 /**
  * What the dev server's "file dialog" answers under test — `BD_FILE_PICKER`
- * prints this path, as Link a file… expects the real dialog to.
+ * prints this path, as Link a file… expects the real dialog to…
  */
 export const E2E_PICK_FILE = join(tmpdir(), "better-diagrams-e2e-pick-file", "picked-plan.json");
+
+/** …unless this file exists, and names another path: a re-link's answer. */
+export const E2E_PICK_ANSWER = join(tmpdir(), "better-diagrams-e2e-pick-file", "answer.txt");

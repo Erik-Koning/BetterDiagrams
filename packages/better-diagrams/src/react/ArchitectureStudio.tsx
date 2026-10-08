@@ -1164,8 +1164,8 @@ function StudioInner({
   const [importNotes, setImportNotes] = useState<string[]>([]);
   /**
    * An import waiting on "Replace this diagram?". One question for the three
-   * ways a document can arrive — the Import button, Import folder, and a
-   * drop — asked only when the canvas holds something to lose.
+   * ways a document can arrive — Import's Open file… and Import folder…, and
+   * a drop — asked only when the canvas holds something to lose.
    */
   const [pendingReplace, setPendingReplace] = useState<{ name: string; run: () => void } | null>(null);
   const compareInputRef = useRef<HTMLInputElement>(null);

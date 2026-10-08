@@ -109,9 +109,11 @@ export async function linkFolder(body) {
 
 /**
  * Link one diagram file from another folder: `{ path }` typed, or `{ pick:
- * true }` through the system's file dialog. Resolves to `{ entry, templates,
- * … }` — `entry` is the listing row to open — or `{ cancelled }`,
- * `{ unsupported }` from the dialog, or `{ error }`.
+ * true, near? }` through the system's file dialog; `replaces` names a link
+ * to re-point instead (its file moved). Resolves to `{ entry, templates, … }`
+ * — `entry` is the listing row — or `{ cancelled }`, `{ unsupported }` from
+ * the dialog, or `{ error }`. A template in symlinks/ whose file has moved is
+ * listed `missing: true`.
  */
 export async function linkFile(body) {
   try {

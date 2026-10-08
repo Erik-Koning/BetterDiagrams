@@ -114,7 +114,7 @@ export { BrandMark, DateChip, TimelineScrubber } from "./chrome";
 export { WelcomeModal } from "./WelcomeModal";
 export type { WelcomeModalProps } from "./WelcomeModal";
 export { SchemaCopyModal } from "./SchemaCopyModal";
-export type { SchemaCopyModalProps, SchemaForm } from "./SchemaCopyModal";
+export type { SchemaCopyModalProps, SchemaFocus, SchemaForm } from "./SchemaCopyModal";
 export { CloudScopePicker, scopeFor, EMPTY_SCOPE } from "./CloudScopePicker";
 export type { CloudScope, CloudScopePickerProps } from "./CloudScopePicker";
 export type { StudioFile, StudioFileInit } from "./chrome";

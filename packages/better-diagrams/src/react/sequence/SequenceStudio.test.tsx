@@ -84,6 +84,16 @@ describe("SequenceStudio", () => {
     expect(onLinkFile).toHaveBeenCalledTimes(1);
   });
 
+  it("without a host to link, Import is the one action and opens the picker straight away", async () => {
+    const user = userEvent.setup();
+    const { container } = mount(<SequenceStudio defaultValue={example} />);
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const click = vi.spyOn(input, "click").mockImplementation(() => undefined);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menuitem", { name: /^Open file…/ })).not.toBeInTheDocument();
+  });
+
   it("adds a participant from the N key", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

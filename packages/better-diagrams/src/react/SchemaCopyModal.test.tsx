@@ -6,7 +6,7 @@
  * handed to `buildPrompt`, not about pixels.
  */
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SchemaCopyModal, type SchemaCopyModalProps } from "./SchemaCopyModal";
 
@@ -135,6 +135,7 @@ describe("SchemaCopyModal", () => {
       "PROMPT[aws|aws-s3,aws-lambda|full]",
       { clouds: ["aws"], components: ["aws-s3", "aws-lambda"] },
       "full",
+      "architecture",
     );
   });
 
@@ -174,5 +175,35 @@ describe("SchemaCopyModal", () => {
     await user.click(screen.getByRole("button", { name: "Copy schema" }));
     expect(writeText).toHaveBeenCalledWith("PROMPT[||content]");
     expect(buildPrompt).toHaveBeenLastCalledWith({ clouds: [], components: [] }, { geometry: false });
+  });
+
+  it("buildTaskPrompt offers Task flow beside Architecture; Task flow drops the clouds and tells the host", async () => {
+    const user = userEvent.setup();
+    const writeText = stubClipboard();
+    const buildTaskPrompt = vi.fn((opts: { geometry: boolean }) => `TASKS[${opts.geometry ? "full" : "content"}]`);
+    const onCopied = vi.fn();
+    mount({ buildTaskPrompt, initialFocus: "tasks", onCopied });
+    const schema = screen.getByRole("group", { name: "Schema" });
+    expect(within(schema).getByRole("button", { name: "Task flow" })).toHaveAttribute("aria-pressed", "true");
+    // A plan has no clouds to scope.
+    expect(screen.queryByRole("button", { name: "AWS" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Elements only" }));
+    await user.click(screen.getByRole("button", { name: "Copy schema" }));
+    expect(writeText).toHaveBeenLastCalledWith("TASKS[content]");
+    expect(onCopied).toHaveBeenLastCalledWith("TASKS[content]", expect.anything(), "content", "tasks");
+
+    // Back on Architecture, the clouds return and scope the copy again.
+    await user.click(within(schema).getByRole("button", { name: "Architecture" }));
+    await user.click(screen.getByRole("button", { name: "AWS" }));
+    // Still reading "Copied" from the first copy.
+    await user.click(screen.getByRole("button", { name: /^(Copy schema|Copied)$/ }));
+    expect(writeText).toHaveBeenLastCalledWith("PROMPT[aws|aws-s3,aws-lambda|content]");
+    expect(onCopied).toHaveBeenLastCalledWith(expect.any(String), expect.anything(), "content", "architecture");
+  });
+
+  it("without buildTaskPrompt there is no schema choice, and it starts on Architecture", () => {
+    mount({ initialFocus: "tasks" });
+    expect(screen.queryByRole("group", { name: "Schema" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "AWS" })).toBeInTheDocument();
   });
 });

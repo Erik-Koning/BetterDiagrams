@@ -538,7 +538,7 @@ export function WelcomeModal({
               <button
                 type="button"
                 className="as-btn as-btn--outline as-welcome__link"
-                title="Pick a diagram JSON file in another folder. It opens as its own file: edits save back to it, and changes made to it there reload here."
+                title="Pick a diagram JSON file in another folder. It opens as its own file, under its own name: edits save back to it, and changes made to it there reload here."
                 onClick={onLinkFile}
               >
                 Link a file on disk…

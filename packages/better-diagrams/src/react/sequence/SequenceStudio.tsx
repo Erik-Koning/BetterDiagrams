@@ -1646,20 +1646,22 @@ function SequenceInner({
             </ToolbarMenu>
             {!readOnly ? (
               <>
-                <ToolbarMenu label="Import" open={openMenu === "import"} onToggle={() => toggleMenu("import")}>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="as-menu__item"
-                    onClick={() => {
-                      setOpenMenu(null);
-                      fileInputRef.current?.click();
-                    }}
-                  >
-                    <div className="as-menu__label">Open file…</div>
-                    <div className="as-menu__hint">Replaces this diagram with a sequence document (.json)</div>
-                  </button>
-                  {onLinkFile ? (
+                {/* A menu only when there is a choice: with nothing to link,
+                    Import is the one action, and opens the picker directly. */}
+                {onLinkFile ? (
+                  <ToolbarMenu label="Import" open={openMenu === "import"} onToggle={() => toggleMenu("import")}>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="as-menu__item"
+                      onClick={() => {
+                        setOpenMenu(null);
+                        fileInputRef.current?.click();
+                      }}
+                    >
+                      <div className="as-menu__label">Open file…</div>
+                      <div className="as-menu__hint">Replaces this diagram with a sequence document (.json)</div>
+                    </button>
                     <button
                       type="button"
                       role="menuitem"
@@ -1674,8 +1676,17 @@ function SequenceInner({
                         Diagram JSON from another folder, opened as its own file: edits save back to it
                       </div>
                     </button>
-                  ) : null}
-                </ToolbarMenu>
+                  </ToolbarMenu>
+                ) : (
+                  <button
+                    type="button"
+                    className="as-btn"
+                    title="Replaces this diagram with a sequence document (.json)"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Import
+                  </button>
+                )}
                 <input
                   ref={fileInputRef}
                   type="file"

@@ -60,6 +60,7 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -187,12 +188,12 @@ function listFolder(dirs, folder) {
   }
   const listed = [];
   for (const file of files) {
-    // A symlink says where it points, so the menu can — and one whose file
-    // has moved says that, rather than "not readable".
+    // A link made by Link a file… says where it points, so the menu can.
+    // Any symlink whose file has moved says that, rather than "not readable".
     const target = linkTarget(join(dir, file));
-    const pointsAt = target ? { target: displayOf(target) } : {};
+    const pointsAt = target && folder === SYMLINKS ? { target: displayOf(target) } : {};
     if (target && !existsSync(target)) {
-      listed.push({ ...unreadable(folder, file, `links to ${displayOf(target)}, which is missing`), ...pointsAt });
+      listed.push({ ...unreadable(folder, file, `links to ${displayOf(target)}, which is missing`), ...pointsAt, missing: true });
       continue;
     }
     // One unreadable file must not take the whole list down — hand-edited
@@ -525,8 +526,12 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
        * the app opens; or `{ error }`. A file the menu already lists — in
        * examples/, a linked folder, or linked before — is handed back as it
        * is, never linked twice.
+       *
+       * `replaces` names a link to point at this file instead (a re-link,
+       * for a file that moved): the link keeps its name, so the app's files
+       * bound to it stay bound.
        */
-      const linkFile = (path) => {
+      const linkFile = (path, replaces) => {
         const full = resolve(expandHome(path));
         const shown = displayOf(full);
         let real;
@@ -548,15 +553,36 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
 
         trackSymlinks();
         const linkedAs = symlinkOf.get(real);
-        if (linkedAs) return { entry: listFolder(folderDirs, SYMLINKS).find((t) => t.file === basename(linkedAs)) };
         const home = Object.entries(folderDirs).find(
           ([folder, dir]) => folder !== FOLDERS && folder !== SYMLINKS && realOrResolved(dir) === dirname(real),
         );
+        const root = realOrResolved(dirname(repoDirs.symlinks));
+        const entryFor = (folder, file) => listFolder(folderDirs, folder).find((t) => t.file === file);
+
+        if (replaces !== undefined) {
+          const link = safePath(folderDirs, SYMLINKS, replaces);
+          if (!link || !lstatOrNull(link)?.isSymbolicLink()) return { error: `${replaces} isn't a link to re-link` };
+          if (linkedAs && linkedAs !== link) return { error: `${shown} is linked already, as ${basename(linkedAs)}` };
+          // Two names for one file would be two open copies writing over each other.
+          if (home || real.startsWith(root + sep)) return { error: `${shown} is already listed under Templates — open it from there` };
+          // Made beside it and renamed over it, so a link that can't be made
+          // leaves the old one as it was.
+          try {
+            symlinkSync(full, `${link}.relink`);
+            renameSync(`${link}.relink`, link);
+          } catch (error) {
+            rmSync(`${link}.relink`, { force: true });
+            return { error: `Couldn't re-link: ${error.message}` };
+          }
+          trackSymlinks();
+          return { entry: entryFor(SYMLINKS, replaces) };
+        }
+
+        if (linkedAs) return { entry: entryFor(SYMLINKS, basename(linkedAs)) };
         if (home) {
-          const entry = listFolder(folderDirs, home[0]).find((t) => t.file === basename(real));
+          const entry = entryFor(home[0], basename(real));
           if (entry && entry.kind !== "unreadable") return { entry };
         }
-        const root = realOrResolved(dirname(repoDirs.symlinks));
         if (real.startsWith(root + sep)) return { error: `${shown} is already under Templates` };
 
         // Named after the file; a name another link holds gets a number.
@@ -570,7 +596,7 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
           return { error: `Couldn't make the link: ${error.message}` };
         }
         trackSymlinks();
-        return { entry: listFolder(folderDirs, SYMLINKS).find((t) => t.file === name) };
+        return { entry: entryFor(SYMLINKS, name) };
       };
 
       /** path → the exact text this server last wrote there, so its own writes are not announced. */
@@ -686,8 +712,9 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
             return res.end("Method not allowed");
           }
           // Linking one file. POST { path } links a typed path; POST
-          // { pick: true } asks with the system's file dialog. JSON only, for
-          // the same reason as a folder link.
+          // { pick: true, near? } asks with the system's file dialog.
+          // `replaces` names a link to re-point (a file that moved). JSON
+          // only, for the same reason as a folder link.
           if (folder === SYMLINKS && !name && req.method === "POST") {
             if (!repoDirs.symlinks) return json(res, 404, { error: "This server links no files" });
             if (!/^application\/json\b/.test(req.headers["content-type"] ?? "")) {
@@ -696,12 +723,16 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
             const body = JSON.parse((await readBody(req)) || "{}");
             let path = typeof body.path === "string" ? body.path.trim() : "";
             if (body.pick) {
-              const picked = await pick("file", { prompt: "Pick a diagram JSON file to link", near: path || undefined });
+              const replacing = typeof body.replaces === "string";
+              const picked = await pick("file", {
+                prompt: replacing ? `Pick where ${body.replaces} is now` : "Pick a diagram JSON file to link",
+                near: (typeof body.near === "string" && body.near) || path || undefined,
+              });
               if (!picked.path) return json(res, 200, picked);
               path = picked.path;
             }
             if (!path) return json(res, 400, { error: "No file given" });
-            const linked = linkFile(path);
+            const linked = linkFile(path, typeof body.replaces === "string" ? body.replaces : undefined);
             if (!linked.entry) return json(res, 400, { error: linked.error ?? `Couldn't link ${path}` });
             return json(res, 200, { entry: linked.entry, ...listing() });
           }
@@ -737,9 +768,9 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
           if (req.method === "PUT") {
             if (!savable.has(folder)) return json(res, 403, { error: `${folder}/ is read-only` });
             const link = links.get(folder);
-            const pointsAt = folder === SYMLINKS ? linkTarget(full) : null;
-            // Nor write a symlinked file back where it used to be: the
-            // menu shows its link as missing instead.
+            const pointsAt = linkTarget(full);
+            // Never write a symlinked file back where it used to be, in any
+            // folder: the menu shows its link as missing instead.
             if (pointsAt && !existsSync(pointsAt)) {
               return json(res, 404, { error: "missing — moved or deleted", missing: true });
             }

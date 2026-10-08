@@ -24,6 +24,9 @@ import type { CloudOption, CloudResourceOption } from "./template-prompt";
 /** Which form of the schema the copy carries. */
 export type SchemaForm = "full" | "content";
 
+/** Which schema the copy teaches: the architecture vocabulary, or the Task flow brief for a plan. */
+export type SchemaFocus = "architecture" | "tasks";
+
 export interface SchemaCopyModalProps {
   /** Dialog heading. */
   title?: string;
@@ -31,7 +34,7 @@ export interface SchemaCopyModalProps {
   subtitle?: string;
   /**
    * Cloud chips to offer, in registry order. Empty for a schema with no
-   * clouds to scope (a task plan's): the dialog then offers the form alone.
+   * clouds to scope: the dialog then offers the form alone.
    */
   clouds: CloudOption[];
   /** Every selectable service; omit for cloud-granularity only. */
@@ -43,14 +46,27 @@ export interface SchemaCopyModalProps {
   /** The prompt for a scope. `geometry: false` asks for the elements-only form. */
   buildPrompt: (scope: CloudScope, opts: { geometry: boolean }) => string;
   /**
+   * The Task flow schema, for a document that holds tasks. Supplying it puts
+   * an Architecture / Task flow choice at the top. Task flow hides the cloud
+   * picker, since a plan has no clouds to scope, and copies this instead.
+   */
+  buildTaskPrompt?: (opts: { geometry: boolean }) => string;
+  /** Which schema the choice starts on, when `buildTaskPrompt` offers one. Defaults to architecture. */
+  initialFocus?: SchemaFocus;
+  /**
    * Offer the elements-only form. False for a document whose layout the model
    * is expected to author (or a kind with no content form at all).
    */
   forms?: boolean;
   onClose: () => void;
   /** Fired after the text reaches the clipboard — for the host's own toast. */
-  onCopied?: (text: string, scope: CloudScope, form: SchemaForm) => void;
+  onCopied?: (text: string, scope: CloudScope, form: SchemaForm, focus: SchemaFocus) => void;
 }
+
+const FOCUS_HINT: Record<SchemaFocus, string> = {
+  architecture: "Services, data and the clouds you tick below",
+  tasks: "A plan: tasks, milestones, story points, assignees and prerequisites",
+};
 
 const FORM_HINT: Record<SchemaForm, string> = {
   full: "Elements and positioning — the AI lays out the whole diagram",
@@ -65,12 +81,16 @@ export function SchemaCopyModal({
   initialClouds,
   usedResources,
   buildPrompt,
+  buildTaskPrompt,
+  initialFocus = "architecture",
   forms = true,
   onClose,
   onCopied,
 }: SchemaCopyModalProps) {
   const [scope, setScope] = useState<CloudScope>(() => scopeFor(initialClouds ?? [], resources ?? []));
   const [form, setForm] = useState<SchemaForm>("full");
+  const [focus, setFocus] = useState<SchemaFocus>(initialFocus);
+  const tasks = focus === "tasks" && !!buildTaskPrompt;
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -79,8 +99,11 @@ export function SchemaCopyModal({
   // Cheap enough to keep live: it is what makes the size of a selection — 40
   // kinds versus 4 — visible before the paste rather than after it.
   const prompt = useMemo(
-    () => buildPrompt(scope, { geometry: form !== "content" }),
-    [buildPrompt, scope, form],
+    () =>
+      tasks && buildTaskPrompt
+        ? buildTaskPrompt({ geometry: form !== "content" })
+        : buildPrompt(scope, { geometry: form !== "content" }),
+    [tasks, buildTaskPrompt, buildPrompt, scope, form],
   );
 
   const handleCopy = async () => {
@@ -93,18 +116,36 @@ export function SchemaCopyModal({
     setCopied(true);
     clearTimeout(copyTimer.current);
     copyTimer.current = setTimeout(() => setCopied(false), 1500);
-    onCopied?.(prompt, scope, form);
+    onCopied?.(prompt, scope, form, tasks ? "tasks" : "architecture");
   };
 
   const cloudCount = scope.clouds.filter((cloud) =>
     scope.components.some((id) => resources?.find((r) => r.id === id)?.cloud === cloud),
   ).length;
-  const scoped = clouds.length > 0;
+  const scoped = clouds.length > 0 && !tasks;
 
   return (
     <Modal title={title} onClose={onClose} cardClassName="as-modal__card--wide">
       <div className="as-schema-copy">
         {subtitle ? <p className="as-schema-copy__subtitle">{subtitle}</p> : null}
+
+        {buildTaskPrompt ? (
+          <div className="as-schema-copy__forms" role="group" aria-label="Schema">
+            {(["architecture", "tasks"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                className="as-kind-chip"
+                aria-pressed={focus === option}
+                onClick={() => setFocus(option)}
+                title={FOCUS_HINT[option]}
+              >
+                {option === "architecture" ? "Architecture" : "Task flow"}
+              </button>
+            ))}
+            <span className="as-schema-copy__form-hint">{FOCUS_HINT[focus]}</span>
+          </div>
+        ) : null}
 
         {scoped ? (
           <CloudScopePicker
