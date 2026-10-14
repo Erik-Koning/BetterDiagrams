@@ -107,6 +107,8 @@ import {
   TimelineScrubber,
   ToolbarMenu,
   VersionTagChip,
+  handOffImportReport,
+  takeImportReport,
   type StudioFile,
   type StudioFileInit,
 } from "../chrome";
@@ -381,6 +383,12 @@ function SequenceInner({
     setToast(message);
     window.setTimeout(() => setToast((cur) => (cur === message ? "" : cur)), 2200);
   }, []);
+  // An import that opened as a new file said so in the editor that read it,
+  // which a host keyed per file has just unmounted; say it here.
+  useEffect(() => {
+    const report = takeImportReport();
+    if (report) showToast(report.message);
+  }, [showToast]);
 
   /** Re-materialize the canvas from a validated document. The one write path. */
   const adopt = useCallback(
@@ -1295,16 +1303,31 @@ function SequenceInner({
     [pendingExport, runDirectExport, filename, stateAxes, exportPalette, mode, gradients, showToast],
   );
 
+  /**
+   * Import a sequence document. Once this diagram has more than one
+   * participant it is work of its own, so — when the host can make files —
+   * the import opens as a new file beside it, as the architecture editor's
+   * does. Otherwise it replaces this one (undoably).
+   */
   const loadFile = useCallback(
     async (file: File) => {
       try {
-        applyTemplate(JSON.parse(await file.text()));
+        const doc = validateSequence(JSON.parse(await file.text()));
+        if (onFileCreate && templateRef.current.participants.length > 1) {
+          const message = `Loaded ${file.name} · in a new file`;
+          handOffImportReport({ message });
+          showToast(message);
+          const title = typeof doc.meta?.title === "string" ? doc.meta.title.trim() : "";
+          onFileCreate({ name: title || file.name.replace(/\.json$/i, ""), kind: "sequence", doc });
+          return;
+        }
+        applyTemplate(doc);
         showToast(`Loaded ${file.name}`);
       } catch (err) {
         showToast(`Could not load ${file.name}: ${(err as Error).message}`);
       }
     },
-    [applyTemplate, showToast],
+    [applyTemplate, showToast, onFileCreate],
   );
 
   const patchMeta = useCallback(
@@ -1328,6 +1351,10 @@ function SequenceInner({
 
   const metaTitle =
     typeof templateRef.current.meta?.title === "string" ? templateRef.current.meta.title.trim() : "";
+  /** Where Import puts what it reads (see `loadFile`), as its menu row says it. */
+  const participantCount = templateRef.current.participants.length;
+  const importLanding =
+    onFileCreate && participantCount > 1 ? "Opens as a new file" : participantCount ? "Replaces this diagram" : "Opens here";
   /** See the architecture editor's reconciler — which side moved decides. */
   const titleSyncRef = useRef<{ fileId: string; title: string; name: string } | null>(null);
   useEffect(() => {
@@ -1660,7 +1687,7 @@ function SequenceInner({
                       }}
                     >
                       <div className="as-menu__label">Open file…</div>
-                      <div className="as-menu__hint">Replaces this diagram with a sequence document (.json)</div>
+                      <div className="as-menu__hint">{importLanding}: a sequence document (.json)</div>
                     </button>
                     <button
                       type="button"
@@ -1681,7 +1708,7 @@ function SequenceInner({
                   <button
                     type="button"
                     className="as-btn"
-                    title="Replaces this diagram with a sequence document (.json)"
+                    title={`${importLanding}: a sequence document (.json)`}
                     onClick={() => fileInputRef.current?.click()}
                   >
                     Import

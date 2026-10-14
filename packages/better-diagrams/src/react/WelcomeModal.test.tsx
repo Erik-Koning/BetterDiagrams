@@ -489,6 +489,34 @@ describe("type picker", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/looks like a sequence document/);
   });
 
+  it("initialPreset starts on Task flow, and a pinned picker still switches Architecture ↔ Task flow, never the kind", async () => {
+    const user = userEvent.setup();
+    const writeText = stubClipboard();
+    mountModal({
+      lockKind: true,
+      initialPreset: "tasks",
+      systemPromptTasks: "TASK PROMPT",
+      parseOther: (text: string) => JSON.parse(text),
+      onInsertOther: vi.fn(),
+    });
+    expect(screen.getByRole("button", { name: "Task flow" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Sequence" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /Copy Schema & System Prompt/ }));
+    expect(writeText).toHaveBeenLastCalledWith("TASK PROMPT");
+    // Both are architecture documents: the switch changes only what is copied.
+    await user.click(screen.getByRole("button", { name: "Architecture" }));
+    expect(screen.getByRole("button", { name: "Architecture" })).toHaveAttribute("aria-pressed", "true");
+    // (It reads "Copied" for a moment after the first copy.)
+    await user.click(screen.getByRole("button", { name: /^(Copied|Copy Schema & System Prompt)$/ }));
+    expect(writeText).toHaveBeenLastCalledWith("THE PROMPT");
+  });
+
+  it("initialPreset is ignored where there is no Task flow to start on", () => {
+    mountModal({ initialPreset: "tasks" });
+    expect(screen.queryByRole("button", { name: "Task flow" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Architecture" })).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("Link a file on disk… is offered only when the host can link, and hands off to it", async () => {
     const user = userEvent.setup();
     const onLinkFile = vi.fn();

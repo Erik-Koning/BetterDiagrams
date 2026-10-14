@@ -3253,6 +3253,53 @@ describe("content/presentation split", () => {
     expect(screen.queryByText("Redis")).not.toBeInTheDocument();
   });
 
+  it("opens an import as a new file once the diagram holds more than one top-level node; a lone frame takes it here", async () => {
+    const user = userEvent.setup();
+    const onFileCreate = vi.fn();
+    const files = [{ id: "f1", name: "Platform", kind: "arch" }];
+    const small = { version: 1, meta: { title: "Small" }, nodes: [{ id: "solo", label: "Solo", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76 }], edges: [] };
+    const pick = (container: HTMLElement) =>
+      fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+        target: { files: [new File([JSON.stringify(small)], "small.json", { type: "application/json" })] },
+      });
+
+    const host = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} files={files} activeFileId="f1" onFileCreate={onFileCreate} />);
+    // The menu says where it lands before anything is picked.
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    expect(screen.getByRole("menuitem", { name: /^Open file…/ })).toHaveTextContent(/Opens as a new file:/);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    pick(host.container);
+    await waitFor(() => expect(onFileCreate).toHaveBeenCalledTimes(1));
+    expect(onFileCreate.mock.calls[0][0]).toMatchObject({ name: "Small", kind: "architecture", doc: { nodes: [expect.objectContaining({ id: "solo" })] } });
+    // Nothing asked, and this diagram is untouched.
+    expect(screen.queryByRole("dialog", { name: /^Replace this diagram/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Redis")).toBeInTheDocument();
+    // A host keyed per file remounts on the new one, and that editor says what was read.
+    host.unmount();
+    const opened = mount(<ArchitectureStudio defaultValue={onFileCreate.mock.calls[0][0].doc} files={files} activeFileId="f2" onFileCreate={onFileCreate} />);
+    expect(await screen.findByText("Loaded small.json · in a new file")).toBeInTheDocument();
+    opened.unmount();
+
+    // A frame of cards is ONE top-level node: the import lands here, asking first.
+    const framed = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "g", label: "Frame", kind: "group", x: 0, y: 0, w: 480, h: 300 },
+        { id: "a", label: "Card A", kind: "service", parentId: "g", x: 20, y: 60 },
+        { id: "b", label: "Card B", kind: "service", parentId: "g", x: 240, y: 60 },
+      ],
+      edges: [],
+    });
+    const lone = mount(<ArchitectureStudio defaultValue={framed} files={files} activeFileId="f1" onFileCreate={onFileCreate} />);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    expect(screen.getByRole("menuitem", { name: /^Open file…/ })).toHaveTextContent(/Replaces this diagram:/);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    pick(lone.container);
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Replace this diagram with “small.json”?" })).getByRole("button", { name: "Replace" }));
+    await waitFor(() => expect(screen.getByText("Solo")).toBeInTheDocument());
+    expect(onFileCreate).toHaveBeenCalledTimes(1);
+  });
+
   it("counts unmatched records so a wrong-diagram layout can't read as success", async () => {
     const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
     const layout = {

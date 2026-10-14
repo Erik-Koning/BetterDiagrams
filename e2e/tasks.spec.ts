@@ -5,7 +5,7 @@
  * CSV import, and the Task flow preset on the Welcome screen.
  */
 import { readFile, writeFile } from "node:fs/promises";
-import { expect, test } from "./fixtures";
+import { ARCH_FILE, expect, test } from "./fixtures";
 
 const task = (id: string, label: string, x: number, y: number, over: Record<string, unknown> = {}) => ({
   id, label, kind: "task", icon: "none", description: "", parentId: null, x, y, w: 200, h: 84, ...over,
@@ -72,6 +72,28 @@ test.describe("task graphs", () => {
       await dialog.getByRole("button", { name: "Task flow" }).click();
       await expect(dialog.getByRole("button", { name: "AWS" })).toHaveCount(0);
     });
+
+    test("a file with no tasks at all is offered Task flow too — the copy is for the next diagram", async ({ page, studio }) => {
+      // The import opened as a file of its own, so the starting architecture is still there.
+      await studio.openFile(ARCH_FILE);
+      await page.locator(".app__bar").getByRole("button", { name: "Copy schema" }).click();
+      const dialog = page.getByRole("dialog", { name: "Copy schema & system prompt" });
+      await expect(dialog.getByRole("button", { name: "Architecture" })).toHaveAttribute("aria-pressed", "true");
+      await dialog.getByRole("button", { name: "Task flow" }).click();
+      await dialog.getByRole("button", { name: "Copy schema" }).click();
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("TASK FLOW:");
+    });
+
+    test("Edit template JSON on a plan starts on Task flow as well, and copies its schema", async ({ page, studio }) => {
+      await studio.showJson();
+      await page.getByRole("button", { name: "Edit template JSON" }).click();
+      const modal = page.getByRole("dialog", { name: "Get started" });
+      await expect(modal.getByRole("button", { name: "Task flow" })).toHaveAttribute("aria-pressed", "true");
+      // The file's kind stays pinned; Architecture ↔ Task flow is only what gets copied.
+      await expect(modal.getByRole("button", { name: "Sequence" })).toBeDisabled();
+      await modal.getByRole("button", { name: "Copy Schema & System Prompt" }).click();
+      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("TASK FLOW:");
+    });
   });
 
   test("the corner check marks a task done without selecting it, and unblocks what waits on it", async ({ studio, page }) => {
@@ -111,6 +133,8 @@ test.describe("task graphs", () => {
   test("a dependency line shows only while one of its tasks is hovered", async ({ studio, page }) => {
     const dep = page.locator('.react-flow__edge[data-id="dep"]');
     const pre = page.locator('.react-flow__edge[data-id="pre"]');
+    // The pointer is left where Import's menu was, which the opened plan can put a card under.
+    await page.mouse.move(5, 5);
     await expect(dep).toHaveClass(/as-edge--dormant/);
     await expect(pre).not.toHaveClass(/as-edge--dormant/);
     await studio.node("infra").hover();

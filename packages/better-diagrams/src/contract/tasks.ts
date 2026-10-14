@@ -31,6 +31,30 @@ export function isWorkItem(n: { kind?: string }): boolean {
   return n.kind === TASK_KIND || n.kind === MILESTONE_KIND;
 }
 
+/**
+ * Kinds that draw nothing of a plan's or a system's own: frames (schema.ts's
+ * CONTAINER_KINDS), text (its ANNOTATION_KINDS) and bare points. Spelled out
+ * because schema.ts imports this module; a test holds the two lists together.
+ */
+const PLAN_NEUTRAL_KINDS: ReadonlySet<string> = new Set(["group", "text", "point"]);
+
+/**
+ * Whether a document reads as a work plan rather than a system: it holds
+ * tasks or milestones, and they are at least half of what it draws. Frames,
+ * text and bare points count neither way, so a plan laid out in phase frames
+ * is still a plan, and one milestone on an architecture doesn't make it one.
+ * The editor's Task flow choices start on Task flow when this holds.
+ */
+export function readsAsPlan(doc: { nodes: ReadonlyArray<{ kind?: string }> }): boolean {
+  let work = 0;
+  let other = 0;
+  for (const n of doc.nodes) {
+    if (isWorkItem(n)) work++;
+    else if (!PLAN_NEUTRAL_KINDS.has(n.kind ?? "")) other++;
+  }
+  return work > 0 && work >= other;
+}
+
 /** The relation that marks a long-range, hover-only link between tasks. */
 export const DEPENDENCY_RELATION = "dependency";
 

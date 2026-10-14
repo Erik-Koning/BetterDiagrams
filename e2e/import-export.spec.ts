@@ -1,5 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { expect, SMALL_TEMPLATE, test } from "./fixtures";
+import { ARCH_FILE, exact, expect, SMALL_TEMPLATE, test } from "./fixtures";
 
 async function downloadedText(download: Awaited<ReturnType<import("./fixtures").Studio["download"]>>) {
   const path = await download.path();
@@ -8,16 +8,34 @@ async function downloadedText(download: Awaited<ReturnType<import("./fixtures").
 }
 
 test.describe("import and export", () => {
-  test("imports a template file from disk, replacing the document", async ({ studio }, testInfo) => {
+  test("an import opens as a new file beside a diagram with work in it, and in place over one node", async ({ page, studio }, testInfo) => {
     await studio.goto();
     const file = testInfo.outputPath("import.json");
     await writeFile(file, JSON.stringify(SMALL_TEMPLATE));
 
     await studio.importFile(file);
 
+    // A file of its own, named by the document's title — and the editor on it says so.
+    await expect(studio.fileButton).toHaveText(exact("Auth slice"));
+    await expect(studio.toast).toHaveText("Loaded import.json · in a new file");
+    // …and then lets it go, like any toast (the app runs in StrictMode).
+    await expect(studio.toast).toHaveCount(0);
     await expect(studio.nodeTitled("Auth Service")).toBeVisible();
     await expect(studio.nodeTitled("Users DB")).toBeVisible();
     await expect(studio.nodeTitled("REST API")).toHaveCount(0);
+    // The diagram it was imported over is untouched.
+    await studio.openFile(ARCH_FILE);
+    await expect(studio.nodeTitled("REST API")).toBeVisible();
+
+    // A new file holding one starter node takes the import in place, after asking.
+    await studio.newFile();
+    await page.getByRole("dialog", { name: "Get started" }).getByRole("button", { name: /Insert Node Manually/ }).click();
+    await expect(studio.page.locator(".react-flow__node")).toHaveCount(1);
+    const before = (await studio.workspace()).files.length;
+    await studio.importFile(file);
+    await expect(studio.nodeTitled("Auth Service")).toBeVisible();
+    await expect(studio.page.locator(".react-flow__node")).toHaveCount(2);
+    expect((await studio.workspace()).files).toHaveLength(before);
   });
 
   test("exports the template as a JSON download", async ({ studio }) => {

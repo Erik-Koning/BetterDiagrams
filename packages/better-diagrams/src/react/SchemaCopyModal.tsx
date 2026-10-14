@@ -46,12 +46,16 @@ export interface SchemaCopyModalProps {
   /** The prompt for a scope. `geometry: false` asks for the elements-only form. */
   buildPrompt: (scope: CloudScope, opts: { geometry: boolean }) => string;
   /**
-   * The Task flow schema, for a document that holds tasks. Supplying it puts
-   * an Architecture / Task flow choice at the top. Task flow hides the cloud
+   * The Task flow schema. Supplying it puts an Architecture / Task flow
+   * choice at the top — offered whatever the open document holds, since the
+   * copy is for the diagram about to be asked for. Task flow hides the cloud
    * picker, since a plan has no clouds to scope, and copies this instead.
    */
   buildTaskPrompt?: (opts: { geometry: boolean }) => string;
-  /** Which schema the choice starts on, when `buildTaskPrompt` offers one. Defaults to architecture. */
+  /**
+   * Which schema the choice starts on, when `buildTaskPrompt` offers one.
+   * Defaults to architecture; pass "tasks" when the document `readsAsPlan`.
+   */
   initialFocus?: SchemaFocus;
   /**
    * Offer the elements-only form. False for a document whose layout the model
@@ -63,9 +67,12 @@ export interface SchemaCopyModalProps {
   onCopied?: (text: string, scope: CloudScope, form: SchemaForm, focus: SchemaFocus) => void;
 }
 
+/** What Task flow is, in one line — the welcome modal's type picker says the same. */
+export const TASK_FLOW_HINT = "A plan: tasks and milestones, with story points, assignees and prerequisites";
+
 const FOCUS_HINT: Record<SchemaFocus, string> = {
-  architecture: "Services, data and the clouds you tick below",
-  tasks: "A plan: tasks, milestones, story points, assignees and prerequisites",
+  architecture: "Services, data and clouds — scoped to the clouds you tick",
+  tasks: TASK_FLOW_HINT,
 };
 
 const FORM_HINT: Record<SchemaForm, string> = {

@@ -14,6 +14,7 @@ import { looksLikeTaskCsv } from "../contract/import/task-csv";
 import { BrandMark, Modal } from "./chrome";
 import { JsonCodeEditor } from "./JsonCodeEditor";
 import { CloudScopePicker, scopeFor, type CloudScope } from "./CloudScopePicker";
+import { TASK_FLOW_HINT } from "./SchemaCopyModal";
 import { copyText } from "./copy-text";
 import { UiIcon } from "./ui-icons";
 import { SEQUENCE_LINT, buildArchitectureLint, type JsonDocLint } from "./schema-lint";
@@ -109,9 +110,16 @@ export interface WelcomeModalProps {
   /** Content-form prompt for Task flow — elements only. */
   systemPromptTasksContent?: string;
   /**
-   * Pin the picker to `kind`, rendered but disabled — for reopening the
-   * modal as a JSON editor over an existing file, whose type must not be
-   * silently rewritten by a paste.
+   * Start the picker on Task flow, when `systemPromptTasks` offers it — for
+   * reopening the modal over a document that `readsAsPlan`.
+   */
+  initialPreset?: "tasks";
+  /**
+   * Pin the picker to `kind` — for reopening the modal as a JSON editor over
+   * an existing file, whose type must not be silently rewritten by a paste.
+   * The other kind renders disabled. Architecture and Task flow stay a
+   * choice, since both are the same kind of document: it picks only what
+   * the copy button copies.
    */
   lockKind?: boolean;
   /**
@@ -233,6 +241,7 @@ export function WelcomeModal({
   systemPromptOtherContent,
   systemPromptTasks,
   systemPromptTasksContent,
+  initialPreset,
   lockKind,
   onLinkFile,
 }: WelcomeModalProps) {
@@ -251,7 +260,9 @@ export function WelcomeModal({
   /** Whether the copy button's form picker is open. See its comment below. */
   const [copyFormOpen, setCopyFormOpen] = useState(false);
   const [copied, setCopied] = useState<null | "full" | "content">(null);
-  const [pickedKind, setPickedKind] = useState<PickedKind>(kind);
+  const [pickedKind, setPickedKind] = useState<PickedKind>(
+    initialPreset === "tasks" && kind === "architecture" && systemPromptTasks ? "tasks" : kind,
+  );
   // Task flow IS an architecture document; everything that parses, lints or
   // routes the insert reads the kind underneath.
   const pickedDocKind: WelcomeModalProps["kind"] = pickedKind === "tasks" ? "architecture" : pickedKind;
@@ -262,6 +273,11 @@ export function WelcomeModal({
   useEffect(() => () => clearTimeout(copyTimer.current), []);
 
   const otherEnabled = !!parseOther && !!onInsertOther;
+  const kindOptions: readonly PickedKind[] = systemPromptTasks
+    ? ["architecture", "tasks", "sequence"]
+    : ["architecture", "sequence"];
+  /** Whether the picker holds a choice within this document's own kind — Architecture or Task flow. */
+  const ownKindChoice = kind === "architecture" && !!systemPromptTasks;
 
   const finalName = () => name.trim() || defaultName;
   /** Close without inserting — telling the host when Task flow was the pick. */
@@ -354,19 +370,18 @@ export function WelcomeModal({
         ) : null}
 
         <div className="as-welcome__kind" role="group" aria-label="Diagram type">
-          {(systemPromptTasks
-            ? (["architecture", "tasks", "sequence"] as const)
-            : (["architecture", "sequence"] as const)
-          ).map((option: PickedKind) => {
+          {kindOptions.map((option: PickedKind) => {
             const docKind = option === "tasks" ? "architecture" : option;
             const isOther = docKind !== kind;
-            const disabled = !!lockKind || (isOther && !otherEnabled);
-            const title = lockKind
+            // Pinned, a choice survives only between options of this kind.
+            const pinned = !!lockKind && (isOther || !ownKindChoice);
+            const disabled = pinned || (isOther && !otherEnabled);
+            const title = pinned
               ? "This dialog edits the current file — its type is fixed"
               : isOther && !otherEnabled
                 ? `This host can't create ${docKind} files`
                 : option === "tasks"
-                  ? "A plan of tasks — an architecture diagram whose nodes are tickets with points, people and a done check"
+                  ? TASK_FLOW_HINT
                   : undefined;
             return (
               <button

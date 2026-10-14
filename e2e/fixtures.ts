@@ -188,22 +188,24 @@ export class Studio {
   }
 
   /**
-   * Import a template through the toolbar's Import → Open file…, accepting
-   * the "Replace this diagram?" question the editor asks whenever the canvas
-   * already holds something (an empty canvas, or a layout file, never asks).
+   * Import a template through the toolbar's Import → Open file…. Where it
+   * lands is what the row says: a new file beside a diagram with more than
+   * one top-level node (waited for here — it opens in a remounted editor),
+   * or this one, accepting the "Replace this diagram?" question when there
+   * is anything to replace. Not for layout files, which never ask.
    */
   async importFile(path: string): Promise<void> {
     const chooser = this.page.waitForEvent("filechooser");
     await this.root.getByRole("button", { name: "Import", exact: true }).click();
-    await this.root.getByRole("menuitem", { name: /^Open file…/ }).click();
+    const row = this.root.getByRole("menuitem", { name: /^Open file…/ });
+    const landing = (await row.textContent()) ?? "";
+    await row.click();
     await (await chooser).setFiles(path);
-    const replace = this.page
-      .getByRole("dialog", { name: /^Replace this diagram/ })
-      .getByRole("button", { name: "Replace" });
-    await replace.waitFor({ state: "visible", timeout: 1500 }).then(
-      () => replace.click(),
-      () => undefined,
-    );
+    if (/Opens as a new file/.test(landing)) {
+      await expect(this.toast).toHaveText(/· in a new file$/);
+    } else if (/Replaces this diagram/.test(landing)) {
+      await this.page.getByRole("dialog", { name: /^Replace this diagram/ }).getByRole("button", { name: "Replace" }).click();
+    }
   }
 
   /** A field row on a record node's card. */

@@ -152,6 +152,7 @@ export {
   MILESTONE_KIND,
   DEPENDENCY_RELATION,
   isWorkItem,
+  readsAsPlan,
   isTaskLink,
   prerequisites,
   workDone,

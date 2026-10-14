@@ -209,3 +209,29 @@ describe("taskDeadlocks", () => {
     expect(taskDeadlocks(doc)).toEqual([["a", "b", "c"]]);
   });
 });
+
+import { readsAsPlan } from "./tasks";
+import { ANNOTATION_KINDS, CONTAINER_KINDS } from "./schema";
+
+describe("readsAsPlan", () => {
+  const doc = (...kinds: string[]) => ({ nodes: kinds.map((kind) => ({ kind })) });
+
+  it("holds when tasks and milestones are at least half of what the document draws", () => {
+    expect(readsAsPlan(doc("task", "task", "milestone"))).toBe(true);
+    expect(readsAsPlan(doc("task", "service"))).toBe(true);
+    expect(readsAsPlan(doc("task", "service", "database"))).toBe(false);
+    // One milestone on an architecture is not a plan.
+    expect(readsAsPlan(doc("milestone", "service", "service", "queue"))).toBe(false);
+    expect(readsAsPlan(doc())).toBe(false);
+    expect(readsAsPlan(doc("service"))).toBe(false);
+  });
+
+  it("counts frames, text and bare points neither way — a plan in phase frames is still a plan", () => {
+    expect(readsAsPlan(doc("group", "group", "text", "point", "task"))).toBe(true);
+    expect(readsAsPlan(doc("group", "text", "point"))).toBe(false);
+    // Every container and annotation kind the schema defines is neutral.
+    for (const kind of [...CONTAINER_KINDS, ...ANNOTATION_KINDS]) {
+      expect(readsAsPlan(doc("task", "service", kind))).toBe(true);
+    }
+  });
+});

@@ -568,6 +568,7 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
           // Made beside it and renamed over it, so a link that can't be made
           // leaves the old one as it was.
           try {
+            rmSync(`${link}.relink`, { force: true }); // one a crash left behind
             symlinkSync(full, `${link}.relink`);
             renameSync(`${link}.relink`, link);
           } catch (error) {
@@ -773,6 +774,11 @@ export function templatesPlugin(repoDirs, { linked: linkedPaths = [], linksFile 
             // folder: the menu shows its link as missing instead.
             if (pointsAt && !existsSync(pointsAt)) {
               return json(res, 404, { error: "missing — moved or deleted", missing: true });
+            }
+            // symlinks/ holds links: a save never makes a file there, so a
+            // link removed by hand fails its saves rather than becoming a copy.
+            if (folder === SYMLINKS && !lstatOrNull(full)) {
+              return json(res, 404, { error: "its link was removed — link the file again", missing: true });
             }
             if (link || folder === SYMLINKS) {
               // Outside the repo, never recreate a folder that has gone (it

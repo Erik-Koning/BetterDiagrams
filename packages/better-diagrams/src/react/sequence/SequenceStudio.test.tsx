@@ -84,6 +84,33 @@ describe("SequenceStudio", () => {
     expect(onLinkFile).toHaveBeenCalledTimes(1);
   });
 
+  it("an import opens as a new file once the diagram has more than one participant, and replaces one that hasn't", async () => {
+    const onFileCreate = vi.fn();
+    const onChange = vi.fn();
+    const files = [{ id: "f1", name: "Order flow", kind: "seq" }];
+    const incoming = { version: 1, meta: { title: "Login" }, participants: [{ id: "u", label: "User" }], messages: [] };
+    const pick = (container: HTMLElement) =>
+      fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+        target: { files: [new File([JSON.stringify(incoming)], "login.json", { type: "application/json" })] },
+      });
+
+    const full = mount(<SequenceStudio defaultValue={example} files={files} activeFileId="f1" onFileCreate={onFileCreate} onChange={onChange} />);
+    expect(screen.getByRole("button", { name: "Import" })).toHaveAttribute("title", "Opens as a new file: a sequence document (.json)");
+    pick(full.container);
+    await waitFor(() => expect(onFileCreate).toHaveBeenCalledTimes(1));
+    expect(onFileCreate.mock.calls[0][0]).toMatchObject({ name: "Login", kind: "sequence", doc: { participants: [expect.objectContaining({ id: "u" })] } });
+    expect(onChange).not.toHaveBeenCalled();
+    full.unmount();
+
+    const lone = mount(<SequenceStudio defaultValue={validateSequence(incoming)} files={files} activeFileId="f1" onFileCreate={onFileCreate} onChange={onChange} />);
+    // The editor mounted after the import says what was read.
+    expect(await screen.findByText("Loaded login.json · in a new file")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import" })).toHaveAttribute("title", "Replaces this diagram: a sequence document (.json)");
+    pick(lone.container);
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(onFileCreate).toHaveBeenCalledTimes(1);
+  });
+
   it("without a host to link, Import is the one action and opens the picker straight away", async () => {
     const user = userEvent.setup();
     const { container } = mount(<SequenceStudio defaultValue={example} />);

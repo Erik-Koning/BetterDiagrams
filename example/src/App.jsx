@@ -13,10 +13,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster, toast } from "sonner";
 import {
-  ANNOTATION_KINDS,
   ArchitectureStudio,
   BrandMark,
-  CONTAINER_KINDS,
   DARK_THEME,
   EMPTY_SEQUENCE,
   EMPTY_TEMPLATE,
@@ -36,7 +34,7 @@ import {
   templatePromptContext,
   themeToStyle,
   importFolder,
-  isWorkItem,
+  readsAsPlan,
   validateSequence,
   validateTemplate,
 } from "@mosphere/better-diagrams";
@@ -492,9 +490,9 @@ export default function App() {
    * Architecture files ASK first: which clouds, and which of their services,
    * the schema should teach. The open document's own clouds seed the answer,
    * but the copy is aimed at the diagram the user is ABOUT to ask for — which
-   * may be on a cloud this document has never mentioned. A document with
-   * tasks is offered the welcome modal's Task flow schema too, and starts on
-   * it when the tasks are most of what is there.
+   * may be on a cloud this document has never mentioned. The welcome
+   * modal's Task flow schema is offered beside it, and the dialog starts on
+   * it when the document reads as a plan (`isPlan`).
    */
   const copySchema = useCallback(() => {
     if (active?.kind === "sequence") void copySequenceSchema();
@@ -583,6 +581,17 @@ export default function App() {
   const failingRef = useRef(new Set());
   /** Re-link a symlinked file — defined further down, offered by the save warning below. */
   const relinkFileRef = useRef(null);
+  /**
+   * Disk paths whose saves wait while a re-link settles: `folder/` for a
+   * linked folder, `folder/file` for one link. The server re-points the link
+   * before the app has compared what it points at now with the open copy,
+   * and a save landing in between would write this copy over the file just
+   * found, without asking (see `syncOrAsk`). Counted: a second Re-link click
+   * while the dialog is up must not lift the first one's hold.
+   */
+  const holdsRef = useRef(new Map());
+  /** Bumped when a hold lifts, so a save pass picks up the edits it held back. */
+  const [holdsLifted, setHoldsLifted] = useState(0);
   /** The workspace as of the last render — for the async sync paths below. */
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
@@ -604,6 +613,19 @@ export default function App() {
   const clearFailure = (id) => {
     if (failingRef.current.delete(id)) toast.dismiss(`save-failed:${id}`);
   };
+
+  const isHeld = (path) => holdsRef.current.has(`${path.folder}/`) || holdsRef.current.has(`${path.folder}/${path.file}`);
+  /** Hold saves to `key` (see `holdsRef`); the returned function lifts this hold. */
+  const holdSaves = useCallback((key) => {
+    const holds = holdsRef.current;
+    holds.set(key, (holds.get(key) ?? 0) + 1);
+    return () => {
+      const left = holds.get(key) - 1;
+      if (left > 0) holds.set(key, left);
+      else holds.delete(key);
+      setHoldsLifted((n) => n + 1);
+    };
+  }, []);
 
   /**
    * Adopt documents read from disk — the file on disk wins. Each adopted file
@@ -742,7 +764,19 @@ export default function App() {
           id: `save-failed:${file.id}`,
           description: `${whereIs(listedLinks, path.folder, path.file, probe?.templates)}: ${result.error}. Edits stay in this browser.`,
           duration: Infinity,
-          ...(lostLink ? { action: { label: "Re-link…", onClick: () => void relinkFileRef.current?.(lostLink) } } : {}),
+          // The click closes the warning; forget it was given, so a cancelled
+          // dialog and the next failed save warn again.
+          ...(lostLink
+            ? {
+                action: {
+                  label: "Re-link…",
+                  onClick: () => {
+                    clearFailure(file.id);
+                    void relinkFileRef.current?.(lostLink);
+                  },
+                },
+              }
+            : {}),
         });
       }
     },
@@ -772,6 +806,8 @@ export default function App() {
         const before = writtenRef.current.get(file.id);
         const moved = before && (before.folder !== path.folder || before.file !== path.file);
         if (before && !moved && before.json === json) continue;
+        // Mid re-link: written once the hold lifts, if the answer still says to.
+        if (isHeld(path)) continue;
         if (cancelled) return;
         const result = await writeTemplate(path.folder, path.file, file.doc);
         if (cancelled) return;
@@ -810,7 +846,7 @@ export default function App() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [files, templatesDir, refreshTemplates, reportSaveFailures]);
+  }, [files, holdsLifted, templatesDir, refreshTemplates, reportSaveFailures]);
 
   // Closing the tab inside the debounce would drop the last edit; hand the
   // unsynced files to the browser to finish writing on the way out.
@@ -824,6 +860,7 @@ export default function App() {
         const before = writtenRef.current.get(file.id);
         const json = JSON.stringify(file.doc);
         if (before && before.folder === path.folder && before.file === path.file && before.json === json) continue;
+        if (isHeld(path)) continue;
         flushTemplate(path.folder, path.file, file.doc);
       }
     };
@@ -1028,7 +1065,8 @@ export default function App() {
         bindTo(id, target, json);
         return "synced";
       }
-      if (live.disk?.folder === target.folder && live.disk?.file === target.file) {
+      const held = live.disk?.folder === target.folder && live.disk?.file === target.file;
+      if (held) {
         updateWorkspace((ws) => ({
           ...ws,
           files: ws.files.map((x) => {
@@ -1042,9 +1080,26 @@ export default function App() {
         id: `relink:${id}`,
         description: "One of them changed while they weren't syncing. Keep which?",
         duration: Infinity,
+        // A held file is bound again only by an answer: closing the question
+        // would leave it quietly saving to scratch instead.
+        ...(held ? { closeButton: false, dismissible: false } : {}),
         // Bound in sync with the DISK copy, so auto-save writes this one over it.
         action: { label: "Keep my edits", onClick: () => bindTo(id, target, json) },
-        cancel: { label: "Use the file", onClick: () => adoptFromDisk([{ id, path: target, doc }]) },
+        // A button of its own: sonner's `cancel` button does nothing on a
+        // toast that can't be dismissed, which a held question is.
+        cancel: (
+          <button
+            type="button"
+            data-button=""
+            data-cancel=""
+            onClick={() => {
+              toast.dismiss(`relink:${id}`);
+              adoptFromDisk([{ id, path: target, doc }]);
+            }}
+          >
+            Use the file
+          </button>
+        ),
       });
       return "asked";
     },
@@ -1097,6 +1152,8 @@ export default function App() {
     async (request, group) => {
       setLinkBusy(true);
       setLinkError(null);
+      // A re-link holds the stranded files' saves until each has been compared.
+      const lift = group ? holdSaves(`${group.folder}/`) : null;
       try {
         const answer = await linkFolder({ ...request, ...(group ? { replaces: group.folder } : {}) });
         if (answer.cancelled) return;
@@ -1122,9 +1179,10 @@ export default function App() {
         });
       } finally {
         setLinkBusy(false);
+        lift?.();
       }
     },
-    [applyListing, rebind],
+    [applyListing, rebind, holdSaves],
   );
 
   /** Unlink a folder linked from the app; its open files carry on as ordinary files. */
@@ -1212,19 +1270,25 @@ export default function App() {
    */
   const relinkDiskFile = useCallback(
     async (entry) => {
-      const answer = await pickAndLink({ replaces: entry.file, ...(entry.target ? { near: entry.target } : {}) });
-      if (!answer) return;
-      const path = { folder: SYMLINKS, file: entry.file };
-      const where = answer.entry.target ?? `${SYMLINKS}/${entry.file}`;
-      const synced = [];
-      for (const f of workspaceRef.current.files.filter((x) => x.disk?.folder === SYMLINKS && x.disk.file === entry.file)) {
-        if ((await syncOrAsk(f.id, path, where)) === "synced") synced.push(f);
+      // Held from before the dialog opens until every open copy has been compared.
+      const lift = holdSaves(`${SYMLINKS}/${entry.file}`);
+      try {
+        const answer = await pickAndLink({ replaces: entry.file, ...(entry.target ? { near: entry.target } : {}) });
+        if (!answer) return;
+        const path = { folder: SYMLINKS, file: entry.file };
+        const where = answer.entry.target ?? `${SYMLINKS}/${entry.file}`;
+        const synced = [];
+        for (const f of workspaceRef.current.files.filter((x) => x.disk?.folder === SYMLINKS && x.disk.file === entry.file)) {
+          if ((await syncOrAsk(f.id, path, where)) === "synced") synced.push(f);
+        }
+        toast.success(`Re-linked ${entry.file}`, {
+          description: synced.length ? `${namesOf(synced)} ${synced.length === 1 ? "syncs" : "sync"} again with ${where}` : `It points at ${where} now`,
+        });
+      } finally {
+        lift();
       }
-      toast.success(`Re-linked ${entry.file}`, {
-        description: synced.length ? `${namesOf(synced)} ${synced.length === 1 ? "syncs" : "sync"} again with ${where}` : `It points at ${where} now`,
-      });
     },
-    [pickAndLink, syncOrAsk],
+    [pickAndLink, syncOrAsk, holdSaves],
   );
   relinkFileRef.current = relinkDiskFile;
 
@@ -1313,19 +1377,12 @@ export default function App() {
 
   const isSequence = active?.kind === "sequence";
   /**
-   * How much of the open file is a plan. Any task or milestone offers the
-   * Task flow schema (the editor's own test for a plan), and the copy starts
-   * on it when they are at least half of what the file draws — frames,
-   * text and bare points don't count either way. One milestone on an
-   * architecture is not a plan, and the Task flow brief says "no services".
+   * Whether the open file is a work plan. Copy schema and Edit JSON both
+   * offer Architecture and Task flow on any architecture file, and start on
+   * Task flow when this holds — the library's rule (`readsAsPlan`), so the
+   * two can't disagree. One milestone on an architecture is not a plan.
    */
-  const plan = useMemo(() => {
-    if (!active || active.kind === "sequence") return { tasks: 0, mostly: false };
-    const neutral = new Set([...CONTAINER_KINDS, ...ANNOTATION_KINDS, "point"]);
-    const tasks = active.doc.nodes.filter(isWorkItem).length;
-    const others = active.doc.nodes.filter((n) => !isWorkItem(n) && !neutral.has(n.kind)).length;
-    return { tasks, mostly: tasks > 0 && tasks >= others };
-  }, [active]);
+  const isPlan = useMemo(() => !!active && active.kind !== "sequence" && readsAsPlan(active.doc), [active]);
   /** Link a file… needs the dev server's file dialog; without one, the editors don't offer it. */
   const onLinkFile = templatesDir && filePicker ? linkDiskFile : undefined;
   const counts = !active
@@ -1847,11 +1904,7 @@ export default function App() {
         // modals read --as-* tokens, which live on the studio roots.
         <div style={{ display: "contents", ...themeToStyle(modalTheme) }}>
           <SchemaCopyModal
-            subtitle={
-              plan.tasks
-                ? `For “${active.name}”. Task flow teaches a plan of tasks; Architecture, the clouds you tick — nothing you haven't.`
-                : `Scoped for “${active.name}”. Nothing is included that you haven't ticked — leave the clouds off for a provider-neutral schema.`
-            }
+            subtitle={`For “${active.name}”. Architecture teaches only the clouds you tick — none, for a provider-neutral schema. Task flow teaches a plan of tasks.`}
             clouds={copyPromptCtx.cloudOptions}
             resources={copyPromptCtx.cloudResources}
             initialClouds={copyPromptCtx.referencedClouds}
@@ -1862,10 +1915,8 @@ export default function App() {
                 geometry,
               })
             }
-            buildTaskPrompt={
-              plan.tasks ? ({ geometry }) => copyPromptCtx.promptForClouds([], { geometry, focus: "tasks" }) : undefined
-            }
-            initialFocus={plan.mostly ? "tasks" : "architecture"}
+            buildTaskPrompt={({ geometry }) => copyPromptCtx.promptForClouds([], { geometry, focus: "tasks" })}
+            initialFocus={isPlan ? "tasks" : "architecture"}
             onCopied={(_text, scope, _form, focus) =>
               focus === "tasks"
                 ? toast.success("Copied the task-flow schema", {
@@ -1895,6 +1946,10 @@ export default function App() {
             defaultName={active.name}
             showNameField
             systemPrompt={editPromptCtx ? editPromptCtx.systemPrompt : buildSequencePrompt()}
+            // The same Architecture / Task flow choice as Copy schema, starting where it does.
+            systemPromptTasks={editPromptCtx?.promptForClouds([], { focus: "tasks" })}
+            systemPromptTasksContent={editPromptCtx?.promptForClouds([], { focus: "tasks", geometry: false })}
+            initialPreset={isPlan ? "tasks" : undefined}
             cloudProviders={editPromptCtx?.cloudOptions}
             promptForClouds={editPromptCtx?.promptForClouds}
             cloudResources={editPromptCtx?.cloudResources}

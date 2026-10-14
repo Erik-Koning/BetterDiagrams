@@ -766,6 +766,33 @@ export interface StudioFileInit {
   doc?: unknown;
 }
 
+/** What an import says once it has landed: its toast, and any notes for the notes bar. */
+export interface ImportReport {
+  message: string;
+  notes?: string[];
+}
+
+let importReport: (ImportReport & { until: number }) | null = null;
+
+/**
+ * Hand an import's report to the editor that mounts next. An import that
+ * opens as a new file goes through `onFileCreate`, and a host that keys the
+ * editor per file (the example app does) remounts it on the new file — the
+ * editor that read the import is gone before its toast could show.
+ * Time-boxed like the welcome latch, so it can't surface on a much later
+ * mount.
+ */
+export function handOffImportReport(report: ImportReport): void {
+  importReport = { ...report, until: Date.now() + 1000 };
+}
+
+/** The report handed off just now, if any — taken, so only one editor shows it. */
+export function takeImportReport(): ImportReport | null {
+  const report = importReport;
+  importReport = null;
+  return report && Date.now() < report.until ? { message: report.message, notes: report.notes } : null;
+}
+
 /**
  * A window-centred dialog over a dimmed canvas. Escape and a backdrop click
  * both dismiss, so nothing can trap the user behind it.

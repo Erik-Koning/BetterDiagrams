@@ -6,7 +6,7 @@
  * so nothing here touches the repo's templates/ — and links a second
  * temporary folder the way `BD_LINKED_DIRS` links one outside the repo.
  */
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { BrowserContext, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
@@ -472,6 +472,53 @@ test.describe("linked files", () => {
       .toBeUndefined();
   });
 
+  test("the server links a file once, only a diagram, under a free name; Unlink and saves never touch what isn't a link", async ({
+    request,
+  }) => {
+    const links = join(E2E_TEMPLATES_DIR, "symlinks");
+    const dir = join(dirname(E2E_PICK_FILE), `server-${base}`);
+    const [a, b] = ["a", "b"].map((sub) => join(dir, sub, `${base}.json`));
+    const notDiagram = join(dir, "package.json");
+    const listed = join(EXAMPLES, `${base}-listed.json`);
+    const plain = join(links, `${base}-plain.json`);
+    created.push(dir, listed, plain);
+    for (const path of [a, b]) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, JSON.stringify(plan(`Server ${base}`)));
+    }
+    writeFileSync(notDiagram, "{}");
+    writeFileSync(listed, JSON.stringify(plan(`Listed ${base}`)));
+    writeFileSync(plain, JSON.stringify(plan(`Plain ${base}`)));
+    const link = async (path: string) => {
+      const res = await request.post("/__templates/symlinks", { data: { path } });
+      return { status: res.status(), body: await res.json() };
+    };
+
+    // Not a diagram: refused, and nothing is made.
+    const refused = await link(notDiagram);
+    expect(refused.status).toBe(400);
+    expect(refused.body.error).toMatch(/not a diagram/);
+
+    // Two files with one name: the second link takes a number.
+    const first = await link(a);
+    const second = await link(b);
+    created.push(join(links, first.body.entry.file), join(links, second.body.entry.file));
+    expect([first.body.entry.file, second.body.entry.file]).toEqual([`${base}.json`, `${base}-2.json`]);
+    expect(realpathSync(join(links, second.body.entry.file))).toBe(realpathSync(b));
+    // Linking a file again hands back its link; one the menu lists opens from where it is.
+    expect((await link(a)).body.entry.file).toBe(`${base}.json`);
+    expect((await link(listed)).body.entry).toMatchObject({ folder: "examples", file: basename(listed) });
+
+    // Unlink refuses a plain file, and removes a link but never its file.
+    expect((await request.delete(`/__templates/symlinks/${basename(plain)}`)).status()).toBe(409);
+    expect(existsSync(plain)).toBe(true);
+    expect((await request.delete(`/__templates/symlinks/${base}.json`)).ok()).toBe(true);
+    expect(existsSync(a)).toBe(true);
+    // And a save to a link that is gone never makes a file in its place.
+    expect((await request.put(`/__templates/symlinks/${base}.json`, { data: plan("x") })).status()).toBe(404);
+    expect(readdirSync(links)).not.toContain(`${base}.json`);
+  });
+
   test("a linked file that moves is never recreated; Re-link… on the warning points the link at it, keeping the open file bound", async ({
     studio,
     page,
@@ -499,6 +546,9 @@ test.describe("linked files", () => {
     // The edit never reached the file, so the two differ: it asks, and keeping
     // the edits writes them to the file in its new place, through the same link.
     const ask = page.locator("[data-sonner-toast]").filter({ hasText: "differs from" });
+    // The file is held unbound until answered, so the question can't be closed unanswered.
+    await expect(ask.getByRole("button", { name: "Keep my edits" })).toBeVisible();
+    await expect(ask.locator("[data-close-button]")).toHaveCount(0);
     await ask.getByRole("button", { name: "Keep my edits" }).click();
     await expect.poll(() => (nodeOf(read(moved), "design") as { done?: boolean }).done).toBe(true);
     expect(realpathSync(link)).toBe(realpathSync(moved));
@@ -512,5 +562,56 @@ test.describe("linked files", () => {
       nodeOf(doc, "build").label = "Build, moved";
     });
     await expect(title(page, "build")).toHaveText("Build, moved");
+  });
+
+  test("saves wait while a re-link settles: an edit made as the link is re-pointed never reaches the file unasked", async ({
+    studio,
+    page,
+  }) => {
+    const moved = join(dirname(E2E_PICK_FILE), `moved-${base}`, basename(E2E_PICK_FILE));
+    created.push(dirname(moved));
+    await linkFromWelcome(studio, page);
+    mkdirSync(dirname(moved), { recursive: true });
+    renameSync(E2E_PICK_FILE, moved);
+    const onDisk = readFileSync(moved, "utf8");
+
+    // The server re-points the link, and its answer is held back: the window
+    // in which the app doesn't yet know the link points somewhere new.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let repointed = false;
+    await page.route("**/__templates/symlinks", async (route) => {
+      const response = await route.fetch();
+      repointed = true;
+      await released;
+      await route.fulfill({ response });
+    });
+    const writes: string[] = [];
+    page.on("request", (req) => {
+      if (req.method() === "PUT" && req.url().includes("/__templates/symlinks/")) writes.push(req.url());
+    });
+
+    // Re-link… from the menu; the dialog answers where the file is now.
+    writeFileSync(E2E_PICK_ANSWER, moved);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("menu", { name: "Settings" }).getByRole("menuitem", { name: `Re-link ${basename(E2E_PICK_FILE)}` }).click();
+    await expect.poll(() => repointed).toBe(true);
+    expect(realpathSync(link)).toBe(realpathSync(moved));
+
+    // An edit in that window, and past the save debounce: nothing is written through the link.
+    await page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox").click();
+    await page.waitForTimeout(1500);
+    expect(writes).toEqual([]);
+    expect(readFileSync(moved, "utf8")).toBe(onDisk);
+
+    // The answer lands: the copies differ, so it asks, and "Use the file" takes the file's.
+    release();
+    const ask = page.locator("[data-sonner-toast]").filter({ hasText: "differs from" });
+    await ask.getByRole("button", { name: "Use the file" }).click();
+    await expect(page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox")).toHaveAttribute("aria-checked", "false");
+    await expect
+      .poll(async () => ((await studio.workspace()).files.find((f) => f.name === `Linked ${base}`) as { disk?: unknown } | undefined)?.disk)
+      .toEqual({ folder: "symlinks", file: basename(E2E_PICK_FILE) });
+    expect(readFileSync(moved, "utf8")).toBe(onDisk);
   });
 });

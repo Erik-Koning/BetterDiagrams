@@ -170,7 +170,10 @@ import {
   ToolbarMenu,
   ToolPicker,
   VersionTagChip,
+  handOffImportReport,
+  takeImportReport,
   type CanvasTool,
+  type ImportReport,
   type StudioFile,
   type StudioFileInit,
 } from "./chrome";
@@ -476,8 +479,9 @@ export interface ArchitectureStudioProps {
   /**
    * Show the welcome/import modal over a brand-new document (or an empty
    * workspace): brand mark, "Insert Node Manually", "Copy Schema & System
-   * Prompt", and a paste-JSON editor. Defaults to true; suppressed while
-   * `readOnly` or `diffBase` is set.
+   * Prompt", a paste-JSON editor, and "Link a file on disk…" when
+   * `onLinkFile` is set. Defaults to true; suppressed while `readOnly` or
+   * `diffBase` is set.
    */
   welcome?: boolean;
   /** Show the infra legend in the corner. Defaults to true; only renders when zones exist. */
@@ -722,6 +726,9 @@ function download(blob: Blob, filename: string): void {
  * takes it so a lone editor works before anyone has touched it.
  */
 let activeStudio: symbol | null = null;
+
+/** Where an import lands: over the open diagram, or in a new file beside it. See `runImport`. */
+type ImportTarget = "here" | "new";
 
 /**
  * Whether a canvas node is pinned.
@@ -1168,7 +1175,8 @@ function StudioInner({
   /**
    * An import waiting on "Replace this diagram?". One question for the three
    * ways a document can arrive — Import's Open file… and Import folder…, and
-   * a drop — asked only when the canvas holds something to lose.
+   * a drop — asked only when it lands over something to lose (see
+   * `runImport`).
    */
   const [pendingReplace, setPendingReplace] = useState<{ name: string; run: () => void } | null>(null);
   const compareInputRef = useRef<HTMLInputElement>(null);
@@ -1248,6 +1256,18 @@ function StudioInner({
     },
     [],
   );
+  // An import that opened as a new file said what it read in the editor that
+  // read it, which a host keyed per file has just unmounted; say it here.
+  // Held in a ref so StrictMode's second run says it again: the cleanup
+  // above cancels the first run's hide timer, which would strand the toast.
+  const handedReport = useRef<ImportReport | null | undefined>(undefined);
+  useEffect(() => {
+    if (handedReport.current === undefined) handedReport.current = takeImportReport();
+    const report = handedReport.current;
+    if (!report) return;
+    setImportNotes(report.notes ?? []);
+    showToast(report.message);
+  }, [showToast]);
 
   // ── Derived template ──────────────────────────────────────────────────────
 
@@ -5156,25 +5176,50 @@ function StudioInner({
     [pendingExport, runDirectExport, filename, stateAxes, template, registry, exportPalette, studioMode, gradients, showToast, focusId],
   );
 
-  /** A schema read from SQL or dbt: laid out, applied, its warnings in the notes bar. */
+  /**
+   * Put an imported document where the import was aimed (see `runImport`):
+   * over this diagram, or into a new file the host makes — which takes the
+   * toast and the notes along, since the host may remount this editor on it.
+   * `name` names that file when the document has no title of its own.
+   */
+  const landImport = useCallback(
+    (doc: DiagramTemplate, into: ImportTarget, name: string, report: ImportReport) => {
+      setError("");
+      if (into === "new" && onFileCreate) {
+        const landed = { message: `${report.message} · in a new file`, notes: report.notes ?? [] };
+        handOffImportReport(landed);
+        // Said here too, for a host that keeps this editor across files.
+        setImportNotes(landed.notes);
+        showToast(landed.message);
+        const title = typeof doc.meta?.title === "string" ? doc.meta.title.trim() : "";
+        onFileCreate({ name: title || name, kind: "architecture", doc });
+        return;
+      }
+      applyTemplate(doc);
+      setImportNotes(report.notes ?? []);
+      showToast(report.message);
+    },
+    [onFileCreate, applyTemplate, showToast],
+  );
+
+  /** A schema read from SQL or dbt: laid out, landed, its warnings in the notes bar. */
   const applySchemaImport = useCallback(
-    (result: SchemaImport, source: string) => {
+    (result: SchemaImport, source: string, into: ImportTarget) => {
       if (!result.template.nodes.some((n) => n.kind === "table")) {
         setError(`No tables could be read from ${source}`);
         setPanelOpen(true);
         return;
       }
-      applyTemplate(layoutIfUnpositioned(result.template, modeLayoutOptions(studioMode)));
-      setError("");
       const notes = result.warnings.map((w) => (w.line ? `line ${w.line}: ${w.message}` : w.message));
       if (result.stats.skipped) notes.push(`${result.stats.skipped} other statement${result.stats.skipped === 1 ? "" : "s"} (settings, grants, sequences, functions…) skipped`);
-      setImportNotes(notes);
-      showToast(
-        `Imported ${result.stats.tables} table${result.stats.tables === 1 ? "" : "s"} · ${result.stats.foreignKeys} key${result.stats.foreignKeys === 1 ? "" : "s"} from ${source}` +
+      landImport(layoutIfUnpositioned(result.template, modeLayoutOptions(studioMode)), into, source.replace(/\.[^./]+$/, ""), {
+        message:
+          `Imported ${result.stats.tables} table${result.stats.tables === 1 ? "" : "s"} · ${result.stats.foreignKeys} key${result.stats.foreignKeys === 1 ? "" : "s"} from ${source}` +
           (result.warnings.length ? ` · ${result.warnings.length} note${result.warnings.length === 1 ? "" : "s"}` : ""),
-      );
+        notes,
+      });
     },
-    [applyTemplate, studioMode, showToast],
+    [landImport, studioMode],
   );
 
   /**
@@ -5183,45 +5228,51 @@ function StudioInner({
    * epics as groups — laid out, with what couldn't be read noted.
    */
   const applyTaskImport = useCallback(
-    (result: TaskCsvImport, name: string) => {
+    (result: TaskCsvImport, name: string, into: ImportTarget) => {
       if (!result.stats.tasks) {
         showToast(`No tasks could be read from ${name}`);
         return;
       }
-      applyTemplate(layoutIfUnpositioned(validateTemplate(result.template, registryOpts(registry)), modeLayoutOptions(studioMode)));
-      setImportNotes(result.warnings.map((w) => (w.line ? `line ${w.line}: ${w.message}` : w.message)));
       const { tasks, links, groups } = result.stats;
-      showToast(`Imported ${tasks} task${tasks === 1 ? "" : "s"} · ${links} link${links === 1 ? "" : "s"}${groups ? ` · ${groups} group${groups === 1 ? "" : "s"}` : ""}`);
+      landImport(
+        layoutIfUnpositioned(validateTemplate(result.template, registryOpts(registry)), modeLayoutOptions(studioMode)),
+        into,
+        name.replace(/\.[^.]+$/, ""),
+        {
+          message: `Imported ${tasks} task${tasks === 1 ? "" : "s"} · ${links} link${links === 1 ? "" : "s"}${groups ? ` · ${groups} group${groups === 1 ? "" : "s"}` : ""}`,
+          notes: result.warnings.map((w) => (w.line ? `line ${w.line}: ${w.message}` : w.message)),
+        },
+      );
     },
-    [applyTemplate, registry, studioMode, showToast],
+    [landImport, registry, studioMode, showToast],
   );
 
   const loadFile = useCallback(
-    async (file: File) => {
+    async (file: File, into: ImportTarget) => {
       try {
         const text = await file.text();
         // A tracker's export: tasks, not tables — read by its columns.
         if (/\.(csv|tsv)$/i.test(file.name)) {
-          applyTaskImport(importTaskCsv(text, { title: file.name.replace(/\.(csv|tsv)$/i, "") }), file.name);
+          applyTaskImport(importTaskCsv(text, { title: file.name.replace(/\.(csv|tsv)$/i, "") }), file.name, into);
           return;
         }
         // A schema script: its tables and keys become the document.
         if (/\.sql$/i.test(file.name) || (!/^\s*[{[]/.test(text) && looksLikeSqlDdl(text))) {
-          applySchemaImport(importSqlDdl(text, { title: file.name.replace(/\.sql$/i, "") }), file.name);
+          applySchemaImport(importSqlDdl(text, { title: file.name.replace(/\.sql$/i, "") }), file.name, into);
           return;
         }
         if (looksLikeTaskCsv(text)) {
-          applyTaskImport(importTaskCsv(text, { title: file.name.replace(/\.[^.]+$/, "") }), file.name);
+          applyTaskImport(importTaskCsv(text, { title: file.name.replace(/\.[^.]+$/, "") }), file.name, into);
           return;
         }
         const raw = JSON.parse(text);
         // A dbt manifest on its own (no catalog: the project's declared types).
         if (isDbtManifest(raw)) {
-          applySchemaImport(importDbt({ manifest: raw }), file.name);
+          applySchemaImport(importDbt({ manifest: raw }), file.name, into);
           return;
         }
         // A layout file re-dresses the CURRENT document — it carries no
-        // architecture of its own.
+        // architecture of its own, so it never opens as a new file.
         if (raw?.format === PRESENTATION_FORMAT) {
           const pres = validatePresentation(raw);
           const current = templateRef.current;
@@ -5250,20 +5301,21 @@ function StudioInner({
           : raw;
         // A content doc (or any never-placed JSON) lays itself out, exactly
         // like the welcome modal's paste path.
-        applyTemplate(
+        landImport(
           layoutIfUnpositioned(
             validateTemplate(incoming, registryOpts(registry)),
             modeLayoutOptions(studioMode),
           ),
+          into,
+          file.name.replace(/\.json$/i, ""),
+          { message: `Loaded ${file.name}` },
         );
-        setError("");
-        showToast(`Loaded ${file.name}`);
       } catch (err) {
         setError(`Could not load ${file.name}: ${(err as Error).message}`);
         setPanelOpen(true);
       }
     },
-    [registry, applyTemplate, showToast, applySchemaImport, applyTaskImport],
+    [registry, applyTemplate, showToast, applySchemaImport, applyTaskImport, landImport, studioMode],
   );
 
   /**
@@ -5273,7 +5325,7 @@ function StudioInner({
    * — dialect detection, the tree walk, layout, the sidecar.
    */
   const loadFolder = useCallback(
-    async (list: readonly File[]) => {
+    async (list: readonly File[], into: ImportTarget) => {
       // `webkitRelativePath` always begins with the picked directory's own
       // name; that segment is the root, not a folder inside it.
       const inside = (f: File) => {
@@ -5293,7 +5345,7 @@ function StudioInner({
             const dir = inside(manifestFile).slice(0, -"manifest.json".length);
             const catalogFile = list.find((f) => inside(f) === `${dir}catalog.json`);
             const catalog = catalogFile ? JSON.parse(await catalogFile.text()) : undefined;
-            applySchemaImport(importDbt({ manifest, ...(catalog ? { catalog } : {}) }), catalogFile ? "the dbt manifest and catalog" : "the dbt manifest");
+            applySchemaImport(importDbt({ manifest, ...(catalog ? { catalog } : {}) }), catalogFile ? "the dbt manifest and catalog" : "the dbt manifest", into);
             return;
           }
         } catch (err) {
@@ -5326,8 +5378,6 @@ function StudioInner({
           setPanelOpen(true);
           return;
         }
-        applyTemplate(result.template);
-        setError("");
         const notes = result.warnings.map(
           (w) => `${w.code}${w.path ? ` · ${w.path}` : ""}: ${w.message}`,
         );
@@ -5341,32 +5391,49 @@ function StudioInner({
             `${unregistered.length} node kind${unregistered.length === 1 ? "" : "s"} from the ${result.dialect} dialect (${unregistered.join(", ")}) are not in this editor's registry — pass the dialect's registry preset to the \`registry\` prop so they render as their own kinds.`,
           );
         }
-        setImportNotes(notes);
         const top = list[0]?.webkitRelativePath?.split("/")[0] || "folder";
-        showToast(
-          `Imported ${result.stats.nodes} node${result.stats.nodes === 1 ? "" : "s"} · ${result.stats.edges} edge${result.stats.edges === 1 ? "" : "s"} from ${top}` +
+        landImport(result.template, into, top, {
+          message:
+            `Imported ${result.stats.nodes} node${result.stats.nodes === 1 ? "" : "s"} · ${result.stats.edges} edge${result.stats.edges === 1 ? "" : "s"} from ${top}` +
             (notes.length ? ` · ${notes.length} note${notes.length === 1 ? "" : "s"}` : ""),
-        );
+          notes,
+        });
       } catch (err) {
         setError(`Could not import that folder: ${(err as Error).message}`);
         setPanelOpen(true);
       }
     },
-    [registry, applyTemplate, showToast, applySchemaImport],
+    [registry, applySchemaImport, landImport],
   );
 
   /**
-   * Run an import, asking first when it would replace a diagram. A template
-   * REPLACES the whole canvas: undoable, but a mis-aimed drag or click over
-   * unsaved work is a shock worth one question. A LAYOUT file only
-   * re-dresses what is here, so it never needs asking — and neither does an
-   * empty canvas.
+   * Run an import where it belongs. Once this diagram holds more than one
+   * top-level node it is work of its own, so — when the host can make
+   * files — the import opens as a new file beside it. Otherwise it lands
+   * here, asking first when that replaces anything: undoable, but a
+   * mis-aimed drag or click over unsaved work is a shock worth one question.
+   * A LAYOUT file only re-dresses what is here, so it always lands here and
+   * never needs asking — and neither does an empty canvas.
    */
-  const confirmReplace = useCallback((name: string, run: () => void) => {
-    const replaces = templateRef.current.nodes.length > 0 && !/\.layout\.json$/i.test(name);
-    if (replaces) setPendingReplace({ name, run });
-    else run();
-  }, []);
+  const importsAsNewFile = useCallback(
+    (doc: DiagramTemplate) => !!onFileCreate && doc.nodes.filter((n) => !n.parentId).length > 1,
+    [onFileCreate],
+  );
+  const runImport = useCallback(
+    (name: string, run: (into: ImportTarget) => void) => {
+      const layout = /\.layout\.json$/i.test(name);
+      if (!layout && importsAsNewFile(templateRef.current)) run("new");
+      else if (!layout && templateRef.current.nodes.length > 0) setPendingReplace({ name, run: () => run("here") });
+      else run("here");
+    },
+    [importsAsNewFile],
+  );
+  /** Where Import puts what it reads, as its menu rows say it. */
+  const importLanding = importsAsNewFile(template)
+    ? "Opens as a new file"
+    : template.nodes.length
+      ? "Replaces this diagram"
+      : "Opens here";
 
   const onDrop = useCallback(
     (event: DragEvent) => {
@@ -5375,9 +5442,9 @@ function StudioInner({
       if (readOnly) return;
       const file = event.dataTransfer?.files?.[0];
       if (!file) return;
-      confirmReplace(file.name, () => void loadFile(file));
+      runImport(file.name, (into) => void loadFile(file, into));
     },
-    [readOnly, loadFile, confirmReplace],
+    [readOnly, loadFile, runImport],
   );
 
   const onDragOver = useCallback(
@@ -8087,7 +8154,7 @@ function StudioInner({
                   >
                     <div className="as-menu__label">Open file…</div>
                     <div className="as-menu__hint">
-                      Replaces this diagram: a document (.json), a SQL schema script (.sql), a dbt manifest.json, or a
+                      {importLanding}: a document (.json), a SQL schema script (.sql), a dbt manifest.json, or a
                       tracker's CSV
                     </div>
                   </button>
@@ -8102,8 +8169,8 @@ function StudioInner({
                   >
                     <div className="as-menu__label">Import folder…</div>
                     <div className="as-menu__hint">
-                      A data-model export, a Folder (.zip) export unzipped, or a dbt project's target/ (manifest.json
-                      and catalog.json)
+                      {importLanding}: a data-model export, a Folder (.zip) export unzipped, or a dbt project's
+                      target/ (manifest.json and catalog.json)
                     </div>
                   </button>
                   {onLinkFile ? (
@@ -8133,7 +8200,7 @@ function StudioInner({
                   className="as-sr-only"
                   onChange={(event) => {
                     const file = event.target.files?.[0];
-                    if (file) confirmReplace(file.name, () => void loadFile(file));
+                    if (file) runImport(file.name, (into) => void loadFile(file, into));
                     event.target.value = "";
                   }}
                 />
@@ -8151,7 +8218,7 @@ function StudioInner({
                     const list = [...(event.target.files ?? [])];
                     if (list.length) {
                       const top = list[0]?.webkitRelativePath?.split("/")[0] || "folder";
-                      confirmReplace(`${top}/`, () => void loadFolder(list));
+                      runImport(`${top}/`, (into) => void loadFolder(list, into));
                     }
                     event.target.value = "";
                   }}
@@ -8601,6 +8668,7 @@ function StudioInner({
                 kindLabel={kindDef(registry, (quickAddFrom.data as DiagramNodeData).kind).label}
                 // A task's assignee tabs hang one 16px row under its box.
                 hangBelow={hasAssigneeStrip(quickAddFrom.data as DiagramNodeData) ? 16 : 0}
+                // Zones don't apply on a drilled-in canvas (see onNodeDragStop).
                 tint={containerInk(quickAddFrom, nodes, focusId ? [] : (template.zones ?? []), registry)}
                 onAdd={(side) => quickAdd(quickAddFrom.id, side)}
               />

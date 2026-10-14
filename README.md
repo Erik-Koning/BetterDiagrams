@@ -90,7 +90,7 @@ shadow.
 | `defaultShowHidden` | `boolean` | Start with provider-hidden nodes ghosted rather than omitted. Default `false`. |
 | `diffBase` | `DiagramTemplate` | Baseline to compare against: the canvas becomes a read-only diff view (added/removed/changed) while set. The toolbar's Compare button offers the same via a file picker. |
 | `filename` | `string` | Base name for exports. Default `"architecture"`. |
-| `files` / `activeFileId` / `onFileSelect` / `onFileCreate` / `onFileRename` / `onFileDelete` | `StudioFile[]`, callbacks | When `files` is provided the brand becomes a **file selector** (switch, new, rename, delete). The host owns all storage — the editor only calls back. Both editors take these. **The file name and the document's `meta.title` are one title with two homes**: renaming the active file writes `meta.title` (committed, emitted, undoable), and a document title arriving any other way — AI generation, import, a controlled `value` — is pushed back out through `onFileRename`, so the dropdown always shows what exports will print. The sync is a reconciler, not two blind pushes: on a mismatch, *which side moved since they last agreed* decides — a title edit (including undo) renames the file, while a **host-side rename** (another tab, the host's own UI, a changed `files` prop) is adopted as the document's new title rather than being reverted; when both moved at once, the document wins. The editor can only do this for the document it holds; a host that stores the other documents should mirror renames into them too (the example app does). Set `StudioFile.empty` and a blank file deletes straight away; anything else asks for confirmation first. `onFileCreate` receives an optional `StudioFileInit` (`{ name?, kind?, doc? }`): the menu's New file row passes nothing, the welcome modal passes a name and — when JSON was inserted — a validated document to seed the file with. |
+| `files` / `activeFileId` / `onFileSelect` / `onFileCreate` / `onFileRename` / `onFileDelete` | `StudioFile[]`, callbacks | When `files` is provided the brand becomes a **file selector** (switch, new, rename, delete). The host owns all storage — the editor only calls back. Both editors take these. **The file name and the document's `meta.title` are one title with two homes**: renaming the active file writes `meta.title` (committed, emitted, undoable), and a document title arriving any other way — AI generation, import, a controlled `value` — is pushed back out through `onFileRename`, so the dropdown always shows what exports will print. The sync is a reconciler, not two blind pushes: on a mismatch, *which side moved since they last agreed* decides — a title edit (including undo) renames the file, while a **host-side rename** (another tab, the host's own UI, a changed `files` prop) is adopted as the document's new title rather than being reverted; when both moved at once, the document wins. The editor can only do this for the document it holds; a host that stores the other documents should mirror renames into them too (the example app does). Set `StudioFile.empty` and a blank file deletes straight away; anything else asks for confirmation first. `onFileCreate` receives an optional `StudioFileInit` (`{ name?, kind?, doc? }`): the menu's New file row passes nothing, the welcome modal passes a name and — when JSON was inserted — a validated document to seed the file with. **Imports open as new files through it too**: once the open diagram has more than one top-level node (sequence: participant), **Import → Open file…**, **Import folder…** and a dropped file pass the name and the document they read, rather than replacing the diagram; an emptier one is replaced in place, after asking if anything is there. Without `onFileCreate`, an import always replaces. |
 | `removedFiles` / `onFileRestore` | `StudioFile[]`, `(id) => void` | Deleted documents the host still holds. The menu grows a **Recently removed…** entry opening a recovery modal. |
 | `onLinkFile` | `() => void` | Offer **Link a file on disk…** in the Import menu and on the welcome modal. The host does the picking and linking (the example app has its dev server show the system's file dialog, symlinks the pick into `templates/symlinks/` and opens it live); the editor only calls back. Both editors take it. |
 | `onNavigateFile` | `(ref) => void` | Fired when a node url with the `file:` prefix (e.g. `file:Order flow`) has its ↗ clicked — resolve by id, then name, and switch documents. |
@@ -238,7 +238,7 @@ apart at a glance, and EC2, Azure VM and Compute Engine read alike across clouds
 // Copying the schema from an OPEN document: ask first, seeded with the
 // document's own clouds. `templatePromptContext` derives everything the
 // dialog needs from the doc + registry.
-import { SchemaCopyModal, templatePromptContext } from "@mosphere/better-diagrams";
+import { SchemaCopyModal, readsAsPlan, templatePromptContext } from "@mosphere/better-diagrams";
 
 const ctx = templatePromptContext(doc, registry);
 <SchemaCopyModal
@@ -249,10 +249,10 @@ const ctx = templatePromptContext(doc, registry);
   buildPrompt={(scope, { geometry }) =>
     ctx.promptForClouds(scope.clouds, { components: scope.components, geometry })
   }
-  // Optional, for a document with tasks: an Architecture / Task flow choice.
+  // Optional: an Architecture / Task flow choice, whatever the document holds.
   // Task flow hides the clouds and copies this; `initialFocus` picks the start.
   buildTaskPrompt={({ geometry }) => ctx.promptForClouds([], { geometry, focus: "tasks" })}
-  initialFocus="tasks"
+  initialFocus={readsAsPlan(doc) ? "tasks" : "architecture"}
   onClose={() => setOpen(false)}
 />
 ```
@@ -1472,7 +1472,11 @@ ends into neighbouring columns. Each task is spaced as its card plus its tabs.
 **Task flow preset.** The Welcome screen's type picker has a third option, *Task flow*. It's an
 architecture document set up as a plan: the copy button gives a prompt that steers the model
 toward tasks, and *Insert Task Manually* starts the canvas with one. Once a document holds a
-task, **Insert ▸ Task** heads the menu.
+task, **Insert ▸ Task** heads the menu. Wherever the editor offers the choice again — the
+welcome modal reopened over a file (`initialPreset="tasks"`; under `lockKind` the
+Architecture / Task flow pair stays switchable, since it changes only what is copied) or
+`SchemaCopyModal` (`initialFocus`) — it starts on Task flow when `readsAsPlan(doc)` holds: tasks and
+milestones are at least half of what the document draws, frames, text and bare points aside.
 
 **Exports.** PNG, PDF, SVG and HTML draw the check, estimate, Blocked mark, tabs and
 strike-through, plus a People section in the legend. A picture has no hover, so dependency lines
@@ -1553,10 +1557,11 @@ sequence in place; on a file with content it opens a new blank file of the other
 **Copy schema** button. On an architecture file that button opens the `SchemaCopyModal`
 described above — which clouds and which of their resources the copied contract should teach,
 seeded with the open document's own — rather than copying blind; sequence files have no
-provider vocabulary to scope, so they copy straight to the clipboard. A file with tasks or
-milestones is offered the **Task flow** schema too (the welcome modal's), and starts on it when
-they are at least half of what the file draws (frames, text and points aside), so one milestone
-on an architecture doesn't turn its copy into a work plan.
+provider vocabulary to scope, so they copy straight to the clipboard. Every architecture file is
+offered the **Task flow** schema too (the welcome modal's) — the copy is for the next diagram, which
+may be a plan — and the dialog starts on it when the file `readsAsPlan`, so one milestone on an
+architecture doesn't turn its copy into a work plan. **Edit template JSON** offers the same choice,
+starting in the same place.
 
 **Live files on disk, while developing.** `npm run dev` mounts a small dev-only route
 (`example/vite-plugin-templates.js`) that keeps every open file in sync with a plain `.json`
@@ -1590,7 +1595,9 @@ at the repo root, one per document:
   recreated. **Re-link…** on the warning, or in the menu, picks where the folder is now. Each
   file binds to the file with the same name there, quietly if the two copies match. If they
   differ, it asks whether to keep your edits or use the file, because either side may hold
-  work. **Stop syncing** keeps them as ordinary files instead, and **Unlink** drops a folder
+  work. Saves to the link wait while a re-link settles, so an edit made as the link is
+  re-pointed can't reach the new place before that question. **Stop syncing** keeps them as
+  ordinary files instead, and **Unlink** drops a folder
   linked from the menu. A save that fails for any other reason says so once, until one goes
   through.
 - **Linked files** bring in one diagram rather than its whole folder. **Link a file on disk…**
@@ -1603,7 +1610,7 @@ at the repo root, one per document:
   moved is listed as missing, and its saves fail rather than recreate the file; **Re-link…** (on
   the save warning, or beside the link in the menu) points the link at where the file is now.
   The link keeps its name, so the open file stays bound and syncs again, asking whether to keep
-  your edits or use the file when the two differ.
+  your edits or use the file when the two differ — saves wait for that, as for a folder.
 
 A conflict needs both sides to change the same file within about a second. When it happens,
 whichever write reaches the disk last is kept. `scratch/` is git-ignored; `templates/examples/`
@@ -1983,7 +1990,8 @@ a rubber band takes everything it touches, plus the lines those elements are wir
 the same modifier adds that catch to the selection instead of replacing it (see **Canvas tools**). A group
 is dragged by its label bar, so the space between its children is free for a rubber band.
 **Right-click** anything for the actions that apply to it. Drop a `.json` template file on the
-canvas to load it — a file that would replace a diagram with content in it asks first.
+canvas to load it — as a new file beside a diagram with more than one top-level node, when the host
+manages files; otherwise in place, asking first when that replaces something.
 
 ## Versioning
 
