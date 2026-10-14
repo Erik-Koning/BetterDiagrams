@@ -264,7 +264,7 @@ import { kindDef, providerDef, relationDef, zoneInk } from "./registry-types";
 import { relationDressing } from "../contract/relations";
 import { NODE_TYPES } from "./nodes";
 import { QuickAddHandles } from "./QuickAddHandles";
-import { addBeside, type QuickAddSide } from "./quick-add";
+import { addBeside, containerInk, type QuickAddSide } from "./quick-add";
 import { EDGE_TYPES } from "./edges";
 import { topDropTarget } from "./dangling";
 import { StudioContext, useStudio } from "./context";
@@ -8601,6 +8601,7 @@ function StudioInner({
                 kindLabel={kindDef(registry, (quickAddFrom.data as DiagramNodeData).kind).label}
                 // A task's assignee tabs hang one 16px row under its box.
                 hangBelow={hasAssigneeStrip(quickAddFrom.data as DiagramNodeData) ? 16 : 0}
+                tint={containerInk(quickAddFrom, nodes, focusId ? [] : (template.zones ?? []), registry)}
                 onAdd={(side) => quickAdd(quickAddFrom.id, side)}
               />
             ) : null}

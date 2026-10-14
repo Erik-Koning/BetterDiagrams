@@ -48,6 +48,8 @@ describe("quick-add arrows", () => {
 
     fireEvent.click(container.querySelector('[data-id="api"]')!);
     await waitFor(() => expect(arrows()).toHaveLength(4));
+    // In no frame or zone: neutral.
+    expect(document.querySelector(".as-quick-add--tinted")).toBeNull();
     expect(arrows().map((b) => b.getAttribute("aria-label"))).toEqual([
       "Add a connected Service above",
       "Add a connected Service to the right",
@@ -73,12 +75,12 @@ describe("quick-add arrows", () => {
     );
   });
 
-  it("add inside the card's frame, and the frame grows to hold the new box", async () => {
+  it("wear the colour of the card's frame, add inside it, and grow the frame to hold the new box", async () => {
     const onChange = vi.fn();
     const doc = validateTemplate({
       version: 1,
       nodes: [
-        { id: "vpc", label: "VPC", kind: "group", x: 0, y: 0, w: 320, h: 240 },
+        { id: "vpc", label: "VPC", kind: "group", color: "#ef4444", x: 0, y: 0, w: 320, h: 240 },
         { id: "api", label: "API", kind: "service", parentId: "vpc", x: 28, y: 52, w: 170, h: 76 },
       ],
       edges: [],
@@ -86,7 +88,12 @@ describe("quick-add arrows", () => {
     const { container } = mount(<ArchitectureStudio defaultValue={doc} onChange={onChange} />);
     await waitFor(() => expect(container.querySelector('[data-id="api"]')).toBeTruthy());
     fireEvent.click(container.querySelector('[data-id="api"]')!);
-    fireEvent.click(await screen.findByRole("button", { name: "Add a connected Service to the right" }));
+    const right = await screen.findByRole("button", { name: "Add a connected Service to the right" });
+    // Tinted with the frame's colour.
+    const bar = right.closest<HTMLElement>(".as-quick-add")!;
+    expect(bar).toHaveClass("as-quick-add--tinted");
+    expect(bar.style.getPropertyValue("--as-quick-add-tint")).toBe("#ef4444");
+    fireEvent.click(right);
 
     await waitFor(() => expect((onChange.mock.calls.at(-1)?.[0] as DiagramTemplate | undefined)?.nodes).toHaveLength(3));
     const t = onChange.mock.calls.at(-1)![0] as DiagramTemplate;

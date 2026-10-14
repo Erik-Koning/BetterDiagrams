@@ -5800,8 +5800,9 @@ button.as-task__check--blocked {
 
 /* The side arrows off a selected card (QuickAddHandles): click one for a
    connected box on that side. NodeToolbar keeps them screen-sized and stands
-   them off the edge, clear of the connect dot that sits on it. Quiet until
-   pointed at, so a selected card does not shout four buttons at the reader. */
+   them off the edge, clear of the connect dot that sits on it. Half-faded
+   until pointed at, so a selected card does not shout four buttons at the
+   reader — and whatever they float over still shows through. */
 .as-quick-add__btn {
   display: grid;
   place-items: center;
@@ -5814,14 +5815,34 @@ button.as-task__check--blocked {
   color: var(--as-text-dim);
   box-shadow: var(--as-elev-1);
   cursor: pointer;
-  transition: background 120ms, border-color 120ms, color 120ms;
+  opacity: 0.55;
+  transition: opacity 120ms, background 120ms, border-color 120ms, color 120ms;
 }
 
 .as-quick-add__btn:hover,
 .as-quick-add__btn:focus-visible {
+  opacity: 1;
   border-color: var(--as-accent);
   background: var(--as-accent);
   color: var(--as-accent-ink);
+}
+
+/* A card in a frame or zone: the arrows wear that container's ink, the way
+   the container itself does — a wash for the fill (the 14% a collapsed
+   frame's chip uses), the ink for the rim, and for the glyph the ink pulled
+   toward the body text like any accent a person reads. No solid fill on
+   hover: an arbitrary frame colour has no ink guaranteed to read on it. */
+.as-quick-add--tinted .as-quick-add__btn {
+  border-color: color-mix(in srgb, var(--as-quick-add-tint) 55%, var(--as-border));
+  background: color-mix(in srgb, var(--as-quick-add-tint) 14%, var(--as-surface));
+  color: color-mix(in srgb, var(--as-quick-add-tint) var(--as-node-ink-mix), var(--as-text));
+}
+
+.as-quick-add--tinted .as-quick-add__btn:hover,
+.as-quick-add--tinted .as-quick-add__btn:focus-visible {
+  border-color: var(--as-quick-add-tint);
+  background: color-mix(in srgb, var(--as-quick-add-tint) 28%, var(--as-surface));
+  color: color-mix(in srgb, var(--as-quick-add-tint) var(--as-node-ink-mix), var(--as-text));
 }
 
 .as-quick-add__btn svg {

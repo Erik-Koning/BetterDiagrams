@@ -11,7 +11,7 @@
  * few hundred tables would be a thousand subscriptions re-run on every frame
  * of every pan.
  */
-import { useCallback, type SyntheticEvent } from "react";
+import { useCallback, type CSSProperties, type SyntheticEvent } from "react";
 import { NodeToolbar, Position, useStore, type ReactFlowState } from "@xyflow/react";
 import type { QuickAddSide } from "./quick-add";
 
@@ -34,6 +34,7 @@ export function QuickAddHandles({
   nodeId,
   kindLabel,
   hangBelow = 0,
+  tint,
   onAdd,
 }: {
   nodeId: string;
@@ -41,6 +42,8 @@ export function QuickAddHandles({
   kindLabel: string;
   /** Canvas pixels of the card that hang below its box (a task's assignee tabs). */
   hangBelow?: number;
+  /** The colour of the frame or zone the card sits in (`containerInk`); absent, the arrows stay neutral. */
+  tint?: string | null;
   onAdd: (side: QuickAddSide) => void;
 }) {
   // Out of the way while the card is moved or resized, or while an arrow is
@@ -68,7 +71,8 @@ export function QuickAddHandles({
           offset={side === "bottom" ? OFFSET + hangBelow * zoom : OFFSET}
           // `nopan`: the toolbar sits inside React Flow's zoom pane, and a
           // press on it would otherwise start a pan.
-          className="as-quick-add nopan nodrag"
+          className={`as-quick-add${tint ? " as-quick-add--tinted" : ""} nopan nodrag`}
+          style={tint ? ({ "--as-quick-add-tint": tint } as CSSProperties) : undefined}
         >
           <button
             type="button"

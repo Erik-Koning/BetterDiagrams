@@ -8,6 +8,8 @@
  */
 import type { Node } from "@xyflow/react";
 import { isBoundaryNodeId, isGhostNodeId, type DiagramNodeData } from "../contract/schema";
+import type { DiagramZone } from "../contract/zones";
+import { kindDef, zoneInk, type ResolvedRegistry } from "./registry-types";
 
 export type QuickAddSide = "top" | "right" | "bottom" | "left";
 
@@ -106,6 +108,47 @@ export function quickAddSpot(
 function isOpenFrame(n: Node): boolean {
   const data = n.data as Partial<DiagramNodeData>;
   return n.type === "group" && !data.collapsed && !data.folded && !isBoundaryNodeId(n.id) && !isGhostNodeId(n.id);
+}
+
+/**
+ * The colour of what a card sits in, for its side arrows to wear: the
+ * nearest frame around it, else its zone — the frame is drawn tighter round
+ * the card, so it is what the card reads as being in.
+ *
+ * The frame's ink is the colour its border is drawn in (its own colour, else
+ * its kind's accent), and a zone's is `zoneInk`, so the arrows match what is
+ * on screen. A frame with nothing drawn (no fill, no outline) is passed over,
+ * and so is a drilled level's boundary: every box on that level is in it.
+ * `zones` is empty where zones do not apply (a drilled-in canvas). Null when
+ * the card is in neither.
+ */
+export function containerInk(
+  source: Node,
+  nodes: readonly Node[],
+  zones: readonly DiagramZone[],
+  registry: ResolvedRegistry,
+): string | null {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const chain: Node[] = [];
+  const seen = new Set<string>();
+  for (let p = source.parentId; p && !seen.has(p); p = byId.get(p)?.parentId) {
+    seen.add(p);
+    const parent = byId.get(p);
+    if (parent) chain.push(parent);
+  }
+
+  for (const frame of chain) {
+    if (!isOpenFrame(frame)) continue;
+    const data = frame.data as DiagramNodeData;
+    if (data.fill === false && data.outline === "none") continue;
+    return data.color || kindDef(registry, data.kind).accent;
+  }
+  for (const n of [source, ...chain]) {
+    const zoneId = (n.data as Partial<DiagramNodeData>).zoneId;
+    const zone = zoneId ? zones.find((z) => z.id === zoneId) : undefined;
+    if (zone) return zoneInk(registry, zone);
+  }
+  return null;
 }
 
 /**

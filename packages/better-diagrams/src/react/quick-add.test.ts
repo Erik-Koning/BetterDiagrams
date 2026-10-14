@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Node } from "@xyflow/react";
-import { QUICK_ADD_GAP, addBeside, growFramesToFit, quickAddSpot } from "./quick-add";
+import type { DiagramZone } from "../contract/zones";
+import { createRegistry } from "./create-registry";
+import { providerDef } from "./registry-types";
+import { QUICK_ADD_GAP, addBeside, containerInk, growFramesToFit, quickAddSpot } from "./quick-add";
 
 const card = (id: string, x: number, y: number, extra: Partial<Node> = {}): Node => ({
   id,
@@ -137,5 +140,42 @@ describe("addBeside", () => {
 
   it("is null when the source is not on the canvas", () => {
     expect(addBeside([card("a", 0, 0)], "gone", "right", fresh())).toBeNull();
+  });
+});
+
+describe("containerInk", () => {
+  const registry = createRegistry();
+  const zone = (id: string, extra: Partial<DiagramZone> = {}) =>
+    ({ id, label: id, shape: "rect", x: 0, y: 0, w: 900, h: 600, providers: ["aws"], provider: "aws", ...extra }) as DiagramZone;
+  const inZone = (zoneId: string, extra: Partial<Node> = {}) => card("a", 28, 52, { data: { label: "a", kind: "service", zoneId }, ...extra });
+
+  it("is the frame's own colour, else its kind's accent — what its border is drawn in", () => {
+    const red = frame("f", 0, 0, 400, 300, { data: { label: "f", kind: "group", color: "#ef4444" } });
+    expect(containerInk(card("a", 28, 52, { parentId: "f" }), [red], [], registry)).toBe("#ef4444");
+    const plain = frame("f", 0, 0, 400, 300);
+    expect(containerInk(card("a", 28, 52, { parentId: "f" }), [plain], [], registry)).toBe("#475569");
+  });
+
+  it("is the zone's ink when the card is in no frame", () => {
+    expect(containerInk(inZone("z"), [], [zone("z")], registry)).toBe(providerDef(registry, "aws").color);
+    expect(containerInk(inZone("z"), [], [zone("z", { color: "#22c55e" })], registry)).toBe("#22c55e");
+  });
+
+  it("prefers the frame to the zone, and the nearest frame to an outer one", () => {
+    const outer = frame("outer", 0, 0, 800, 500, { data: { label: "o", kind: "group", color: "#111111" } });
+    const inner = frame("inner", 28, 52, 400, 300, { parentId: "outer", data: { label: "i", kind: "group", color: "#222222" } });
+    expect(containerInk(inZone("z", { parentId: "inner" }), [outer, inner], [zone("z")], registry)).toBe("#222222");
+  });
+
+  it("passes over a frame that draws nothing, a collapsed one and a drilled level's boundary", () => {
+    const invisible = frame("f", 0, 0, 400, 300, { data: { label: "f", kind: "group", color: "#ef4444", fill: false, outline: "none" } });
+    expect(containerInk(inZone("z", { parentId: "f" }), [invisible], [zone("z", { color: "#22c55e" })], registry)).toBe("#22c55e");
+    const boundary = frame("boundary:svc", 0, 0, 400, 300);
+    expect(containerInk(card("a", 28, 52, { parentId: "boundary:svc" }), [boundary], [], registry)).toBeNull();
+  });
+
+  it("is null for a card in neither, or in a zone that does not apply here", () => {
+    expect(containerInk(card("a", 0, 0), [], [], registry)).toBeNull();
+    expect(containerInk(inZone("z"), [], [], registry)).toBeNull();
   });
 });
