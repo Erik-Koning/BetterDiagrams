@@ -178,8 +178,9 @@ function seedWorkspace() {
 }
 
 /**
- * Sends prompts to /api/diagram (see server.mjs). The browser never holds a key.
- * The same generator serves both editors — each sends its own system prompt.
+ * Sends prompts to /api/diagram, which the dev server answers with the keys in
+ * its own environment (ai-route.mjs). The browser never holds a key. The same
+ * generator serves both editors — each sends its own system prompt.
  */
 const generate = createProxyGenerator({ endpoint: "/api/diagram" });
 
@@ -262,6 +263,25 @@ export default function App() {
   // null = "use the active theme's accent"; set once the user picks a colour.
   const [accent, setAccent] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(false);
+  // What answers the AI route, as the server reports it: the panel turns
+  // itself on when the server found a key, and says which model it is.
+  // Settings can still turn it off.
+  const [aiModel, setAiModel] = useState(null);
+  useEffect(() => {
+    let live = true;
+    fetch("/api/ai")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((status) => {
+        if (!live || !status?.configured) return;
+        setAiModel(status.label);
+        setAiEnabled(true);
+      })
+      // A static build has no route: the panel just stays off.
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
   // The template panel starts collapsed; hovering the handle explains what it is.
   const [showJson, setShowJson] = useState(false);
   /** The template-JSON edit modal over the viewer panel. */
@@ -1547,7 +1567,7 @@ export default function App() {
                 {[
                   ["Read-only", readOnly, setReadOnly, "Hide every editing affordance; pan, zoom and export still work"],
                   ["Minimap", minimap, setMinimap, "The overview in the canvas corner"],
-                  ["AI panel", aiEnabled, setAiEnabled, "Offer the AI generate / refine panel"],
+                  ["AI panel", aiEnabled, setAiEnabled, aiModel ? `Offer the Adjust with AI chat — answered by ${aiModel}` : "Offer the Adjust with AI chat and Generate"],
                   ["Light", mode === "light", (on) => setMode(on ? "light" : "dark"), "Light theme, or dark"],
                   [
                     "Marketing",
@@ -1826,6 +1846,7 @@ export default function App() {
               mode={studioMode}
               gradients={gradients}
               generate={aiEnabled ? generate : undefined}
+              aiLabel={aiModel ?? undefined}
               filename={active.name}
               onNavigateFile={navigateFile}
               onSelectionChange={setSelection}

@@ -29,6 +29,8 @@ import {
   EDGE_COLOR_HEX,
   EDGE_DASH,
   DEFAULT_FONT_SIZE,
+  DESC_FONT_SIZE,
+  DESC_LINE_H,
   FIELD_ROW_H,
   FIELD_TAG_HIDDEN,
   fieldTagBadge,
@@ -40,6 +42,7 @@ import {
   stackLevels,
   uncrossFieldAnchors,
   withEndSlots,
+  wrappedDescWidth,
   type DiagramNode,
   type DiagramTemplate,
 } from "../contract/schema";
@@ -129,15 +132,6 @@ const TITLE_BLOCK_H = 46;
  */
 const ANNOTATION_LINE_HEIGHT = 1.4;
 const ANNOTATION_DESC_LINE_HEIGHT = 1.3;
-
-/**
- * A card's description, `.as-node__desc` in the stylesheet: 11px on a 1.25
- * line-height, clamped to two lines. The export drew it at 10.5px over four
- * lines when the node wrapped, so the same document read differently on screen
- * and in its own PNG.
- */
-const DESC_FONT_SIZE = 11;
-const DESC_LINE_H = Math.round(DESC_FONT_SIZE * 1.25);
 
 // ─── Palette ─────────────────────────────────────────────────────────────────
 
@@ -1642,45 +1636,6 @@ export function emitTemplate(
     const chipInset = skin.marketing ? 14 : 12;
     const chipGap = skin.marketing ? 12 : 10;
     const textX = box.x + sil.contentInlinePad + (icon ? chipInset + skin.iconBox + chipGap : 14);
-    const contentMidY = box.y + cTop + (box.height - cTop) / 2;
-    // Icon and text share one flex line on the canvas, so the icon follows
-    // the node's vertical alignment too — centred by default, pinned to the
-    // padding edge when the text is (records included, which pin to the top).
-    // Half the chip plus the card's top padding: where a pinned chip centres,
-    // which moves with the chip's own size.
-    const iconInset = 6 + skin.iconBox / 2;
-    const iconMidY =
-      node.fields?.length || node.textVAlign === "top"
-        ? box.y + cTop + iconInset
-        : node.textVAlign === "bottom"
-          ? box.y + box.height - iconInset
-          : contentMidY;
-    if (icon) {
-      const chipX = box.x + sil.contentInlinePad + chipInset;
-      const chipY = iconMidY - skin.iconBox / 2;
-      const glyph = skin.iconBox * (17 / 28);
-      cmds.push({
-        op: "path",
-        d: roundedRectPath(chipX, chipY, skin.iconBox, skin.iconBox, skin.iconRadius),
-        ...skin.iconChip(accent, chipX, chipY, skin.iconBox),
-        ...(skin.marketing ? { strokeWidth: 1 } : {}),
-      });
-      for (const d of icon) {
-        cmds.push({
-          op: "path",
-          d,
-          stroke: skin.iconInk(accent),
-          strokeWidth: 1.8,
-          round: true,
-          transform: {
-            tx: chipX + (skin.iconBox - glyph) / 2,
-            ty: chipY + (skin.iconBox - glyph) / 2,
-            scale: glyph / 24,
-          },
-        });
-      }
-    }
-
     const textW = box.width - (textX - box.x) - 10;
     const kindText = def.label.toUpperCase();
     // After the kind: the lifecycle status, then a task's estimate.
@@ -1726,21 +1681,29 @@ export function emitTemplate(
     const titleOverflow = Math.max(0, titleLines.length - 1) * lineH;
 
     const rows = node.fields ?? [];
+    // A wrapped card reads like a document (`.as-node__below`): its
+    // description runs the card's full width under the icon and title, in the
+    // technical type it was measured in (`wrappedNodeHeight`) — in either mode.
+    const textBelow = !!node.wrap && !rows.length;
+    const descSize = textBelow ? DESC_FONT_SIZE : skin.descSize;
+    const descLineH = textBelow ? DESC_LINE_H : skin.descLineH;
+    const descX = textBelow ? box.x + sil.contentInlinePad + 14 : textX;
+    const descW = textBelow ? wrappedDescWidth(box.width) - 2 * sil.contentInlinePad : textW;
+    const descAnchorX = align === "center" ? descX + descW / 2 : align === "right" ? descX + descW : descX;
     // A node with rows holds its description to ONE line: the rows below are
     // placed by a shared formula, and a second line would shift every one of
     // them out from under its edge anchor.
     //
-    // `wrap` lifts the two-line clamp on the canvas (.as-node--wrap
-    // .as-node__desc), but validateTemplate only grows a node's height for its
-    // TITLE — so the box, not the text, is what bounds it. Cap the wrapped
-    // description at the lines that fit above the bottom edge; unbounded, a
-    // long one prints straight through the silhouette.
+    // A wrapped one shows every line: validateTemplate grew the box to hold
+    // them. The cap is for a box that never went through it — the lines that
+    // fit above the bottom edge, or a long one prints straight through the
+    // silhouette.
     const descRoom = Math.max(
       1,
-      Math.floor((box.height - cTop - 49 - titleOverflow) / skin.descLineH) + 1,
+      Math.floor((box.height - cTop - 49 - titleOverflow) / descLineH) + 1,
     );
     const descLines = node.description
-      ? wrapText(node.description, skin.descSize, "sans", textW, rows.length ? 1 : node.wrap ? descRoom : 2)
+      ? wrapText(node.description, descSize, "sans", descW, rows.length ? 1 : node.wrap ? descRoom : 2)
       : [];
 
     // Vertical placement moves the whole text block inside the box.
@@ -1762,9 +1725,9 @@ export function emitTemplate(
     // the canvas closes it by having one fewer flex child.
     const TITLE_DY = eyebrow ? 31 : Math.round(fontSize * 1.2) + 2;
     const DESC_DY = TITLE_DY + 14;
-    const blockH = DESC_DY + titleOverflow + descLines.length * skin.descLineH;
+    const blockH = DESC_DY + titleOverflow + descLines.length * descLineH;
     const slack = Math.max(0, box.height - cTop - blockH);
-    const vShift = rows.length
+    const vShift = rows.length || textBelow
       ? 0
       : node.textVAlign === "top"
         ? 0
@@ -1772,6 +1735,49 @@ export function emitTemplate(
           ? slack
           : slack / 2;
     const ty = (offset: number) => box.y + cTop + offset + vShift;
+
+    const contentMidY = box.y + cTop + (box.height - cTop) / 2;
+    // Icon and text share one flex line on the canvas, so the icon follows
+    // the node's vertical alignment too — centred by default, pinned to the
+    // padding edge when the text is (records included, which pin to the top).
+    // Half the chip plus the card's top padding: where a pinned chip centres,
+    // which moves with the chip's own size.
+    const iconInset = 6 + skin.iconBox / 2;
+    const iconMidY = textBelow
+      ? // A wrapped card's chip heads the card beside its title, and the
+        // description runs on underneath (`.as-node__below`): centred on that
+        // header line, at the top of the card, whatever the alignment says.
+        ty((7 + DESC_DY - 8.5 + titleOverflow) / 2)
+      : node.fields?.length || node.textVAlign === "top"
+        ? box.y + cTop + iconInset
+        : node.textVAlign === "bottom"
+          ? box.y + box.height - iconInset
+          : contentMidY;
+    if (icon) {
+      const chipX = box.x + sil.contentInlinePad + chipInset;
+      const chipY = iconMidY - skin.iconBox / 2;
+      const glyph = skin.iconBox * (17 / 28);
+      cmds.push({
+        op: "path",
+        d: roundedRectPath(chipX, chipY, skin.iconBox, skin.iconBox, skin.iconRadius),
+        ...skin.iconChip(accent, chipX, chipY, skin.iconBox),
+        ...(skin.marketing ? { strokeWidth: 1 } : {}),
+      });
+      for (const d of icon) {
+        cmds.push({
+          op: "path",
+          d,
+          stroke: skin.iconInk(accent),
+          strokeWidth: 1.8,
+          round: true,
+          transform: {
+            tx: chipX + (skin.iconBox - glyph) / 2,
+            ty: chipY + (skin.iconBox - glyph) / 2,
+            scale: glyph / 24,
+          },
+        });
+      }
+    }
 
     // The kind half of the eyebrow, dropped in marketing; the status half is
     // never dropped, in either mode.
@@ -1871,7 +1877,7 @@ export function emitTemplate(
       cmds.push({ op: "path", d: strikeD, stroke: palette.text, strokeAlpha: dim, strokeWidth: 1 });
     }
     descLines.forEach((line, i) =>
-      cmds.push({ op: "text", x: anchorX, y: ty(DESC_DY + titleOverflow + i * skin.descLineH), text: line, size: skin.descSize, font: "sans", color: skin.descColor, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
+      cmds.push({ op: "text", x: descAnchorX, y: ty(DESC_DY + titleOverflow + i * descLineH), text: line, size: descSize, font: "sans", color: skin.descColor, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
     );
 
     // Field rows — the same list the canvas draws, from the same metrics.
@@ -1991,17 +1997,17 @@ export function emitTemplate(
       // thing this emitter exists to prevent.
       const below = rows.length
         ? listTop + rows.length * FIELD_ROW_H + 2
-        : ty(DESC_DY - 9 + descLines.length * skin.descLineH);
+        : ty(DESC_DY - 9 + descLines.length * descLineH);
       // Work's date is a due date: late once it passes unfinished, whatever
       // the lifecycle status says. A live page decides "late" itself, on the
       // day it is opened, so both chips go in as parts.
       if (live) {
         const date = node.date;
         const late = overdue.has(node.id);
-        liveParts.push({ name: "due", on: !late, draw: () => pushDateChip(date, textX, below, false) });
-        liveParts.push({ name: "due-late", on: late, draw: () => pushDateChip(date, textX, below, true) });
+        liveParts.push({ name: "due", on: !late, draw: () => pushDateChip(date, descX, below, false) });
+        liveParts.push({ name: "due-late", on: late, draw: () => pushDateChip(date, descX, below, true) });
       } else {
-        pushDateChip(node.date, textX, below, isWork ? overdue.has(node.id) : isOverdue(node.date, node.status));
+        pushDateChip(node.date, descX, below, isWork ? overdue.has(node.id) : isOverdue(node.date, node.status));
       }
       dateBottom = below + DATE_CHIP_H;
     }

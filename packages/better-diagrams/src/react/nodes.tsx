@@ -342,7 +342,7 @@ export const ShapeNode = memo(function ShapeNode({
   height,
 }: NodeProps<ShapeNodeType>) {
   const { registry, readOnly, mode, tagFilter, showTeams, showLinks, requestCommit, navigateFile, drillInto, navigateToNode, childCounts, dimmedIds, pinnedFields, highlightFields, domainTint, blockedIds, taskLabelOf, personPreview, personFocus, overdueIds, reachedIds, taskFilterIds, today } = useStudio();
-  const { updateNodeData } = useReactFlow();
+  const { updateNodeData, updateNode } = useReactFlow();
   const def = kindDef(registry, data.kind);
   const paths = iconPaths(registry, data.icon);
   const shape = def.shape ?? "card";
@@ -439,6 +439,11 @@ export const ShapeNode = memo(function ShapeNode({
       ? { paddingTop: 6 + sil.contentTop, paddingInline: 12 + sil.contentInlinePad }
       : {}),
   } as CSSProperties;
+
+  // A record keeps its one-line description above its rows, wrapped or not
+  // (see `wrappedNodeHeight`).
+  const textBelow = !!data.wrap && !data.fields?.length;
+  const dateChip = <DateChip date={data.date} prefix={isWork ? "Due" : "Lands"} overdue={overdue} />;
 
   const className = [
     "as-node",
@@ -582,13 +587,27 @@ export const ShapeNode = memo(function ShapeNode({
             title={data.label}
             onCommit={(label) => {
               updateNodeData(id, { label });
+              // A wrapped card fits its text, as the inspector's edits keep it
+              // (`patchNodes`): a longer name needs a taller box.
+              if (data.wrap) {
+                const fit = shapeMinHeight({ ...data, label }, w);
+                updateNode(id, (n) => ({ height: fit, style: { ...n.style, height: fit } }));
+              }
               requestCommit();
             }}
           />
-          {data.description ? <div className="as-node__desc">{data.description}</div> : null}
+          {data.description && !textBelow ? <div className="as-node__desc">{data.description}</div> : null}
           {data.fields?.length ? <FieldList nodeId={docId} fields={data.fields} rowsFiltered={rowsFiltered} /> : null}
-          <DateChip date={data.date} prefix={isWork ? "Due" : "Lands"} overdue={overdue} />
+          {textBelow ? null : dateChip}
         </div>
+        {/* A wrapped card reads like a document: the icon and title head it,
+            and the description runs the card's full width underneath. */}
+        {textBelow && (data.description || data.date) ? (
+          <div className="as-node__below">
+            {data.description ? <div className="as-node__desc">{data.description}</div> : null}
+            {dateChip}
+          </div>
+        ) : null}
         {!showLinks ? null : data.url?.startsWith("file:") ? (
           navigateFile ? (
             <button

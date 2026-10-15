@@ -21,6 +21,10 @@ import {
   EDGE_Z_INDEX,
   validateTemplate,
   visibleAnchor,
+  wrappedNodeHeight,
+  wrappedTitleHeight,
+  fieldsBoxHeight,
+  DESC_LINE_H,
   type DiagramTemplate,
 } from "./schema";
 import {
@@ -154,6 +158,79 @@ describe("new node fields", () => {
   it("does not grow a wrapped node whose label already fits", () => {
     const t = validateTemplate({ nodes: [node({ id: "s", label: "API", wrap: true })] });
     expect(t.nodes.find((n) => n.id === "s")!.h).toBe(76);
+  });
+
+  // A user story's criteria, a line each — four lines whatever the width.
+  const criteria = [
+    "Given a returning customer",
+    "When they tap Reorder",
+    "Then every item from the order is in the basket",
+    "And a toast says how many were added",
+  ].join("\n");
+
+  it("grows a wrapped card for every line of its description, and for its date", () => {
+    const t = validateTemplate({
+      nodes: [
+        node({ id: "described", label: "API", description: criteria, wrap: true }),
+        node({ id: "dated", label: "API", description: criteria, date: "2026-11-01", wrap: true }),
+        node({ id: "unwrapped", label: "API", description: criteria }),
+        // A frame's description is its own sub-line, and a record's is one line
+        // above its rows: neither grows for it.
+        node({ id: "frame", kind: "group", label: "Checkout", description: criteria, wrap: true, w: 320, h: 240 }),
+        node({ id: "record", kind: "table", label: "orders", description: criteria, wrap: true, fields: [{ id: "id", name: "id" }] }),
+      ],
+    });
+    const h = (id: string) => t.nodes.find((n) => n.id === id)!.h;
+    expect(h("unwrapped")).toBe(76);
+    // The box holds one line of description already; three more need room.
+    expect(h("described")).toBeGreaterThanOrEqual(wrappedTitleHeight("API", 13, 170, true) + 3 * DESC_LINE_H);
+    expect(h("dated")).toBeGreaterThan(h("described"));
+    expect(h("frame")).toBe(240);
+    expect(h("record")).toBe(Math.max(76, fieldsBoxHeight(1, true)));
+  });
+
+  describe("wrappedNodeHeight", () => {
+    const long = "A deliberately long component label that cannot fit on one line";
+
+    it("is the title's height when nothing runs under it, so those documents keep their heights", () => {
+      for (const w of [120, 170, 240]) {
+        expect(wrappedNodeHeight({ label: long }, w, true)).toBe(wrappedTitleHeight(long, 13, w, true));
+        expect(wrappedNodeHeight({ label: long, description: "One line" }, w, false)).toBe(
+          wrappedTitleHeight(long, 13, w, false),
+        );
+      }
+    });
+
+    it("measures the description at the card's full width, icon or not", () => {
+      // The label fits one line either way, so only the description differs —
+      // and it runs under the icon, so the icon changes nothing.
+      const paragraph = `${criteria} ${criteria.replace(/\n/g, " ")}`;
+      expect(wrappedNodeHeight({ label: "API", description: paragraph }, 200, true)).toBe(
+        wrappedNodeHeight({ label: "API", description: paragraph }, 200, false),
+      );
+      // Narrower, the same words take more lines.
+      expect(wrappedNodeHeight({ label: "API", description: paragraph }, 140, false)).toBeGreaterThan(
+        wrappedNodeHeight({ label: "API", description: paragraph }, 200, false),
+      );
+    });
+
+    it("keeps a task's title clear of its corner check", () => {
+      // A title that just fits a card's text column takes a second line on a
+      // task, whose corner check takes 14px of it.
+      let label = "Story";
+      while (wrappedNodeHeight({ label: `${label} x` }, 200, false) === wrappedNodeHeight({ label: "x" }, 200, false)) {
+        label = `${label} x`;
+      }
+      expect(wrappedNodeHeight({ label, kind: "task" }, 200, false)).toBeGreaterThan(
+        wrappedNodeHeight({ label, kind: "service" }, 200, false),
+      );
+    });
+
+    it("leaves room for a date chip under the text", () => {
+      expect(wrappedNodeHeight({ label: "API", date: "2026-11-01" }, 170, true)).toBe(
+        wrappedNodeHeight({ label: "API" }, 170, true) + 20,
+      );
+    });
   });
 
   it("keeps frame styling only on container kinds, and only when non-default", () => {

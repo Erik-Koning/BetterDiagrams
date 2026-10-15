@@ -10,7 +10,7 @@
  *
  * Every follower keeps its own floor. A size the handle can reach on the
  * dragged box is not always one a neighbour can hold: a table needs its
- * rows, a wrapped title its lines, a group its children. The floors are the
+ * rows, a wrapped card its lines, a group its children. The floors are the
  * same ones the renderers put on their own resizers (`shapeMinHeight`,
  * `groupContentBox`), so a follower is never made smaller than a direct
  * resize of it would allow.
@@ -20,6 +20,7 @@ import {
   DEFAULT_FONT_SIZE,
   NODE_MIN_SIZE,
   fieldsBoxHeight,
+  wrappedNodeHeight,
   wrappedTitleHeight,
   isBoundaryNodeId,
   isGhostNodeId,
@@ -41,15 +42,16 @@ export function shapeMinHeight(data: DiagramNodeData, width: number): number {
   return Math.max(
     NODE_MIN_SIZE.shape.h,
     data.fields?.length ? fieldsBoxHeight(data.fields.length, !!data.description) : 0,
-    data.wrap
-      ? wrappedTitleHeight(
-          data.label,
-          data.fontSize ?? DEFAULT_FONT_SIZE,
-          width,
-          !!data.icon && data.icon !== "none",
-        )
-      : 0,
+    !data.wrap
+      ? 0
+      : data.fields?.length
+        ? wrappedTitleHeight(data.label, data.fontSize ?? DEFAULT_FONT_SIZE, width, hasIcon(data))
+        : wrappedNodeHeight(data, width, hasIcon(data)),
   );
+}
+
+function hasIcon(data: DiagramNodeData): boolean {
+  return !!data.icon && data.icon !== "none";
 }
 
 /** How much room a group's children need, in the frame's own coordinates. */

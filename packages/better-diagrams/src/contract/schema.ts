@@ -32,6 +32,7 @@ import { ALL_CLOUD_KIND_IDS } from "./cloud";
 import { normalizeDate, type DiagramDate } from "./timeline";
 import { parseLlmJsonReport } from "./json-repair";
 import { wrappedLineCount } from "./text";
+import { TASK_KIND } from "./tasks";
 import { validatePaths, type DiagramPath, type PathGlow } from "./paths";
 import { validateAnalyses, type SavedAnalysis } from "./analyses";
 import { validateLineage, type LineageLink } from "./lineage-links";
@@ -319,6 +320,58 @@ export function wrappedTitleHeight(
   return Math.round(lines * fontSize * TITLE_LINE_HEIGHT) + WRAP_BOX_PADDING;
 }
 
+/** `.as-node__desc`: 11px type. */
+export const DESC_FONT_SIZE = 11;
+/** Its 1.25 line pitch, rounded up the way the exporter draws it. */
+export const DESC_LINE_H = Math.round(DESC_FONT_SIZE * 1.25);
+/** `.as-node--task .as-node__body`'s right padding: the title keeps clear of the corner check. */
+const TASK_CHECK_ROOM = 14;
+/** A date chip under the text: its 15px line, its border and the 3px above it (`.as-date`). */
+const DATE_CHIP_H = 20;
+
+/**
+ * Width a wrapped card's description runs at: the card's full inner width,
+ * under the icon as well as the title. The card's 12px padding each side
+ * and its border.
+ */
+export function wrappedDescWidth(w: number): number {
+  return Math.max(24, w - 26);
+}
+
+/**
+ * The height a WRAPPED card needs to show all of its text, by the same
+ * measurement the renderer and the exporters use (contract/text.ts).
+ *
+ * A wrapped card reads like a document: the title wraps in the column beside
+ * the icon, and the description runs the card's full width beneath them
+ * (`wrappedDescWidth`). WRAP_BOX_PADDING already holds one line of
+ * description; each further line adds a line, and a date adds its chip. A
+ * task's title keeps clear of its corner check.
+ *
+ * Only for cards: a record holds its description to one line and is sized by
+ * its rows (`fieldsBoxHeight`). With no description, no date and no task
+ * check this is exactly `wrappedTitleHeight`, so those documents keep their
+ * stored heights.
+ */
+export function wrappedNodeHeight(
+  node: { label: string; description?: string; fontSize?: number; kind?: string; date?: string },
+  w: number,
+  hasIcon: boolean,
+): number {
+  const fontSize = node.fontSize ?? DEFAULT_FONT_SIZE;
+  const titleW = nodeTextWidth(w, hasIcon) - (node.kind === TASK_KIND ? TASK_CHECK_ROOM : 0);
+  const titleLines = wrappedLineCount(node.label, fontSize, "sans", Math.max(24, titleW));
+  const descLines = node.description
+    ? wrappedLineCount(node.description, DESC_FONT_SIZE, "sans", wrappedDescWidth(w))
+    : 0;
+  return (
+    Math.round(titleLines * fontSize * TITLE_LINE_HEIGHT) +
+    WRAP_BOX_PADDING +
+    Math.max(0, descLines - 1) * DESC_LINE_H +
+    (node.date ? DATE_CHIP_H : 0)
+  );
+}
+
 /**
  * Lifecycle stage of a node. `active` is the default and is never stored —
  * validation strips it so pre-status documents stay byte-identical.
@@ -492,13 +545,17 @@ export interface DiagramNode {
   textAlign?: NodeTextAlign;
   /**
    * Vertical placement of the text block inside the box. Absent = "middle"
-   * (record kinds pin to the top regardless — their rows are anchored).
+   * (record kinds pin to the top regardless — their rows are anchored — and
+   * so does a wrapped card, which reads from the top like a document).
    */
   textVAlign?: NodeTextVAlign;
   /**
-   * Wrap the label across as many lines as it needs instead of ellipsising it
-   * on one, growing the node's height to fit. Absent = the single-line
-   * treatment. Width is never changed — that stays authored.
+   * Show all of the text: the label wraps across as many lines as it needs
+   * instead of ellipsising on one, and on a card the description runs the
+   * card's full width under the icon and title, every line of it, instead of
+   * stopping at two. The node's height grows to fit (`wrappedNodeHeight`) and
+   * the text sits at the top. Absent = the single-line treatment. Width is
+   * never changed — that stays authored.
    */
   wrap?: boolean;
 
@@ -1037,7 +1094,7 @@ Rules:
 - meta.routing "orthogonal" gives right-angle connectors (formal/dense diagrams), "straight" direct point-to-point lines (classic flow charts); omit for curved. meta.title names the diagram. meta.versionTag labels the revision ("v2.1", "2026-Q3 draft") when the user gives one; omit otherwise.
 - "settings" holds document-wide rendering preferences. settings.groupContents "hide" folds every group with contents into a chip (a high-level overview the reader expands from the toolbar); set it ONLY when the user asks for collapsed/folded groups or a summary view, and omit the "settings" key otherwise.
 - Node "tags" = short lowercase labels for cross-cutting concerns the user mentions ("pci","gdpr","deprecated","planned"); omit when none. Node "url" = deep link to docs/repo if the user supplies one; omit otherwise. Node "team" = the owning or contact team when the user names one ("Payments", "Platform"); omit otherwise. Node "status" = lifecycle stage when stated: "planned" for future work, "stubbed" for scaffolding that exists but does nothing yet, "dark" for built-and-shipped but not yet enabled, "deprecated" for being sunset; omit for normal active components. Text notes draw a subtle box by default; set "plain":true only when the user wants bare text with no outline.
-- Node text layout, all optional and all rarely needed — omit unless the user asks: "textAlign":"center"/"right" (default left), "textVAlign":"top"/"bottom" (default middle), "wrap":true to break a long label across lines instead of ellipsising it on one (the editor grows the node's height to fit). "fontSize" sets the label size in px (default 13).
+- Node text layout, all optional and all rarely needed — omit unless the user asks: "textAlign":"center"/"right" (default left), "textVAlign":"top"/"bottom" (default middle), "wrap":true to show a long label and description in full instead of truncating them (the editor grows the node's height to fit). "fontSize" sets the label size in px (default 13).
 - A "group" may also be styled as a purely visual grouping frame: "fill":false drops its background, "outline":"none" drops its border, "outline":"dotted"/"solid" changes it (default dashed), and "color" is an "#rrggbb" ink the background tint derives from. Use "fill":false with "outline":"none" only when the user explicitly wants an invisible/abstract grouping box.
 - Node/edge/zone "date" = when that piece lands or landed, as "YYYY-MM-DD". Set it ONLY when the user gives a roadmap, phases, quarters, or a migration order; omit it everywhere else. Undated elements are treated as always present, so a phased plan dates the new pieces and leaves today's system undated. A node inside a group is never shown before the group, so date the group with its earliest phase.
 - parentId may reference ANY existing node. A child of a "group" renders inside its frame. A child of any other node is that component's INTERNAL decomposition (the next C4 level) — shown only when the user drills into that component, never on the parent's own diagram. Do NOT decompose a component into children unless the user explicitly asks for its internal detail. Never create a parent cycle.
@@ -1255,8 +1312,9 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         // for, it grows to fit the list. Rows are content; clipping them would
         // silently drop meaning, unlike clipping a description.
         //
-        // A wrapped label is content by the same argument: `wrap` promises
-        // nothing is hidden, so the box grows to hold every line. This is the
+        // Wrapped text is content by the same argument: `wrap` promises
+        // nothing is hidden, so a card grows to hold every line of its title
+        // and its description (a frame or a note, only its title). This is the
         // one measurement the canvas, the exports and validation all share
         // (contract/text.ts), or the PNG would disagree with the screen.
         h: fields
@@ -1264,12 +1322,18 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
           : wrap
             ? Math.max(
                 positive(n.h, size.h),
-                wrappedTitleHeight(
-                  String(n.label ?? id),
-                  fontSize,
-                  positive(n.w, size.w),
-                  iconSet.has(n.icon as string) && n.icon !== "none",
-                ),
+                isContainer || annotationSet.has(kind)
+                  ? wrappedTitleHeight(
+                      String(n.label ?? id),
+                      fontSize,
+                      positive(n.w, size.w),
+                      iconSet.has(n.icon as string) && n.icon !== "none",
+                    )
+                  : wrappedNodeHeight(
+                      { label: String(n.label ?? id), description, fontSize, kind, ...(date ? { date } : {}) },
+                      positive(n.w, size.w),
+                      iconSet.has(n.icon as string) && n.icon !== "none",
+                    ),
               )
             : positive(n.h, size.h),
         fontSize,

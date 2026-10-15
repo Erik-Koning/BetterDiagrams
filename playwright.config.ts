@@ -61,6 +61,9 @@ export default defineConfig({
       BD_LINKED_DIRS: E2E_LINKED_DIR,
       BD_FOLDER_PICKER: `printf '%s' '${E2E_PICK_DIR}'`,
       BD_FILE_PICKER: `cat '${E2E_PICK_ANSWER}' 2>/dev/null || printf '%s' '${E2E_PICK_FILE}'`,
+      // No model behind the AI route, whatever keys this shell has: the specs
+      // answer /api/diagram themselves, and nothing may reach a provider.
+      BD_AI: "off",
     },
   },
 });

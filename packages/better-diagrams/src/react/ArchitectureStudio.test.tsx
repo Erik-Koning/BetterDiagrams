@@ -127,7 +127,7 @@ describe("ArchitectureStudio", () => {
     const user = userEvent.setup();
     mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} generate={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: /AI/ }));
-    expect(screen.getByText("Generate architecture")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Adjust with AI" })).toBeInTheDocument();
   });
 
   it("shows a Save button only when onSave is provided", () => {
@@ -1534,6 +1534,48 @@ describe("ArchitectureStudio", () => {
     )!;
     expect(after.h).toBe(grown);
     expect(after.wrap).toBe(true);
+  });
+
+  it("fits a wrapped card to its text as it is edited, growing and shrinking", async () => {
+    // Wrap promises nothing is hidden, so every edit that changes how many
+    // lines the card takes — the description in the inspector, the title
+    // renamed in place — re-fits the box, as validation would.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+    const heightOf = () =>
+      (onChange.mock.calls.at(-1)![0] as DiagramTemplate).nodes.find((n) => n.id === "db")!.h;
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.click(screen.getByRole("checkbox", { name: "Wrap" }));
+    const fitted = heightOf();
+    // A wrapped card reads from the top; the vertical alignment waits for it
+    // to unwrap.
+    expect(screen.getByLabelText("Vertical text alignment")).toBeDisabled();
+
+    const description = screen.getByLabelText("Node description");
+    fireEvent.change(description, {
+      target: { value: "Orders, payments and refunds, replicated across three zones with point-in-time recovery and a read replica per region" },
+    });
+    await waitFor(() => expect(heightOf()).toBeGreaterThan(fitted));
+    fireEvent.change(description, { target: { value: "" } });
+    await waitFor(() => expect(heightOf()).toBeLessThanOrEqual(fitted));
+
+    const before = heightOf();
+    fireEvent.keyDown(window, { key: "F2" });
+    const name = await waitFor(() => {
+      const input = container.querySelector<HTMLInputElement>('[data-id="db"] input.as-node__title');
+      expect(input).not.toBeNull();
+      return input!;
+    });
+    fireEvent.change(name, { target: { value: "Primary Transactional Postgres Cluster For Billing And Refunds" } });
+    fireEvent.keyDown(name, { key: "Enter" });
+    // The CANVAS box grows, not just the document: validation would grow the
+    // stored height anyway, while the card on screen kept its old one and
+    // the title ran out of it.
+    const boxHeight = () => parseFloat(container.querySelector<HTMLElement>('.react-flow__node[data-id="db"]')!.style.height);
+    await waitFor(() => expect(boxHeight()).toBeGreaterThan(before));
+    expect(heightOf()).toBe(boxHeight());
   });
 
   it("leaves a node with default text layout completely unmarked", () => {
@@ -3401,7 +3443,7 @@ describe("content/presentation split", () => {
       screen.getByPlaceholderText('"make the queue edges dotted" · "add a CDN"'),
       "add metrics",
     );
-    await user.click(screen.getByRole("button", { name: "Apply refinement" }));
+    await user.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
@@ -3426,6 +3468,25 @@ describe("content/presentation split", () => {
     const metrics = latest.nodes.find((n) => n.id === "metrics")!;
     expect(metrics.y).toBeGreaterThan(500);
     expect(latest.edges.some((e) => e.id === "e8")).toBe(true);
+  });
+
+  it("refuses a chat reply cut off mid-document, rather than merging what never arrived as deletions", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const whole = JSON.stringify(splitTemplate(EXAMPLE_TEMPLATE).content);
+    // A note, then the document — stopped halfway, as a reply that ran into
+    // its token limit is. Repaired, it would validate as a smaller diagram.
+    const generate = vi.fn().mockResolvedValue(`Tidied the labels.\n${whole.slice(0, Math.floor(whole.length / 2))}`);
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} generate={generate} />);
+
+    await user.click(screen.getByRole("button", { name: "AI" }));
+    await user.type(screen.getByRole("textbox", { name: "Message" }), "tidy the labels");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText(/The reply was cut off before the diagram was complete/)).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+    // The chat asked for a sentence before the JSON.
+    expect(generate.mock.calls[0][0].systemPrompt).toContain("This is a conversation with the user");
   });
 });
 
@@ -3887,14 +3948,14 @@ describe("drill-down AI scope", () => {
     // Generate is unavailable while focused — the panel hands the way out.
     expect(screen.queryByPlaceholderText(/Paste requirements/)).not.toBeInTheDocument();
     expect(screen.getByText(/Generate replaces the whole diagram/)).toBeInTheDocument();
-    // The refine section says exactly where it will work.
-    expect(screen.getByText(/Refining inside: “Payments Core” · C2 · Containers/)).toBeInTheDocument();
+    // The chat says exactly where it will work.
+    expect(screen.getByText(/Adjusting inside: “Payments Core” · C2 · Containers/)).toBeInTheDocument();
 
     await user.type(
       screen.getByPlaceholderText('"add a cache between these" · "split the parser"'),
       "add a ledger",
     );
-    await user.click(screen.getByRole("button", { name: "Apply refinement" }));
+    await user.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(generate).toHaveBeenCalled());
     const req = generate.mock.calls[0][0];

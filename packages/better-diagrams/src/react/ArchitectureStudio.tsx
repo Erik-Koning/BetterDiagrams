@@ -75,8 +75,6 @@ import {
   type NodeOutline,
   type NodeTextAlign,
   type NodeTextVAlign,
-  NODE_MIN_SIZE,
-  wrappedTitleHeight,
   fieldsBoxHeight,
   KIND_DEFAULT_SIZE,
   absolutePosition,
@@ -99,6 +97,7 @@ import {
   templateBounds,
   templateProviders,
   toReactFlow,
+  parseLlmTemplateReport,
   toZoneNodeId,
   validateTemplate,
   ZONE_DRAG_HANDLE,
@@ -186,7 +185,7 @@ import {
   welcomeSuppressed,
 } from "./WelcomeModal";
 import { buildArchitectureLint } from "./schema-lint";
-import { fanOutResize } from "./resize";
+import { fanOutResize, shapeMinHeight } from "./resize";
 import { NestingModal } from "./NestingModal";
 import { inlineContents, nestContents } from "../contract/nesting";
 import { importFolder } from "../contract/folder";
@@ -284,8 +283,11 @@ import {
 import { useHistory, type Snapshot } from "./history";
 import {
   buildRefineMessage,
+  CHAT_REPLY_RULE,
   coerceGeneratorResult,
+  replyNote,
   type DiagramGenerator,
+  type GenerateTurn,
 } from "../contract/llm";
 
 // Module-level so the object identity is stable across renders — React Flow
@@ -463,6 +465,11 @@ export interface ArchitectureStudioProps {
   gradients?: boolean;
   /** Supply to enable the AI panel. Omit and no network code runs. */
   generate?: DiagramGenerator;
+  /**
+   * Names what answers `generate` — "Claude Opus 5.5" — for the AI panel to
+   * show. Purely informative: the editor never knows or picks the model.
+   */
+  aiLabel?: string;
   /** Base name for exported files. Defaults to "architecture". */
   filename?: string;
   /** Show the React Flow minimap. Defaults to true. */
@@ -730,6 +737,34 @@ let activeStudio: symbol | null = null;
 /** Where an import lands: over the open diagram, or in a new file beside it. See `runImport`. */
 type ImportTarget = "here" | "new";
 
+/** One bubble in the Adjust with AI chat. */
+interface ChatEntry {
+  id: number;
+  role: "user" | "assistant";
+  text: string;
+  /** What the turn did to the diagram, counted from the documents — the model's note can be wrong. */
+  detail?: string;
+  /** A turn that failed or was stopped: shown, never sent back as history. */
+  failed?: boolean;
+}
+
+/** How many earlier turns a chat message carries as context. */
+const CHAT_HISTORY_TURNS = 16;
+
+/** "2 added · 1 changed" — what a turn did. */
+function changeCount(summary: { added: number; removed: number; changed: number }): string {
+  return [
+    summary.added ? `${summary.added} added` : "",
+    summary.removed ? `${summary.removed} removed` : "",
+    summary.changed ? `${summary.changed} changed` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** The node fields a wrapped card's height is measured from (`wrappedNodeHeight`). */
+const WRAP_MEASURED_KEYS = ["label", "description", "fontSize", "icon", "kind", "date"] as const;
+
 /**
  * Whether a canvas node is pinned.
  *
@@ -810,6 +845,7 @@ function StudioInner({
   mode,
   gradients = true,
   generate,
+  aiLabel,
   filename = "architecture",
   minimap = true,
   edgesOnHover = false,
@@ -1014,7 +1050,16 @@ function StudioInner({
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [createInput, setCreateInput] = useState("");
+  /** The Adjust with AI message being typed. */
   const [refineInput, setRefineInput] = useState("");
+  /** The Adjust with AI conversation — this editor's own; a new mount starts fresh. */
+  const [chat, setChat] = useState<ChatEntry[]>([]);
+  const chatSeq = useRef(0);
+  const chatThreadRef = useRef<HTMLDivElement>(null);
+  /** The AI panel, whose width the chat keeps a re-fit clear of. */
+  const aiPanelRef = useRef<HTMLDivElement>(null);
+  /** Whether the AI panel's Generate section is expanded. */
+  const [createOpen, setCreateOpen] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [showHidden, setShowHidden] = useState(defaultShowHidden);
   /**
@@ -3507,25 +3552,21 @@ function StudioInner({
                 ? "point"
                 : "shape";
 
-          // A wrapped label decides the node's height. `validateTemplate` grows
+          // Wrapped text decides the node's height. `validateTemplate` grows
           // the stored `h` for it, but the DOCUMENT is derived from the canvas
           // — so unless the canvas node grows too, the next derive reads the
           // old height back off it and the extra lines spill out of the box.
-          // Anything that changes how many lines the label takes lands here.
+          // Anything that changes how many lines the title or description
+          // takes, or what sits under them, lands here — and the box fits the
+          // text again, shrinking as well as growing.
           const affectsHeight =
-            "wrap" in own || "fontSize" in own || ("label" in own && data.wrap);
+            "wrap" in own ||
+            (!!data.wrap && WRAP_MEASURED_KEYS.some((key) => key in own));
           const grown =
             affectsHeight && data.wrap && !def.container && !def.annotation
-              ? wrappedTitleHeight(
-                  data.label,
-                  data.fontSize ?? DEFAULT_FONT_SIZE,
-                  firstNumber(n.width, n.style?.width, n.measured?.width) ?? 170,
-                  !!data.icon && data.icon !== "none",
-                )
+              ? shapeMinHeight(data, firstNumber(n.width, n.style?.width, n.measured?.width) ?? 170)
               : null;
-          const height = grown
-            ? Math.max(grown, NODE_MIN_SIZE.shape.h)
-            : firstNumber(n.height, n.style?.height, n.measured?.height);
+          const height = grown ?? firstNumber(n.height, n.style?.height, n.measured?.height);
 
           // Materializing a dangling arrow's dot: changing a point's kind is
           // how "the thing this arrow points at" comes into existence, and a
@@ -5773,119 +5814,231 @@ function StudioInner({
     [zeroFiles, onFileCreate, readOnly, addNode, registry],
   );
 
-  const runGenerate = useCallback(
-    async (mode: "create" | "refine") => {
-      if (!generate || busy) return;
-      const input = mode === "create" ? createInput : refineInput;
-      if (!input.trim()) return;
-
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-      setBusy(true);
-      setError("");
-
-      try {
-        const rOpts = registryOpts(registry);
-        // Refine sends the content form and keeps the layout at home: the
-        // reply is merged with the CURRENT document's presentation, so every
-        // surviving element keeps its exact place and only genuinely new ones
-        // get positions (stacked into their container, nothing else moves).
-        const split = mode === "refine" ? splitTemplate(template, rOpts) : null;
-        // While drilled in, refine works INSIDE the focused component — the
-        // whole content doc still travels (ids stay stable), the model is
-        // just told where the user is looking.
-        const focusNode =
-          split && rfFocusRef.current
-            ? template.nodes.find((n) => n.id === rfFocusRef.current)
-            : undefined;
-        const focusScope = focusNode ? { id: focusNode.id, label: focusNode.label } : undefined;
-        const result = await generate(
-          {
-            mode,
-            input: split
-              ? buildRefineMessage(split.content, input, { focus: focusScope })
-              : input,
-            systemPrompt: mode === "refine" ? refineSystemPrompt : systemPrompt,
-            ...(split ? { current: split.content } : {}),
-          },
-          controller.signal,
-        );
-        let next = coerceGeneratorResult(result, rOpts);
-        if (split) {
-          // Whatever geometry the model emitted anyway is stripped by the
-          // split; the document's own presentation is the only layout source —
-          // taken from the LIVE document, not the request-time snapshot, so a
-          // node dragged while the model was thinking keeps its new place.
-          next = mergeTemplate(
-            splitTemplate(next, rOpts).content,
-            splitTemplate(templateRef.current, rOpts).presentation,
-            rOpts,
-          );
-        } else if (hasOverlaps(next, { containerKinds: registry.containerKinds })) {
-          // Models are good at topology and bad at coordinates. Tidy only when
-          // the output is actually a mess, so a well-placed generated diagram
-          // keeps the arrangement it was given. A fresh generation has no
-          // arrangement to protect on ANY level, so every frame is fair game.
-          next = autoLayout(next, {
-            containerKinds: registry.containerKinds,
-            ...modeLayoutOptions(studioMode),
-            frames: "all",
-          });
+  /**
+   * One round trip to the host's generator, and the document the reply lands
+   * as — shared by Generate and the Adjust with AI chat. Create replaces the
+   * diagram; refine sends the content form and keeps the layout at home: the
+   * reply is merged with the CURRENT document's presentation, so every
+   * surviving element keeps its exact place and only genuinely new ones get
+   * positions (stacked into their container, nothing else moves).
+   */
+  const askModel = useCallback(
+    async (
+      mode: "create" | "refine",
+      input: string,
+      { history, chat = false }: { history?: GenerateTurn[]; chat?: boolean },
+      signal: AbortSignal,
+    ) => {
+      if (!generate) throw new Error("No generator");
+      const rOpts = registryOpts(registry);
+      const split = mode === "refine" ? splitTemplate(templateRef.current, rOpts) : null;
+      // While drilled in, refine works INSIDE the focused component — the
+      // whole content doc still travels (ids stay stable), the model is
+      // just told where the user is looking.
+      const focusNode =
+        split && rfFocusRef.current
+          ? templateRef.current.nodes.find((n) => n.id === rfFocusRef.current)
+          : undefined;
+      const focusScope = focusNode ? { id: focusNode.id, label: focusNode.label } : undefined;
+      const prompt = mode === "refine" ? refineSystemPrompt : systemPrompt;
+      const result = await generate(
+        {
+          mode,
+          input: split
+            ? buildRefineMessage(split.content, input, { focus: focusScope })
+            : input,
+          systemPrompt: chat ? `${prompt}\n\n${CHAT_REPLY_RULE}` : prompt,
+          ...(split ? { current: split.content } : {}),
+          ...(history?.length ? { history } : {}),
+        },
+        signal,
+      );
+      let next: DiagramTemplate;
+      let note = "";
+      if (typeof result === "string") {
+        const report = parseLlmTemplateReport(result, rOpts);
+        // A reply cut off by max_tokens closes and validates cleanly, so the
+        // parts that never arrived would land as deletions.
+        if (report.truncated) {
+          throw new Error("The reply was cut off before the diagram was complete, so nothing was changed. Try a smaller change.");
         }
-        // Count what the reply touched OUTSIDE the focused subtree before the
-        // canvas re-materializes — a scoped refine that spilled over should
-        // say so rather than change levels silently.
-        let outsideChanges = 0;
-        if (focusScope) {
-          const inSubtree = (doc: DiagramTemplate, rootId: string) => {
-            const ids = new Set([rootId]);
-            let grew = true;
-            while (grew) {
-              grew = false;
-              for (const n of doc.nodes) {
-                if (!ids.has(n.id) && n.parentId && ids.has(n.parentId)) {
-                  ids.add(n.id);
-                  grew = true;
-                }
+        next = report.template;
+        note = replyNote(result);
+      } else {
+        next = coerceGeneratorResult(result, rOpts);
+      }
+      if (split) {
+        // Whatever geometry the model emitted anyway is stripped by the
+        // split; the document's own presentation is the only layout source —
+        // taken from the LIVE document, not the request-time snapshot, so a
+        // node dragged while the model was thinking keeps its new place.
+        next = mergeTemplate(
+          splitTemplate(next, rOpts).content,
+          splitTemplate(templateRef.current, rOpts).presentation,
+          rOpts,
+        );
+      } else if (hasOverlaps(next, { containerKinds: registry.containerKinds })) {
+        // Models are good at topology and bad at coordinates. Tidy only when
+        // the output is actually a mess, so a well-placed generated diagram
+        // keeps the arrangement it was given. A fresh generation has no
+        // arrangement to protect on ANY level, so every frame is fair game.
+        next = autoLayout(next, {
+          containerKinds: registry.containerKinds,
+          ...modeLayoutOptions(studioMode),
+          frames: "all",
+        });
+      }
+      // Count what the reply touched OUTSIDE the focused subtree before the
+      // canvas re-materializes — a scoped refine that spilled over should
+      // say so rather than change levels silently.
+      let outsideChanges = 0;
+      if (focusScope) {
+        const inSubtree = (doc: DiagramTemplate, rootId: string) => {
+          const ids = new Set([rootId]);
+          let grew = true;
+          while (grew) {
+            grew = false;
+            for (const n of doc.nodes) {
+              if (!ids.has(n.id) && n.parentId && ids.has(n.parentId)) {
+                ids.add(n.id);
+                grew = true;
               }
             }
-            return ids;
-          };
-          const beforeIds = inSubtree(templateRef.current, focusScope.id);
-          const afterIds = inSubtree(next, focusScope.id);
-          const outsideDiff = diffTemplates(
-            {
-              ...templateRef.current,
-              nodes: templateRef.current.nodes.filter((n) => !beforeIds.has(n.id)),
-            },
-            { ...next, nodes: next.nodes.filter((n) => !afterIds.has(n.id)) },
-          );
-          outsideChanges = outsideDiff.summary.added + outsideDiff.summary.removed + outsideDiff.summary.changed;
-        }
-        const focusRemoved = focusScope && !next.nodes.some((n) => n.id === focusScope.id);
-        applyTemplate(next);
-        if (mode === "refine") setRefineInput("");
-        setPanelOpen(false);
-        showToast(
-          mode === "create"
-            ? "Diagram generated"
-            : focusRemoved
-              ? "Refinement removed the focused element — returned to overview"
-              : outsideChanges > 0
-                ? `Refinement applied · ${outsideChanges} change${outsideChanges === 1 ? "" : "s"} outside this level`
-                : "Refinement applied",
+          }
+          return ids;
+        };
+        const beforeIds = inSubtree(templateRef.current, focusScope.id);
+        const afterIds = inSubtree(next, focusScope.id);
+        const outsideDiff = diffTemplates(
+          {
+            ...templateRef.current,
+            nodes: templateRef.current.nodes.filter((n) => !beforeIds.has(n.id)),
+          },
+          { ...next, nodes: next.nodes.filter((n) => !afterIds.has(n.id)) },
         );
-      } catch (err) {
-        if ((err as Error).name === "AbortError") return;
-        setError((err as Error).message || "Generation failed — try a shorter input.");
-      } finally {
-        setBusy(false);
-        abortRef.current = null;
+        outsideChanges = outsideDiff.summary.added + outsideDiff.summary.removed + outsideDiff.summary.changed;
       }
+      const focusRemoved = !!focusScope && !next.nodes.some((n) => n.id === focusScope.id);
+      return { next, note, outsideChanges, focusRemoved };
     },
-    [generate, busy, createInput, refineInput, template, systemPrompt, refineSystemPrompt, registry, applyTemplate, showToast, studioMode],
+    [generate, systemPrompt, refineSystemPrompt, registry, studioMode],
   );
+
+  /** Generate: a new diagram from a description, replacing this one. */
+  const runGenerate = useCallback(async () => {
+    const input = createInput;
+    if (!generate || busy || !input.trim()) return;
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setBusy(true);
+    setError("");
+
+    try {
+      const { next } = await askModel("create", input, {}, controller.signal);
+      applyTemplate(next);
+      setPanelOpen(false);
+      showToast("Diagram generated");
+    } catch (err) {
+      if ((err as Error).name === "AbortError") return;
+      setError((err as Error).message || "Generation failed — try a shorter input.");
+    } finally {
+      setBusy(false);
+      abortRef.current = null;
+    }
+  }, [generate, busy, createInput, askModel, applyTemplate, showToast]);
+
+  /**
+   * Adjust with AI: one chat turn. The instruction and the conversation so
+   * far go to the model with the live document; the reply lands as one undo
+   * step, and the chat says what the model said it did and what actually
+   * changed. On an empty canvas there is nothing to adjust, so the first
+   * message draws the diagram.
+   */
+  const sendChat = useCallback(async () => {
+    const text = refineInput.trim();
+    if (!generate || busy || !text) return;
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    // Turns that landed, oldest first — a failed one said nothing the model
+    // needs to remember.
+    const history: GenerateTurn[] = chat
+      .filter((entry) => !entry.failed)
+      .slice(-CHAT_HISTORY_TURNS)
+      .map((entry) => ({ role: entry.role, content: entry.text }));
+    const say = (entry: Omit<ChatEntry, "id">) =>
+      setChat((list) => [...list, { ...entry, id: ++chatSeq.current }]);
+    say({ role: "user", text });
+    setRefineInput("");
+    setBusy(true);
+    setError("");
+
+    const mode = isBlankDoc(templateRef.current) && !rfFocusRef.current ? "create" : "refine";
+    try {
+      const { next, note, outsideChanges, focusRemoved } = await askModel(
+        mode,
+        text,
+        { history, chat: true },
+        controller.signal,
+      );
+      const changed = diffTemplates(templateRef.current, next).summary;
+      const changes = changed.added + changed.removed + changed.changed;
+      if (changes) {
+        applyTemplate(next, { fit: false });
+        // The chat stays open over the canvas's left edge, so the result is
+        // fitted into the part you can see — what a turn adds never lands
+        // under the conversation.
+        const covered = aiPanelRef.current?.offsetWidth ?? 0;
+        window.setTimeout(
+          () =>
+            void flow.fitView({
+              padding: { top: "48px", right: "48px", bottom: "48px", left: `${covered + 48}px` },
+              duration: 300,
+            }),
+          50,
+        );
+      }
+      say({
+        role: "assistant",
+        text: note || (changes ? "Done." : "I left the diagram as it was."),
+        detail: [
+          changes ? changeCount(changed) : note ? "No changes to the diagram" : "",
+          focusRemoved ? "the focused element was removed — back to the overview" : "",
+          outsideChanges ? `${outsideChanges} outside this level` : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      });
+    } catch (err) {
+      say({
+        role: "assistant",
+        text:
+          (err as Error).name === "AbortError"
+            ? "Stopped. The diagram is unchanged."
+            : (err as Error).message || "The request failed.",
+        failed: true,
+      });
+    } finally {
+      setBusy(false);
+      abortRef.current = null;
+    }
+  }, [generate, busy, refineInput, chat, askModel, applyTemplate, flow]);
+
+  // The newest turn in view, as a chat keeps it.
+  useEffect(() => {
+    const thread = chatThreadRef.current;
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }, [chat.length, busy]);
+
+  // Opening the panel on an empty canvas leads with Generate; on a diagram,
+  // with the chat.
+  useEffect(() => {
+    if (panelOpen) setCreateOpen(isBlankDoc(templateRef.current));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelOpen]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -8426,60 +8579,68 @@ function StudioInner({
               {...(!readOnly && pins.length >= 2 ? { onSave: () => saveAnalysis("paths") } : {})}
             />
           ) : aiPanelVisible ? (
-            <div className="as-panel">
+            <div className="as-panel as-panel--ai" ref={aiPanelRef}>
               <div className="as-panel__head">
-                <h2 className="as-panel__title">Generate architecture</h2>
-                <button
-                  type="button"
-                  className="as-btn as-btn--icon"
-                  onClick={() => setPanelOpen(false)}
-                  aria-label="Close panel"
-                >
-                  <UiIcon name="close" />
-                </button>
+                <h2 className="as-panel__title">Adjust with AI</h2>
+                <div className="as-panel__headactions">
+                  {chat.length ? (
+                    <button
+                      type="button"
+                      className="as-panel__exitlink"
+                      onClick={() => setChat([])}
+                      disabled={busy}
+                      title="Start a new conversation — the diagram stays as it is"
+                    >
+                      New chat
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="as-btn as-btn--icon"
+                    onClick={() => setPanelOpen(false)}
+                    aria-label="Close panel"
+                  >
+                    <UiIcon name="close" />
+                  </button>
+                </div>
               </div>
 
               {focusId ? (
-                // Generate replaces the WHOLE document — the one thing nobody
-                // means while staring at one component's internals.
-                <p className="as-panel__scopednote">
-                  Generate replaces the whole diagram —{" "}
-                  <button type="button" className="as-panel__exitlink" onClick={() => drillTo([])}>
-                    Exit focus
-                  </button>{" "}
-                  to use it.
+                <p className="as-panel__scopechip">
+                  Adjusting inside: “
+                  {template.nodes.find((n) => n.id === focusId)?.label ?? focusId}” ·{" "}
+                  {levelLabel(focusStack.length)}
                 </p>
-              ) : (
-                <>
-                  <textarea
-                    className="as-textarea"
-                    value={createInput}
-                    onChange={(event) => setCreateInput(event.target.value)}
-                    placeholder="Paste requirements, source code, or plain English…"
-                  />
-                  <button
-                    type="button"
-                    className="as-btn as-btn--primary"
-                    onClick={() => void runGenerate("create")}
-                    disabled={busy || !createInput.trim()}
-                  >
-                    {busy ? "Designing…" : "Generate diagram"}
-                  </button>
-                </>
-              )}
+              ) : null}
 
-              <div className="as-panel__section">
-                <h3 className="as-panel__label">Refine current diagram</h3>
-                {focusId ? (
-                  <p className="as-panel__scopechip">
-                    Refining inside: “
-                    {template.nodes.find((n) => n.id === focusId)?.label ?? focusId}” ·{" "}
-                    {levelLabel(focusStack.length)}
+              <div className="as-chat" ref={chatThreadRef} role="log" aria-label="Conversation">
+                {chat.length ? (
+                  chat.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className={`as-chat__msg as-chat__msg--${entry.role}${entry.failed ? " as-chat__msg--failed" : ""}`}
+                    >
+                      <p className="as-chat__text">{entry.text}</p>
+                      {entry.detail ? <p className="as-chat__detail">{entry.detail}</p> : null}
+                    </div>
+                  ))
+                ) : (
+                  <p className="as-chat__empty">
+                    Ask for a change and the model edits the diagram in place — the layout you
+                    arranged stays put. Each change is one undo step.
                   </p>
+                )}
+                {busy && chat.at(-1)?.role === "user" ? (
+                  <div className="as-chat__msg as-chat__msg--assistant as-chat__msg--pending">Working on it…</div>
                 ) : null}
-                <input
-                  className="as-input"
+              </div>
+
+              <div className="as-chat__composer">
+                <textarea
+                  className="as-textarea as-chat__input"
+                  rows={2}
                   value={refineInput}
+                  aria-label="Message"
                   onChange={(event) => setRefineInput(event.target.value)}
                   placeholder={
                     focusId
@@ -8487,24 +8648,72 @@ function StudioInner({
                       : '"make the queue edges dotted" · "add a CDN"'
                   }
                   onKeyDown={(event) => {
-                    if (event.key === "Enter") void runGenerate("refine");
+                    // Enter sends, as a chat does; Shift+Enter is a new line.
+                    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
+                      void sendChat();
+                    }
                   }}
                 />
-                <button
-                  type="button"
-                  className="as-btn as-btn--outline"
-                  onClick={() => void runGenerate("refine")}
-                  disabled={busy || !refineInput.trim()}
-                >
-                  {busy ? "Working…" : "Apply refinement"}
-                </button>
+                {busy && chat.at(-1)?.role === "user" ? (
+                  <button type="button" className="as-btn as-btn--outline" onClick={() => abortRef.current?.abort()}>
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="as-btn as-btn--primary"
+                    onClick={() => void sendChat()}
+                    disabled={busy || !refineInput.trim()}
+                  >
+                    Send
+                  </button>
+                )}
               </div>
 
-              {error ? <div className="as-error">{error}</div> : null}
+              <details
+                className="as-panel__section as-panel__create"
+                open={createOpen}
+                onToggle={(event) => setCreateOpen(event.currentTarget.open)}
+              >
+                <summary className="as-panel__label">New diagram from a description</summary>
+                <div className="as-panel__createbody">
+                  {focusId ? (
+                    // Generate replaces the WHOLE document — the one thing nobody
+                    // means while staring at one component's internals.
+                    <p className="as-panel__scopednote">
+                      Generate replaces the whole diagram —{" "}
+                      <button type="button" className="as-panel__exitlink" onClick={() => drillTo([])}>
+                        Exit focus
+                      </button>{" "}
+                      to use it.
+                    </p>
+                  ) : (
+                    <>
+                      <textarea
+                        className="as-textarea"
+                        value={createInput}
+                        onChange={(event) => setCreateInput(event.target.value)}
+                        placeholder="Paste requirements, source code, or plain English…"
+                      />
+                      <button
+                        type="button"
+                        className="as-btn as-btn--primary"
+                        onClick={() => void runGenerate()}
+                        disabled={busy || !createInput.trim()}
+                      >
+                        {busy && chat.at(-1)?.role !== "user" ? "Designing…" : "Generate diagram"}
+                      </button>
+                    </>
+                  )}
+                  {error ? <div className="as-error">{error}</div> : null}
+                </div>
+              </details>
 
               <p className="as-panel__foot">
-                Exports and saves always capture the live, cursor-edited state. The model is prompted
-                with the schema generated from this editor's registry.
+                {aiLabel ? <>Answered by {aiLabel}. </> : null}
+                The model is prompted with the schema generated from this editor&apos;s registry, and
+                sees the diagram as it is when you send.
               </p>
             </div>
           ) : usageOpen && usageIndex && usageResult && !activeDiffBase ? (
@@ -10614,7 +10823,14 @@ function NodeInspector({
               if (value) patch({ textVAlign: value === "middle" ? undefined : value });
             }}
             aria-label="Vertical text alignment"
-            title="Where the text block sits in the box"
+            // A wrapped card reads from the top whatever this says (see
+            // `.as-node--wrap`); the value is kept for when it unwraps.
+            disabled={wrap.value && !wrap.mixed}
+            title={
+              wrap.value && !wrap.mixed
+                ? "A wrapped card reads from the top"
+                : "Where the text block sits in the box"
+            }
           >
             <MixedOption when={textVAlign.mixed} />
             {NODE_TEXT_VALIGNS.map((a) => (
@@ -10644,7 +10860,7 @@ function NodeInspector({
             checked={wrap.value}
             mixed={wrap.mixed}
             label="Wrap"
-            title="Wrap the label across lines, growing the box to fit"
+            title="Show all the text: the title wraps, the description runs the full width below it, and the box grows to fit"
             // One ellipsised line is the default, so only the opt-IN is stored.
             onChange={(checked) => patch({ wrap: checked ? true : undefined })}
           />

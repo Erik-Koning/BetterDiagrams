@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { templatesPlugin } from "./vite-plugin-templates.js";
+import { aiPlugin } from "./vite-plugin-ai.js";
 
 /**
  * Where templates live while you develop, at the repo root:
@@ -49,14 +50,15 @@ const LINKED_DIRS = (process.env.BD_LINKED_DIRS ?? "")
   .filter(Boolean);
 
 export default defineConfig({
-  plugins: [react(), templatesPlugin(TEMPLATE_DIRS, { linked: LINKED_DIRS, linksFile: join(TEMPLATES_ROOT, "linked.json") })],
+  plugins: [
+    react(),
+    templatesPlugin(TEMPLATE_DIRS, { linked: LINKED_DIRS, linksFile: join(TEMPLATES_ROOT, "linked.json") }),
+    // The AI route, answered with the keys in this shell's environment
+    // (ANTHROPIC_API_KEY, else OPENAI_API_KEY) — the browser never sees one.
+    aiPlugin(),
+  ],
   server: {
     port: 5173,
-    // Optional: proxy AI generation to the local example server (npm run server).
-    // The browser never sees an API key.
-    proxy: {
-      "/api": { target: "http://localhost:8787", changeOrigin: true },
-    },
   },
   resolve: {
     // Consume the library from source so `npm run dev` picks up edits with no rebuild.

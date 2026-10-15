@@ -11,7 +11,9 @@
  * Omit `generate` entirely and the AI panel is not rendered at all — the editor
  * is then a pure cursor-driven tool with no network surface.
  *
- * See `docs/server.md` for a ~20-line reference route.
+ * `example/ai-route.mjs` is a complete reference route: it picks Claude or
+ * OpenAI from the server's environment and answers both Generate and the
+ * Adjust with AI chat.
  */
 import { parseLlmTemplate, type DiagramTemplate, type ValidateOptions } from "./schema";
 import type { DiagramContent } from "./presentation";
@@ -30,6 +32,42 @@ export interface GenerateRequest {
    * refine can never scramble a hand-made arrangement.
    */
   current?: DiagramTemplate | DiagramContent;
+  /**
+   * The conversation so far, oldest first, when the request comes from the
+   * Adjust with AI chat: each instruction as the user typed it and the note
+   * the model answered with. The diagram itself is never in here — `input`
+   * carries the live document every turn — so a route can send these as
+   * earlier messages for context, or ignore them and lose nothing but the
+   * memory of what was said.
+   */
+  history?: GenerateTurn[];
+}
+
+/** One earlier turn of an Adjust with AI conversation. */
+export interface GenerateTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/**
+ * Added to the system prompt for a chat turn. The schema prompt asks for bare
+ * JSON; in a conversation the user also needs to hear what changed, so the
+ * reply opens with a sentence for them — which `replyNote` lifts off and
+ * every JSON parser here already skips.
+ */
+export const CHAT_REPLY_RULE =
+  "This is a conversation with the user about their diagram. Overriding the no-commentary rule above: " +
+  "begin your reply with one or two plain sentences, with no braces or markdown, telling the user what you " +
+  "changed — or answering their question, if they asked one and the diagram needs no change. Then give the " +
+  "full JSON as instructed.";
+
+/**
+ * The note a chat reply opens with: whatever precedes the JSON (or the code
+ * fence around it). Empty when the reply is bare JSON.
+ */
+export function replyNote(text: string): string {
+  const starts = [text.indexOf("{"), text.indexOf("```")].filter((i) => i >= 0);
+  return text.slice(0, starts.length ? Math.min(...starts) : text.length).trim();
 }
 
 /**

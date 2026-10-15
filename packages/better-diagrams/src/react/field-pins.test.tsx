@@ -829,7 +829,7 @@ describe("audit: the references panel yields the slot to Generate", () => {
     await screen.findByRole("region", { name: "References" });
     fireEvent.click(screen.getByRole("button", { name: /AI/ }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "References" })).not.toBeInTheDocument());
-    expect(screen.getByText("Generate architecture")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Adjust with AI" })).toBeInTheDocument();
   });
 });
 
@@ -895,7 +895,7 @@ describe("the paths panel's sections", () => {
     await screen.findByRole("region", { name: "Paths between pinned fields" });
     fireEvent.click(screen.getByRole("button", { name: /AI/ }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "Paths between pinned fields" })).not.toBeInTheDocument());
-    expect(screen.getByText("Generate architecture")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Adjust with AI" })).toBeInTheDocument();
     expect(ref.current!.getPins()).toEqual([{ nodeId: "items" }, { nodeId: "users" }]);
   });
 });

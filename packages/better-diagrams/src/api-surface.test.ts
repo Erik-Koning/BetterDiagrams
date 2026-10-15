@@ -77,6 +77,7 @@ const CONTRACT_EXPORTS = [
   "DEFAULT_FONT_SIZE",
   "nodeTextWidth",
   "wrappedTitleHeight",
+  "wrappedNodeHeight",
   // the shared text measurement (contract/text.ts)
   "approxTextWidth",
   "ellipsise",
@@ -262,6 +263,7 @@ const CONTRACT_EXPORTS = [
   "createProxyGenerator",
   "coerceGeneratorResult",
   "buildRefineMessage",
+  "replyNote",
   // json repair
   "repairJsonText",
   // lint

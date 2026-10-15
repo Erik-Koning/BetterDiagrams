@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { Node, NodeChange } from "@xyflow/react";
 import { createRegistry } from "./create-registry";
 import { fanOutResize, nodeSizeFloor } from "./resize";
-import { NODE_MIN_SIZE, fieldsBoxHeight, toZoneNodeId } from "../contract/schema";
+import { NODE_MIN_SIZE, fieldsBoxHeight, toZoneNodeId, wrappedNodeHeight } from "../contract/schema";
 
 const registry = createRegistry();
 
@@ -147,5 +147,16 @@ describe("fanOutResize", () => {
       h: Math.max(NODE_MIN_SIZE.group.h, 100 + 76 + 12),
     });
     expect(nodeSizeFloor(nodes[4]!, registry, nodes, 80)).toEqual({ ...NODE_MIN_SIZE.annotation });
+  });
+
+  it("holds a wrapped card to every line of its description, at the width it is given", () => {
+    const description = "Given a returning customer\nWhen they tap Reorder\nThen the basket is full\nAnd a toast says so";
+    const wrapped = node("story", { data: { kind: "task", icon: "none", description, wrap: true } });
+    const floor = nodeSizeFloor(wrapped, registry, [wrapped], 200);
+    expect(floor.h).toBe(wrappedNodeHeight({ label: "story", kind: "task", description }, 200, false));
+    expect(floor.h).toBeGreaterThan(nodeSizeFloor(node("bare", { data: { kind: "task", icon: "none", wrap: true } }), registry, [], 200).h);
+    // Unwrapped, the description stops at two lines and asks for nothing.
+    const clamped = node("clamped", { data: { kind: "task", icon: "none", description } });
+    expect(nodeSizeFloor(clamped, registry, [clamped], 200).h).toBe(NODE_MIN_SIZE.shape.h);
   });
 });

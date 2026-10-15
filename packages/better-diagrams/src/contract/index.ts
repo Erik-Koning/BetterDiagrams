@@ -83,6 +83,7 @@ export {
   DEFAULT_FONT_SIZE,
   nodeTextWidth,
   wrappedTitleHeight,
+  wrappedNodeHeight,
 } from "./schema";
 // The one text measurement validation, the canvas and every exporter share.
 // Public because a host drawing its own node bodies has to agree with it.
@@ -404,9 +405,11 @@ export {
   createProxyGenerator,
   coerceGeneratorResult,
   buildRefineMessage,
+  replyNote,
 } from "./llm";
 export type {
   GenerateRequest,
+  GenerateTurn,
   DiagramGenerator,
   ProxyGeneratorOptions,
 } from "./llm";

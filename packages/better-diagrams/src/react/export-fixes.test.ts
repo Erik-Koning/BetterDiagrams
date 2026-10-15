@@ -393,12 +393,32 @@ describe("a card's description matches .as-node__desc", () => {
     expect(descLines(card({}))).toHaveLength(2);
   });
 
-  it("wraps past two lines when the node asks to, but never past its own box", () => {
-    // `wrap` lifts the CSS clamp; validateTemplate only grows the box for the
-    // TITLE, so the box is still what bounds the description.
-    expect(descLines(card({ wrap: true, h: 300 })).length).toBeGreaterThan(2);
-    const inABox = descLines(card({ wrap: true, h: 120 }));
-    expect(inABox.at(-1)!.y).toBeLessThanOrEqual(120);
+  it("wraps past two lines when the node asks to, in a box validation grew to hold them", () => {
+    const wrapped = card({ wrap: true, w: 140 });
+    const lines = descLines(wrapped);
+    expect(lines.length).toBeGreaterThan(2);
+    expect(lines.at(-1)!.y).toBeLessThanOrEqual(wrapped.nodes[0]!.h);
+  });
+
+  it("never prints a wrapped description past a box that skipped validation", () => {
+    const shrunk = card({ wrap: true, w: 140 });
+    shrunk.nodes[0]!.h = 60;
+    expect(descLines(shrunk).at(-1)!.y).toBeLessThanOrEqual(60);
+  });
+
+  it("runs a wrapped card's description the full width under its icon, in the type it was measured in", () => {
+    const t = card({ wrap: true, icon: "server" });
+    for (const mode of ["technical", "marketing"] as const) {
+      const drawn = texts(emitTemplate(t, registry, {}, { mode }).cmds);
+      const title = drawn.find((c) => c.text === "API")!;
+      const lines = drawn.filter((c) => c.size === 11 && c.font === "sans");
+      expect(lines.length, mode).toBeGreaterThan(2);
+      // From the card's own padding — left of the title, which sits beside
+      // the icon — and every line from the same edge.
+      expect(lines.every((c) => c.x === lines[0]!.x), mode).toBe(true);
+      expect(lines[0]!.x, mode).toBeLessThan(title.x);
+      expect(lines[0]!.x - t.nodes[0]!.x, mode).toBe(14);
+    }
   });
 });
 

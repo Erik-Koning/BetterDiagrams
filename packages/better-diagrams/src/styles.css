@@ -961,6 +961,124 @@
   color: var(--as-text-dim);
 }
 
+.as-panel__headactions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.75rem;
+}
+
+/* Adjust with AI: the conversation takes the panel's height and scrolls on
+   its own, so the box you type in stays where it is however long the chat
+   runs. */
+.as-chat {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 140px;
+  overflow-y: auto;
+}
+
+.as-chat__empty {
+  margin: auto 8px;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--as-text-dim);
+}
+
+.as-chat__msg {
+  max-width: 92%;
+  padding: 7px 10px;
+  border: 1px solid var(--as-border);
+  border-radius: 10px;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--as-text);
+}
+
+.as-chat__msg--user {
+  align-self: flex-end;
+  border-color: color-mix(in srgb, var(--as-accent) 35%, var(--as-border));
+  background: color-mix(in srgb, var(--as-accent) 14%, var(--as-surface-2));
+}
+
+.as-chat__msg--assistant {
+  align-self: flex-start;
+  background: var(--as-surface-2);
+}
+
+.as-chat__msg--failed {
+  border-color: color-mix(in srgb, var(--as-danger) 45%, transparent);
+  background: color-mix(in srgb, var(--as-danger) 10%, var(--as-surface-2));
+  color: var(--as-danger);
+}
+
+.as-chat__msg--pending {
+  color: var(--as-text-dim);
+  font-style: italic;
+}
+
+.as-chat__text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.as-chat__detail {
+  margin: 4px 0 0;
+  font-size: 0.6875rem;
+  color: var(--as-text-dim);
+}
+
+.as-chat__composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.as-chat__composer > .as-btn {
+  height: 34px;
+}
+
+/* A message, not a paste of requirements or code: the UI's own type, and
+   room for a couple of lines that grows when dragged. Scoped to the
+   composer to outrank `.as-textarea`'s own type, which comes later. */
+.as-chat__composer .as-chat__input {
+  min-height: 60px;
+  font-family: var(--as-font);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+/* A <details> is not a dependable flex container, so its body is. */
+.as-panel__create {
+  display: block;
+}
+
+.as-panel__create > summary {
+  cursor: pointer;
+}
+
+.as-panel__createbody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.as-panel__createbody > .as-btn {
+  height: 34px;
+}
+
+/* The chat already scrolls; the panel holds its foot at the bottom. */
+.as-panel--ai > .as-panel__foot {
+  margin-top: 0;
+  padding-top: 0;
+}
+
 /* ── Form controls ───────────────────────────────────────────────────────── */
 
 .as-input,
@@ -1431,6 +1549,39 @@
 .as-node--wrap .as-node__desc {
   -webkit-line-clamp: unset;
   overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+/* A wrapped card reads like a document: the icon and title head it on the
+   first line, and the description (and a date) run the card's full width on
+   the second — validateTemplate measured them at that width
+   (`wrappedNodeHeight`). It reads from the top, whatever the vertical
+   alignment says, as a record does: the measurement errs a line long, and
+   that room belongs under the text, not split around it. The title column
+   starts from nothing, or a long title's width would push it onto a line of
+   its own, away from its icon. */
+.as-node--wrap {
+  flex-wrap: wrap;
+  align-content: flex-start;
+  align-items: center;
+  row-gap: 0;
+}
+
+.as-node--wrap .as-node__body {
+  flex-basis: 0;
+}
+
+.as-node__below {
+  flex: 0 0 100%;
+  min-width: 0;
+}
+
+.as-node--align-center .as-node__below {
+  text-align: center;
+}
+
+.as-node--align-right .as-node__below {
+  text-align: right;
 }
 
 /* ── Field rows ──────────────────────────────────────────────────────────── */
@@ -6642,7 +6793,7 @@ button.as-task__check--blocked {
    lines. Those cards keep both, so the measurement stays true and nothing
    spills; the larger glyph still sits in the same-sized chip. */
 .as-root--marketing .as-node--wrap {
-  gap: 10px;
+  gap: 0 10px;
   padding: 6px 12px;
 }
 
@@ -6661,6 +6812,12 @@ button.as-task__check--blocked {
   font-size: 0.75rem;
   line-height: 1.35;
   color: var(--as-mk-text);
+}
+
+/* A wrapped description was measured at the technical type too. */
+.as-root--marketing .as-node--wrap .as-node__desc {
+  font-size: 0.6875rem;
+  line-height: 1.25;
 }
 
 /* ── Record rows: the type column and required mark are the redundant part

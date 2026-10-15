@@ -41,12 +41,19 @@ The end-to-end suite starts its own dev server on :5174 and drives the example i
 Chromium — first run `npx playwright install chromium`. It never writes to
 `/templates`: the auto-save route is blocked for the duration of a test.
 
-The example runs fully offline. AI generation is optional and needs a second terminal:
+The example runs fully offline. AI is optional: start the dev server with a key in its
+environment and the **Adjust with AI** panel turns itself on — no second terminal.
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-npm run server -w example        # proxy on :8787, Vite forwards /api to it
+export ANTHROPIC_API_KEY=sk-ant-...   # Claude Opus 5.5; add ANTHROPIC_BASE_URL for a gateway
+# with no Anthropic key, OpenAI is the fallback:
+export OPENAI_API_KEY=sk-...          # GPT-6 Astra; OPENAI_KEY works too, OPENAI_BASE_URL for a gateway
+npm run dev
 ```
+
+`ANTHROPIC_MODEL` or `OPENAI_MODEL` picks another model, and `BD_AI=off` turns the route off. The
+dev server says which model it found when it starts. The keys stay in the server
+(`example/ai-route.mjs`); the browser only ever sees `/api/diagram`.
 
 ## Using it
 
@@ -83,6 +90,7 @@ shadow.
 | `mode` | `"technical" \| "marketing"` | Presentation mode. Default `"technical"`. `"marketing"` restyles the same document for a slide or a landing page — see **Marketing mode** below. Both editors take it; unknown values fall back to technical. |
 | `gradients` | `boolean` | Marketing's one setting. Default `true`. `false` paints every fade the mode draws as one flat coat — on screen and in every picture export, which then carry no gradient at all. Ignored in technical. Both editors take it; see **Without gradients** under Marketing mode. |
 | `generate` | `DiagramGenerator` | Enables the AI panel. Omitted ⇒ no network code runs. |
+| `aiLabel` | `string` | Names what answers `generate` ("Claude Opus 5.5") in the AI panel. Informative only. |
 | `minimap` | `boolean` | Default `true`. |
 | `edgesOnHover` | `boolean` | Default `false`. Hide every connection until the pointer is over a node it touches. Hovering a group draws its members' lines; a selected node, or a selected connection, keeps its lines while the pointer moves on. A view setting only — the document, the inspector and every export still carry every connection. Task **dependency** lines hide this way whatever the setting says (see [Task graphs](#task-graphs)). |
 | `welcome` | `boolean` | Default `true`. Shows the **welcome modal** over a brand-new document — see below. |
@@ -139,7 +147,7 @@ as the browser already reads it for its own widgets.
 
 The root element carries `as-root--marketing` and `data-mode`, so a host stylesheet can reach in;
 technical adds no class at all, so existing host CSS keeps matching exactly what it matched before.
-Titles that are set to wrap keep their technical font size and chip width, because the stored
+Cards that are set to wrap keep their technical font sizes and chip width, because the stored
 height was measured with those, and a sequence participant's name stops one step short of a card
 title's for the same reason — its header is a fixed lane box.
 
@@ -464,17 +472,28 @@ directly in the document:
 { "id": "api", "label": "Payment Reconciliation Worker",
   "textAlign": "center",     // left (default) · center · right
   "textVAlign": "middle",    // top · middle (default) · bottom
-  "wrap": true,              // break across lines instead of ellipsising
+  "wrap": true,              // show all the text instead of ellipsising
   "fontSize": 16 }           // default 13
 ```
 
-**`wrap` grows the node.** Nothing is ever clipped: `validateTemplate` measures the wrapped label
-and raises the stored `h` to hold every line, the same way a table node already grows to fit its
-rows. Width stays exactly as authored. The measurement lives in `contract/text.ts`, and
-validation, the canvas and the PNG/SVG exporters all call it — which is the only reason an export
-can be trusted to look like the screen. A record node is excluded from vertical alignment: its
-rows sit at offsets that field-anchored edges also compute, so moving them would leave
-foreign-key lines pointing between columns.
+**`wrap` shows all of the text and grows the node.** The label wraps across as many lines as it
+needs, and on a card the description stops clamping at two lines: it runs the card's full width
+under the icon and title, every line of it, with its line breaks kept — the layout a user story
+with its acceptance criteria wants, read straight off the canvas without opening anything.
+Nothing is ever clipped: `validateTemplate` measures the wrapped text (`wrappedNodeHeight`) and
+raises the stored `h` to hold every line and a date chip under them, the same way a table node
+already grows to fit its rows. The editor re-fits the box on every edit that changes its lines —
+the description, a rename in place, the size, the icon — shrinking it as well as growing it.
+Width stays exactly as authored. The measurement lives in `contract/text.ts`, and validation, the
+canvas and the PNG/SVG exporters all call it — which is the only reason an export can be trusted
+to look like the screen. It errs a line long rather than ever clipping, so a long card can have a
+little room under its last line.
+
+A wrapped card reads from the top, like a document, so vertical alignment is set aside while it
+wraps (the inspector greys it out) and comes back when it unwraps. A record node is excluded from
+vertical alignment too: its rows sit at offsets that field-anchored edges also compute, so moving
+them would leave foreign-key lines pointing between columns — and its description stays one line
+above its rows, wrapped or not.
 
 Every value above is stored **only when it differs from the default**, so a document written
 before these existed round-trips byte-identical.
@@ -1304,8 +1323,23 @@ import { createProxyGenerator } from "@mosphere/better-diagrams";
 const generate = createProxyGenerator({ endpoint: "/api/diagram" });
 ```
 
-Your route receives `{ mode, input, systemPrompt, current }` and returns `{ text }` or
-`{ template }`. `example/server.mjs` is a complete ~90-line reference using `claude-opus-5`.
+Your route receives `{ mode, input, systemPrompt, current, history }` and returns `{ text }` or
+`{ template }`.
+
+**Adjust with AI** is the panel's chat. Each message goes to the model with the live diagram (the
+content form, so the layout you arranged stays put) and lands as one undo step; the panel stays
+open for the next one. The reply opens with a sentence for you — the chat shows it, with what
+actually changed counted underneath — and the conversation so far travels as `history`, oldest
+first: what you typed and what the model said, never the diagram, which `input` carries fresh each
+turn. A route that ignores `history` still works; the model just forgets the earlier turns. A reply
+cut off by its token limit is refused rather than merged, since the parts that never arrived would
+land as deletions. On an empty canvas the first message draws the diagram; **New diagram from a
+description** below the chat replaces a diagram outright.
+
+`example/ai-route.mjs` is a complete reference route: it picks the provider from the server's
+environment (Anthropic first, OpenAI as the fallback), streams the reply, and cancels the model
+call when the browser goes away. The example's dev server mounts it (`vite-plugin-ai.js`), and
+`npm run server -w example` serves it alone on :8787.
 
 ## C4 & professional editing
 
@@ -1876,7 +1910,7 @@ so the bar stays a few rows and never buries the canvas it is editing.
 **Resizing one node of a multi-selection resizes its peers.** React Flow already drags every
 selected node together; the resize handle now does the same, live, so five cards can be matched
 in one gesture. Peers are boxes of the same class — cards follow cards, frames follow frames,
-notes follow notes — and each keeps its own floor (a table its rows, a wrapped title its lines, a
+notes follow notes — and each keeps its own floor (a table its rows, a wrapped card its lines, a
 group its children), so a size the handle can reach on the dragged box never squashes a
 neighbour's contents. Locked nodes, zones, and dangling-arrow dots stay as they are, and so do
 the resized node's own container and contents: a band across a group selects the frame and what
