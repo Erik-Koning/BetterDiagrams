@@ -2123,6 +2123,88 @@
   fill: var(--as-accent);
 }
 
+/* ── Roadmap: the calendar under a plan laid out by date ─────────────────── */
+
+/* Behind every frame and card, like the dot grid it is drawn after. */
+.as-roadmap-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+}
+.as-roadmap-backdrop__line {
+  stroke: var(--as-border);
+  stroke-width: 1;
+  opacity: 0.45;
+}
+.as-roadmap-backdrop__line--major {
+  opacity: 0.9;
+}
+.as-roadmap-backdrop__today {
+  stroke: var(--as-overdue);
+  stroke-width: 1.5;
+  opacity: 0.75;
+}
+
+/* Pinned to the top of the canvas, under the panels (same layer, earlier in the DOM). */
+.as-roadmap-ruler {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 26px;
+  z-index: 5;
+  pointer-events: none;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--as-surface) 88%, transparent);
+  border-bottom: 1px solid var(--as-border);
+  color: var(--as-text-dim);
+  font-size: 0.6875rem;
+  line-height: 26px;
+  white-space: nowrap;
+}
+.as-roadmap-ruler__unit {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  padding-left: 5px;
+  border-left: 1px solid var(--as-border);
+}
+.as-roadmap-ruler__unit--major {
+  color: var(--as-text);
+  font-weight: 600;
+}
+.as-roadmap-ruler__unit--pinned {
+  border-left: none;
+}
+.as-roadmap-ruler__unscheduled {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  padding-right: 6px;
+  font-style: italic;
+}
+.as-roadmap-ruler__today {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  transform: translateX(-50%);
+  padding: 0 5px;
+  border-radius: 4px;
+  line-height: 20px;
+  background: var(--as-surface);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--as-overdue) 60%, transparent);
+  color: var(--as-overdue);
+  font-weight: 600;
+}
+/* Corner panels clear the ruler rather than cover it. */
+.as-canvas--roadmap .react-flow__panel.top {
+  margin-top: calc(15px + 26px);
+}
+
 /* ── Legend ──────────────────────────────────────────────────────────────── */
 
 .as-legend {

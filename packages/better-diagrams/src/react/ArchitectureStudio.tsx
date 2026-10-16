@@ -210,6 +210,7 @@ import {
   type PromptScopeOptions,
 } from "./template-prompt";
 import { autoLayout, hasOverlaps, type LayoutOptions } from "../contract/layout";
+import { besideDates, hasRoadmapWork, isRoadmap, roadmapAxisOf, roadmapDragPatch, settleRoadmap, unscheduledEdge } from "../contract/roadmap";
 import { collapseJunctions, junctionTables } from "../contract/junctions";
 import {
   PRESENTATION_FORMAT,
@@ -234,6 +235,7 @@ import { kindDef, providerDef, registryValidateOptions, relationDef, zoneInk } f
 import { relationDressing } from "../contract/relations";
 import { NODE_TYPES } from "./nodes";
 import { QuickAddHandles } from "./QuickAddHandles";
+import { RoadmapBackdrop, RoadmapRuler } from "./RoadmapChrome";
 import { addBeside, containerInk, type QuickAddSide } from "./quick-add";
 import { EDGE_TYPES } from "./edges";
 import { topDropTarget } from "./dangling";
@@ -824,6 +826,34 @@ function typingRunKey(scope: string, id: string, patch: object): string | undefi
   return keys.length === 1 && TYPED_FIELDS.has(keys[0]!) ? `${scope}:${id}:${keys[0]}` : undefined;
 }
 
+/** The frames a node sits inside, innermost first. */
+function framesAround(nodes: readonly Node[], id: string): Set<string> {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const out = new Set<string>();
+  for (let p = byId.get(id)?.parentId; p && !out.has(p); p = byId.get(p)?.parentId) out.add(p);
+  return out;
+}
+
+/**
+ * How strongly a frame claims a node dropped with its centre at (cx, cy), or
+ * -1 when it doesn't: the deepest frame the centre is inside wins. On a
+ * roadmap a frame the node already sits in (`holds`) keeps it anywhere along
+ * its band, since a drag sideways there is a change of dates, not of frame
+ * — though a frame the centre is actually inside wins at the same depth.
+ */
+function dropRank(
+  box: { x: number; y: number; w: number; h: number },
+  cx: number,
+  cy: number,
+  holds: boolean,
+  depth: () => number,
+): number {
+  const inBand = cy > box.y && cy < box.y + box.h;
+  const inside = inBand && cx > box.x && cx < box.x + box.w;
+  if (!inside && !(holds && inBand)) return -1;
+  return depth() * 2 + (inside ? 1 : 0);
+}
+
 
 export const ArchitectureStudio = forwardRef<StudioHandle, ArchitectureStudioProps>(
   function ArchitectureStudio(props, ref) {
@@ -891,9 +921,12 @@ function StudioInner({
     // CONTENT doc handed as value/defaultValue lays itself out instead of
     // piling every node at the origin. No-op for placed documents.
     () =>
-      layoutIfUnpositioned(
-        validateTemplate(value ?? defaultValue ?? EMPTY_TEMPLATE, registryValidateOptions(registry)),
-        modeLayoutOptions(studioMode),
+      settleRoadmap(
+        layoutIfUnpositioned(
+          validateTemplate(value ?? defaultValue ?? EMPTY_TEMPLATE, registryValidateOptions(registry)),
+          modeLayoutOptions(studioMode),
+        ),
+        { containerKinds: registry.containerKinds },
       ),
     // Only for first mount; `value` changes are handled by the sync effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1391,61 +1424,6 @@ function StudioInner({
   const visibility = useMemo(() => visibleElements(template), [template]);
   const hiddenCount = template.nodes.length - visibility.nodes.size;
 
-  // ── Commit: snapshot for undo, then notify the host ───────────────────────
-
-  const commit = useCallback(
-    (n: Node[], e: Edge[], derived?: DiagramTemplate, coalesce?: string) => {
-      const next = derived ?? deriveTemplate(n, e);
-      // The snapshot carries the full document so undo can re-materialize it
-      // instead of re-deriving against whatever frame is current by then —
-      // undoing across a provider toggle must not re-judge (and lose) nodes.
-      // `coalesce` folds a run of keystrokes in one field into one entry; see
-      // CommitOptions in history.ts.
-      commitHistory({ nodes: n, edges: e, meta: meta.current, template: next }, { coalesce });
-      if (!onChange) return;
-      const json = JSON.stringify(next);
-      if (json === lastEmitted.current) return;
-      lastEmitted.current = json;
-      onChange(next);
-    },
-    [commitHistory, onChange, deriveTemplate],
-  );
-
-  /**
-   * Commit whatever is in state right now — for changes applied via setNodes.
-   *
-   * `coalesce` names the field being edited, so a run of typing in one
-   * inspector input undoes as the one edit it was rather than a character at
-   * a time. Omit it for anything a person would call a single action.
-   */
-  /**
-   * The deferred commit in flight, if any. The rebuild effect below
-   * SUPERSEDES it: when the edit it was queued for also changes what the
-   * canvas shows (a group folding, a provider hiding nodes), the effect
-   * rebuilds and commits the rebuilt canvas itself — and the deferred commit
-   * must then stand down rather than derive a second document from a store
-   * the rebuild has not reached yet. That derive was judged against the
-   * ALREADY-advanced base, so a node the rebuild was about to reveal read as
-   * "absent but visible" — user-deleted — and was dropped: the data-loss
-   * class the FACT refs exist to prevent, arriving by another door. The
-   * token is what a superseded microtask checks; the coalescing key rides
-   * along so the effect's commit joins the same undo run the edit meant to.
-   */
-  const deferredCommit = useRef<{ token: number; coalesce?: string } | null>(null);
-  const commitLater = useCallback(
-    (coalesce?: string) => {
-      const token = (deferredCommit.current?.token ?? 0) + 1;
-      deferredCommit.current = { token, coalesce };
-      // Read the freshest state from the store rather than the render closure.
-      queueMicrotask(() => {
-        if (deferredCommit.current?.token !== token) return; // superseded
-        deferredCommit.current = null;
-        commit(flow.getNodes(), flow.getEdges(), undefined, coalesce);
-      });
-    },
-    [commit, flow],
-  );
-
   // ── Materialization: the ONE way a document becomes a canvas ──────────────
 
   /**
@@ -1548,6 +1526,67 @@ function StudioInner({
     [registry, showHidden, viewFold, flow, setNodes, setEdges],
   );
 
+  // ── Commit: snapshot for undo, then notify the host ───────────────────────
+
+  const commit = useCallback(
+    (n: Node[], e: Edge[], derived?: DiagramTemplate, coalesce?: string) => {
+      const edited = derived ?? deriveTemplate(n, e);
+      // A plan laid out by date is placed by its dates, so whatever this edit
+      // changed — a date in the inspector, a card added or dragged — the plan
+      // is re-laid in the SAME commit: one undo step, and the host only ever
+      // hears of a laid-out document. A no-op on any other document.
+      const next = settleRoadmap(edited, { containerKinds: registry.containerKinds });
+      if (next !== edited) ({ nodes: n, edges: e } = materializeTemplate(next));
+      // The snapshot carries the full document so undo can re-materialize it
+      // instead of re-deriving against whatever frame is current by then —
+      // undoing across a provider toggle must not re-judge (and lose) nodes.
+      // `coalesce` folds a run of keystrokes in one field into one entry; see
+      // CommitOptions in history.ts.
+      commitHistory({ nodes: n, edges: e, meta: meta.current, template: next }, { coalesce });
+      if (!onChange) return;
+      const json = JSON.stringify(next);
+      if (json === lastEmitted.current) return;
+      lastEmitted.current = json;
+      onChange(next);
+    },
+    [commitHistory, onChange, deriveTemplate, registry, materializeTemplate],
+  );
+
+  /**
+   * Commit whatever is in state right now — for changes applied via setNodes.
+   *
+   * `coalesce` names the field being edited, so a run of typing in one
+   * inspector input undoes as the one edit it was rather than a character at
+   * a time. Omit it for anything a person would call a single action.
+   */
+  /**
+   * The deferred commit in flight, if any. The rebuild effect below
+   * SUPERSEDES it: when the edit it was queued for also changes what the
+   * canvas shows (a group folding, a provider hiding nodes), the effect
+   * rebuilds and commits the rebuilt canvas itself — and the deferred commit
+   * must then stand down rather than derive a second document from a store
+   * the rebuild has not reached yet. That derive was judged against the
+   * ALREADY-advanced base, so a node the rebuild was about to reveal read as
+   * "absent but visible" — user-deleted — and was dropped: the data-loss
+   * class the FACT refs exist to prevent, arriving by another door. The
+   * token is what a superseded microtask checks; the coalescing key rides
+   * along so the effect's commit joins the same undo run the edit meant to.
+   */
+  const deferredCommit = useRef<{ token: number; coalesce?: string } | null>(null);
+  const commitLater = useCallback(
+    (coalesce?: string) => {
+      const token = (deferredCommit.current?.token ?? 0) + 1;
+      deferredCommit.current = { token, coalesce };
+      // Read the freshest state from the store rather than the render closure.
+      queueMicrotask(() => {
+        if (deferredCommit.current?.token !== token) return; // superseded
+        deferredCommit.current = null;
+        commit(flow.getNodes(), flow.getEdges(), undefined, coalesce);
+      });
+    },
+    [commit, flow],
+  );
+
   /** Whether the document folds its groups (`settings.groupContents`), read off the live document. */
   const documentFolds = useCallback(
     () => templateRef.current.settings?.groupContents === "hide",
@@ -1584,9 +1623,14 @@ function StudioInner({
     // every render. layoutIfUnpositioned is a no-op on anything this editor
     // ever emitted (always placed), so the echo guard is unaffected; it only
     // fires when the host swaps in a CONTENT doc, which lays itself out.
-    const validated = layoutIfUnpositioned(
-      validateTemplate(value, registryValidateOptions(registry)),
-      modeLayoutOptions(studioModeRef.current),
+    // A plan laid out by date settles the same way, and for the same reason:
+    // a no-op on what this editor emitted, a re-lay of an edit made elsewhere.
+    const validated = settleRoadmap(
+      layoutIfUnpositioned(
+        validateTemplate(value, registryValidateOptions(registry)),
+        modeLayoutOptions(studioModeRef.current),
+      ),
+      { containerKinds: registry.containerKinds },
     );
     const json = JSON.stringify(validated);
     if (json === lastEmitted.current) {
@@ -1690,9 +1734,12 @@ function StudioInner({
       // The declaration is truth on import: a generated document usually gets
       // membership right and coordinates approximately right, so move the node
       // to match its declared zone rather than dropping the membership.
-      const validated = snapNodesIntoZones(validateTemplate(incoming, registryValidateOptions(registry)), {
-        containerKinds: registry.containerKinds,
-      });
+      const validated = settleRoadmap(
+        snapNodesIntoZones(validateTemplate(incoming, registryValidateOptions(registry)), {
+          containerKinds: registry.containerKinds,
+        }),
+        { containerKinds: registry.containerKinds },
+      );
       const next = materializeTemplate(validated, select);
       commitHistory(
         { nodes: next.nodes, edges: next.edges, meta: meta.current, template: validated },
@@ -3167,6 +3214,9 @@ function StudioInner({
 
   /** What Tidy optimises for, read off the live document. Absent means "flow". */
   const arrangeMode: ArrangeMode = template.settings?.arrange ?? "flow";
+  /** The time axis the canvas is drawn on, at the top level of a roadmap; null anywhere else. */
+  const roadmapAxis = arrangeMode === "roadmap" && !focusId ? roadmapAxisOf(template) : null;
+  const roadmapUnscheduled = roadmapAxis ? unscheduledEdge(template, roadmapAxis, registry.containerKinds) : null;
 
   /**
    * Pick what Tidy optimises for — and tidy, right there, so the choice is
@@ -3180,9 +3230,19 @@ function StudioInner({
     (next: ArrangeMode) => {
       if (readOnly) return;
       const current = templateRef.current;
+      // Leaving a roadmap, a task's width stops meaning how long it runs:
+      // every task goes back to a standard card, and the axis is forgotten.
+      const leaving = isRoadmap(current) && next !== "roadmap";
+      const { roadmap: _axis, ...settings } = current.settings ?? {};
       applyTemplate(
         autoLayout(
-          { ...current, settings: { ...current.settings, arrange: next } },
+          {
+            ...current,
+            nodes: leaving
+              ? current.nodes.map((n) => (n.kind === TASK_KIND ? { ...n, w: KIND_DEFAULT_SIZE.task!.w } : n))
+              : current.nodes,
+            settings: { ...(leaving ? settings : current.settings), arrange: next },
+          },
           levelLayoutOptions(),
         ),
         { fit: true },
@@ -3191,7 +3251,9 @@ function StudioInner({
       showToast(
         next === "untangle"
           ? `Untangled the lines · ${mod}Z to undo`
-          : `Arranged left to right · ${mod}Z to undo`,
+          : next === "roadmap"
+            ? `Laid out by date · ${mod}Z to undo`
+            : `Arranged left to right · ${mod}Z to undo`,
       );
     },
     [readOnly, applyTemplate, showToast, levelLayoutOptions],
@@ -3439,7 +3501,11 @@ function StudioInner({
       if (readOnly) return;
       const source = flow.getNode(sourceId);
       if (!source) return;
-      const fresh = freshNode((source.data as DiagramNodeData).kind);
+      const blank = freshNode((source.data as DiagramNodeData).kind);
+      // On a roadmap, where a card goes says when: the next task follows this
+      // one, the one above runs alongside it.
+      const dates = isRoadmap(templateRef.current) ? besideDates(source.data as DiagramNodeData, side) : {};
+      const fresh = { ...blank, data: { ...blank.data, ...dates } };
       // As a drop decides it — and not at all on a drilled-in canvas, whose
       // zone boxes live in root space (see onNodeDragStop).
       const zones = rfFocusRef.current ? [] : (templateRef.current.zones ?? []);
@@ -3523,6 +3589,7 @@ function StudioInner({
             "locked",
             "providers",
             "date",
+            "startDate",
             "textAlign",
             "textVAlign",
             "wrap",
@@ -3678,6 +3745,8 @@ function StudioInner({
   const altDragOrigins = useRef<Map<string, { x: number; y: number }> | null>(null);
   /** Ties an alt-drag's clone and its move into one undo entry. */
   const altDragCommitKey = useRef<string | null>(null);
+  /** On a roadmap, where each dragged node started, in absolute x — the drop reads the move as new dates. */
+  const roadmapDragFrom = useRef<Map<string, number> | null>(null);
 
   const onNodeDragStart = useCallback(
     (event: MouseEvent | TouchEvent, node: Node, dragged: Node[]) => {
@@ -3693,6 +3762,17 @@ function StudioInner({
         );
         if (ids.length) zoneDrag.current = { ids, last: { ...node.position } };
       }
+      roadmapDragFrom.current =
+        !readOnly && isRoadmap(templateRef.current)
+          ? new Map(
+              dragged
+                .filter((n) => !isZoneNodeId(n.id) && !isBoundaryNodeId(n.id) && !isGhostNodeId(n.id))
+                .flatMap((n) => {
+                  const x = flow.getInternalNode(n.id)?.internals.positionAbsolute.x;
+                  return x === undefined ? [] : [[n.id, x] as const];
+                }),
+            )
+          : null;
       // Touch has no alt key, so a touch drag simply never clones.
       if (readOnly || !("altKey" in event && event.altKey)) {
         altDragOrigins.current = null;
@@ -3859,8 +3939,9 @@ function StudioInner({
       const cx = self.x + self.w / 2;
       const cy = self.y + self.h / 2;
       const movingIds = new Set(dragged.map((n) => n.id));
+      const holding = roadmapDragFrom.current ? framesAround(flow.getNodes(), node.id) : null;
       let over: string | null = null;
-      let overDepth = -1;
+      let overRank = -1;
       for (const candidate of flow.getNodes()) {
         if (movingIds.has(candidate.id) || isZoneNodeId(candidate.id)) continue;
         if (isBoundaryNodeId(candidate.id) || isGhostNodeId(candidate.id)) continue;
@@ -3868,11 +3949,13 @@ function StudioInner({
         if (!kindDef(registry, data.kind).container || data.collapsed || data.folded) continue;
         const box = boxOf(candidate.id);
         if (!box) continue;
-        if (cx <= box.x || cx >= box.x + box.w || cy <= box.y || cy >= box.y + box.h) continue;
-        let depth = 0;
-        for (let p = candidate.parentId; p; p = flow.getNode(p)?.parentId) depth += 1;
-        if (depth > overDepth) {
-          overDepth = depth;
+        const rank = dropRank(box, cx, cy, holding?.has(candidate.id) ?? false, () => {
+          let depth = 0;
+          for (let p = candidate.parentId; p; p = flow.getNode(p)?.parentId) depth += 1;
+          return depth;
+        });
+        if (rank > overRank) {
+          overRank = rank;
           over = candidate.id;
         }
       }
@@ -3900,7 +3983,7 @@ function StudioInner({
       // the same axis would land the box on neither. The guide still shows,
       // because "you are level with that box" is worth knowing whichever
       // thing decides the last few pixels.
-      pendingSnap.current = snapEnabled ? null : { id: node.id, moving: movingIds };
+      pendingSnap.current = snapEnabled || roadmapDragFrom.current ? null : { id: node.id, moving: movingIds };
     },
     [readOnly, flow, registry, snapEnabled, bestAlignment, dragZoneMembers],
   );
@@ -3915,6 +3998,8 @@ function StudioInner({
       setDropTargetId(null);
       const snap = pendingSnap.current;
       pendingSnap.current = null;
+      const roadmapFrom = roadmapDragFrom.current;
+      roadmapDragFrom.current = null;
       if (readOnly) return;
       // An alt-drag drops its copy first, so the clone is in the document
       // before this move is committed on top of it.
@@ -3983,9 +4068,10 @@ function StudioInner({
         const cx = abs.x + w / 2;
         const cy = abs.y + h / 2;
         const excluded = descendantsOf(node.id);
+        const holding = roadmapFrom ? framesAround(all, node.id) : null;
 
         let target: Node | null = null;
-        let targetDepth = -1;
+        let targetRank = -1;
         for (const candidate of all) {
           if (excluded.has(candidate.id)) continue;
           // The boundary frame is scenery, and a ghost standing for a group
@@ -3996,12 +4082,15 @@ function StudioInner({
           const cAbs = absOf(candidate.id);
           if (!cAbs) continue;
           const cSize = sizeOf(candidate);
-          const inside =
-            cx > cAbs.x && cx < cAbs.x + cSize.w && cy > cAbs.y && cy < cAbs.y + cSize.h;
-          if (!inside) continue;
-          const d = depthOfNode(candidate);
-          if (d > targetDepth) {
-            targetDepth = d;
+          const rank = dropRank(
+            { ...cAbs, ...cSize },
+            cx,
+            cy,
+            holding?.has(candidate.id) ?? false,
+            () => depthOfNode(candidate),
+          );
+          if (rank > targetRank) {
+            targetRank = rank;
             target = candidate;
           }
         }
@@ -4084,16 +4173,38 @@ function StudioInner({
         }
       }
 
-      if (updates.size) {
+      // On a roadmap a sideways drag is a reschedule: the move becomes new
+      // dates here, in the same write as any change of frame, and the commit
+      // re-lays the plan from them — one gesture, one undo step.
+      const axis = roadmapFrom ? roadmapAxisOf(templateRef.current) : null;
+      const dated =
+        roadmapFrom && axis
+          ? roadmapDragPatch(
+              templateRef.current,
+              axis,
+              [...roadmapFrom].flatMap(([id, from]) => {
+                const to = absOf(id)?.x;
+                if (to === undefined || Math.abs(to - from) < 4) return [];
+                // A drilled-in canvas isn't on the axis: only a move counts there, not where it lands.
+                const data = flow.getNode(id)?.data as DiagramNodeData | undefined;
+                if (rfFocusRef.current && !data?.date && !data?.startDate && !kindDef(registry, data?.kind ?? "").container) return [];
+                return [{ id, from, to }];
+              }),
+              registry.containerKinds,
+            )
+          : null;
+
+      if (updates.size || dated?.size) {
         setNodes((current) => {
           const next = current.map((n) => {
+            const dates = dated?.get(n.id);
             const update = updates.get(n.id);
-            if (!update) return n;
+            if (!update) return dates ? { ...n, data: { ...(n.data as DiagramNodeData), ...dates } } : n;
             const { parentId, position, zoneId } = update;
             const copy: Node = {
               ...n,
               position,
-              data: { ...(n.data as DiagramNodeData), zoneId },
+              data: { ...(n.data as DiagramNodeData), ...dates, zoneId },
             };
             if (parentId) copy.parentId = parentId;
             else delete copy.parentId;
@@ -7506,8 +7617,9 @@ function StudioInner({
                 >
                   <div className="as-menu__label">Tidy</div>
                   <div className="as-menu__hint">
-                    Arrange nodes within their zones and groups
-                    {arrangeMode === "untangle" ? ", untangling the lines" : ", left to right"}
+                    {arrangeMode === "roadmap"
+                      ? "Fit the time axis to the plan's dates"
+                      : `Arrange nodes within their zones and groups${arrangeMode === "untangle" ? ", untangling the lines" : ", left to right"}`}
                   </div>
                 </button>
                 {/* What Tidy optimises for. Unnamed radios, like the connector
@@ -7542,6 +7654,23 @@ function StudioInner({
                   />
                   Untangle lines
                 </label>
+                {/* Offered once the plan has a date to go by. */}
+                {arrangeMode === "roadmap" || hasRoadmapWork(template) ? (
+                  <label
+                    className="as-menu__check"
+                    title="A roadmap: left to right is time. Tasks run from their start to their due date, milestones sit on theirs, and dragging a card sideways changes its dates"
+                  >
+                    <input
+                      type="radio"
+                      checked={arrangeMode === "roadmap"}
+                      onChange={() => {
+                        setArrangeMode("roadmap");
+                        setOpenMenu(null);
+                      }}
+                    />
+                    By date
+                  </label>
+                ) : null}
                 <div className="as-menu__sep" role="separator" />
                 <button
                   type="button"
@@ -8592,7 +8721,7 @@ function StudioInner({
 
         <div
           ref={canvasRef}
-          className={`as-canvas as-canvas--tool-${tool}${dropActive ? " as-canvas--dropping" : ""}${activeDiffBase ? " as-canvas--diff" : ""}`}
+          className={`as-canvas as-canvas--tool-${tool}${dropActive ? " as-canvas--dropping" : ""}${activeDiffBase ? " as-canvas--diff" : ""}${roadmapAxis ? " as-canvas--roadmap" : ""}`}
           onDrop={onDrop}
           onDragOver={onDragOver}
           onDragLeave={() => setDropActive(false)}
@@ -8921,7 +9050,8 @@ function StudioInner({
             selectionMode={SelectionMode.Partial}
             onSelectionEnd={selectEnclosedEdges}
             panOnScroll
-            snapToGrid={snapEnabled}
+            // A roadmap places cards by their dates, and any day must be reachable.
+            snapToGrid={snapEnabled && arrangeMode !== "roadmap"}
             snapGrid={[12, 12]}
             selectNodesOnDrag={false}
             fitView
@@ -8931,6 +9061,15 @@ function StudioInner({
             proOptions={{ hideAttribution: false }}
           >
             <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} color="var(--as-grid-dot)" />
+            {/* The calendar under a plan laid out by date: on the top level
+                only, where the canvas IS the axis. The ruler comes before the
+                corner panels, so they paint over it. */}
+            {roadmapAxis ? (
+              <>
+                <RoadmapBackdrop axis={roadmapAxis} today={today} unscheduledEdge={roadmapUnscheduled} />
+                <RoadmapRuler axis={roadmapAxis} today={today} unscheduledEdge={roadmapUnscheduled} />
+              </>
+            ) : null}
             <LineageOverlay links={analysis.lineageLinks} reps={canvasReps} />
             {quickAddFrom ? (
               <QuickAddHandles

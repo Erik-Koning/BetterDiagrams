@@ -128,6 +128,20 @@ describe("validateTemplateReport", () => {
     expect(byPath["dropped /lineage"]).toMatch(/^1 lineage link couldn't be read .*, so it was left out\.$/);
   });
 
+  it("reports a start date it can't read, one off a task, and an axis it can't use", () => {
+    expect(
+      codes({
+        nodes: [
+          { id: "t", kind: "task", date: "2026-05-01", startDate: "2026-04-01" },
+          { id: "u", kind: "task", startDate: "next week" },
+          { id: "m", kind: "milestone", date: "2026-05-01", startDate: "2026-04-01" },
+        ],
+        edges: [],
+        settings: { arrange: "roadmap", roadmap: { from: "2026-03-01", dayWidth: "wide" } },
+      }),
+    ).toEqual(["invalid-date /nodes/1/startDate", "not-applicable /nodes/2/startDate", "unknown-value /settings/roadmap"]);
+  });
+
   it("escapes JSON Pointer segments", () => {
     expect(codes({ nodes: [{ id: "a", "x/y~z": 1 }], edges: [] })).toEqual(["unknown-key /nodes/0/x~1y~0z"]);
   });

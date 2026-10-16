@@ -64,6 +64,15 @@ describe("importTaskCsv", () => {
     expect(template.nodes.find((n) => n.id === "13")!.done).toBe(true);
   });
 
+  it("reads a start date beside the due date, and says when it can't", () => {
+    const { template, warnings } = importTaskCsv("Title,Start date,Due date\nBuild,2026-06-01,2026-06-12\nShip,whenever,2026-06-20\n");
+    expect(template.nodes.map((n) => [n.startDate, n.date])).toEqual([
+      ["2026-06-01", "2026-06-12"],
+      [undefined, "2026-06-20"],
+    ]);
+    expect(warnings.map((w) => w.message)).toEqual(['Couldn\'t read the start date "whenever"']);
+  });
+
   it("notes a link to an issue that isn't in the export, and a row with no title", () => {
     const { warnings, stats } = importTaskCsv("Summary,Key,Blocked by\nA,K-1,K-99\n,K-2,\n");
     expect(stats.skipped).toBe(1);

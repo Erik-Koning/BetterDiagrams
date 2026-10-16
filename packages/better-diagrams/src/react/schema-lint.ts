@@ -135,10 +135,14 @@ const architectureKeyLookup: KeyLookup = (path) => {
       return PATH_KEYS;
     case "settings":
       return SETTINGS_KEYS;
+    case "settings.roadmap":
+      return ROADMAP_AXIS_KEYS;
     default:
       return null;
   }
 };
+
+const ROADMAP_AXIS_KEYS: readonly string[] = ["from", "dayWidth"];
 
 const sequenceKeyLookup: KeyLookup = (path) => {
   switch (path.join(".")) {
@@ -298,8 +302,10 @@ export function buildArchitectureLint(
     ],
     dates: [
       { path: "nodes.*", key: "date" },
+      { path: "nodes.*", key: "startDate" },
       { path: "edges.*", key: "date" },
       { path: "zones.*", key: "date" },
+      { path: "settings.roadmap", key: "from" },
     ],
     sibling: { path: "zones.*", key: "provider", arrayKey: "providers" },
     refPools: architecturePools,

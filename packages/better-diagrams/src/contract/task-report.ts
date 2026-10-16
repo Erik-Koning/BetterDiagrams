@@ -138,7 +138,7 @@ export function tasksCsv(t: DiagramTemplate, opts: { today?: string } = {}): str
   const blocked = blockedTasks(t);
   const ready = readyTasks(t);
   const late = overdueWork(t, today);
-  const header = ["id", "title", "status", "priority", "points", "assignees", "due", "phase", "blocked by", "ready", "overdue", "description"];
+  const header = ["id", "title", "status", "priority", "points", "assignees", "start", "due", "phase", "blocked by", "ready", "overdue", "description"];
   const rows = t.nodes
     .filter((n) => n.kind === TASK_KIND)
     .map((n) => [
@@ -148,6 +148,7 @@ export function tasksCsv(t: DiagramTemplate, opts: { today?: string } = {}): str
       n.priority ? n.priority.toUpperCase() : "",
       n.storyPoints !== undefined ? String(n.storyPoints) : "",
       (n.assignees ?? []).join("; "),
+      n.startDate ?? "",
       n.date ?? "",
       phaseOf(t, n.id),
       (blocked.get(n.id) ?? []).map((id) => label.get(id) ?? id).join("; "),

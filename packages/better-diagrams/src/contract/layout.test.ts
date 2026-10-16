@@ -209,6 +209,30 @@ describe("arrange modes", () => {
     // Fewer crossings than the one-pass flow — the whole point.
     expect(crossings(first)).toBeLessThanOrEqual(crossings(autoLayout(t)));
   });
+
+  it("roadmap places a plan by its dates, on an axis fitted afresh", () => {
+    const task = (id: string, date: string, over: Partial<DiagramNode> = {}) =>
+      node(id, { kind: "task", w: 200, h: 84, date, ...over });
+    const t = doc(
+      [task("a", "2026-03-10"), task("b", "2026-04-20", { startDate: "2026-04-01" }), node("svc", { x: 40, y: 40 })],
+      [edge("a", "b")],
+      // A stale axis from long ago: Tidy refits it to the plan.
+      { settings: { arrange: "roadmap", roadmap: { from: "2020-01-01", dayWidth: 2 } } },
+    );
+    const out = autoLayout(t);
+    expect(out.settings?.roadmap?.from).toBe("2026-03-01");
+    const at = (id: string) => out.nodes.find((n) => n.id === id)!;
+    const day = out.settings!.roadmap!.dayWidth;
+    // b runs from Apr 1 (day 31) to the end of Apr 20 (day 51).
+    expect(at("b").x).toBe(31 * day);
+    expect(at("b").w).toBe(20 * day);
+    expect(at("a").x + at("a").w).toBe(10 * day);
+    // The service is no part of the plan: it is moved clear of it, not into it.
+    expect(at("svc").y).toBeGreaterThan(Math.max(at("a").y + at("a").h, at("b").y + at("b").h));
+    expect(hasOverlaps(out)).toBe(false);
+    // Naming the mode does the same as the document saying it.
+    expect(autoLayout({ ...t, settings: undefined }, { mode: "roadmap" }).nodes).toEqual(out.nodes);
+  });
 });
 
 describe("task graphs", () => {

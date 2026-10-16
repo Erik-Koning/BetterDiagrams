@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "meta": { "title": "Product roadmap", "versionTag": "Q4 2026" },
+  "settings": { "arrange": "roadmap", "roadmap": { "from": "2026-09-01", "dayWidth": 16 } },
+  "nodes": [
+    { "id": "platform", "label": "Platform", "kind": "group", "icon": "none", "description": "", "parentId": null, "zoneId": null, "color": "#38bdf8", "x": 516, "y": 0, "w": 1256, "h": 182, "fontSize": 13 },
+    { "id": "sso", "label": "Single sign-on", "kind": "task", "icon": "none", "description": "SAML + OIDC for workspaces", "parentId": "platform", "zoneId": null, "assignees": ["Mo"], "storyPoints": 8, "stage": "in-progress", "priority": "p0", "date": "2026-10-30", "startDate": "2026-10-05", "x": 28, "y": 52, "w": 416, "h": 84, "fontSize": 13 },
+    { "id": "api", "label": "Public API v2", "kind": "task", "icon": "none", "description": "Versioned REST, webhooks", "parentId": "platform", "zoneId": null, "assignees": ["Ravi"], "storyPoints": 13, "date": "2026-12-04", "startDate": "2026-11-02", "x": 476, "y": 52, "w": 528, "h": 84, "fontSize": 13 },
+    { "id": "limits", "label": "Rate limiting", "kind": "task", "icon": "none", "description": "", "parentId": "platform", "zoneId": null, "assignees": ["Ravi"], "storyPoints": 5, "date": "2026-12-18", "startDate": "2026-12-07", "x": 1036, "y": 52, "w": 192, "h": 84, "fontSize": 13 },
+    { "id": "mobile", "label": "Mobile app", "kind": "group", "icon": "none", "description": "", "parentId": null, "zoneId": null, "color": "#a78bfa", "x": 404, "y": 210, "w": 1704, "h": 306, "fontSize": 13 },
+    { "id": "redesign", "label": "App redesign", "kind": "task", "icon": "none", "description": "Navigation and home", "parentId": "mobile", "zoneId": null, "assignees": ["Priya"], "storyPoints": 5, "done": true, "date": "2026-10-16", "startDate": "2026-09-28", "x": 28, "y": 52, "w": 304, "h": 84, "fontSize": 13 },
+    { "id": "screens", "label": "Build new screens", "kind": "task", "icon": "none", "description": "", "parentId": "mobile", "zoneId": null, "assignees": ["Priya", "Ana"], "storyPoints": 13, "stage": "in-progress", "date": "2026-12-04", "startDate": "2026-10-19", "x": 364, "y": 52, "w": 752, "h": 84, "fontSize": 13 },
+    { "id": "beta", "label": "Beta", "kind": "milestone", "icon": "none", "description": "", "parentId": "mobile", "zoneId": null, "date": "2026-12-09", "x": 1103, "y": 182, "w": 170, "h": 96, "fontSize": 13 },
+    { "id": "review", "label": "Store review", "kind": "task", "icon": "none", "description": "", "parentId": "mobile", "zoneId": null, "assignees": ["Ana"], "storyPoints": 3, "date": "2027-01-08", "startDate": "2026-12-14", "x": 1260, "y": 52, "w": 416, "h": 84, "fontSize": 13 },
+    { "id": "growth", "label": "Growth", "kind": "group", "icon": "none", "description": "", "parentId": null, "zoneId": null, "color": "#34d399", "x": -276, "y": 544, "w": 2608, "h": 182, "fontSize": 13 },
+    { "id": "research", "label": "Pricing research", "kind": "task", "icon": "none", "description": "Interviews, competitor scan", "parentId": "growth", "zoneId": null, "assignees": ["Lena"], "storyPoints": 5, "date": "2026-11-06", "startDate": "2026-10-12", "x": 932, "y": 52, "w": 416, "h": 84, "fontSize": 13 },
+    { "id": "pricing", "label": "New pricing page", "kind": "task", "icon": "none", "description": "", "parentId": "growth", "zoneId": null, "assignees": ["Lena"], "storyPoints": 5, "date": "2026-11-27", "startDate": "2026-11-09", "x": 1380, "y": 52, "w": 304, "h": 84, "fontSize": 13 },
+    { "id": "campaign", "label": "Launch campaign", "kind": "task", "icon": "none", "description": "", "parentId": "growth", "zoneId": null, "assignees": ["Lena", "Ana"], "storyPoints": 3, "date": "2027-01-22", "startDate": "2027-01-04", "x": 2276, "y": 52, "w": 304, "h": 84, "fontSize": 13 },
+    { "id": "partners", "label": "Partner integrations", "kind": "task", "icon": "none", "description": "Not scheduled yet", "parentId": "growth", "zoneId": null, "storyPoints": 8, "x": 28, "y": 52, "w": 200, "h": 84, "fontSize": 13 },
+    { "id": "launch", "label": "Public launch", "kind": "milestone", "icon": "none", "description": "", "parentId": null, "zoneId": null, "date": "2027-01-26", "x": 2275, "y": 0, "w": 170, "h": 96, "fontSize": 13 }
+  ],
+  "edges": [
+    { "id": "sso-api", "source": "sso", "target": "api", "label": "", "labelT": 0.5, "style": "solid", "color": "slate" },
+    { "id": "api-limits", "source": "api", "target": "limits", "label": "", "labelT": 0.5, "style": "solid", "color": "slate" },
+    { "id": "redesign-screens", "source": "redesign", "target": "screens", "label": "", "labelT": 0.5, "style": "solid", "color": "slate" },
+    { "id": "screens-beta", "source": "screens", "target": "beta", "label": "", "labelT": 0.5, "style": "solid", "color": "slate" },
+    { "id": "beta-review", "source": "beta", "target": "review", "label": "", "labelT": 0.5, "style": "solid", "color": "slate" },
+    { "id": "research-pricing", "source": "research", "target": "pricing", "label": "", "labelT": 0.5, "style": "solid", "color": "slate" },
+    { "id": "pricing-campaign", "source": "pricing", "target": "campaign", "label": "", "labelT": 0.5, "style": "solid", "color": "slate" },
+    { "id": "api-screens", "source": "api", "target": "screens", "label": "", "labelT": 0.5, "style": "solid", "color": "slate", "relation": "dependency" },
+    { "id": "limits-launch", "source": "limits", "target": "launch", "label": "", "labelT": 0.5, "style": "solid", "color": "slate" },
+    { "id": "review-launch", "source": "review", "target": "launch", "label": "", "labelT": 0.5, "style": "solid", "color": "slate" },
+    { "id": "campaign-launch", "source": "campaign", "target": "launch", "label": "", "labelT": 0.5, "style": "solid", "color": "slate" }
+  ]
+}

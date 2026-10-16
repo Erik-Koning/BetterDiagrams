@@ -23,6 +23,8 @@ import {
   FIELD_KEYS,
   GROUP_CONTENTS,
   ICON_NAMES,
+  MAX_DAY_WIDTH,
+  MIN_DAY_WIDTH,
   NODE_KINDS,
   NODE_OUTLINES,
   NODE_STATUSES,
@@ -106,7 +108,8 @@ export function diagramJsonSchema(options: JsonSchemaOptions = {}): JsonSchema {
       priority: oneOf(TASK_PRIORITIES, "How urgent a task is, p0 the most."),
       capacity: num("Containers: the story points a sprint or phase can hold.", { minimum: 0 }),
       status: oneOf(NODE_STATUSES, "Lifecycle stage. Default active."),
-      date: ref("date", "When this lands, for the timeline."),
+      date: ref("date", "When this lands, for the timeline. A task's due date."),
+      startDate: ref("date", "Tasks: when work starts. With `date`, a bar on a roadmap."),
       locked: bool("Pinned in place in the editor."),
       plain: bool("Text notes: bare text without a box."),
       collapsed: bool("Containers: folded into a chip."),
@@ -254,7 +257,15 @@ export function diagramJsonSchema(options: JsonSchemaOptions = {}): JsonSchema {
       settings: object(
         {
           groupContents: oneOf(GROUP_CONTENTS, "Whether groups show their contents. Default show."),
-          arrange: oneOf(ARRANGE_MODES, "What Tidy optimises for. Default flow."),
+          arrange: oneOf(ARRANGE_MODES, "What Tidy optimises for. Default flow; roadmap lays a plan out by date."),
+          roadmap: object(
+            {
+              from: ref("date", "The day at the left edge of the axis."),
+              dayWidth: num("Canvas pixels per day.", { minimum: MIN_DAY_WIDTH, maximum: MAX_DAY_WIDTH }),
+            },
+            ["from", "dayWidth"],
+            "A roadmap's time axis. Fitted to the plan's dates when absent.",
+          ),
           notation: oneOf(NOTATIONS, "How cardinality is drawn. Default both."),
           capacity: { type: "object", additionalProperties: { type: "number", minimum: 0 }, description: "Story points per person, by name." },
         },

@@ -111,6 +111,7 @@ export type {
   VersionTagPosition,
   GroupContents,
   ArrangeMode,
+  RoadmapAxis,
   Notation,
   DiagramNode,
   DiagramEdge,
@@ -175,6 +176,9 @@ export { taskLintRules } from "./task-lint";
 export type { TaskLintOptions } from "./task-lint";
 export { taskReportMarkdown, tasksCsv } from "./task-report";
 export type { TaskReportOptions } from "./task-report";
+// A plan laid out by date (`settings.arrange: "roadmap"`): positions follow the dates.
+export { roadmapAxisOf, roadmapLayout, roadmapTicks, settleRoadmap } from "./roadmap";
+export type { RoadmapLayoutOptions, RoadmapTick, RoadmapTickUnit } from "./roadmap";
 
 // ── Fields (rows plus what the data bag knows about them) ───────────────────
 export {

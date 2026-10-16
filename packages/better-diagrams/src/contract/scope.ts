@@ -376,6 +376,8 @@ export function scopedView(
       ...(repNode.priority !== undefined ? { priority: repNode.priority } : {}),
       ...(repNode.status !== undefined ? { status: repNode.status } : {}),
       ...(date !== undefined ? { date } : {}),
+      // Its start only beside its own due date, not a date rolled up from inside.
+      ...(repNode.startDate !== undefined && date === repNode.date ? { startDate: repNode.startDate } : {}),
     };
     ghostNodes.push(ghost);
     columns[ghostInbound.get(ghostId) ? "left" : "right"].push(ghost);

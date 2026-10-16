@@ -1,6 +1,6 @@
 /**
  * The plan checks: deadlocks, overdue work, dates that contradict their
- * prerequisites, unassigned and unestimated work, and capacity.
+ * prerequisites or each other, unassigned and unestimated work, and capacity.
  */
 import { describe, expect, it } from "vitest";
 import { lintTemplate } from "./lint";
@@ -29,6 +29,19 @@ describe("plan checks", () => {
     });
     expect(byRule(f, "task-overdue").map((x) => x.nodeIds)).toEqual([["late"]]);
     expect(byRule(f, "task-due-before-prereq")).toMatchObject([{ nodeIds: ["ui", "api"] }]);
+  });
+
+  it("flag open work that starts after it is due", () => {
+    const f = run({
+      nodes: [
+        task("ok", { startDate: "2026-06-01", date: "2026-06-10" }),
+        task("bad", { startDate: "2026-06-20", date: "2026-06-10" }),
+        task("shipped", { startDate: "2026-06-20", date: "2026-06-10", done: true }),
+      ],
+    });
+    expect(byRule(f, "task-start-after-due")).toMatchObject([
+      { severity: "warning", message: '"BAD" starts 2026-06-20 but is due 2026-06-10', nodeIds: ["bad"] },
+    ]);
   });
 
   it("check assignment and estimates only once the plan uses them", () => {

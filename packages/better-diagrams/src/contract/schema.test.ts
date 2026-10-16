@@ -661,9 +661,27 @@ describe("task fields", () => {
     expect(fromReactFlow(rf.nodes, rf.edges, { base: t })).toEqual(t);
   });
 
+  it("keeps a start date on a task, normalised, and nowhere else", () => {
+    const t = validateTemplate({
+      version: 1,
+      nodes: [
+        { ...base, date: "2026-05-01", startDate: "2026-4-6" },
+        { ...base, id: "m", kind: "milestone", date: "2026-05-01", startDate: "2026-04-06" },
+        { ...base, id: "u", startDate: "soon" },
+      ],
+      edges: [],
+    });
+    expect(t.nodes.map((n) => n.startDate)).toEqual(["2026-04-06", undefined, undefined]);
+    expect(t.nodes[1]).not.toHaveProperty("startDate");
+    const rf = toReactFlow(t);
+    expect(fromReactFlow(rf.nodes, rf.edges, { base: t })).toEqual(t);
+  });
+
   it("is described to the model, and the Task flow focus steers toward a plan", () => {
     expect(buildSystemPrompt()).toContain('TASKS: "task" = a unit of work');
     expect(buildSystemPrompt()).not.toContain("TASK FLOW:");
     expect(buildSystemPrompt({ focus: "tasks" })).toContain("TASK FLOW:");
+    expect(buildSystemPrompt({ focus: "tasks" })).toContain('"startDate"');
+    expect(buildSystemPrompt({ focus: "tasks" })).toContain('"arrange":"roadmap"');
   });
 });

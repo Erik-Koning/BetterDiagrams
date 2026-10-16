@@ -27,6 +27,7 @@ import { pointInZone } from "./zones";
 import { COLLAPSED_SIZE, CONTAINER_KINDS, visibleElements } from "./schema";
 import type { ArrangeMode, DiagramNode, DiagramTemplate } from "./schema";
 import { ASSIGNEE_STRIP_HEIGHT, DEPENDENCY_RELATION, hasAssigneeStrip } from "./tasks";
+import { roadmapLayout } from "./roadmap";
 
 /**
  * Provider ALTERNATES, mapped to the one that stands in for the set.
@@ -785,11 +786,17 @@ function layoutUntangled(
  * their origin.
  */
 export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {}): DiagramTemplate {
-  const opts: LayoutMetrics = {
-    ...DEFAULTS,
-    ...options,
-    mode: options.mode ?? template.settings?.arrange ?? "flow",
-  };
+  const mode = options.mode ?? template.settings?.arrange ?? "flow";
+  if (mode === "roadmap") {
+    // A plan laid out by date is placed by its dates, on an axis refitted to
+    // them. What holds no plan work — a card's own canvas, a group of
+    // services beside the plan — still tidies as a flow first.
+    return roadmapLayout(autoLayout(template, { ...options, mode: "flow" }), {
+      containerKinds: options.containerKinds,
+      refit: true,
+    });
+  }
+  const opts: LayoutMetrics = { ...DEFAULTS, ...options, mode };
   const zones = template.zones ?? [];
   // A card's children live in their own drilled canvas, so a tidy arranges
   // one FRAME — by default the visible one, never a level you can't see.

@@ -11,7 +11,7 @@ const PLAN = validateTemplate({
     { id: "s1", label: "Sprint 1", kind: "group", x: 0, y: 0, w: 900, h: 400 },
     { id: "spec", label: "Spec", kind: "task", parentId: "s1", x: 0, y: 0, storyPoints: 2, assignees: ["Ana"], done: true },
     { id: "api", label: "API", kind: "task", parentId: "s1", x: 0, y: 0, storyPoints: 5, assignees: ["Ana"], stage: "in-progress", priority: "p1" },
-    { id: "ui", label: "UI", kind: "task", x: 0, y: 0, storyPoints: 3, assignees: ["Ravi"], date: "2026-01-01" },
+    { id: "ui", label: "UI", kind: "task", x: 0, y: 0, storyPoints: 3, assignees: ["Ravi"], startDate: "2025-12-15", date: "2026-01-01" },
     { id: "qa", label: "QA", kind: "task", x: 0, y: 0, storyPoints: 1 },
     { id: "ship", label: "Ship", kind: "milestone", x: 0, y: 0, date: "2026-12-01" },
   ],
@@ -43,10 +43,10 @@ describe("taskReportMarkdown", () => {
 describe("tasksCsv", () => {
   it("is every task, one row each, with its status and what blocks it", () => {
     const rows = tasksCsv(PLAN, { today: "2026-06-01" }).trim().split("\r\n");
-    expect(rows[0]).toBe("id,title,status,priority,points,assignees,due,phase,blocked by,ready,overdue,description");
+    expect(rows[0]).toBe("id,title,status,priority,points,assignees,start,due,phase,blocked by,ready,overdue,description");
     expect(rows).toHaveLength(5);
-    expect(rows.find((r) => r.startsWith("api,"))).toBe("api,API,In progress,P1,5,Ana,,Sprint 1,,,,");
-    expect(rows.find((r) => r.startsWith("qa,"))).toBe("qa,QA,To do,,1,,,,API,,,");
-    expect(rows.find((r) => r.startsWith("ui,"))).toBe("ui,UI,To do,,3,Ravi,2026-01-01,,,yes,yes,");
+    expect(rows.find((r) => r.startsWith("api,"))).toBe("api,API,In progress,P1,5,Ana,,,Sprint 1,,,,");
+    expect(rows.find((r) => r.startsWith("qa,"))).toBe("qa,QA,To do,,1,,,,,API,,,");
+    expect(rows.find((r) => r.startsWith("ui,"))).toBe("ui,UI,To do,,3,Ravi,2025-12-15,2026-01-01,,,yes,yes,");
   });
 });

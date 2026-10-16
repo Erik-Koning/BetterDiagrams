@@ -48,6 +48,7 @@ import {
 } from "./schema";
 import { ZONE_KEYS, ZONE_OUTLINES, ZONE_SHAPES } from "./zones";
 import { PATH_KEYS } from "./paths";
+import { TASK_KIND } from "./tasks";
 
 export const VALIDATION_ISSUE_CODES = [
   /** An element that couldn't be read at all — no usable id, or not an object. */
@@ -116,9 +117,9 @@ export function validateTemplateReport(raw: unknown, opts: ValidateOptions = {})
       add("unknown-value", `${at}${pointer(key)}`, `${show(value[key])} isn't ${article} ${key} value (${allowed.join(", ")}), so ${fallback}.`);
     }
   };
-  const date = (value: Obj, at: string, kept: unknown) => {
-    if (given(value.date) && !kept) {
-      add("invalid-date", `${at}/date`, `${show(value.date)} isn't a date this reads (YYYY-MM-DD), so it was dropped.`);
+  const date = (value: Obj, at: string, kept: unknown, key = "date") => {
+    if (given(value[key]) && !kept) {
+      add("invalid-date", `${at}/${key}`, `${show(value[key])} isn't a date this reads (YYYY-MM-DD), so it was dropped.`);
     }
   };
 
@@ -178,6 +179,11 @@ export function validateTemplateReport(raw: unknown, opts: ValidateOptions = {})
     vocab(node, "stage", TASK_STAGES, at, `the task reads as "to do"`);
     vocab(node, "priority", TASK_PRIORITIES, at, `it has no priority`);
     date(node, at, out.date);
+    if (out.kind !== TASK_KIND && given(node.startDate)) {
+      add("not-applicable", `${at}/startDate`, `"startDate" applies to tasks only, and kind "${out.kind}" isn't one, so it was dropped.`);
+    } else {
+      date(node, at, out.startDate, "startDate");
+    }
 
     const isContainer = containers.has(out.kind);
     if (isContainer) vocab(node, "outline", NODE_OUTLINES, at, `the frame is dashed`);
@@ -299,6 +305,9 @@ export function validateTemplateReport(raw: unknown, opts: ValidateOptions = {})
     unknownKeys(doc.settings, SETTINGS_KEYS, "/settings", "settings");
     vocab(doc.settings, "groupContents", GROUP_CONTENTS, "/settings", `groups show their contents`);
     vocab(doc.settings, "arrange", ARRANGE_MODES, "/settings", `Tidy arranges by flow`);
+    if (given(doc.settings.roadmap) && !template.settings?.roadmap) {
+      add("unknown-value", "/settings/roadmap", `The roadmap axis needs a "from" date and a numeric "dayWidth", so it was dropped and is fitted to the plan.`);
+    }
     vocab(doc.settings, "notation", NOTATIONS, "/settings", `both notations are drawn`);
   }
   if (isObj(doc.meta)) {

@@ -108,8 +108,8 @@ export interface ArchitectureStudioProps {
     welcome?: boolean;
 }
 
-// @public (undocumented)
-export const ARRANGE_MODES: readonly ["flow", "untangle"];
+// @public
+export const ARRANGE_MODES: readonly ["flow", "untangle", "roadmap"];
 
 // @public (undocumented)
 export type ArrangeMode = (typeof ARRANGE_MODES)[number];
@@ -535,6 +535,7 @@ export const dataModelRegistry: DialectRegistry;
 // @public
 export function DateChip(input: {
     date?: DiagramDate;
+    start?: DiagramDate;
     inline?: boolean;
     prefix?: string;
     overdue?: boolean;
@@ -695,6 +696,7 @@ export interface DiagramNode {
     priority?: TaskPriority;
     providers?: string[];
     stage?: TaskStage;
+    startDate?: DiagramDate;
     status?: NodeStatus;
     storyPoints?: number;
     tags?: string[];
@@ -735,6 +737,7 @@ export type DiagramNodeData = {
     locked?: boolean;
     collapsed?: boolean;
     date?: DiagramDate;
+    startDate?: DiagramDate;
     textAlign?: NodeTextAlign;
     textVAlign?: NodeTextVAlign;
     wrap?: boolean;
@@ -776,6 +779,7 @@ export interface DiagramSettings {
     capacity?: Record<string, number>;
     groupContents?: GroupContents;
     notation?: Notation;
+    roadmap?: RoadmapAxis;
 }
 
 // @public (undocumented)
@@ -3006,6 +3010,43 @@ export type RFNodeLike = {
 };
 
 // @public
+export interface RoadmapAxis {
+    dayWidth: number;
+    from: DiagramDate;
+}
+
+// @public
+export function roadmapAxisOf(doc: Pick<DiagramTemplate, "settings">): RoadmapAxis | null;
+
+// @public
+export function roadmapLayout(doc: DiagramTemplate, opts?: RoadmapLayoutOptions): DiagramTemplate;
+
+// @public
+export interface RoadmapLayoutOptions {
+    containerKinds?: readonly string[];
+    refit?: boolean;
+    today?: DiagramDate;
+}
+
+// @public
+export interface RoadmapTick {
+    date: DiagramDate;
+    full: string;
+    label: string;
+    major: boolean;
+    x: number;
+}
+
+// @public
+export function roadmapTicks(axis: RoadmapAxis, x0: number, x1: number, pxPerDay?: number): {
+    unit: RoadmapTickUnit;
+    ticks: RoadmapTick[];
+};
+
+// @public
+export type RoadmapTickUnit = "week" | "month" | "quarter" | "year";
+
+// @public
 export function rollupFraction(r: TaskRollup): number;
 
 // @public
@@ -3536,6 +3577,9 @@ export function sequenceTimelineView(template: SequenceTemplate, at: DiagramDate
 export function setAllZoneProviders(template: DiagramTemplate, provider: string): DiagramTemplate;
 
 // @public
+export function settleRoadmap(doc: DiagramTemplate, opts?: Omit<RoadmapLayoutOptions, "refit">): DiagramTemplate;
+
+// @public
 export function setZoneProvider(template: DiagramTemplate, zoneId: string, provider: string): DiagramTemplate;
 
 // @public
@@ -3864,6 +3908,7 @@ export interface TaskDocument {
         stage?: string;
         priority?: string;
         date?: string;
+        startDate?: string;
         capacity?: number;
     }>;
     // (undocumented)

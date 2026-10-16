@@ -4154,6 +4154,129 @@ describe("Arrange modes", () => {
   });
 });
 
+describe("Roadmap: a plan laid out by date", () => {
+  const card = { icon: "none", description: "", parentId: null, x: 0, y: 0 };
+  const PLAN: DiagramTemplate = validateTemplate({
+    version: 1,
+    meta: { title: "Launch" },
+    nodes: [
+      { ...card, id: "design", label: "Design", kind: "task", date: "2026-03-10", w: 200, h: 84 },
+      { ...card, id: "build", label: "Build", kind: "task", startDate: "2026-04-01", date: "2026-04-20", x: 300, w: 200, h: 84 },
+      { ...card, id: "svc", label: "Billing", kind: "service", x: 0, y: 300, w: 170, h: 76 },
+    ],
+    edges: [{ id: "db", source: "design", target: "build", label: "", style: "solid", color: "slate" }],
+  });
+  const ROADMAP: DiagramTemplate = { ...PLAN, settings: { arrange: "roadmap", roadmap: { from: "2026-03-01", dayWidth: 10 } } };
+  const last = (spy: ReturnType<typeof vi.fn>) => spy.mock.calls.at(-1)![0] as DiagramTemplate;
+  const at = (doc: DiagramTemplate, id: string) => doc.nodes.find((n) => n.id === id)!;
+
+  it("is offered only to a plan with dates", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={{ ...PLAN, nodes: PLAN.nodes.map(({ date: _d, startDate: _s, ...n }) => n) }} />);
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    expect(screen.getByRole("radio", { name: "Untangle lines" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "By date" })).not.toBeInTheDocument();
+  });
+
+  it("By date lays the plan out by its dates in one undo step, and leaving it gives back standard cards", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={PLAN} onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    await user.click(screen.getByRole("radio", { name: "By date" }));
+    await screen.findByText(/Laid out by date/);
+    const laid = last(onChange);
+    expect(laid.settings?.arrange).toBe("roadmap");
+    expect(laid.settings?.roadmap?.from).toBe("2026-03-01");
+    const day = laid.settings!.roadmap!.dayWidth;
+    // Build runs from Apr 1 (day 31) to the end of Apr 20 (day 51).
+    expect(at(laid, "build")).toMatchObject({ x: 31 * day, w: 20 * day });
+    // The ruler names the months over it.
+    expect(document.querySelector(".as-roadmap-ruler")).not.toBeNull();
+
+    // One undo takes the layout and the mode back together.
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(last(onChange).settings).toBeUndefined());
+    expect(last(onChange).nodes.map((n) => [n.id, n.x, n.y, n.w])).toEqual(PLAN.nodes.map((n) => [n.id, n.x, n.y, n.w]));
+    await user.click(screen.getByRole("button", { name: "Redo" }));
+    await waitFor(() => expect(last(onChange).settings?.arrange).toBe("roadmap"));
+
+    // Back to left to right: the axis is forgotten and the bar is a card again.
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    await user.click(screen.getByRole("radio", { name: "Left to right" }));
+    await waitFor(() => expect(last(onChange).settings).toEqual({ arrange: "flow" }));
+    expect(at(last(onChange), "build").w).toBe(200);
+    expect(document.querySelector(".as-roadmap-ruler")).toBeNull();
+  });
+
+  it("re-lays the plan when a date changes in the inspector, as one edit", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={ROADMAP} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Build"));
+    fireEvent.change(await screen.findByLabelText("Start date"), { target: { value: "2026-04-06" } });
+    await waitFor(() => expect(at(last(onChange), "build").startDate).toBe("2026-04-06"));
+    // Apr 6 is day 36; the bar now runs fifteen days, to the end of Apr 20.
+    expect(at(last(onChange), "build")).toMatchObject({ x: 360, w: 150 });
+
+    await user.click(screen.getByRole("button", { name: "Clear start date" }));
+    await waitFor(() => expect(at(last(onChange), "build").startDate).toBeUndefined());
+    // Without a start it is a standard card ending on its due day.
+    expect(at(last(onChange), "build")).toMatchObject({ x: 510 - 200, w: 200 });
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(at(last(onChange), "build")).toMatchObject({ startDate: "2026-04-06", x: 360, w: 150 }));
+  });
+
+  it("settles a host's edit and doesn't loop on the echo, in StrictMode", async () => {
+    const seen: DiagramTemplate[] = [];
+    function Host() {
+      const [doc, setDoc] = useState<DiagramTemplate>(ROADMAP);
+      seen.push(doc);
+      return (
+        <>
+          <button type="button" onClick={() => setDoc((d) => ({ ...d, nodes: d.nodes.map((n) => (n.id === "design" ? { ...n, date: "2026-03-20" } : n)) }))}>
+            Slip design
+          </button>
+          <ArchitectureStudio value={doc} onChange={setDoc} />
+        </>
+      );
+    }
+    const user = userEvent.setup();
+    mount(
+      <StrictMode>
+        <Host />
+      </StrictMode>,
+    );
+    await user.click(screen.getByRole("button", { name: "Slip design" }));
+    // The card follows the new date on the canvas…
+    await waitFor(() => {
+      const box = document.querySelector<HTMLElement>('.react-flow__node[data-id="design"]');
+      // Due Mar 10 it ended at x 100, so it sat at −100; due Mar 20 (day 19) it ends at 200 and sits at 0.
+      expect(box?.style.transform).toContain("translate(0px");
+    });
+    // …and the echo of the edit settles: no render storm.
+    const renders = seen.length;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(seen.length).toBe(renders);
+  });
+
+  it("quick-adds the next task after this one, as long", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={ROADMAP} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Build"));
+    await user.click(await screen.findByRole("button", { name: /Add a connected Task to the right/ }));
+    await waitFor(() => expect(last(onChange).nodes).toHaveLength(4));
+    const added = last(onChange).nodes.at(-1)!;
+    expect(added).toMatchObject({ kind: "task", startDate: "2026-04-21", date: "2026-05-10" });
+    // Laid out on its dates: it starts where Build ends.
+    expect(added.x).toBe(at(last(onChange), "build").x + at(last(onChange), "build").w);
+  });
+});
+
 describe("UML notation and structure", () => {
   const table = (id: string, x: number, fields: unknown[]) => ({
     id, label: id, kind: "table", icon: "none", description: "", parentId: null, x, y: 0, w: 230, h: 96, fields,

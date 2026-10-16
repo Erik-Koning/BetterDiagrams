@@ -99,6 +99,7 @@ function DateSection({
   label,
   caption = "Date",
   clearable = !!date,
+  clearLabel = "Clear date",
   onChange,
 }: {
   date?: string;
@@ -113,6 +114,8 @@ function DateSection({
    * clear, so the bulk bar passes "any of them is dated" instead.
    */
   clearable?: boolean;
+  /** The clear button's name — distinct when one inspector shows two dates. */
+  clearLabel?: string;
   onChange: (date: string | undefined) => void;
 }) {
   return (
@@ -132,8 +135,8 @@ function DateSection({
           type="button"
           className="as-btn as-btn--icon"
           onClick={() => onChange(undefined)}
-          aria-label="Clear date"
-          title="Clear the date — the element goes back to being always present"
+          aria-label={clearLabel}
+          title={clearLabel === "Clear date" ? "Clear the date — the element goes back to being always present" : clearLabel}
         >
           <UiIcon name="close" size={13} />
         </button>
@@ -904,6 +907,7 @@ export function NodeInspector({
   const color = read((d) => d.color ?? "");
   const team = read((d) => d.team ?? "");
   const date = read((d) => d.date);
+  const startDate = read((d) => d.startDate);
   const locked = read((d) => !!d.locked);
   // Tags: every tag anyone carries is offered; a chip is ON when everyone
   // carries it. Toggling an ON chip strips it from all, an OFF one adds it
@@ -1385,6 +1389,22 @@ export function NodeInspector({
         }
         onChange={(next) => patch({ date: next })}
       />
+
+      {allTasks ? (
+        <DateSection
+          date={startDate.mixed ? undefined : startDate.value}
+          clearable={datas.some((d) => !!d.startDate)}
+          what="Start"
+          caption="Start"
+          clearLabel="Clear start date"
+          label={
+            startDate.mixed
+              ? "Mixed — pick one start for all"
+              : "When work starts. Laid out by date, the task runs from here to its due date."
+          }
+          onChange={(next) => patch({ startDate: next })}
+        />
+      ) : null}
 
       {single && noAnnotations ? (
         <InspectorSection caption="Link">

@@ -137,6 +137,11 @@ const CONTRACT_EXPORTS = [
   "taskLintRules",
   "taskReportMarkdown",
   "tasksCsv",
+  // roadmap
+  "roadmapAxisOf",
+  "roadmapLayout",
+  "roadmapTicks",
+  "settleRoadmap",
   // coverage
   "keyCoverage",
   "marginalGains",

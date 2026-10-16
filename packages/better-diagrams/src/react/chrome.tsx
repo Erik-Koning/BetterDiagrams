@@ -480,11 +480,14 @@ export function VersionTagChip({
  */
 export function DateChip({
   date,
+  start,
   inline = false,
   prefix,
   overdue = false,
 }: {
   date?: DiagramDate;
+  /** When a task's work starts: the chip reads as the range, start to `date`. */
+  start?: DiagramDate;
   /** Flow beside a label instead of stacking under it. */
   inline?: boolean;
   /** Wording for the tooltip, e.g. "Due". Defaults to a bare date. */
@@ -497,13 +500,14 @@ export function DateChip({
 }) {
   if (!date) return null;
   const full = formatDiagramDate(date, { year: "always" });
-  const label = prefix ? `${prefix} ${full}` : full;
+  const ranged = !!start && start <= date;
+  const label = `${ranged ? `Starts ${formatDiagramDate(start, { year: "always" })} · ` : ""}${prefix ? `${prefix} ${full}` : full}`;
   return (
     <span
       className={`as-date${inline ? " as-date--inline" : ""}${overdue ? " as-date--overdue" : ""}`}
       title={overdue ? `${label} — overdue` : label}
     >
-      {formatDiagramDate(date)}
+      {ranged ? `${formatDiagramDate(start)} – ${formatDiagramDate(date)}` : formatDiagramDate(date)}
     </span>
   );
 }

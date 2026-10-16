@@ -29,6 +29,12 @@ This changelog starts with the editing API (October 2026). For what changed betw
   `createCompleter`, `RouteError`. `@anthropic-ai/sdk` and `openai` are optional peer
   dependencies; `complete` plugs in any other model call.
 - The **Adjust with AI** chat, and wrapped cards that show all of their text.
+- **Roadmaps**: Arrange → **By date** lays a plan out on a calendar — `"roadmap"` joins
+  `ARRANGE_MODES`, and `settings.roadmap` (`RoadmapAxis`) stores the time axis. Tasks take a
+  `startDate` and run as bars from it to their due date; dragging a card sideways reschedules it.
+  `settleRoadmap`, `roadmapLayout`, `roadmapAxisOf` and `roadmapTicks` do the same outside the
+  editor, and `autoLayout` dispatches to it.
+- The `task-start-after-due` plan check, and a start date column in tracker CSV imports.
 
 ### Changed
 
@@ -40,6 +46,7 @@ This changelog starts with the editing API (October 2026). For what changed betw
   `ExporterDef.run` always allowed.
 - `htmlExplorerData` moved module internally; it is still exported from the root entry.
 - `engines.node` is now `>=22`.
+- `tasksCsv` has a `start` column, before `due`.
 
 ### Fixed
 

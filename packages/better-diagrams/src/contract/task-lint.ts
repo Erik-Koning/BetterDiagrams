@@ -82,6 +82,17 @@ export function taskLintRules(opts: TaskLintOptions = {}): Record<string, LintRu
       },
     },
 
+    "task-start-after-due": {
+      label: "Starts after it's due",
+      description: "A task whose start date is later than its due date — one of the two is wrong. A roadmap draws it from its due date alone.",
+      severity: "warning",
+      check(t) {
+        return openTasks(t)
+          .filter((n) => n.startDate && n.date && n.startDate > n.date && !lintIgnored(n, "task-start-after-due"))
+          .map((n) => ({ message: `"${n.label}" starts ${n.startDate} but is due ${n.date}`, nodeIds: [n.id] }));
+      },
+    },
+
     "task-unassigned": {
       label: "Unassigned task",
       description: "Open work nobody holds. Checked once the plan assigns anyone.",

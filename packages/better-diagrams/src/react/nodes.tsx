@@ -443,7 +443,7 @@ export const ShapeNode = memo(function ShapeNode({
   // A record keeps its one-line description above its rows, wrapped or not
   // (see `wrappedNodeHeight`).
   const textBelow = !!data.wrap && !data.fields?.length;
-  const dateChip = <DateChip date={data.date} prefix={isWork ? "Due" : "Lands"} overdue={overdue} />;
+  const dateChip = <DateChip date={data.date} start={data.startDate} prefix={isWork ? "Due" : "Lands"} overdue={overdue} />;
 
   const className = [
     "as-node",

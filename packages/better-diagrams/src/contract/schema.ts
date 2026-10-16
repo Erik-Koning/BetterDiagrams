@@ -418,8 +418,26 @@ export type GroupContents = (typeof GROUP_CONTENTS)[number];
  * "untangle" spends more effort on the lines: crossings are minimised over
  * repeated sweeps, a line that spans several ranks is given a channel of its
  * own so it never runs through a box in between, and nodes are nudged level
- * with what they connect to so lines run straight. See `DiagramSettings`.
+ * with what they connect to so lines run straight. "roadmap" lays a plan
+ * out by date instead (see `roadmap.ts`): left to right is time, a task is a
+ * bar from its `startDate` to its due `date`, and every edit re-lays it, so
+ * the dates stay the only record of when. See `DiagramSettings`.
  */
+export const ARRANGE_MODES = ["flow", "untangle", "roadmap"] as const;
+export type ArrangeMode = (typeof ARRANGE_MODES)[number];
+
+/** Where a roadmap's time axis starts and how wide a day is: x = (day − from) × dayWidth. */
+export interface RoadmapAxis {
+  /** The day at x = 0, `YYYY-MM-DD`. */
+  from: DiagramDate;
+  /** Canvas pixels per day, a whole number. */
+  dayWidth: number;
+}
+
+/** The narrowest and widest day a roadmap is drawn at — a decade still fits, a week isn't absurd. */
+export const MIN_DAY_WIDTH = 1;
+export const MAX_DAY_WIDTH = 40;
+
 /** An open task's workflow stage; absent is "to do", and done is the corner check. */
 export const TASK_STAGES = ["in-progress", "in-review"] as const;
 export type TaskStage = (typeof TASK_STAGES)[number];
@@ -427,9 +445,6 @@ export type TaskStage = (typeof TASK_STAGES)[number];
 /** A task's priority, most urgent first. */
 export const TASK_PRIORITIES = ["p0", "p1", "p2", "p3"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
-
-export const ARRANGE_MODES = ["flow", "untangle"] as const;
-export type ArrangeMode = (typeof ARRANGE_MODES)[number];
 
 /**
  * How a relationship's cardinality is drawn at each end, document-wide.
@@ -622,8 +637,15 @@ export interface DiagramNode {
    * When this element lands (or landed): `YYYY-MM-DD`. Rendered as a small
    * outlined chip on the node, and it is what the timeline scrubber runs on —
    * absent means "always there", present at every point on the timeline.
+   * On a task it is the due date.
    */
   date?: DiagramDate;
+  /**
+   * Tasks only: when work starts, `YYYY-MM-DD`. With `date` it makes the
+   * task a bar on a roadmap (`settings.arrange: "roadmap"`); the timeline
+   * scrubber ignores it.
+   */
+  startDate?: DiagramDate;
   /** Pinned in place — the editor refuses to drag or resize it. */
   locked?: boolean;
   /**
@@ -778,6 +800,13 @@ export interface DiagramSettings {
    * next Tidy keeps arranging the way the document says.
    */
   arrange?: ArrangeMode;
+  /**
+   * The time axis a roadmap is laid out on — see `RoadmapAxis`. Fitted to
+   * the plan's dates when it is first laid out by date, or tidied, and kept
+   * through every other edit so the canvas never jumps. Left behind when the
+   * document stops being a roadmap.
+   */
+  roadmap?: RoadmapAxis;
   /** How cardinality is drawn — see `NOTATIONS`. Absent means "both". */
   notation?: Notation;
   /**
@@ -879,6 +908,7 @@ export const TEMPLATE_KEYS: readonly string[] = Object.keys(TEMPLATE_KEY_MAP);
 const SETTINGS_KEY_MAP: Record<keyof DiagramSettings, true> = {
   groupContents: true,
   arrange: true,
+  roadmap: true,
   notation: true,
   capacity: true,
 };
@@ -917,6 +947,7 @@ const NODE_KEY_MAP: Record<keyof DiagramNode, true> = {
   capacity: true,
   status: true,
   date: true,
+  startDate: true,
   locked: true,
   plain: true,
   collapsed: true,
@@ -1123,7 +1154,7 @@ Rules:
 }
 
 /** What `focus: "tasks"` appends: the brief for a task graph. */
-const TASK_FOCUS_RULES = `TASK FLOW: this diagram is a work plan, not an architecture. Make every work item a "task" node (no zones, no services) and connect prerequisites with ordinary edges pointing at the task they unblock, so chains read left to right. Use "relation":"dependency" only for a link to a task far away in the plan that would clutter the picture as a line. Group tasks with a "group" node for a phase, sprint or epic when the user describes one (give a sprint a "capacity"), and mark checkpoints — a release, a sign-off — with a "milestone" node fed by the tasks it needs. Example node: {"id":"login","label":"Build login page","kind":"task","description":"OAuth + magic link","storyPoints":3,"assignees":["Ana"]}.`;
+const TASK_FOCUS_RULES = `TASK FLOW: this diagram is a work plan, not an architecture. Make every work item a "task" node (no zones, no services) and connect prerequisites with ordinary edges pointing at the task they unblock, so chains read left to right. Use "relation":"dependency" only for a link to a task far away in the plan that would clutter the picture as a line. Group tasks with a "group" node for a phase, sprint or epic when the user describes one (give a sprint a "capacity"), and mark checkpoints — a release, a sign-off — with a "milestone" node fed by the tasks it needs. When the user gives dates, a task's "date" is its due date and "startDate" when work begins (both YYYY-MM-DD); for a roadmap or timeline, set settings {"arrange":"roadmap"} and the plan is laid out by date. Example node: {"id":"login","label":"Build login page","kind":"task","description":"OAuth + magic link","storyPoints":3,"assignees":["Ana"]}.`;
 
 /**
  * The prompt for the built-in vocabulary, with no registry extensions.
@@ -1225,6 +1256,8 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
       // timeline orders by string comparison, and one malformed value would
       // sort somewhere arbitrary instead of failing visibly.
       const date = normalizeDate(n.date);
+      // When work starts means something only on a task.
+      const startDate = kind === TASK_KIND ? normalizeDate(n.startDate) : undefined;
       const fields = validateFields(n.fields);
       const description = n.description ? String(n.description) : "";
       const fontSize = positive(n.fontSize, DEFAULT_FONT_SIZE);
@@ -1277,6 +1310,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         // A sprint's or phase's capacity — a frame concept, like collapse.
         ...(containerSet.has(kind) && storyPointsOf(n.capacity) ? { capacity: storyPointsOf(n.capacity) } : {}),
         ...(date ? { date } : {}),
+        ...(startDate ? { startDate } : {}),
         // `active` is the default — stripping it keeps old documents
         // byte-identical through a load/save round-trip.
         ...(NODE_STATUSES.includes(n.status as NodeStatus) && n.status !== "active"
@@ -1508,6 +1542,14 @@ function validateSettings(raw: unknown): DiagramSettings | undefined {
   }
   if (ARRANGE_MODES.includes(r.arrange as ArrangeMode)) {
     out.arrange = r.arrange as ArrangeMode;
+  }
+  if (r.roadmap && typeof r.roadmap === "object" && !Array.isArray(r.roadmap)) {
+    const { from, dayWidth } = r.roadmap as Record<string, unknown>;
+    const day = normalizeDate(from);
+    const width = typeof dayWidth === "number" ? dayWidth : typeof dayWidth === "string" ? Number(dayWidth) : NaN;
+    if (day && Number.isFinite(width)) {
+      out.roadmap = { from: day, dayWidth: Math.min(MAX_DAY_WIDTH, Math.max(MIN_DAY_WIDTH, Math.round(width))) };
+    }
   }
   if (NOTATIONS.includes(r.notation as Notation)) {
     out.notation = r.notation as Notation;
@@ -2826,6 +2868,7 @@ export type DiagramNodeData = {
   locked?: boolean;
   collapsed?: boolean;
   date?: DiagramDate;
+  startDate?: DiagramDate;
   textAlign?: NodeTextAlign;
   textVAlign?: NodeTextVAlign;
   wrap?: boolean;
@@ -3274,6 +3317,7 @@ export function toReactFlow(
           ...(n.capacity !== undefined ? { capacity: n.capacity } : {}),
           ...(n.status ? { status: n.status } : {}),
           ...(n.date ? { date: n.date } : {}),
+          ...(n.startDate ? { startDate: n.startDate } : {}),
           ...(n.plain ? { plain: true } : {}),
           ...(n.locked ? { locked: true } : {}),
           ...(n.collapsed ? { collapsed: true } : {}),
@@ -3524,6 +3568,7 @@ export function fromReactFlow(
       capacity: n.data?.capacity,
       status: n.data?.status,
       date: n.data?.date,
+      startDate: n.data?.startDate,
       plain: n.data?.plain,
       locked: n.data?.locked,
       collapsed,

@@ -7,8 +7,8 @@
  * labels…") all export issues as a spreadsheet with their own column names.
  * This reads any of them by recognising the columns, not the tracker:
  *
- *   id, title, description, assignees, story points, status, priority, due
- *   date, labels, url, a sprint / epic / parent to group by, and links —
+ *   id, title, description, assignees, story points, status, priority, start
+ *   and due dates, labels, url, a sprint / epic / parent to group by, and links —
  *   "blocked by" / "depends on" (this waits on those) and "blocks" (those
  *   wait on this), which become prerequisite arrows.
  *
@@ -75,6 +75,7 @@ const COLUMNS: Record<string, RegExp> = {
   status: /^(status|state|status category)$/,
   priority: /^(priority)$/,
   due: /^(due date|due|due on|target date|deadline)$/,
+  start: /^(start date|start|start on|starts|begin date|planned start|custom field \(start date\))$/,
   labels: /^(labels?|tags?)$/,
   url: /^(url|link|html url|issue url)$/,
   group: /^(sprint|cycle|epic|epic link|epic name|parent|parent summary|milestone|phase|project milestone|custom field \(epic link\)|custom field \(epic name\))$/,
@@ -217,6 +218,8 @@ export function importTaskCsv(text: string, opts: TaskCsvOptions = {}): TaskCsvI
     const status = first(row, "status");
     const due = dateOf(first(row, "due"));
     if (first(row, "due") && !due) warnings.push({ message: `Couldn't read the due date "${first(row, "due")}"`, line });
+    const start = dateOf(first(row, "start"));
+    if (first(row, "start") && !start) warnings.push({ message: `Couldn't read the start date "${first(row, "start")}"`, line });
     nodes.push({
       id,
       label: title,
@@ -230,6 +233,7 @@ export function importTaskCsv(text: string, opts: TaskCsvOptions = {}): TaskCsvI
       ...STAGE_OF(status),
       ...(PRIORITY_OF(first(row, "priority")) ? { priority: PRIORITY_OF(first(row, "priority")) } : {}),
       ...(due ? { date: due } : {}),
+      ...(start ? { startDate: start } : {}),
       ...(cells(row, "labels").length ? { tags: cells(row, "labels").flatMap(listOf) } : {}),
       ...(first(row, "url") ? { url: first(row, "url") } : {}),
     });

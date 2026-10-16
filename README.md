@@ -1468,7 +1468,7 @@ The schema and editor cover C4's notational essentials:
 | **Lock** | `node.locked` / zone lock pins an element against drags and resizes |
 | **Search** | ⌘K, matches id/label/description/kind/tags, Enter cycles and centres |
 | **Snap & align** | Arrange: snap-to-grid, align left/centre/right/top/middle/bottom (2+ selected), distribute (3+), clear routes |
-| **Arrange modes** | Arrange: *Left to right* (default, proximity-based) or *Untangle lines* (fewest crossings, lanes for long lines); stored as `settings.arrange`, applied on pick, one `⌘Z` undoes both |
+| **Arrange modes** | Arrange: *Left to right* (default, proximity-based), *Untangle lines* (fewest crossings, lanes for long lines) or, for a dated plan, *By date* (a roadmap); stored as `settings.arrange`, applied on pick, one `⌘Z` undoes both |
 | **Notation** — symbols and numbers / crow's foot / UML | View: how a line's ends draw cardinality; `settings.notation`. UML shows the end glyphs a crow's-foot symbol would replace |
 | **Enumerations** | Kind `enum`: a record whose rows are the allowed values, «enumeration» style; Insert ▸ Enumeration |
 | **Tasks** | Kind `task`: a ticket with `storyPoints`, `assignees` and a `done` check; prerequisite and dependency lines; a People legend. See [Task graphs](#task-graphs) |
@@ -1496,6 +1496,7 @@ three optional fields, all stored only when set:
   "done": true,                           // only when finished
   "stage": "in-progress",                 // or "in-review": where open work stands
   "priority": "p1",                       // p0 (most urgent) … p3
+  "startDate": "2026-06-01",              // when work starts — a bar on a roadmap
   "date": "2026-06-15"                    // the due date
 }
 ```
@@ -1554,6 +1555,10 @@ offers everyone already in the document, and you can type a new name.
 - **Due dates.** A task's `date` is its due date, labelled "Due". It turns amber once it passes
   with the task still open. Unlike an architecture element's date, it doesn't put the task on
   the timeline: work due in November is on the plan today.
+- **Start dates.** A task's `startDate` is when work on it begins (the inspector's **Start**).
+  Its date chip then reads as the range, "Jun 1 – Jun 15", and laid out
+  [by date](#roadmap-a-plan-laid-out-by-date) the task is a bar from one to the other. Only tasks
+  have one; validation drops it anywhere else.
 - **Milestones.** `kind: "milestone"` is a rose diamond for a checkpoint such as a release or
   a sign-off. It shows **Reached** once everything feeding it is done. Until then, any task
   waiting on it is blocked, and a milestone whose date passes unreached is overdue.
@@ -1577,6 +1582,7 @@ offers everyone already in the document, and you can type a new name.
   - deadlocked tasks (a prerequisite loop)
   - overdue work
   - a task due before something it waits on
+  - a task that starts after it's due
   - unassigned tasks
   - unestimated tasks
   - a person over capacity
@@ -1588,7 +1594,7 @@ offers everyone already in the document, and you can type a new name.
 - **Import from a tracker.** Import a `.csv` or `.tsv` from Jira, Linear or GitHub, or paste
   one into the Welcome box. Columns are recognised by name:
   - summary or title, key, description;
-  - assignees, story points or estimate, status, priority, due date, labels;
+  - assignees, story points or estimate, status, priority, start date, due date, labels;
   - a sprint, cycle, epic or parent becomes a group;
   - "blocked by", "depends on" and "blocks", including Jira's issue-link columns, become
     prerequisite arrows.
@@ -1605,6 +1611,49 @@ today's date, and a page or editor left open past midnight re-counts on its own.
 
 **Tidy** ranks by prerequisites only. A dependency is a long-range link, so it doesn't pull its
 ends into neighbouring columns. Each task is spaced as its card plus its tabs.
+
+### Roadmap: a plan laid out by date
+
+**Arrange → By date** (offered once the plan has a date) turns the canvas into a roadmap: left
+to right is time. It is the third arrange mode, `settings.arrange: "roadmap"`, so the file
+reopens as a roadmap and its exports draw one.
+
+```jsonc
+{
+  "settings": {
+    "arrange": "roadmap",
+    "roadmap": { "from": "2026-09-01", "dayWidth": 16 }   // x = (day − from) × dayWidth
+  }
+}
+```
+
+- **Bars.** A task with a `startDate` runs from the start of that day to the end of its due
+  day, never narrower than its name needs (it then keeps its due edge). A task with only a due
+  date is a standard card ending on its due day; a milestone sits centred on its day.
+- **Unscheduled.** Work with no date waits in a column of its own, left of the first date.
+  Drag a card out of it onto the calendar and it takes the date it lands on.
+- **Bands.** Each group fits round its work. Groups that follow one another — sprints — share a
+  row; groups that overlap — workstreams — stack, in the order the document lists them. Inside
+  a group, work packs into as few rows as it can, earliest first.
+- **The dates are the record.** Positions are derived, so every edit re-lays the plan in the
+  same undo step: a date typed in the inspector moves the card, a card dragged sideways changes
+  its dates by whole days (a group dragged moves every dated card inside it), and a quick-add
+  arrow to the right starts the next task the day after this one is due, as long as this one.
+  Dropping a card in another group moves it there; a card dragged along its own group's row
+  stays in it. Grid snapping is off, so every day can be reached.
+- **The calendar.** A ruler along the top names the weeks, months or quarters as you zoom,
+  with a line where each begins and an amber line at today. Pictures (PNG, SVG, PDF, HTML) carry
+  the ruler, the lines and today's.
+- **What it leaves alone.** Zones, boxes outside the plan, and a card's own drill-in canvas
+  keep their places; a Tidy moves the boxes outside the plan below it if it would cover them.
+- **The axis** is fitted to the plan's dates when you pick By date and on every Tidy, and kept
+  through every other edit, so the canvas never jumps. Picking another mode forgets it and gives
+  every task back its standard width.
+
+Outside the editor, `settleRoadmap(doc)` re-lays a roadmap after an edit to its dates (a no-op on
+any other document), `roadmapLayout` lays one out on demand, and `roadmapTicks` names the units a
+ruler would show; `autoLayout` dispatches to it as it does to the other modes.
+`templates/examples/roadmap.json` is a worked example.
 
 **Task flow preset.** The Welcome screen's type picker has a third option, *Task flow*. It's an
 architecture document set up as a plan: the copy button gives a prompt that steers the model
@@ -1926,9 +1975,10 @@ render "the architecture as of 2026-06-15" without React.
 ## Layout, clipboard, ghosts
 
 **Tidy** arranges nodes within each zone and group using a layered (Sugiyama-style) layout,
-growing containers to fit but never moving them. Two **arrange modes** live in the Arrange menu
+growing containers to fit but never moving them. The **arrange modes** live in the Arrange menu
 and are stored in the document as `settings.arrange`, so every later Tidy keeps arranging the
-same way. *Left to right* (the default, `"flow"`) is proximity-based: each node sits one rank
+same way. (The third, *By date*, lays a plan out on a calendar instead — see
+[Roadmap](#roadmap-a-plan-laid-out-by-date).) *Left to right* (the default, `"flow"`) is proximity-based: each node sits one rank
 past what feeds it and rank-mates are ordered once by where their predecessors sit — compact and
 quick. *Untangle lines* (`"untangle"`) spends its effort on the lines instead: ranks are re-ordered
 by repeated sweeps in both directions until as few lines as possible cross, a line that skips a

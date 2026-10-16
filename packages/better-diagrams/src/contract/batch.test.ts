@@ -749,7 +749,17 @@ describe("settings.groupContents — the document-wide fold", () => {
     expect("settings" in validateTemplate({ nodes: [], settings: "hide" })).toBe(false);
     // Strict, so the JSON editor can lint it.
     expect(TEMPLATE_KEYS).toContain("settings");
-    expect(SETTINGS_KEYS).toEqual(["groupContents", "arrange", "notation", "capacity"]);
+    expect(SETTINGS_KEYS).toEqual(["groupContents", "arrange", "roadmap", "notation", "capacity"]);
+  });
+
+  it("keeps a roadmap's axis whole and in range, or not at all", () => {
+    expect(doc({ arrange: "roadmap", roadmap: { from: "2026-3-1", dayWidth: "8.4" } }).settings).toEqual({
+      arrange: "roadmap",
+      roadmap: { from: "2026-03-01", dayWidth: 8 },
+    });
+    expect(doc({ roadmap: { from: "2026-03-01", dayWidth: 900 } }).settings?.roadmap?.dayWidth).toBe(40);
+    expect("settings" in doc({ roadmap: { from: "soon", dayWidth: 8 } })).toBe(false);
+    expect("settings" in doc({ roadmap: { from: "2026-03-01" } })).toBe(false);
   });
 
   it("folds every group with contents, never an empty frame", () => {

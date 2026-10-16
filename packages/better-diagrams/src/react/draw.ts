@@ -85,9 +85,11 @@ import {
   taskAssignees,
   taskRollups,
   taskWorkload,
+  todayIso,
   workDone,
   type TaskRollup,
 } from "../contract/tasks";
+import { dayX, isRoadmap, roadmapAxisOf, roadmapTicks, unscheduledEdge, type RoadmapAxis } from "../contract/roadmap";
 import { kindDef, iconPaths, providerDef, relationDef, zoneInk, type ResolvedRegistry } from "./registry-types";
 import { resolveStudioMode, type StudioMode } from "./theme";
 
@@ -122,6 +124,13 @@ const LEGEND_INSET = 16;
 /** Between the infra key and the relationships key when the box shows both. */
 const LEGEND_SECTION_GAP = 8;
 const TITLE_BLOCK_H = 46;
+/**
+ * A roadmap's ruler — the strip naming its weeks, months or quarters — and
+ * the clear space between it and the drawing. Reserved below the title and
+ * legend's headroom, so it never shares a row with either.
+ */
+const RULER_H = 26;
+const RULER_GAP = 10;
 
 /**
  * A note's line pitch, as a factor of its own font size: 1.4 is what
@@ -824,6 +833,88 @@ function zoneOutlineAbs(zone: DiagramZone): Array<[number, number]> | null {
   return outline.map(([nx, ny]): [number, number] => [zone.x + nx * zone.w, zone.y + ny * zone.h]);
 }
 
+// ─── A roadmap's ruler ───────────────────────────────────────────────────────
+
+/**
+ * The calendar a roadmap is read against, in the page's own coordinates:
+ * the ruler between `top` and the drawing, and a line from it to `bottom`
+ * where each unit begins, stronger where a larger one does. Today's line is
+ * the date the picture was made, as overdue is.
+ */
+function pushRoadmapRuler(
+  cmds: DrawCmd[],
+  axis: RoadmapAxis,
+  at: {
+    x0: number;
+    x1: number;
+    top: number;
+    bottom: number;
+    unscheduled: number | null;
+    palette: ExportPalette;
+    font: "mono" | "sans";
+  },
+) {
+  const { palette } = at;
+  const base = at.top + RULER_H;
+  cmds.push({
+    op: "path",
+    d: `M ${at.x0} ${at.top} H ${at.x1} V ${base} H ${at.x0} Z`,
+    fill: palette.surface,
+    fillAlpha: 0.7,
+  });
+  cmds.push({ op: "path", d: `M ${at.x0} ${base + 0.5} H ${at.x1}`, stroke: palette.border, strokeWidth: 1 });
+
+  // The calendar starts where the dates do: nothing undated is on it.
+  const x0 = at.unscheduled === null ? at.x0 : Math.max(at.x0, at.unscheduled);
+  const { ticks } = roadmapTicks(axis, x0, at.x1);
+  // A label that would run into the one before it is left out, not printed over it.
+  const room = (text: string, major: boolean) => approxTextWidth(text, 10, at.font) * (major ? 1.06 : 1) + 12;
+  let taken = -Infinity;
+  ticks.forEach((tick, i) => {
+    const inside = tick.x >= x0;
+    if (inside) {
+      const x = Math.round(tick.x) + 0.5;
+      cmds.push({
+        op: "path",
+        d: `M ${x} ${at.top} V ${at.bottom}`,
+        stroke: palette.border,
+        strokeAlpha: tick.major ? 0.9 : 0.45,
+        strokeWidth: 1,
+      });
+    } else {
+      const next = ticks[i + 1];
+      if (next && next.x - x0 < room(tick.full, tick.major)) return;
+    }
+    const left = inside ? tick.x : x0;
+    // Whichever label comes first names the year.
+    const text = taken === -Infinity ? tick.full : tick.label;
+    if (left < taken) return;
+    taken = left + room(text, tick.major);
+    cmds.push({
+      op: "text",
+      x: left + 6,
+      y: at.top + 13,
+      text,
+      size: 10,
+      font: at.font,
+      weight: tick.major ? 600 : 500,
+      color: tick.major ? palette.text : palette.textDim,
+    });
+  });
+
+  if (at.unscheduled !== null && at.unscheduled > at.x0) {
+    cmds.push({ op: "text", x: at.unscheduled - 6, y: at.top + 13, text: "Unscheduled", size: 10, font: at.font, weight: 500, color: palette.textFaint, anchor: "end" });
+  }
+
+  const today = todayIso();
+  const now = dayX(axis, today) + axis.dayWidth / 2;
+  if (now >= at.x0 && now <= at.x1) {
+    const ink = palette.overdue ?? "#f59e0b";
+    cmds.push({ op: "path", d: `M ${now} ${at.top} V ${at.bottom}`, stroke: ink, strokeAlpha: 0.75, strokeWidth: 1.5 });
+    cmds.push({ op: "text", x: now + 4, y: base - 3, text: "Today", size: 9, font: at.font, weight: 600, color: ink });
+  }
+}
+
 // ─── The emitter ─────────────────────────────────────────────────────────────
 
 export interface Emitted {
@@ -965,6 +1056,7 @@ export function emitTemplate(
   // verified sitting on the example's region border and its "Cloud Region"
   // header. Growing the page is the only way an export carries all of it.
   const tag = template.meta?.versionTag ? String(template.meta.versionTag) : "";
+  const roadmapAxis = isRoadmap(template) ? roadmapAxisOf(template) : null;
   const tagPos = template.meta?.versionTagPosition ?? "top-left";
   const tagW = tag ? approxTextWidth(tag, 10, skin.chipFont) + 20 : 0;
   // One box for both keys — the infra providers, then the relationship kinds
@@ -992,7 +1084,7 @@ export function emitTemplate(
     // its key over whatever was in the top-right corner.
     legendH ? LEGEND_INSET * 2 + legendH : 0,
     tag && tagPos.startsWith("top") ? 10 + tagOffsetY + 20 + 8 : 0,
-  );
+  ) + (roadmapAxis ? RULER_H + RULER_GAP : 0);
   const padRight =
     Math.max(PAD, tag && tagPos.endsWith("right") ? tagW + 20 : 0) +
     (legendSections ? LEGEND_W + LEGEND_INSET : 0);
@@ -1078,6 +1170,21 @@ export function emitTemplate(
     color: palette.gridDot,
   });
 
+  // A roadmap's calendar: the ruler above the drawing, a line down the page
+  // where each unit begins, and today's — all behind the zones and cards, as
+  // on the canvas, and untagged, so the HTML page's scrubber never fades it.
+  if (roadmapAxis) {
+    pushRoadmapRuler(cmds, roadmapAxis, {
+      x0: b.minX - PAD,
+      x1: b.maxX + PAD,
+      top: b.minY - RULER_GAP - RULER_H,
+      bottom: b.maxY + PAD,
+      unscheduled: unscheduledEdge(template, roadmapAxis, registry.containerKinds),
+      palette,
+      font: skin.chipFont,
+    });
+  }
+
   // Zones, back to front. The ink (override or provider colour) mirrors what
   // the canvas paints — see zoneInk; the fill is the same colour tinted.
   for (const zone of zones) {
@@ -1150,14 +1257,17 @@ export function emitTemplate(
   // width formula reads the mode's own face so the chip still fits its text.
   const DATE_SIZE = skin.marketing ? 10 : 9;
   const DATE_PAD = skin.marketing ? 7 : 6;
-  const dateChipW = (date: string) =>
-    approxTextWidth(exportDate(date), DATE_SIZE, skin.chipFont) + DATE_PAD * 2;
-  const pushDateChip = (date: string, x: number, y: number, overdue = false) => {
-    const text = exportDate(date);
+  // A task with a start reads as its range, start to due, as on the canvas.
+  const chipText = (date: string, start?: string) =>
+    start && start <= date ? `${exportDate(start)} – ${exportDate(date)}` : exportDate(date);
+  const dateChipW = (date: string, start?: string) =>
+    approxTextWidth(chipText(date, start), DATE_SIZE, skin.chipFont) + DATE_PAD * 2;
+  const pushDateChip = (date: string, x: number, y: number, overdue = false, start?: string) => {
+    const text = chipText(date, start);
     // Overdue — past date, element still pre-active — is the chip's one loud
     // moment: amber border and text, same as the editor.
     const ink = overdue ? (palette.overdue ?? "#f59e0b") : palette.textDim;
-    const d = roundedRectPath(x, y, dateChipW(date), 15, skin.marketing ? 7.5 : 4);
+    const d = roundedRectPath(x, y, dateChipW(date, start), 15, skin.marketing ? 7.5 : 4);
     cmds.push({ op: "path", d, fill: palette.surface, fillAlpha: 0.7 });
     cmds.push({ op: "path", d, stroke: ink, strokeAlpha: overdue ? 0.65 : 0.4, strokeWidth: 1 });
     cmds.push({ op: "text", x: x + DATE_PAD, y: y + 11, text, size: DATE_SIZE, font: skin.chipFont, weight: 500, color: ink });
@@ -2004,10 +2114,10 @@ export function emitTemplate(
       if (live) {
         const date = node.date;
         const late = overdue.has(node.id);
-        liveParts.push({ name: "due", on: !late, draw: () => pushDateChip(date, descX, below, false) });
-        liveParts.push({ name: "due-late", on: late, draw: () => pushDateChip(date, descX, below, true) });
+        liveParts.push({ name: "due", on: !late, draw: () => pushDateChip(date, descX, below, false, node.startDate) });
+        liveParts.push({ name: "due-late", on: late, draw: () => pushDateChip(date, descX, below, true, node.startDate) });
       } else {
-        pushDateChip(node.date, descX, below, isWork ? overdue.has(node.id) : isOverdue(node.date, node.status));
+        pushDateChip(node.date, descX, below, isWork ? overdue.has(node.id) : isOverdue(node.date, node.status), node.startDate);
       }
       dateBottom = below + DATE_CHIP_H;
     }

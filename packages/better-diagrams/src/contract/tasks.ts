@@ -84,6 +84,8 @@ export interface TaskDocument {
     priority?: string;
     /** A task's due date / a milestone's date, `YYYY-MM-DD`. */
     date?: string;
+    /** When a task's work starts, `YYYY-MM-DD`. */
+    startDate?: string;
     /** A container's capacity in story points. */
     capacity?: number;
   }>;
