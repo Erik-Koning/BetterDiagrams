@@ -33,13 +33,17 @@ jobs:
 
       # The peer range is ">=18": run the same suite on the next major. An
       # override swaps React for every workspace at once, so the tests and
-      # testing-library share one copy.
+      # testing-library share one copy. Node 22's npm (10) keeps a lockfile's
+      # versions over a new override ("up to date"), so this job resolves
+      # afresh without one — and stops if the package doesn't then see 19.
       - name: Switch to React 19
         if: matrix.react == '19'
         run: |
           npm pkg set overrides.react=^19.2.0 overrides.react-dom=^19.2.0 'overrides.@types/react=^19.2.0' 'overrides.@types/react-dom=^19.2.0'
+          rm package-lock.json
           npm install --no-audit --no-fund
-          node -e "console.log('react', require('react/package.json').version)"
+          cd packages/better-diagrams
+          node -e "for (const p of ['react', 'react-dom']) { const v = require(p + '/package.json').version; console.log(p, v); if (!v.startsWith('19.')) process.exit(1); }"
 
       - run: npm run typecheck
       # The unit suite has timing-sensitive cases that can trip on a busy
