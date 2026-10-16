@@ -6,7 +6,7 @@
  * this split the two modules form a runtime import cycle.
  */
 import type { IconPaths } from "./icons";
-import type { DiagramTemplate, IconName, NodeKind } from "../contract/schema";
+import type { DiagramTemplate, IconName, NodeKind, ValidateOptions } from "../contract/schema";
 import { DEFAULT_ZONE_OPACITY } from "../contract/schema";
 import type { DiagramZone } from "../contract/zones";
 import type { LintRuleDef } from "../contract/lint";
@@ -303,4 +303,24 @@ export function zoneFill(
   if (!m) return ink; // non-hex ink (host-supplied provider colour) — use as-is
   const [r, g, b] = [m[1], m[2], m[3]].map((h) => Number.parseInt(h, 16));
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/**
+ * The validation options a registry implies: its kinds, icons, container and
+ * annotation kinds, and providers. Validate a document anywhere but the
+ * editor — a server, a pipeline, a test — with these, or a custom kind is
+ * "repaired" into a service and its frame styling dropped:
+ *
+ *   const opts = registryValidateOptions(createRegistry(myExtensions));
+ *   validateTemplateReport(doc, opts);
+ *   diagramJsonSchema(opts); // the JSON Schema that accepts the same kinds
+ */
+export function registryValidateOptions(registry: ResolvedRegistry): ValidateOptions {
+  return {
+    knownKinds: registry.kindOrder,
+    knownIcons: registry.iconNames,
+    containerKinds: registry.containerKinds,
+    annotationKinds: registry.annotationKinds,
+    knownProviders: registry.providerOrder,
+  };
 }

@@ -47,6 +47,13 @@ export interface CommitOptions {
 export interface History {
   canUndo: boolean;
   canRedo: boolean;
+  /**
+   * Whether there is a step to undo (or redo) right now. `canUndo` is the
+   * answer as of the last render; these read the live stacks, for callers
+   * outside render — an imperative handle asked straight after an edit.
+   */
+  hasUndo: () => boolean;
+  hasRedo: () => boolean;
   /** Record a new state. The state it replaces becomes the undo target. */
   commit: (snapshot: Snapshot, opts?: CommitOptions) => void;
   /** Step back; returns the state to apply, or null when there is none. */
@@ -189,9 +196,14 @@ export function useHistory(initial?: Snapshot): History {
     [rerender],
   );
 
+  const hasUndo = useCallback(() => past.current.length > 0, []);
+  const hasRedo = useCallback(() => future.current.length > 0, []);
+
   return {
     canUndo: past.current.length > 0,
     canRedo: future.current.length > 0,
+    hasUndo,
+    hasRedo,
     commit,
     undo,
     redo,

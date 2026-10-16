@@ -21,7 +21,8 @@ import { json, jsonParseLinter } from "@codemirror/lang-json";
 import { linter, lintGutter } from "@codemirror/lint";
 import { Compartment } from "@codemirror/state";
 import { tags } from "@lezer/highlight";
-import { docDiagnostics, type JsonDocLint } from "./schema-lint";
+import type { JsonDocLint } from "./schema-lint";
+import { docDiagnostics } from "./schema-lint-diagnostics";
 import { approximateJsonFix, repairJsonText } from "../contract/json-repair";
 
 export interface JsonCodeEditorProps {

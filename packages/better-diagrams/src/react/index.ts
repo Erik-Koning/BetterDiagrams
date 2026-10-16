@@ -12,6 +12,7 @@ export type {
   StudioHandle,
   StudioSelection,
   StudioSlotContext,
+  StudioUpdateOptions,
 } from "./ArchitectureStudio";
 export { DiffCanvas } from "./DiffCanvas";
 // The field grid on its own, for a host that opens it from chrome of its own.
@@ -19,7 +20,7 @@ export { FieldGridModal } from "./FieldGridModal";
 export type { FieldGridModalProps } from "./FieldGridModal";
 
 export { SequenceStudio } from "./sequence/SequenceStudio";
-export type { SequenceSelection, SequenceStudioProps } from "./sequence/SequenceStudio";
+export type { SequenceSelection, SequenceStudioHandle, SequenceStudioProps } from "./sequence/SequenceStudio";
 export {
   BUILTIN_SEQUENCE_EXPORTERS,
   renderSequenceToCanvas,
@@ -40,6 +41,7 @@ export {
   relationDef,
   zoneInk,
   zoneFill,
+  registryValidateOptions,
   FALLBACK_KIND,
   FALLBACK_PROVIDER,
 } from "./registry";
@@ -76,7 +78,7 @@ export {
 export type { ExportPalette, DrawCmd, DrawTag, Emitted } from "./draw";
 export { buildTimelineHtml, buildMultiViewHtml } from "./html-export";
 // What the page's search and relationship analysis read — pass as `explorer`.
-export { htmlExplorerData } from "./exporters";
+export { htmlExplorerData } from "./html-pipeline";
 export type { HtmlExplorerData, ExplorerDocument, ExplorerLevel } from "./html-explorer";
 // Transient route colours, for a host lighting its own found paths.
 export { transientPathColors } from "./path-view";

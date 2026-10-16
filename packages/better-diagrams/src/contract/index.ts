@@ -414,6 +414,30 @@ export type {
   ProxyGeneratorOptions,
 } from "./llm";
 
+// ── Editing the document ─────────────────────────────────────────────────────
+// Pure edits that keep every reference consistent (contract/edit.ts), the
+// validation repairs listed rather than applied silently, and the document as
+// a JSON Schema for editors, other languages and structured output.
+export {
+  uniqueId,
+  addNode,
+  updateNode,
+  renameNode,
+  removeNodes,
+  addEdge,
+  updateEdge,
+  removeEdges,
+  addZone,
+  updateZone,
+  removeZones,
+  removeElements,
+} from "./edit";
+export type { NodeInput, EdgeInput, ZoneInput, ElementUpdate, ElementIds, RemoveOptions } from "./edit";
+export { validateTemplateReport, VALIDATION_ISSUE_CODES } from "./validation-report";
+export type { ValidationIssue, ValidationIssueCode, ValidationReport } from "./validation-report";
+export { diagramJsonSchema } from "./json-schema";
+export type { JsonSchema, JsonSchemaOptions } from "./json-schema";
+
 // ── JSON repair ──────────────────────────────────────────────────────────────
 // The gentle healer behind parseLlmTemplate / parseLlmSequence, exported on
 // its own for pipelines that parse model replies or pasted JSON themselves.

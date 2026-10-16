@@ -11,13 +11,16 @@
  * grid after a drag.
  */
 import {
+  forwardRef,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
   type ReactNode,
+  type Ref,
 } from "react";
 import {
   Background,
@@ -174,6 +177,28 @@ interface DeletionPlan {
   notes: Set<string>;
 }
 
+/**
+ * The sequence editor's imperative handle — the document API the
+ * architecture editor's `StudioHandle` offers, for a sequence.
+ */
+export interface SequenceStudioHandle {
+  /** The document as it stands now — what `onChange` last reported. */
+  getTemplate: () => SequenceTemplate;
+  /**
+   * Edit the document from outside as ONE undo step: validated, redrawn and
+   * reported through `onChange` like an edit on the canvas. Pass the next
+   * document or a function of the current one (`removeMessages`,
+   * `moveMessage` and `moveParticipant` fit). Returns it as applied.
+   */
+  update: (edit: SequenceTemplate | ((current: SequenceTemplate) => SequenceTemplate)) => SequenceTemplate;
+  /** Step back through the undo history; false when there was nothing to undo. */
+  undo: () => boolean;
+  /** Step forward again; false when there was nothing to redo. */
+  redo: () => boolean;
+  canUndo: () => boolean;
+  canRedo: () => boolean;
+}
+
 export interface SequenceStudioProps {
   /** Controlled document. Provide with `onChange`. */
   value?: SequenceTemplate;
@@ -287,13 +312,13 @@ function decorate(nodes: SeqRFNode[]): Node[] {
   );
 }
 
-export function SequenceStudio(props: SequenceStudioProps) {
+export const SequenceStudio = forwardRef<SequenceStudioHandle, SequenceStudioProps>(function SequenceStudio(props, ref) {
   return (
     <ReactFlowProvider>
-      <SequenceInner {...props} />
+      <SequenceInner {...props} handleRef={ref} />
     </ReactFlowProvider>
   );
-}
+});
 
 function SequenceInner({
   value,
@@ -321,7 +346,8 @@ function SequenceInner({
   inspectorExtras,
   className,
   style,
-}: SequenceStudioProps) {
+  handleRef,
+}: SequenceStudioProps & { handleRef: Ref<SequenceStudioHandle> }) {
   const flow = useReactFlow();
   const registry = useMemo(() => createRegistry(), []);
 
@@ -377,6 +403,8 @@ function SequenceInner({
     reset: resetHistory,
     undo: undoHistory,
     redo: redoHistory,
+    hasUndo,
+    hasRedo,
   } = history;
 
   const showToast = useCallback((message: string) => {
@@ -442,13 +470,24 @@ function SequenceInner({
   );
 
   // Controlled mode: adopt external value changes, ignoring our own echoes.
+  // Within one file a host's change is an edit and lands as one undo step,
+  // so the person's own history survives it; a change of `activeFileId` is a
+  // different document and starts the history afresh — the architecture
+  // editor's rule.
+  const historyFileRef = useRef(activeFileId);
   useEffect(() => {
-    if (value === undefined) return;
-    const validated = validateSequence(value);
-    if (JSON.stringify(validated) === lastEmitted.current) return;
-    adopt(validated, { reset: true });
+    const fileChanged = activeFileId !== historyFileRef.current;
+    historyFileRef.current = activeFileId;
+    const validated = value === undefined ? null : validateSequence(value);
+    if (!validated || JSON.stringify(validated) === lastEmitted.current) {
+      if (fileChanged) {
+        resetHistory({ nodes: flow.getNodes(), edges: flow.getEdges(), template: templateRef.current });
+      }
+      return;
+    }
+    adopt(validated, fileChanged ? { reset: true } : { record: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
+  }, [value, activeFileId]);
 
   // ── Gesture endings ───────────────────────────────────────────────────────
 
@@ -1079,8 +1118,32 @@ function SequenceInner({
     [setNodes, setEdges, onChange],
   );
 
-  const doUndo = useCallback(() => applySnapshot(undoHistory()), [applySnapshot, undoHistory]);
-  const doRedo = useCallback(() => applySnapshot(redoHistory()), [applySnapshot, redoHistory]);
+  const doUndo = useCallback(() => {
+    const snapshot = undoHistory();
+    applySnapshot(snapshot);
+    return !!snapshot;
+  }, [applySnapshot, undoHistory]);
+  const doRedo = useCallback(() => {
+    const snapshot = redoHistory();
+    applySnapshot(snapshot);
+    return !!snapshot;
+  }, [applySnapshot, redoHistory]);
+
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      getTemplate: () => templateRef.current,
+      update: (edit) => {
+        applyTemplate(typeof edit === "function" ? edit(templateRef.current) : edit);
+        return templateRef.current;
+      },
+      undo: doUndo,
+      redo: doRedo,
+      canUndo: hasUndo,
+      canRedo: hasRedo,
+    }),
+    [applyTemplate, doUndo, doRedo, hasUndo, hasRedo],
+  );
 
   const handleSave = useCallback(async () => {
     if (!onSave) return;

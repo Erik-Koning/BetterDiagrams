@@ -789,6 +789,12 @@ export interface DiagramSettings {
 }
 
 export interface DiagramTemplate {
+  /**
+   * A JSON Schema reference for the editor a file is typed in — a path or
+   * URL to the package's `schema.json` — so it autocompletes and checks the
+   * document as it is written. Kept exactly as written; nothing else reads it.
+   */
+  $schema?: string;
   version: 1;
   /**
    * Optional document metadata; unknown keys round-trip untouched.
@@ -857,6 +863,7 @@ export const EMPTY_TEMPLATE: DiagramTemplate = { version: 1, nodes: [], edges: [
 // `meta` is deliberately absent — its index signature admits anything.
 
 const TEMPLATE_KEY_MAP: Record<keyof DiagramTemplate, true> = {
+  $schema: true,
   version: true,
   meta: true,
   zones: true,
@@ -1435,7 +1442,9 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
     colors: EDGE_COLORS,
   });
 
-  const out: DiagramTemplate = { version: 1, nodes, edges };
+  // A `$schema` reference leads the document, where editors look for it.
+  const schemaRef = typeof r.$schema === "string" ? r.$schema.trim() : "";
+  const out: DiagramTemplate = { ...(schemaRef ? { $schema: schemaRef } : {}), version: 1, nodes, edges };
   // Only attach `zones` when there are some, so a zone-less document
   // round-trips byte-identical to what it was before zones existed.
   if (zones.length) out.zones = zones;
@@ -2517,7 +2526,7 @@ function breakParentCycles(nodes: DiagramNode[], byId: Map<string, DiagramNode>)
  * have no honest reading and are refused — which drops the element, the only
  * case where that is the right answer.
  */
-function idOf(raw: unknown): string | null {
+export function idOf(raw: unknown): string | null {
   if (typeof raw === "string") return raw.trim() || null;
   if (typeof raw === "number") return Number.isFinite(raw) ? String(raw) : null;
   if (typeof raw === "bigint") return String(raw);

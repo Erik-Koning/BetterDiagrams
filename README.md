@@ -32,7 +32,7 @@ enforced by a test that walks the import graph rather than trusted to a comment.
 ```bash
 npm install
 npm run dev        # example app on http://localhost:5173
-npm test           # 332 tests
+npm test           # unit tests (Vitest)
 npm run test:e2e   # Playwright, end to end through the example app (see e2e/)
 npm run build      # builds the library to packages/better-diagrams/dist
 ```
@@ -53,7 +53,7 @@ npm run dev
 
 `ANTHROPIC_MODEL` or `OPENAI_MODEL` picks another model, and `BD_AI=off` turns the route off. The
 dev server says which model it found when it starts. The keys stay in the server
-(`example/ai-route.mjs`); the browser only ever sees `/api/diagram`.
+(`@mosphere/better-diagrams/server`); the browser only ever sees `/api/diagram`.
 
 ## Using it
 
@@ -80,7 +80,7 @@ shadow.
 
 | Prop | Type | Notes |
 |---|---|---|
-| `value` | `DiagramTemplate` | Controlled document. Pair with `onChange`. |
+| `value` | `DiagramTemplate` | Controlled document. Pair with `onChange`. A new `value` from the host is an **edit**: it lands as one undo step, so the person's own history survives a JSON pane, an agent or a collaborator writing to it. A change of `activeFileId` starts a fresh history (without files, remount with a `key` to do the same). |
 | `defaultValue` | `DiagramTemplate` | Initial document when uncontrolled. |
 | `onChange` | `(t) => void` | Every committed edit, already validated. Typing in an inspector field fires per keystroke, so a host that persists on every call should debounce; the UNDO stack does not — a run of typing in one field is one entry. |
 | `onSave` | `(t) => void \| Promise` | Shows a Save button; `⌘S` also triggers it, from inside a text field too, and never twice at once. The button reads `Save •` while the document differs from what was last saved. A rejected promise is surfaced to the user rather than swallowed. |
@@ -107,7 +107,7 @@ shadow.
 | `onCoverageChange` | `(keys: FieldRef[]) => void` | The keys the **Key coverage** panel is scoring, mirrored like the pins. View state; pruned when a key's table leaves the document. |
 | `onKeyUsageChange` | `(names: string[]) => void` | The field names the **Key usage** panel has picked, lowercased, mirrored like the pins. View state; a name no table carries is kept and scores nothing. |
 | `onFocusChange` / `onActivePathsChange` | `(ids: string[]) => void` | The two pieces of **view state** the editor keeps outside the document, mirrored to the host: the drill-in stack (root first, `[]` at the top) and the ids of the lit paths. Both fire on mount and on every change, keyed by content, so a host can render its own breadcrumbs or path list. Neither is content — a drill never enters undo or `onChange`. |
-| `ref` | `Ref<StudioHandle>` | Imperative access to the same view state: `getFocus()`, `drillTo(stack)`, `navigateTo(nodeId)`, `getActivePaths()`, `setActivePaths(ids)`. `drillTo` fits the view to the new level; the deepest id the document knows names the level and its real ancestry becomes the stack; `navigateTo` drills to whichever level shows a node, then selects and centres it. Fields: `getPins()`, `setPins(refs)` (a pin is `{ nodeId, fieldId? }` — a whole table when `fieldId` is absent), `navigateToField(ref)` (drill, select, mark the row), `openFieldGrid(nodeId, fieldId?)`, for the coverage panel `getCoverageKeys()`, `setCoverageKeys(refs)`, `openCoverage()`, and for the key-usage panel `getUsageKeys()`, `setUsageKeys(names)` (names are lowercased and deduped), `openKeyUsage()`. The slot context (`toolbarExtras` / `inspectorExtras`) carries the same reads and writes as `focus`, `drillTo`, `activePaths`, `setActivePaths`, `pins`, `setPins`, `coverageKeys`, `setCoverageKeys`, `usageKeys`, `setUsageKeys`. |
+| `ref` | `Ref<StudioHandle>` | **The document:** `getTemplate()`, `update(docOrFn, { fit? })` — one undo step, validated against the registry, reported through `onChange`, returning `{ template, issues }` — `undo()`, `redo()`, `canUndo()`, `canRedo()`, `getSelection()`, `select({ nodes, edges, zones })` and `fitView(nodeIds?)`; see [Editing the document from code](#editing-the-document-from-code). **The view:** imperative access to the same view state: `getFocus()`, `drillTo(stack)`, `navigateTo(nodeId)`, `getActivePaths()`, `setActivePaths(ids)`. `drillTo` fits the view to the new level; the deepest id the document knows names the level and its real ancestry becomes the stack; `navigateTo` drills to whichever level shows a node, then selects and centres it. Fields: `getPins()`, `setPins(refs)` (a pin is `{ nodeId, fieldId? }` — a whole table when `fieldId` is absent), `navigateToField(ref)` (drill, select, mark the row), `openFieldGrid(nodeId, fieldId?)`, for the coverage panel `getCoverageKeys()`, `setCoverageKeys(refs)`, `openCoverage()`, and for the key-usage panel `getUsageKeys()`, `setUsageKeys(names)` (names are lowercased and deduped), `openKeyUsage()`. The slot context (`toolbarExtras` / `inspectorExtras`) carries the same reads and writes as `focus`, `drillTo`, `activePaths`, `setActivePaths`, `pins`, `setPins`, `coverageKeys`, `setCoverageKeys`, `usageKeys`, `setUsageKeys`. |
 | `toolbarExtras` / `inspectorExtras` | `ReactNode \| (ctx) => ReactNode` | Slots for your own controls. |
 
 ### Marketing mode
@@ -264,6 +264,75 @@ const ctx = templatePromptContext(doc, registry);
   onClose={() => setOpen(false)}
 />
 ```
+
+## Editing the document from code
+
+A diagram is a plain JSON document (`DiagramTemplate`), and everything that edits it — the
+canvas, an AI reply, an import — goes through the same validation. Code that edits it has three
+tools, all in the dependency-free `contract` entry, so they run in a browser, a server or a test.
+
+**Edit helpers.** Pure functions that return a new document and keep every reference consistent,
+by the same rules the editor's gestures follow:
+
+```ts
+import { addNode, addEdge, updateNode, renameNode, removeNodes } from "@mosphere/better-diagrams/contract";
+
+let doc = addNode(template, { label: "Redis Cache", kind: "database" }); // id "redis-cache", placed beside its siblings
+doc = addEdge(doc, { source: "api", target: "redis-cache", label: "reads" });
+doc = updateNode(doc, "redis-cache", { tags: ["cache"], url: undefined }); // undefined clears a key
+doc = renameNode(doc, "api", "orders-api"); // edges, children, paths, lineage, analyses and per-view layout follow
+doc = removeNodes(doc, ["legacy"]);         // with everything nested inside, and the edges touching any of it
+```
+
+There are the same for edges and zones (`updateEdge`, `removeEdges`, `addZone`, `updateZone`,
+`removeZones`), `removeElements` for a mixed selection, and `uniqueId` for picking an id first. A
+reference to an id the document doesn't have, an id already in use, or a parent that would contain
+itself is refused with an `Error` — nothing is repaired behind your back. Removing a zone keeps its
+members and clears their `zoneId`; removing an edge also removes an arrow-end dot it leaves with no
+line, as Delete does.
+
+**A validation report.** `validateTemplate` repairs rather than rejects, which is right for
+rendering and wrong for a program that wants to know its edit lost something. `validateTemplateReport`
+runs the same validation and lists every repair, each with a JSON Pointer into the input:
+
+```ts
+const { template, issues } = validateTemplateReport(json, registryValidateOptions(registry));
+// [{ code: "missing-reference", path: "/edges/4",
+//    message: 'The edge\'s target "paymnts" names no node, so the edge was left out.' }]
+```
+
+The codes are `dropped`, `duplicate-id`, `unknown-key`, `unknown-value`, `missing-reference`,
+`parent-cycle`, `invalid-date` and `not-applicable` (`VALIDATION_ISSUE_CODES`). Defaults filled in
+or stripped are not issues.
+
+**A JSON Schema.** `diagramJsonSchema()` is the document as JSON Schema (draft 2020-12), built from
+the same vocabularies and key lists validation uses and tested against them — closed enums, no
+unknown keys, so a value the schema rejects is one validation would repair or drop. The package
+ships it with the built-in vocabulary as `@mosphere/better-diagrams/schema.json`; point a file's
+`$schema` at it (validation keeps the key) for autocompletion while hand-editing:
+
+```json
+{ "$schema": "./node_modules/@mosphere/better-diagrams/schema.json", "version": 1, "nodes": [], "edges": [] }
+```
+
+Custom kinds, icons and providers are accepted once passed in, exactly as validation takes them:
+`diagramJsonSchema(registryValidateOptions(createRegistry(myExtensions)))`.
+
+**In the editor.** The `ref` handle applies an edit as one undo step — validated against the
+editor's registry, redrawn, reported through `onChange` — and hands back what validation repaired:
+
+```tsx
+const studio = useRef<StudioHandle>(null);
+
+const { issues } = studio.current!.update((doc) => addNode(doc, { id: "cache", label: "Cache", kind: "database" }));
+studio.current!.select({ nodes: ["cache"] });
+studio.current!.undo(); // takes the whole edit back
+```
+
+A controlled host gets the same undo behaviour from `value`: a new document within the same
+`activeFileId` is one undo step. The sequence editor has the same handle (`SequenceStudioHandle`:
+`getTemplate`, `update`, `undo`, `redo`, `canUndo`, `canRedo`), and `removeMessages`,
+`moveMessage` and `moveParticipant` are its edit helpers.
 
 ## The schema is the contract
 
@@ -1266,6 +1335,12 @@ export and the Canvas2D raster export. `"none"` opts a node out.
 A registered kind shows up in the inspector dropdown **and** in the generated system prompt, so
 the model can emit it too. `example/src/extensions.js` demonstrates all of it.
 
+Validating the same documents anywhere else — a server, a pipeline, a test — needs the same
+vocabulary, or a custom kind is "repaired" into a `service` and a custom container loses its frame
+styling. `registryValidateOptions(createRegistry(extensions))` is the options object the editor
+itself validates with; pass it to `validateTemplate`, `validateTemplateReport` or
+`diagramJsonSchema`.
+
 ## Exports
 
 PNG, PDF, SVG, template JSON, Content/Layout JSON (the split — see above), React Flow JSON,
@@ -1299,9 +1374,12 @@ formats never narrow — "export → save to your database" must not quietly bec
 I had highlighted". Mermaid can't express overlapping regions, so it
 records the active selection as `%% zone:` comments and reserves subgraphs for groups.
 
+The interactive HTML page carries its own runtime, so its builder loads when that export runs
+rather than with the editor; its `run` resolves asynchronously (as any exporter's may).
+
 A custom exporter receives the mode and its gradient setting alongside the palette
-(`{ template, registry, filename, palette, mode, gradients }`), and returns a blob to download,
-or nothing if it delivered the result itself:
+(`{ template, registry, filename, palette, mode, gradients }`), and returns — or resolves to — a
+blob to download, or nothing if it delivered the result itself:
 
 ```js
 const summary = {
@@ -1336,10 +1414,35 @@ cut off by its token limit is refused rather than merged, since the parts that n
 land as deletions. On an empty canvas the first message draws the diagram; **New diagram from a
 description** below the chat replaces a diagram outright.
 
-`example/ai-route.mjs` is a complete reference route: it picks the provider from the server's
-environment (Anthropic first, OpenAI as the fallback), streams the reply, and cancels the model
-call when the browser goes away. The example's dev server mounts it (`vite-plugin-ai.js`), and
-`npm run server -w example` serves it alone on :8787.
+The route ships with the package, as `@mosphere/better-diagrams/server`. It picks the provider
+from the server's environment (Anthropic first, OpenAI as the fallback), streams the reply, checks
+and trims the history, and cancels the model call when the browser goes away. Mount it on
+node:http (or Express, Connect, Vite):
+
+```js
+import { createDiagramRoute, serveAiRequest } from "@mosphere/better-diagrams/server";
+
+const route = createDiagramRoute(); // reads process.env
+http.createServer(async (req, res) => {
+  if (!(await serveAiRequest(route, req, res))) res.writeHead(404).end(); // not one of its two paths
+});
+// Express / Connect: app.use((req, res, next) => serveAiRequest(route, req, res).then((ok) => ok || next(), next));
+```
+
+or as a Fetch API handler — a Next.js route handler, Hono, Bun, Deno:
+
+```ts
+// app/api/diagram/route.ts
+import { createFetchHandler } from "@mosphere/better-diagrams/server";
+const handler = createFetchHandler();
+export { handler as GET, handler as POST }; // GET answers which model is configured
+```
+
+The provider SDKs are optional peer dependencies, loaded only when their provider answers:
+install `@anthropic-ai/sdk`, `openai`, or both. To answer with something else — a gateway's own
+SDK, a self-hosted model — pass `createDiagramRoute({ complete: async ({ system, messages, signal }) => text })`
+and install neither. The example's dev server mounts the route (`vite-plugin-ai.js`), and
+`npm run server -w example` serves it alone on :8787 from the built package.
 
 ## C4 & professional editing
 
@@ -2027,9 +2130,34 @@ is dragged by its label bar, so the space between its children is free for a rub
 canvas to load it — as a new file beside a diagram with more than one top-level node, when the host
 manages files; otherwise in place, asking first when that replaces something.
 
+## Packaging
+
+| Entry | What | Runs on |
+|---|---|---|
+| `@mosphere/better-diagrams` | The editors, exporters and registry, plus everything in `contract` | the browser (a `"use client"` module for Next.js) |
+| `@mosphere/better-diagrams/contract` | The document: types, validation and its report, edit helpers, JSON Schema, prompts, layout, lint, diff | anywhere — no dependencies |
+| `@mosphere/better-diagrams/contract/folder/node` | The folder format's file-system adapter | Node |
+| `@mosphere/better-diagrams/server` | The AI route | Node, or any Fetch API runtime |
+| `@mosphere/better-diagrams/styles.css` | The editor's styles, React Flow's included | — |
+| `@mosphere/better-diagrams/schema.json` | The document's JSON Schema | — |
+
+Each entry is ESM and CommonJS with its own types. The build keeps one file per source module, so a
+host's bundler drops what it never imports — a host using only the architecture editor doesn't
+ship the sequence editor — and two heavy, occasional pieces load on first use: the interactive
+HTML page builder and the JSON code editor (CodeMirror, which the welcome modal uses). React,
+React Flow and CodeMirror are dependencies the host's bundler dedupes, never bundled copies.
+
 ## Versioning
 
-Documents carry a `version`, and `migrateTemplate` runs them up to `CURRENT_VERSION` through a
+**The API.** Every export of every entry is pinned twice: by name in `api-surface.test.ts`, and by
+shape — every signature, prop and type — in the API reports under `packages/better-diagrams/etc/`
+(`npm run api:update` after a build rewrites them; CI fails while they differ from the build). A
+change to the public API therefore arrives as a diff someone reviews. Releases are listed in
+`CHANGELOG.md`. CI (`.github/workflows/ci.yml`) typechecks and tests the library on React 18 and
+19, checks the API reports, lints the packed tarball with publint and arethetypeswrong, and runs
+the end-to-end suite.
+
+**Documents.** Documents carry a `version`, and `migrateTemplate` runs them up to `CURRENT_VERSION` through a
 registered migration chain. A document from a **newer** build throws rather than being coerced —
 silently dropping fields a future release added would turn "open an old client" into irreversible
 data loss on the next save. `MIGRATIONS` is empty today; the hook exists so v2 has somewhere to
@@ -2037,6 +2165,6 @@ go.
 
 ## Known issue
 
-`npm audit` reports 4 high advisories from `vite-plugin-dts` → `@vue/language-core` → `minimatch`.
-These are DoS-only, build-time-only, and never reach the published bundle. Fixing them needs a
-breaking downgrade of the `.d.ts` generator.
+`npm audit` reports 4 moderate advisories from `@microsoft/api-extractor` → `argparse@1` →
+`sprintf-js`, which has no patched release. They are DoS-only and build-time-only — the
+`.d.ts` generator and the API reports use api-extractor — and never reach the published bundle.

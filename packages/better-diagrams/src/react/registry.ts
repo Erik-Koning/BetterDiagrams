@@ -49,7 +49,17 @@ export type {
   ExportResult,
   ExporterDef,
 } from "./registry-types";
-export { kindDef, iconPaths, providerDef, relationDef, zoneInk, zoneFill, FALLBACK_KIND, FALLBACK_PROVIDER } from "./registry-types";
+export {
+  kindDef,
+  iconPaths,
+  providerDef,
+  relationDef,
+  zoneInk,
+  zoneFill,
+  registryValidateOptions,
+  FALLBACK_KIND,
+  FALLBACK_PROVIDER,
+} from "./registry-types";
 
 /**
  * Infra providers a zone can be switched between.

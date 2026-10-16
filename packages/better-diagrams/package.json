@@ -60,7 +60,18 @@
         "default": "./dist/contract-folder-node.cjs"
       }
     },
+    "./server": {
+      "import": {
+        "types": "./dist/server.d.ts",
+        "default": "./dist/server.js"
+      },
+      "require": {
+        "types": "./dist/server.d.cts",
+        "default": "./dist/server.cjs"
+      }
+    },
     "./styles.css": "./dist/better-diagrams.css",
+    "./schema.json": "./dist/schema.json",
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -70,35 +81,52 @@
       ],
       "contract/folder/node": [
         "./dist/contract-folder-node.d.ts"
+      ],
+      "server": [
+        "./dist/server.d.ts"
       ]
     }
   },
   "files": [
     "dist",
-    "bin"
+    "bin",
+    "CHANGELOG.md"
   ],
   "sideEffects": [
     "**/*.css"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && vite build && npm run build:dts-cts",
-    "build:dts-cts": "node -e \"for (const f of ['better-diagrams','contract','contract-folder-node']) require('fs').copyFileSync('dist/'+f+'.d.ts','dist/'+f+'.d.cts')\"",
+    "build": "tsc -p tsconfig.build.json && vite build && npm run build:dts-cts && npm run build:schema",
+    "build:dts-cts": "node -e \"for (const f of ['better-diagrams','contract','contract-folder-node','server']) require('fs').copyFileSync('dist/'+f+'.d.ts','dist/'+f+'.d.cts')\"",
+    "build:schema": "node scripts/write-json-schema.mjs",
     "build:explorer": "node scripts/build-explorer-runtime.mjs",
+    "api:check": "node scripts/api-report.mjs --check",
+    "api:update": "node scripts/api-report.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "prepublishOnly": "npm run typecheck && npm run test && npm run build",
-    "prepack": "cp ../../README.md ../../LICENSE .",
-    "postpack": "rm -f README.md LICENSE"
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build && npm run api:check",
+    "prepack": "cp ../../README.md ../../LICENSE ../../CHANGELOG.md .",
+    "postpack": "rm -f README.md LICENSE CHANGELOG.md"
   },
   "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.133.0",
+    "openai": ">=7.34.0",
     "react": ">=18",
     "react-dom": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
@@ -112,6 +140,7 @@
     "@xyflow/react": "^12.12.0"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.133.0",
     "@microsoft/api-extractor": "^7.59.4",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
@@ -120,7 +149,9 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^6.1.2",
+    "ajv": "^8.18.0",
     "jsdom": "^30.1.2",
+    "openai": "^7.34.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "typescript": "^7.0.2",

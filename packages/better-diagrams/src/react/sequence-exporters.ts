@@ -7,7 +7,6 @@
 import type { ExporterDef } from "./registry-types";
 import { emitOptions, type ExportPalette, type PictureOptions } from "./draw";
 import { emitSequence } from "./sequence-draw";
-import { buildTimelineHtml } from "./html-export";
 import {
   blobToUint8,
   buildSinglePageJpegPdf,
@@ -264,7 +263,10 @@ export const BUILTIN_SEQUENCE_EXPORTERS: Record<string, ExporterDef<SequenceTemp
     label: "Interactive HTML",
     hint: "Self-contained page with a timeline scrubber",
     fullDocument: true,
-    run({ template, filename, palette, mode, gradients }) {
+    // The page builder loads when an export asks for it — see the
+    // architecture editor's HTML exporter.
+    async run({ template, filename, palette, mode, gradients }) {
+      const { buildTimelineHtml } = await import("./html-export");
       const page = buildTimelineHtml({
         svg: renderSequenceToSvg(template, palette, { mode, gradients }),
         title: String(template.meta?.title ?? filename),

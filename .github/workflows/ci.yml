@@ -1,0 +1,81 @@
+# Every push to main and every pull request: the library is typechecked,
+# tested on React 18 and 19, built, and packed the way npm will publish it;
+# the example app is driven end to end in a browser.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  library:
+    name: Library (React ${{ matrix.react }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        react: ["18", "19"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+
+      # The peer range is ">=18": run the same suite on the next major. An
+      # override swaps React for every workspace at once, so the tests and
+      # testing-library share one copy.
+      - name: Switch to React 19
+        if: matrix.react == '19'
+        run: |
+          npm pkg set overrides.react=^19.2.0 overrides.react-dom=^19.2.0 'overrides.@types/react=^19.2.0' 'overrides.@types/react-dom=^19.2.0'
+          npm install --no-audit --no-fund
+          node -e "console.log('react', require('react/package.json').version)"
+
+      - run: npm run typecheck
+      # The unit suite has timing-sensitive cases that can trip on a busy
+      # runner; a retry tells a flake from a failure. (Called on the
+      # workspace directly: through the root `npm test`, npm keeps the flag.)
+      - run: npm run test -w @mosphere/better-diagrams -- --retry=2
+      - run: npm run build
+
+      - name: The public API matches etc/*.api.md
+        if: matrix.react == '18'
+        run: npm run api:check -w @mosphere/better-diagrams
+
+      - name: The package as npm would publish it
+        if: matrix.react == '18'
+        working-directory: packages/better-diagrams
+        run: |
+          npm pack
+          npx --yes publint@0.3 ./mosphere-better-diagrams-*.tgz
+          npx --yes @arethetypeswrong/cli@0.18 ./mosphere-better-diagrams-*.tgz --exclude-entrypoints styles.css schema.json
+
+  e2e:
+    name: End to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - name: Keep the report when something failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14

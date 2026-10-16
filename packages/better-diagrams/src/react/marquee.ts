@@ -167,7 +167,7 @@ export function useMarqueeSelect({
   setNodes: (updater: (nodes: Node[]) => Node[]) => void;
   setEdges: (updater: (edges: Edge[]) => Edge[]) => void;
 }): {
-  bandRef: React.RefObject<HTMLDivElement>;
+  bandRef: React.Ref<HTMLDivElement>;
   onPointerDownCapture: (event: React.PointerEvent<HTMLElement>) => void;
 } {
   const bandRef = useRef<HTMLDivElement>(null);

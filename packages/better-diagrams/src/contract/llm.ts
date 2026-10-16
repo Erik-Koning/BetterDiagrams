@@ -11,9 +11,9 @@
  * Omit `generate` entirely and the AI panel is not rendered at all — the editor
  * is then a pure cursor-driven tool with no network surface.
  *
- * `example/ai-route.mjs` is a complete reference route: it picks Claude or
- * OpenAI from the server's environment and answers both Generate and the
- * Adjust with AI chat.
+ * `@mosphere/better-diagrams/server` is a complete route for the other end: it
+ * picks Claude or OpenAI from the server's environment and answers both
+ * Generate and the Adjust with AI chat.
  */
 import { parseLlmTemplate, type DiagramTemplate, type ValidateOptions } from "./schema";
 import type { DiagramContent } from "./presentation";

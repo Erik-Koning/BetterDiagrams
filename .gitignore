@@ -4,10 +4,13 @@ dist/
 # Build artefacts and local scratch
 *.tgz
 .pkg-test/
+# api-extractor's working copy of the reports (the reports themselves live in etc/)
+packages/*/temp/
 
 # Copied into the package by `prepack`, removed by `postpack`
 packages/*/README.md
 packages/*/LICENSE
+packages/*/CHANGELOG.md
 
 # Folder-format trees the example app imports (drop an export in to try it)
 templates/folders/*

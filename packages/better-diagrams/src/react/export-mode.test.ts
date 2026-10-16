@@ -229,7 +229,8 @@ describe("marketing without gradients", () => {
     const svg = await (BUILTIN_EXPORTERS.svg.run(ctx) as { blob: Blob }).blob.text();
     expect(svg).not.toMatch(/<linearGradient/);
     expect(svg).toMatch(/<feDropShadow /);
-    const html = await (BUILTIN_EXPORTERS.html.run(ctx) as { blob: Blob }).blob.text();
+    // The HTML exporter loads its page builder on demand, so it resolves later.
+    const html = await ((await BUILTIN_EXPORTERS.html.run(ctx)) as { blob: Blob }).blob.text();
     expect(html).not.toMatch(/<linearGradient/);
     // The drilling page pre-renders one SVG per level; the switch has to
     // reach every one of them.
@@ -239,7 +240,7 @@ describe("marketing without gradients", () => {
         { id: "a", label: "API", kind: "service", parentId: "g", x: 20, y: 40 },
       ],
     });
-    const drilled = await (BUILTIN_EXPORTERS.html.run({ ...ctx, template: nested }) as { blob: Blob }).blob.text();
+    const drilled = await ((await BUILTIN_EXPORTERS.html.run({ ...ctx, template: nested })) as { blob: Blob }).blob.text();
     expect(drilled).toMatch(/as-grid-v1/);
     expect(drilled).not.toMatch(/<linearGradient/);
   });

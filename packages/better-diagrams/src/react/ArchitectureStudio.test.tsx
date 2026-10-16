@@ -2313,7 +2313,9 @@ describe("ArchitectureStudio", () => {
     fireEvent.click(screen.getByText("Cloud Region"));
     // The vendor zone's custom rose shows up in the region's palette.
     const swatch = await screen.findByRole("button", { name: /Zone colour Custom \(Stripe\)/ });
-    expect(swatch).toHaveStyle({ background: "#e11d48" });
+    // The longhand: how a `background` shorthand reads back varies between
+    // CSS parser versions; the colour it sets does not.
+    expect(swatch).toHaveStyle({ backgroundColor: "#e11d48" });
   });
 
   it("sets outline style and fill from the inspector", async () => {
@@ -3509,9 +3511,13 @@ describe("drill-down (C4 levels)", () => {
     ],
   });
 
-  /** Double-click a node body and wait for the focus bar to appear. */
+  /**
+   * Double-click a node body and wait for the focus bar to appear. The level's
+   * cards can land a render after the bar (React 19 commits them separately),
+   * so assertions on them right after a drill use findBy.
+   */
   async function drillIntoLabel(label: string) {
-    fireEvent.doubleClick(screen.getByText(label));
+    fireEvent.doubleClick(await screen.findByText(label));
     await waitFor(
       () => expect(screen.getByRole("navigation", { name: "Diagram level" })).toBeInTheDocument(),
       { timeout: 2000 },
@@ -3530,7 +3536,7 @@ describe("drill-down (C4 levels)", () => {
     expect(within(bar).getByRole("button", { name: "Exit focus" })).toBeInTheDocument();
 
     // The level: children visible, group child as a chip, outsider as ghost.
-    expect(screen.getByText("Pay API")).toBeInTheDocument();
+    expect(await screen.findByText("Pay API")).toBeInTheDocument();
     expect(screen.getByText("Job Workers")).toBeInTheDocument();
     expect(screen.queryByText("Retry Worker")).not.toBeInTheDocument();
     expect(screen.getByTitle("External to this view — double-click to visit")).toBeInTheDocument();
@@ -3576,7 +3582,7 @@ describe("drill-down (C4 levels)", () => {
     );
     await drillIntoLabel("Payments Core");
 
-    const ghost = screen.getByTitle("External to this view — double-click to visit");
+    const ghost = await screen.findByTitle("External to this view — double-click to visit");
     fireEvent.click(ghost);
     await waitFor(() =>
       expect(onSelectionChange).toHaveBeenLastCalledWith({ nodes: ["web"], edges: [], zones: [] }),
@@ -3605,7 +3611,7 @@ describe("drill-down (C4 levels)", () => {
     await waitFor(() =>
       expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument(),
     );
-    expect(screen.getByText("Storefront")).toBeInTheDocument();
+    expect(await screen.findByText("Storefront")).toBeInTheDocument();
   });
 
   it("breadcrumbs navigate across two levels", async () => {
@@ -3624,7 +3630,7 @@ describe("drill-down (C4 levels)", () => {
       { timeout: 2000 },
     );
     const bar = screen.getByRole("navigation", { name: "Diagram level" });
-    expect(screen.getByText("Retry Worker")).toBeInTheDocument();
+    expect(await screen.findByText("Retry Worker")).toBeInTheDocument();
 
     // The root crumb exits everything.
     fireEvent.click(within(bar).getByRole("button", { name: /Shop/ }));
@@ -3637,7 +3643,7 @@ describe("drill-down (C4 levels)", () => {
   it("a leaf drill lands in the empty-boundary state", async () => {
     mount(<ArchitectureStudio defaultValue={DRILL_DOC} />);
     await drillIntoLabel("Storefront");
-    expect(screen.getByText(/has no internals yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/has no internals yet/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add node" })).toBeInTheDocument();
     // Its external contracts still show: the card it talks to stands in.
     expect(screen.getByTitle("External to this view — double-click to visit")).toBeInTheDocument();
@@ -3718,14 +3724,14 @@ describe("drill-down (C4 levels)", () => {
   it("readOnly can drill into detail but not into empty leaves", async () => {
     mount(<ArchitectureStudio defaultValue={DRILL_DOC} readOnly />);
     await drillIntoLabel("Payments Core");
-    expect(screen.getByText("Pay API")).toBeInTheDocument();
+    expect(await screen.findByText("Pay API")).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() =>
       expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument(),
     );
     // A leaf has nothing to show a viewer: double-click stays put.
-    fireEvent.doubleClick(screen.getByText("Storefront"));
+    fireEvent.doubleClick(await screen.findByText("Storefront"));
     await new Promise((resolve) => setTimeout(resolve, 350));
     expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument();
   });

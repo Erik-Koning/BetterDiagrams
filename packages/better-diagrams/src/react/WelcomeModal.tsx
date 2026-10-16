@@ -8,11 +8,11 @@
  * through `onInsert`. Escape and the backdrop behave like "Insert Node
  * Manually" — this can never trap the user.
  */
-import { useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { looksLikeSqlDdl } from "../contract/import/sql-ddl";
 import { looksLikeTaskCsv } from "../contract/import/task-csv";
 import { BrandMark, Modal } from "./chrome";
-import { JsonCodeEditor } from "./JsonCodeEditor";
+import type { JsonCodeEditorProps } from "./JsonCodeEditor";
 import { CloudScopePicker, scopeFor, type CloudScope } from "./CloudScopePicker";
 import { TASK_FLOW_HINT } from "./SchemaCopyModal";
 import { copyText } from "./copy-text";
@@ -20,6 +20,27 @@ import { UiIcon } from "./ui-icons";
 import { SEQUENCE_LINT, buildArchitectureLint, type JsonDocLint } from "./schema-lint";
 import { approximateJsonFix } from "../contract/json-repair";
 import type { CloudResourceOption } from "./template-prompt";
+
+/**
+ * The code editor, loaded the first time the modal shows: CodeMirror is the
+ * largest thing the editor depends on, and a host that only ever opens
+ * existing diagrams never needs it. Until it arrives, a plain text box holds
+ * the same text, so a paste in that first moment is kept.
+ */
+const JsonCodeEditor = lazy(() => import("./JsonCodeEditor").then((m) => ({ default: m.JsonCodeEditor })));
+
+function PlainJsonEditor({ value, onChange, placeholder, ariaLabel }: JsonCodeEditorProps) {
+  return (
+    <textarea
+      className="as-welcome__plain"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      aria-label={ariaLabel}
+      spellCheck={false}
+    />
+  );
+}
 
 export interface WelcomeModalProps {
   kind: "architecture" | "sequence";
@@ -269,7 +290,7 @@ export function WelcomeModal({
   const tasksPicked = pickedKind === "tasks";
   /** A manual pick wins over auto-detect for the rest of the session. */
   const [kindTouched, setKindTouched] = useState(false);
-  const copyTimer = useRef<ReturnType<typeof setTimeout>>();
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(copyTimer.current), []);
 
   const otherEnabled = !!parseOther && !!onInsertOther;
@@ -344,6 +365,30 @@ export function WelcomeModal({
     setText(approxFix.text);
     setApproxFix(null);
     setError(null);
+  };
+
+  const editorProps: JsonCodeEditorProps = {
+    value: text,
+    onChange: (next) => {
+      setText(next);
+      setError(null);
+      setApproxFix(null);
+      // Follow what the paste looks like until the user has picked by
+      // hand. Only flip toward kinds the picker could actually serve.
+      if (!kindTouched && !lockKind) {
+        const sniffed = sniffKind(next);
+        if (sniffed && (sniffed === kind || otherEnabled)) setPickedKind(sniffed);
+      }
+    },
+    placeholder: pickedKind === "sequence" ? SEQ_PLACEHOLDER : tasksPicked ? TASK_PLACEHOLDER : ARCH_PLACEHOLDER,
+    ariaLabel: "Diagram JSON",
+    lint:
+      pickedDocKind === kind
+        ? (lint ?? (kind === "sequence" ? SEQUENCE_LINT : DEFAULT_ARCH_LINT))
+        : pickedDocKind === "sequence"
+          ? SEQUENCE_LINT
+          : DEFAULT_ARCH_LINT,
+    onDiagnostics: setNotices,
   };
 
   return (
@@ -486,30 +531,9 @@ export function WelcomeModal({
         </div>
 
         <div className="as-welcome__editor">
-          <JsonCodeEditor
-            value={text}
-            onChange={(next) => {
-              setText(next);
-              setError(null);
-              setApproxFix(null);
-              // Follow what the paste looks like until the user has picked by
-              // hand. Only flip toward kinds the picker could actually serve.
-              if (!kindTouched && !lockKind) {
-                const sniffed = sniffKind(next);
-                if (sniffed && (sniffed === kind || otherEnabled)) setPickedKind(sniffed);
-              }
-            }}
-            placeholder={pickedKind === "sequence" ? SEQ_PLACEHOLDER : tasksPicked ? TASK_PLACEHOLDER : ARCH_PLACEHOLDER}
-            ariaLabel="Diagram JSON"
-            lint={
-              pickedDocKind === kind
-                ? (lint ?? (kind === "sequence" ? SEQUENCE_LINT : DEFAULT_ARCH_LINT))
-                : pickedDocKind === "sequence"
-                  ? SEQUENCE_LINT
-                  : DEFAULT_ARCH_LINT
-            }
-            onDiagnostics={setNotices}
-          />
+          <Suspense fallback={<PlainJsonEditor {...editorProps} />}>
+            <JsonCodeEditor {...editorProps} />
+          </Suspense>
         </div>
 
         {/* The warnings, in words, under the editor.

@@ -8,8 +8,9 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 
 /**
  * The React half is a client component: it uses hooks, refs, and the DOM. Next
- * App Router consumers need the directive on the built file, so it is stamped
- * onto that chunk only — `contract` must stay server-runnable, which is its
+ * App Router consumers need the directive on the module they import, so it is
+ * stamped onto the root entry only — the client boundary, whose imports are
+ * client modules with it — and `contract` stays server-runnable, which is its
  * entire reason for existing.
  */
 const useClientBanner = {
@@ -42,6 +43,9 @@ export default defineConfig({
         // The Node adapter for the folder format: its own entry, so importing
         // `contract` never pulls `node:fs` into a browser bundle.
         "contract-folder-node": `${here}src/contract/folder/node.ts`,
+        // The AI route, for a host's server. Its provider SDKs are optional
+        // peers, imported only when that provider answers.
+        server: `${here}src/server/index.ts`,
       },
       name: "ArchitectureStudio",
       formats: ["es", "cjs"],
@@ -62,10 +66,20 @@ export default defineConfig({
         /^@codemirror\//,
         /^@lezer\//,
         /^node:/,
+        "@anthropic-ai/sdk",
+        "openai",
       ],
       output: {
         globals: { react: "React", "react-dom": "ReactDOM" },
         assetFileNames: "better-diagrams.css",
+        // One file per source module rather than one per entry. A host's
+        // bundler can then drop whole modules the host never reaches —
+        // `sideEffects` says only the CSS has any — and a dynamic `import()`
+        // inside the editor (the HTML page builder, the JSON code editor and
+        // CodeMirror with it) stays a real split point in the host's build
+        // instead of being inlined into one file here.
+        preserveModules: true,
+        preserveModulesRoot: "src",
       },
     },
     sourcemap: true,

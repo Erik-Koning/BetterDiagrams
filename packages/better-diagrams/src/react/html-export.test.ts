@@ -8,9 +8,9 @@ import { describe, expect, it } from "vitest";
 import { emitTemplate, drawToSvg } from "./draw";
 import { emitSequence } from "./sequence-draw";
 import { buildTimelineHtml } from "./html-export";
+import { htmlExplorerData } from "./html-pipeline";
 import {
   BUILTIN_EXPORTERS,
-  htmlExplorerData,
   renderTemplateToC4Puml,
   renderTemplateToMermaid,
   renderTemplateToSvg,

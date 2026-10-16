@@ -19,13 +19,13 @@
  * stops, the pointer does not); unmounting the resizer there would destroy
  * the drag without its end, and the size would never be committed.
  */
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type Ref } from "react";
 
 export interface ResizeHandles {
   /** Whether to mount the `NodeResizer`. */
   visible: boolean;
   /** Put on the node's own element — any element inside React Flow's wrapper. */
-  hostRef: RefObject<HTMLDivElement>;
+  hostRef: Ref<HTMLDivElement>;
   /** Call from the resizer's `onResizeStart`. */
   onResizeStart: () => void;
   /** Call from the resizer's `onResizeEnd`. */

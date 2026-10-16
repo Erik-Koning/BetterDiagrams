@@ -5231,6 +5231,25 @@ button.as-task__check--blocked {
   overflow: auto;
 }
 
+/* The welcome modal's JSON box while the code editor loads — the same box,
+   so nothing jumps when it arrives (see WelcomeModal's lazy JsonCodeEditor). */
+.as-welcome__plain {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 220px;
+  max-height: 320px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--as-border);
+  border-radius: 8px;
+  background: var(--as-surface-2);
+  color: var(--as-text);
+  font-family: var(--as-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .as-welcome__error {
   font-size: 0.75rem;
   line-height: 1.5;

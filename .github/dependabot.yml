@@ -15,7 +15,8 @@ updates:
         update-types: ["minor", "patch"]
     ignore:
       # React 19 and the tooling majors are deliberate upgrades, not chores:
-      # the library's peer range is ">=18" and its tests mount on 18.
+      # the library's peer range is ">=18", its tests mount on 18, and CI
+      # runs them on 19 as well (see workflows/ci.yml).
       - dependency-name: "react"
         update-types: ["version-update:semver-major"]
       - dependency-name: "react-dom"

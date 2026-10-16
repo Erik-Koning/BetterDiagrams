@@ -179,7 +179,7 @@ function seedWorkspace() {
 
 /**
  * Sends prompts to /api/diagram, which the dev server answers with the keys in
- * its own environment (ai-route.mjs). The browser never holds a key. The same
+ * its own environment (@mosphere/better-diagrams/server). The browser never holds a key. The same
  * generator serves both editors — each sends its own system prompt.
  */
 const generate = createProxyGenerator({ endpoint: "/api/diagram" });

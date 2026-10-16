@@ -114,7 +114,7 @@ the exported page keeps parity with the editor.
 | Checks | `contract/lint.ts` (`lintTemplate`, `BUILTIN_LINT_RULES`) | Architecture rules only: `no-orphans`, `no-cycles`, `external-data-access`, `missing-owner`, `unlabeled-cross-team`, `deprecated-dependency`. Findings name nodes/edges, not fields. |
 | Compare | `contract/diff.ts` (`diffTemplates`), `DiffCanvas.tsx` | Matches by id; a changed table reports `fields` as ONE changed property — not which columns. |
 | Data-model import | `contract/folder/dialects/datamodel/*` | Nodes: `data.model.{shape,name,label,kind,namespace,recordCount,fieldsTotal,fieldsTruncated,fields[],fieldMeta,...}`. Edges: `relation` + `data.model.{field,targetField,kind,relationshipName,referenceTo,required,cascadeDelete,deleteConstraint,visible,business}`. Field data: `type`, `displayType`, `primaryKey`, `nullable`, `unique`, `externalId`, `formula`, `visible`, `createable`, `updateable`, `tags`, `relationship`. Tables past `MAX_NODE_FIELDS` are truncated (`fieldsTruncated`). |
-| Interactive HTML export | `react/html-export.ts`, `react/html-explorer.ts`, `react/html-explorer-runtime.ts` (bundled to `html-explorer-runtime.generated.ts`), `exporters.ts` (`htmlExplorerData`) | Search, pins, paths, references, key usage, field grid, menus — the editor's own analysis, bundled. See §3. |
+| Interactive HTML export | `react/html-export.ts`, `react/html-explorer.ts`, `react/html-explorer-runtime.ts` (bundled to `html-explorer-runtime.generated.ts`), `html-pipeline.ts` (`htmlExplorerData`) | Search, pins, paths, references, key usage, field grid, menus — the editor's own analysis, bundled. See §3. |
 
 The gaps an expert notices first: Checks says nothing about schema quality; Compare cannot
 say which columns changed; nothing answers "what breaks if I change this?"; there is no
@@ -155,7 +155,7 @@ Read this before touching the export side of any feature.
 
 ### 3.1 The moving parts
 
-- **`htmlExplorerData(template, registry, palette)`** (`exporters.ts`) builds what the page
+- **`htmlExplorerData(template, registry, palette)`** (`html-pipeline.ts`) builds what the page
   reads (`HtmlExplorerData` in `html-explorer.ts`):
   - `doc` — a **slice** of the document from `explorerDocument()`: node id/label/kind/
     description/tags/parentId/fields, and from `data` only

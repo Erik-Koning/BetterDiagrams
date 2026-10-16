@@ -286,7 +286,7 @@ describe("marketing without gradients", () => {
     const svg = await (BUILTIN_SEQUENCE_EXPORTERS.svg.run(ctx) as { blob: Blob }).blob.text();
     expect(svg).not.toMatch(/<linearGradient/);
     expect(svg).toMatch(/<feDropShadow /);
-    const html = await (BUILTIN_SEQUENCE_EXPORTERS.html.run(ctx) as { blob: Blob }).blob.text();
+    const html = await ((await BUILTIN_SEQUENCE_EXPORTERS.html.run(ctx)) as { blob: Blob }).blob.text();
     expect(html).not.toMatch(/<linearGradient/);
     // And the default still has them.
     const glossy = await (BUILTIN_SEQUENCE_EXPORTERS.svg.run({ ...ctx, gradients: undefined }) as { blob: Blob }).blob.text();

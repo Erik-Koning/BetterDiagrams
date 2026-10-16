@@ -264,6 +264,22 @@ const CONTRACT_EXPORTS = [
   "coerceGeneratorResult",
   "buildRefineMessage",
   "replyNote",
+  // editing
+  "uniqueId",
+  "addNode",
+  "updateNode",
+  "renameNode",
+  "removeNodes",
+  "addEdge",
+  "updateEdge",
+  "removeEdges",
+  "addZone",
+  "updateZone",
+  "removeZones",
+  "removeElements",
+  "validateTemplateReport",
+  "VALIDATION_ISSUE_CODES",
+  "diagramJsonSchema",
   // json repair
   "repairJsonText",
   // lint
@@ -348,6 +364,7 @@ const REACT_EXPORTS = [
   "relationDef",
   "zoneFill",
   "zoneInk",
+  "registryValidateOptions",
   "FALLBACK_KIND",
   "FALLBACK_PROVIDER",
   // icons
@@ -396,6 +413,16 @@ const REACT_EXPORTS = [
   "TimelineScrubber",
 ];
 
+// The server entry (`@mosphere/better-diagrams/server`).
+const SERVER_EXPORTS = [
+  "resolveProvider",
+  "createCompleter",
+  "createDiagramRoute",
+  "RouteError",
+  "serveAiRequest",
+  "createFetchHandler",
+];
+
 describe("public API surface", () => {
   it("contract entry exports exactly the curated list", async () => {
     const actual = Object.keys(await import("./contract/index")).sort();
@@ -405,6 +432,11 @@ describe("public API surface", () => {
   it("root entry exports exactly contract + react", async () => {
     const actual = Object.keys(await import("./index")).sort();
     expect(actual).toEqual([...CONTRACT_EXPORTS, ...REACT_EXPORTS].sort());
+  });
+
+  it("server entry exports exactly the curated list, and none of the browser halves", async () => {
+    const actual = Object.keys(await import("./server/index")).sort();
+    expect(actual).toEqual([...SERVER_EXPORTS].sort());
   });
 
   // The root barrel is a double `export *`; a name collision between the

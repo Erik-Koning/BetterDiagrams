@@ -1,28 +1,35 @@
 /**
- * server.mjs — the AI route on its own, for serving the built example
- * without Vite. `npm run dev` already answers it (vite-plugin-ai.js); this is
- * the same route over plain node:http, and the reference for a host's own.
+ * server.mjs — the AI route on its own, over plain node:http: what a host's
+ * own server looks like. `npm run dev` already answers the route
+ * (vite-plugin-ai.js); this imports it the way another project would, from
+ * the built package, so build the library first:
  *
+ *   npm run build                # at the repo root
  *   npm run server -w example    # :8787, keys from the environment
  *
  * Which model answers is decided by the environment — ANTHROPIC_API_KEY first,
- * OPENAI_API_KEY as the fallback; see ai-route.mjs. The editor itself has no
- * provider code: it posts a GenerateRequest and parses the reply.
+ * OPENAI_API_KEY as the fallback. The editor itself has no provider code: it
+ * posts a GenerateRequest and parses the reply.
  */
 import { createServer } from "node:http";
-import { createDiagramRoute, sendJson, serveAiRequest } from "./ai-route.mjs";
+import { createDiagramRoute, serveAiRequest } from "@mosphere/better-diagrams/server";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const route = createDiagramRoute();
 
+const sendError = (res, status, error) => {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ error }));
+};
+
 const server = createServer((req, res) => {
   serveAiRequest(route, req, res)
     .then((served) => {
-      if (!served) sendJson(res, 404, { error: "Not found" });
+      if (!served) sendError(res, 404, "Not found");
     })
     .catch((err) => {
       console.error("[ai]", err);
-      if (!res.writableEnded) sendJson(res, 500, { error: "Generation failed." });
+      if (!res.writableEnded) sendError(res, 500, "Generation failed.");
     });
 });
 

@@ -100,7 +100,7 @@ export function SchemaCopyModal({
   const tasks = focus === "tasks" && !!buildTaskPrompt;
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const copyTimer = useRef<ReturnType<typeof setTimeout>>();
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(copyTimer.current), []);
 
   // Cheap enough to keep live: it is what makes the size of a selection — 40

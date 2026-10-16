@@ -5,12 +5,8 @@
 import { describe, expect, it } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { json } from "@codemirror/lang-json";
-import {
-  SEQUENCE_LINT,
-  buildArchitectureLint,
-  docDiagnostics,
-  type JsonDocLint,
-} from "./schema-lint";
+import { SEQUENCE_LINT, buildArchitectureLint, type JsonDocLint } from "./schema-lint";
+import { docDiagnostics } from "./schema-lint-diagnostics";
 import { EXAMPLE_TEMPLATE, EXAMPLE_ZONED_TEMPLATE } from "../contract/schema";
 import { EXAMPLE_SEQUENCE } from "../contract/sequence";
 
