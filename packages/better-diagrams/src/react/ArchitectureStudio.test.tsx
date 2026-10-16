@@ -1534,7 +1534,9 @@ describe("ArchitectureStudio", () => {
     )!;
     expect(after.h).toBe(grown);
     expect(after.wrap).toBe(true);
-  });
+    // A long label typed key by key through the whole editor: ~1 s locally on
+    // React 18, twice that on 19, and past the 5 s default on a CI runner.
+  }, 15_000);
 
   it("fits a wrapped card to its text as it is edited, growing and shrinking", async () => {
     // Wrap promises nothing is hidden, so every edit that changes how many
