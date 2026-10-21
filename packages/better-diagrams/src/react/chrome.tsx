@@ -770,6 +770,19 @@ export interface StudioFileInit {
   doc?: unknown;
 }
 
+/** The Import menu's word on Link a file on disk…, in both editors. */
+export const LINK_FILE_HINT = "Edit a diagram .json where it lives: edits save to it, and its changes reload here";
+
+/** …and on New file on disk…, its twin for a file that isn't there yet. */
+export const NEW_FILE_HINT = "Make a diagram .json where it belongs and edit it there. Picking an existing one links it";
+
+/**
+ * Said after Open file… read a diagram in while the host also offers Link a
+ * file on disk…: the two look alike, and only one edits the file.
+ */
+export const copyNote = (name: string): string =>
+  `${name} was read in as a copy: edits here don't go back to it. To edit the file where it lives, use Import → Link a file on disk….`;
+
 /** What an import says once it has landed: its toast, and any notes for the notes bar. */
 export interface ImportReport {
   message: string;
@@ -915,6 +928,7 @@ export const SHORTCUT_GROUPS: Record<"architecture" | "sequence", ReadonlyArray<
         ["mod+Z", "Undo"],
         ["mod+⇧+Z / mod+Y", "Redo"],
         ["mod+S", "Save"],
+        ["⇧+mod+S", "Save as… (when the host offers it)"],
         ["mod+A", "Select all"],
         ["F2 / Enter", "Rename the selection"],
         ["Delete", "Delete selection (cascades into groups)"],
@@ -988,6 +1002,7 @@ export const SHORTCUT_GROUPS: Record<"architecture" | "sequence", ReadonlyArray<
         ["mod+Z", "Undo"],
         ["mod+⇧+Z", "Redo"],
         ["mod+S", "Save"],
+        ["⇧+mod+S", "Save as… (when the host offers it)"],
         ["mod+A", "Select all"],
         ["Delete", "Delete selection"],
         ["Esc", "Close panels"],
@@ -1074,6 +1089,7 @@ export function FileMenu({
   onDelete,
   removedFiles,
   onFileRestore,
+  onSaveAs,
 }: {
   files: StudioFile[];
   activeFileId?: string;
@@ -1086,6 +1102,8 @@ export function FileMenu({
   /** Recently deleted documents the host still holds, newest first. */
   removedFiles?: StudioFile[];
   onFileRestore?: (id: string) => void;
+  /** Save the active file somewhere the host lets the person pick. */
+  onSaveAs?: () => void;
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -1199,6 +1217,25 @@ export function FileMenu({
             >
               <UiIcon name="plus" size={13} />
               <span className="as-menu__label">New file</span>
+            </button>
+          ) : null}
+          {onSaveAs ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="as-menu__item as-tool"
+              onClick={() => {
+                onToggle();
+                onSaveAs();
+              }}
+            >
+              <UiIcon name="download" size={13} className="as-tool__icon" />
+              <span className="as-tool__text">
+                <span className="as-menu__label">Save as…</span>
+                <span className="as-menu__hint">
+                  {active ? `${active.name}, ` : ""}to a folder you pick — edits keep saving there ({isMac() ? "⇧⌘S" : "Ctrl+Shift+S"})
+                </span>
+              </span>
             </button>
           ) : null}
           {removedFiles?.length && onFileRestore ? (

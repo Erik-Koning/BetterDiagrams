@@ -94,8 +94,11 @@ export interface ArchitectureStudioProps {
     onLinkFile?: () => void;
     // (undocumented)
     onNavigateFile?: (ref: string) => void;
+    onNewFileOnDisk?: () => void;
+    onOpenFile?: () => Promise<File | null>;
     onPinsChange?: (pins: Pin[]) => void;
     onSave?: (template: DiagramTemplate) => void | Promise<void>;
+    onSaveFileAs?: () => void;
     onSelectionChange?: (selection: StudioSelection) => void;
     readOnly?: boolean;
     registry?: RegistryExtensions;
@@ -3515,7 +3518,10 @@ export interface SequenceStudioProps {
     // (undocumented)
     onFileSelect?: (id: string) => void;
     onLinkFile?: () => void;
+    onNewFileOnDisk?: () => void;
+    onOpenFile?: () => Promise<File | null>;
     onSave?: (template: SequenceTemplate) => void | Promise<void>;
+    onSaveFileAs?: () => void;
     onSelectionChange?: (selection: SequenceSelection) => void;
     // (undocumented)
     readOnly?: boolean;
@@ -3598,6 +3604,7 @@ export const SIDECAR_DIR = ".better-diagrams";
 // @public (undocumented)
 export interface Silhouette {
     body: string;
+    contentBottom: number;
     contentInlinePad: number;
     contentTop: number;
     detail?: string;
@@ -4425,6 +4432,7 @@ export interface WelcomeModalProps {
     onInsert: (doc: unknown, name: string) => void;
     onInsertOther?: (doc: unknown, name: string) => void;
     onLinkFile?: () => void;
+    onNewFileOnDisk?: () => void;
     parse: (text: string) => unknown;
     parseOther?: (text: string) => unknown;
     promptForClouds?: (clouds: string[], opts?: {

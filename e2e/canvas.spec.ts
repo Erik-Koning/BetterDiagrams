@@ -151,6 +151,41 @@ test.describe("the canvas tools", () => {
     await expect(studio.node("api")).toHaveClass(/selected/);
   });
 
+  test("a band takes a region only when it goes all the way round it", async ({ studio }) => {
+    await studio.goto();
+    await studio.focusEditor();
+    const zone = studio.node("zone:region");
+    const box = (await zone.boundingBox())!;
+    const pane = (await studio.canvas.boundingBox())!;
+    const inside = await studio.boxAround(["cdn", "api"]);
+    expect(inside.x1, "the band starts on the region's own floor").toBeGreaterThan(box.x);
+
+    // Select bands from wherever the press lands, so this one starts inside
+    // the region it sits on — and selecting the cards must not take it too,
+    // or the next drag under the Cursor carries the whole region off.
+    await studio.pickTool("Select");
+    await studio.band(inside);
+    await expect(studio.node("cdn")).toHaveClass(/selected/);
+    await expect(studio.node("api")).toHaveClass(/selected/);
+    await expect(zone).not.toHaveClass(/selected/);
+
+    await studio.pickTool("Cursor");
+    await studio.dragNode("cdn", 40, 0);
+    expect(await zone.boundingBox()).toEqual(box);
+
+    // The Cursor's band starts on the bare pane, outside the region, and
+    // crossing its border is not enough either.
+    const outside = box.x - (box.x - pane.x) / 2;
+    await studio.band({ ...(await studio.boxAround(["cdn", "api"])), x1: outside });
+    await expect(studio.node("cdn")).toHaveClass(/selected/);
+    await expect(studio.node("api")).toHaveClass(/selected/);
+    await expect(zone).not.toHaveClass(/selected/);
+
+    // All the way round it, and it is in.
+    await studio.band({ x1: outside, y1: box.y - 4, x2: box.x + box.width + 4, y2: box.y + box.height + 4 });
+    await expect(zone).toHaveClass(/selected/);
+  });
+
   test("the Pan tool drags the canvas instead of what is under the pointer", async ({ studio }) => {
     await studio.goto();
     await studio.showJson();

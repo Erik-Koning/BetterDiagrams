@@ -70,6 +70,16 @@
         "default": "./dist/server.cjs"
       }
     },
+    "./disk": {
+      "import": {
+        "types": "./dist/disk.d.ts",
+        "default": "./dist/disk.js"
+      },
+      "require": {
+        "types": "./dist/disk.d.cts",
+        "default": "./dist/disk.cjs"
+      }
+    },
     "./styles.css": "./dist/better-diagrams.css",
     "./schema.json": "./dist/schema.json",
     "./package.json": "./package.json"
@@ -84,11 +94,15 @@
       ],
       "server": [
         "./dist/server.d.ts"
+      ],
+      "disk": [
+        "./dist/disk.d.ts"
       ]
     }
   },
   "files": [
     "dist",
+    "app",
     "bin",
     "CHANGELOG.md"
   ],
@@ -103,20 +117,21 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && vite build && npm run build:dts-cts && npm run build:schema",
-    "build:dts-cts": "node -e \"for (const f of ['better-diagrams','contract','contract-folder-node','server']) require('fs').copyFileSync('dist/'+f+'.d.ts','dist/'+f+'.d.cts')\"",
+    "build:dts-cts": "node -e \"for (const f of ['better-diagrams','contract','contract-folder-node','server','disk']) require('fs').copyFileSync('dist/'+f+'.d.ts','dist/'+f+'.d.cts')\"",
     "build:schema": "node scripts/write-json-schema.mjs",
     "build:explorer": "node scripts/build-explorer-runtime.mjs",
     "api:check": "node scripts/api-report.mjs --check",
     "api:update": "node scripts/api-report.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "prepublishOnly": "npm run typecheck && npm run test && npm run build && npm run api:check",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build && npm run api:check && node scripts/check-app.mjs",
     "prepack": "cp ../../README.md ../../LICENSE ../../CHANGELOG.md .",
     "postpack": "rm -f README.md LICENSE CHANGELOG.md"
   },
   "peerDependencies": {
     "@anthropic-ai/sdk": ">=0.133.0",
     "openai": ">=7.34.0",
+    "prettier": ">=2",
     "react": ">=18",
     "react-dom": ">=18"
   },
@@ -125,6 +140,9 @@
       "optional": true
     },
     "openai": {
+      "optional": true
+    },
+    "prettier": {
       "optional": true
     }
   },
@@ -160,6 +178,7 @@
     "vitest": "^5.0.3"
   },
   "bin": {
-    "bd-folder": "./bin/bd-folder.mjs"
+    "bd-folder": "./bin/bd-folder.mjs",
+    "better-diagrams": "./bin/better-diagrams.mjs"
   }
 }

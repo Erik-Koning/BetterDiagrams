@@ -4131,6 +4131,11 @@ button.as-task__check--blocked {
   font-size: 0.75rem;
 }
 
+/* "C2 · Containers" is one name, as on the breadcrumb bar's chip. */
+.as-focus-empty__level {
+  white-space: nowrap;
+}
+
 .as-focus-empty__actions {
   display: flex;
   justify-content: center;
@@ -5351,10 +5356,14 @@ button.as-task__check--blocked {
   gap: 10px;
 }
 
-/* Linking a file sits at the row's other end from Insert: a way in of its
-   own, not a step after the paste. */
+/* Linking a file — or starting one — sits at the row's other end from
+   Insert: a way in of its own, not a step after the paste. */
 .as-welcome__link {
   margin-right: auto;
+}
+
+.as-welcome__link:has(+ .as-welcome__link) {
+  margin-right: 0;
 }
 
 /* ── File selector ───────────────────────────────────────────────────────── */
@@ -6541,6 +6550,74 @@ button.as-task__check--blocked {
 
 .as-kindmenu__dim .as-kindmenu__dot {
   opacity: 0.45;
+}
+
+/* ── Searchable pickers (SearchSelect, and KindSelect's box) ─────────────── */
+
+/* Fills whatever width its wrapper is given (the field row's key column) —
+   two classes, to outrank `.as-inspector .as-select { width: auto }`. */
+.as-searchselect > .as-searchselect__button {
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.as-searchselect__value {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The same button-over-a-menu as the kind picker, for every other choice in
+   the node inspector. Unlike `.as-kindselect`, the wrapper is NOT positioned:
+   the menu hangs off the inspector instead, and SearchSelect sets its `left`,
+   `bottom` and `min-width` from the button — so a scrolling box between the
+   two, a table's field list, can't clip it. */
+.as-searchselect .as-searchmenu {
+  top: auto;
+  right: auto;
+  width: max-content;
+  min-width: 160px;
+  max-width: 280px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+/* Pinned while the rows scroll under it. The menu's own 5px padding would
+   show rows through the gap above the box, so the box steps up into it and
+   paints it with the menu's surface. */
+.as-searchmenu__box {
+  position: sticky;
+  top: -5px;
+  z-index: 1;
+  width: 100%;
+  height: 28px;
+  margin-bottom: 4px;
+  font-size: 0.75rem;
+  box-shadow: 0 -5px 0 var(--as-surface);
+}
+
+.as-inspector .as-searchmenu__box {
+  width: 100%;
+}
+
+/* The row Enter would pick — the keyboard's hover. */
+.as-searchmenu .as-kindmenu__option[data-active="true"] {
+  background: color-mix(in srgb, var(--as-accent) 14%, transparent);
+}
+
+.as-searchmenu .as-kindmenu__option[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+  background: none;
+}
+
+.as-searchmenu__empty {
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  color: var(--as-text-dim);
 }
 
 /* ── Marketing mode ──────────────────────────────────────────────────────── */

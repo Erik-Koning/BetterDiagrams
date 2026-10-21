@@ -69,10 +69,11 @@ describe("SequenceStudio", () => {
     expect(latest.participants.at(-1)!.label).toBe("New Participant");
   });
 
-  it("Import is a menu: Open file… opens the picker, and Link a file on disk… is the host's", async () => {
+  it("Import is a menu: Open file… opens the picker, and Link a file on disk… and New file on disk… are the host's", async () => {
     const user = userEvent.setup();
     const onLinkFile = vi.fn();
-    const { container } = mount(<SequenceStudio defaultValue={example} onLinkFile={onLinkFile} />);
+    const onNewFileOnDisk = vi.fn();
+    const { container } = mount(<SequenceStudio defaultValue={example} onLinkFile={onLinkFile} onNewFileOnDisk={onNewFileOnDisk} />);
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
     const click = vi.spyOn(input, "click").mockImplementation(() => undefined);
 
@@ -82,6 +83,44 @@ describe("SequenceStudio", () => {
     await user.click(screen.getByRole("button", { name: "Import" }));
     await user.click(screen.getByRole("menuitem", { name: /^Link a file on disk…/ }));
     expect(onLinkFile).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await user.click(screen.getByRole("menuitem", { name: /^New file on disk…/ }));
+    expect(onNewFileOnDisk).toHaveBeenCalledTimes(1);
+    expect(onLinkFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Save as… in the file menu and on ⇧⌘S when the host can, and says Open file… reads a copy when it can link", async () => {
+    const user = userEvent.setup();
+    const onSaveFileAs = vi.fn();
+    const files = [{ id: "f1", name: "Order flow", kind: "seq" }];
+    mount(<SequenceStudio defaultValue={example} files={files} activeFileId="f1" onSaveFileAs={onSaveFileAs} onLinkFile={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Order flow" }));
+    await user.click(screen.getByRole("menuitem", { name: /^Save as…/ }));
+    expect(onSaveFileAs).toHaveBeenCalledTimes(1);
+    await user.keyboard("{Meta>}{Shift>}s{/Shift}{/Meta}");
+    expect(onSaveFileAs).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    expect(screen.getByRole("menuitem", { name: /^Open file…/ })).toHaveTextContent(/read in as a copy/);
+  });
+
+  it("opens through the host's dialog when it has one, reading in what it hands back", async () => {
+    const user = userEvent.setup();
+    const incoming = { version: 1, meta: { title: "Login" }, participants: [{ id: "u", label: "User" }], messages: [] };
+    const onChange = vi.fn();
+    const onOpenFile = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(new File([JSON.stringify(incoming)], "login.json"));
+    const lone = validateSequence({ version: 1, participants: [{ id: "a", label: "A" }], messages: [] });
+    mount(<SequenceStudio defaultValue={lone} onChange={onChange} onOpenFile={onOpenFile} />);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    expect(screen.getByRole("menuitem", { name: /^Open file…/ })).toHaveTextContent("A sequence .json is linked, so edits save to it");
+    // The host linked what it picked (or the person cancelled): nothing to read.
+    await user.click(screen.getByRole("menuitem", { name: /^Open file…/ }));
+    expect(onOpenFile).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+    // It handed a file back: read in, as the browser's picker would have.
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await user.click(screen.getByRole("menuitem", { name: /^Open file…/ }));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(await screen.findByText("Loaded login.json")).toBeInTheDocument();
   });
 
   it("an import opens as a new file once the diagram has more than one participant, and replaces one that hasn't", async () => {
@@ -95,7 +134,7 @@ describe("SequenceStudio", () => {
       });
 
     const full = mount(<SequenceStudio defaultValue={example} files={files} activeFileId="f1" onFileCreate={onFileCreate} onChange={onChange} />);
-    expect(screen.getByRole("button", { name: "Import" })).toHaveAttribute("title", "Opens as a new file: a sequence document (.json)");
+    expect(screen.getByRole("button", { name: "Import" })).toHaveAttribute("title", "Opens as a new file: a sequence .json");
     pick(full.container);
     await waitFor(() => expect(onFileCreate).toHaveBeenCalledTimes(1));
     expect(onFileCreate.mock.calls[0][0]).toMatchObject({ name: "Login", kind: "sequence", doc: { participants: [expect.objectContaining({ id: "u" })] } });
@@ -105,7 +144,7 @@ describe("SequenceStudio", () => {
     const lone = mount(<SequenceStudio defaultValue={validateSequence(incoming)} files={files} activeFileId="f1" onFileCreate={onFileCreate} onChange={onChange} />);
     // The editor mounted after the import says what was read.
     expect(await screen.findByText("Loaded login.json · in a new file")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Import" })).toHaveAttribute("title", "Replaces this diagram: a sequence document (.json)");
+    expect(screen.getByRole("button", { name: "Import" })).toHaveAttribute("title", "Replaces this diagram: a sequence .json");
     pick(lone.container);
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     expect(onFileCreate).toHaveBeenCalledTimes(1);

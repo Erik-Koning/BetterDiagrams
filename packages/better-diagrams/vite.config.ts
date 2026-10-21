@@ -46,6 +46,10 @@ export default defineConfig({
         // The AI route, for a host's server. Its provider SDKs are optional
         // peers, imported only when that provider answers.
         server: `${here}src/server/index.ts`,
+        // The disk store behind a local editor's live files, and the
+        // standalone server `better-diagrams` runs. Node only; Prettier, an
+        // optional peer, is imported only to format what it writes.
+        disk: `${here}src/disk/index.ts`,
       },
       name: "ArchitectureStudio",
       formats: ["es", "cjs"],
@@ -68,6 +72,7 @@ export default defineConfig({
         /^node:/,
         "@anthropic-ai/sdk",
         "openai",
+        "prettier",
       ],
       output: {
         globals: { react: "React", "react-dom": "ReactDOM" },

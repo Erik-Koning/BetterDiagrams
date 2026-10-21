@@ -32,7 +32,7 @@ import { ALL_CLOUD_KIND_IDS } from "./cloud";
 import { normalizeDate, type DiagramDate } from "./timeline";
 import { parseLlmJsonReport } from "./json-repair";
 import { wrappedLineCount } from "./text";
-import { TASK_KIND } from "./tasks";
+import { MILESTONE_KIND, TASK_KIND } from "./tasks";
 import { validatePaths, type DiagramPath, type PathGlow } from "./paths";
 import { validateAnalyses, type SavedAnalysis } from "./analyses";
 import { validateLineage, type LineageLink } from "./lineage-links";
@@ -460,9 +460,19 @@ export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export const NOTATIONS = ["both", "uml", "crowsfoot"] as const;
 export type Notation = (typeof NOTATIONS)[number];
 
-/** Horizontal placement of a node's text. "left" is the default and never stored. */
+/** Horizontal placement of a node's text. The default (`defaultTextAlign`) is never stored. */
 export const NODE_TEXT_ALIGNS = ["left", "center", "right"] as const;
 export type NodeTextAlign = (typeof NODE_TEXT_ALIGNS)[number];
+
+/**
+ * The alignment a node's text takes when the document says nothing: left,
+ * except in a diamond, which narrows to a point at each side, so left-aligned
+ * text starts in its corner. By kind rather than by the registry's shape,
+ * because validation decides what to store and runs without a registry.
+ */
+export function defaultTextAlign(kind: string): NodeTextAlign {
+  return kind === "decision" || kind === MILESTONE_KIND ? "center" : "left";
+}
 
 /** Vertical placement of a node's text block. "middle" is the default and never stored. */
 export const NODE_TEXT_VALIGNS = ["top", "middle", "bottom"] as const;
@@ -1132,7 +1142,7 @@ Rules:
 - meta.routing "orthogonal" gives right-angle connectors (formal/dense diagrams), "straight" direct point-to-point lines (classic flow charts); omit for curved. meta.title names the diagram. meta.versionTag labels the revision ("v2.1", "2026-Q3 draft") when the user gives one; omit otherwise.
 - "settings" holds document-wide rendering preferences. settings.groupContents "hide" folds every group with contents into a chip (a high-level overview the reader expands from the toolbar); set it ONLY when the user asks for collapsed/folded groups or a summary view, and omit the "settings" key otherwise.
 - Node "tags" = short lowercase labels for cross-cutting concerns the user mentions ("pci","gdpr","deprecated","planned"); omit when none. Node "url" = deep link to docs/repo if the user supplies one; omit otherwise. Node "team" = the owning or contact team when the user names one ("Payments", "Platform"); omit otherwise. Node "status" = lifecycle stage when stated: "planned" for future work, "stubbed" for scaffolding that exists but does nothing yet, "dark" for built-and-shipped but not yet enabled, "deprecated" for being sunset; omit for normal active components. Text notes draw a subtle box by default; set "plain":true only when the user wants bare text with no outline.
-- Node text layout, all optional and all rarely needed — omit unless the user asks: "textAlign":"center"/"right" (default left), "textVAlign":"top"/"bottom" (default middle), "wrap":true to show a long label and description in full instead of truncating them (the editor grows the node's height to fit). "fontSize" sets the label size in px (default 13).
+- Node text layout, all optional and all rarely needed — omit unless the user asks: "textAlign":"left"/"center"/"right" (default left, centred on a "decision" or "milestone"), "textVAlign":"top"/"bottom" (default middle), "wrap":true to show a long label and description in full instead of truncating them (the editor grows the node's height to fit). "fontSize" sets the label size in px (default 13).
 - A "group" may also be styled as a purely visual grouping frame: "fill":false drops its background, "outline":"none" drops its border, "outline":"dotted"/"solid" changes it (default dashed), and "color" is an "#rrggbb" ink the background tint derives from. Use "fill":false with "outline":"none" only when the user explicitly wants an invisible/abstract grouping box.
 - Node/edge/zone "date" = when that piece lands or landed, as "YYYY-MM-DD". Set it ONLY when the user gives a roadmap, phases, quarters, or a migration order; omit it everywhere else. Undated elements are treated as always present, so a phased plan dates the new pieces and leaves today's system undated. A node inside a group is never shown before the group, so date the group with its earliest phase.
 - parentId may reference ANY existing node. A child of a "group" renders inside its frame. A child of any other node is that component's INTERNAL decomposition (the next C4 level) — shown only when the user drills into that component, never on the parent's own diagram. Do NOT decompose a component into children unless the user explicitly asks for its internal detail. Never create a parent cycle.
@@ -1266,7 +1276,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
       // written before these existed round-trips byte-identical.
       const textAlign = NODE_TEXT_ALIGNS.includes(n.textAlign as NodeTextAlign)
         ? (n.textAlign as NodeTextAlign)
-        : "left";
+        : defaultTextAlign(kind);
       const textVAlign = NODE_TEXT_VALIGNS.includes(n.textVAlign as NodeTextVAlign)
         ? (n.textVAlign as NodeTextVAlign)
         : "middle";
@@ -1324,9 +1334,10 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         // the field is stored only when true, and only where it means
         // something — every other kind draws its own shape.
         ...(n.plain === true && annotationSet.has(kind) ? { plain: true } : {}),
-        // Left / middle / unwrapped is how every node rendered before these
-        // fields existed, so those values are the ones never written down.
-        ...(textAlign !== "left" ? { textAlign } : {}),
+        // Left (centred in a diamond) / middle / unwrapped is how every node
+        // rendered before these fields existed, so those values are the ones
+        // never written down.
+        ...(textAlign !== defaultTextAlign(kind) ? { textAlign } : {}),
         ...(textVAlign !== "middle" ? { textVAlign } : {}),
         ...(wrap ? { wrap: true } : {}),
         // Frame styling means nothing on a leaf node — it draws its own shape.

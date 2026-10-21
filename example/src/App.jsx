@@ -37,6 +37,7 @@ import {
   readsAsPlan,
   validateSequence,
   validateTemplate,
+  validateTemplateReport,
 } from "@mosphere/better-diagrams";
 import "@mosphere/better-diagrams/styles.css";
 import { registry } from "./extensions.js";
@@ -54,6 +55,7 @@ import {
   readFolderTree,
   readTemplate,
   removeTemplate,
+  saveFileAs,
   templateFile,
   unlinkFile,
   unlinkFolder,
@@ -78,6 +80,45 @@ const nextFileId = () => `f_${Date.now().toString(36)}${(fileCounter++).toString
 const VALIDATE = { knownKinds: Object.keys(registry.nodeKinds) };
 const validateDoc = (kind, doc) =>
   kind === "sequence" ? validateSequence(doc) : validateTemplate(doc, VALIDATE);
+
+/**
+ * What saving `doc` — validated from `raw`, a file read from disk — would
+ * drop from that file: one sentence each. Validation repairs rather than
+ * rejects, so a key this editor doesn't know, a value outside its vocabulary
+ * or an edge to nowhere loads fine and is simply gone from the next save.
+ * Architecture files get the library's own report; a sequence, the keys that
+ * didn't survive.
+ */
+function lossOf(kind, raw, doc) {
+  if (kind !== "sequence") return validateTemplateReport(raw, VALIDATE).issues.map((issue) => issue.message);
+  const lost = [];
+  const walk = (given, kept, at) => {
+    if (Array.isArray(given)) {
+      const keptById = new Map((Array.isArray(kept) ? kept : []).map((el) => [el?.id, el]));
+      given.forEach((el, i) => {
+        const match = el && typeof el === "object" && "id" in el ? keptById.get(el.id) : Array.isArray(kept) ? kept[i] : undefined;
+        if (match === undefined) lost.push(`${at}/${i} isn't something a sequence keeps, so it was dropped.`);
+        else walk(el, match, `${at}/${i}`);
+      });
+      return;
+    }
+    if (!given || typeof given !== "object") return;
+    for (const [key, value] of Object.entries(given)) {
+      if (value === undefined || value === null || value === "") continue;
+      if (!kept || typeof kept !== "object" || !(key in kept)) lost.push(`"${key}" at ${at || "/"} isn't a sequence property, so it was dropped.`);
+      else walk(value, kept[key], `${at}/${key}`);
+    }
+  };
+  walk(raw, doc, "");
+  return lost;
+}
+
+/** `3 things` — counted the way a person reads it. */
+const thingsOf = (n) => `${n} ${n === 1 ? "thing" : "things"}`;
+
+/** The first few sentences of a list, for a toast: `A. B. C. …and 4 more (see the console).` */
+const previewOf = (lines, shown = 3) =>
+  lines.slice(0, shown).join(" ") + (lines.length > shown ? ` …and ${lines.length - shown} more (see the console).` : "");
 
 /**
  * Where each workspace file lives on disk while developing: the file it is
@@ -105,6 +146,34 @@ function diskPaths(files) {
 }
 
 /**
+ * The binding for a listed file: its folder and path there, and how a person
+ * reads where it is — a linked folder's path, a link's target. A link's
+ * target is also what the store checks the link still points at (see
+ * templates.js), so a link remade under the same name for another file is
+ * never taken for this one.
+ */
+function bindingOf(entry, linked) {
+  const link = linked?.find((l) => l.folder === entry.folder);
+  return {
+    folder: entry.folder,
+    file: entry.file,
+    ...(link ? { display: link.display } : {}),
+    ...(entry.folder === SYMLINKS && entry.target ? { target: entry.target } : {}),
+  };
+}
+
+/** Is a workspace file bound to this disk file? */
+const boundTo = (f, path) => f.disk?.folder === path.folder && f.disk?.file === path.file;
+
+/** Where a file dialog about this workspace file opens: beside the file it's synced with, if any. */
+function nearOf(f, linked) {
+  if (!f?.disk) return undefined;
+  if (f.disk.target) return f.disk.target;
+  const link = linked?.find((l) => l.folder === f.disk.folder);
+  return link ? `${link.dir}/${f.disk.file}` : undefined;
+}
+
+/**
  * A disk file as a person reads it in a toast: a linked folder by its path
  * (`~/work/tracker/plan.json`), a repo folder by its name (`examples/…`), and
  * a symlink by the file it points at, when the listing in `templates` knows.
@@ -118,6 +187,16 @@ function whereIs(linked, folder, file, templates) {
 
 /** `Plan, Roadmap` — workspace files named in a toast. */
 const namesOf = (files) => files.map((f) => f.name).join(", ");
+
+/** What the menu says under a linked folder: where it came from, and what its listing left out. */
+function linkedNote(l) {
+  const from = l.source === "env" ? ", from BD_LINKED_DIRS" : l.source === "cli" ? ", from the command line" : "";
+  const skipped = l.skipped
+    ? ` ${l.skipped} other JSON ${l.skipped === 1 ? "file isn't a diagram, so it isn't" : "files aren't diagrams, so they aren't"} listed.`
+    : "";
+  const truncated = l.truncated ? " Only its first 2,000 JSON files were read." : "";
+  return `Outside the repo${from} — live like examples; never deleted.${skipped}${truncated}`;
+}
 
 /** Nothing in it yet — deleting is safe, and the mode switch flips in place. */
 const isBlank = (kind, doc) =>
@@ -148,6 +227,10 @@ function seedWorkspace() {
   } catch (err) {
     console.warn("Ignoring unreadable workspace:", err);
   }
+
+  // Opened to show one file (`better-diagrams path/to/plan.json` does this):
+  // a first visit starts with just that file, not the demos.
+  if (new URLSearchParams(window.location.search).has("open")) return { files: [], activeId: null, removed: [] };
 
   const legacy = (key, kind, fallback) => {
     try {
@@ -595,12 +678,18 @@ export default function App() {
   const [picker, setPicker] = useState(false);
   /** …and its file dialog? Link a file… is offered only with one. */
   const [filePicker, setFilePicker] = useState(false);
+  /** …and Open file…'s, for any file? Without one, Open file… uses the browser's picker and reads a copy. */
+  const [openPicker, setOpenPicker] = useState(false);
+  /** …and its save dialog? Save as… is offered only with one. */
+  const [savePicker, setSavePicker] = useState(false);
   /** id → the disk file it was last synced with and that document's JSON, so an idle app writes nothing. */
   const writtenRef = useRef(new Map());
   /** Ids of files whose last save failed — warned about once, until a save goes through. */
   const failingRef = useRef(new Set());
   /** Re-link a symlinked file — defined further down, offered by the save warning below. */
   const relinkFileRef = useRef(null);
+  /** Open a listed file — defined further down, used by the startup pass for `?open=`. */
+  const openTemplateRef = useRef(null);
   /**
    * Disk paths whose saves wait while a re-link settles: `folder/` for a
    * linked folder, `folder/file` for one link. The server re-points the link
@@ -612,16 +701,30 @@ export default function App() {
   const holdsRef = useRef(new Map());
   /** Bumped when a hold lifts, so a save pass picks up the edits it held back. */
   const [holdsLifted, setHoldsLifted] = useState(0);
+  /**
+   * id → what the next save would drop from the file it is bound to (see
+   * `lossOf`): `{ key, issues, acknowledged, asked }`, `key` being the file's
+   * `folder/file`. Until the person says to save anyway, nothing is written
+   * there — a hand-written key or an agent's typo is theirs to lose, not the
+   * editor's.
+   */
+  const lossRef = useRef(new Map());
   /** The workspace as of the last render — for the async sync paths below. */
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
 
   /** Take in a listing from the server — the probe's, or a link's answer. */
   const applyListing = useCallback((listing) => {
+    // The refs at once, not on the next render: an async path that takes a
+    // listing in and opens a file from it straight away reads them.
+    savedTemplatesRef.current = listing.templates ?? [];
+    linkedRef.current = listing.linked ?? [];
     setSavedTemplates(listing.templates ?? []);
     setLinked(listing.linked ?? []);
     setPicker(Boolean(listing.picker));
     setFilePicker(Boolean(listing.filePicker));
+    setOpenPicker(Boolean(listing.openPicker));
+    setSavePicker(Boolean(listing.savePicker));
   }, []);
 
   const refreshTemplates = useCallback(async () => {
@@ -632,6 +735,119 @@ export default function App() {
   /** A save that went through after failing: take its warning down. */
   const clearFailure = (id) => {
     if (failingRef.current.delete(id)) toast.dismiss(`save-failed:${id}`);
+  };
+
+  /** Stop syncing one workspace file: it carries on as an ordinary file, which auto-save writes to scratch. */
+  const unbindFile = useCallback(
+    (id) =>
+      updateWorkspace((ws) => ({
+        ...ws,
+        files: ws.files.map((f) => {
+          if (f.id !== id || !f.disk) return f;
+          const { disk: _unbound, ...rest } = f;
+          return rest;
+        }),
+      })),
+    [updateWorkspace],
+  );
+
+  /**
+   * Note what the next save of a file would drop from the copy just read
+   * from disk (`issues`, from `lossOf`) — or, with none, that it drops nothing
+   * now. A question already answered stays answered while the file says the
+   * same. True when there is something new to tell the person.
+   */
+  const noteLoss = (id, path, issues) => {
+    const key = `${path.folder}/${path.file}`;
+    const known = lossRef.current.get(id);
+    if (!issues.length) {
+      if (known) {
+        lossRef.current.delete(id);
+        toast.dismiss(`loss:${id}`);
+      }
+      return false;
+    }
+    if (known?.key === key && JSON.stringify(known.issues) === JSON.stringify(issues)) return false;
+    lossRef.current.set(id, { key, issues, acknowledged: false, asked: false });
+    console.warn(`Saving ${key} from this editor would drop:`, issues);
+    return true;
+  };
+
+  /** Say, as a file is read, what this editor won't keep of it. */
+  const warnLoss = (id, name, where, issues) =>
+    toast.warning(`${where} has ${thingsOf(issues.length)} this editor doesn't keep`, {
+      id: `loss:${id}`,
+      description: `${previewOf(issues, 2)} Editing ${name} here asks before it saves without them.`,
+      duration: 12_000,
+    });
+
+  /**
+   * Ask before a save drops something from its file (see `lossRef`) — once
+   * per file, and the question can't be closed unanswered: the file's saves
+   * wait on it. Save anyway writes this copy over it; Keep the file stops
+   * syncing this copy, which carries on in scratch with its edits, and leaves
+   * the file exactly as it is.
+   */
+  const askLoss = (file, path, loss) => {
+    if (loss.asked) return;
+    loss.asked = true;
+    const where = whereIs(linkedRef.current, path.folder, path.file, savedTemplatesRef.current);
+    toast(`Saving ${file.name} will remove ${thingsOf(loss.issues.length)} from ${where}`, {
+      id: `loss:${file.id}`,
+      description: `${previewOf(loss.issues)} This editor doesn't keep them.`,
+      duration: Infinity,
+      closeButton: false,
+      dismissible: false,
+      action: {
+        label: "Save anyway",
+        onClick: () => {
+          loss.acknowledged = true;
+          toast.dismiss(`loss:${file.id}`);
+          setHoldsLifted((n) => n + 1);
+        },
+      },
+      // A button of its own, as in `syncOrAsk`: sonner's `cancel` does nothing on a toast that can't be dismissed.
+      cancel: (
+        <button
+          type="button"
+          data-button=""
+          data-cancel=""
+          onClick={() => {
+            toast.dismiss(`loss:${file.id}`);
+            lossRef.current.delete(file.id);
+            unbindFile(file.id);
+            toast.info(`${file.name} isn't synced with ${where} now`, {
+              description: "The file is as it was; this copy keeps its edits, saved to scratch.",
+            });
+          }}
+        >
+          Keep the file
+        </button>
+      ),
+    });
+  };
+
+  /** Sync a detached file with its own file again — defined further down, offered by `detachMoved`. */
+  const relinkMovedRef = useRef(null);
+
+  /**
+   * A file bound to a link that points at another file now — the link was
+   * removed and remade under its name for a different file. This copy is not
+   * that file: it stops syncing, keeps its edits (auto-saved to scratch), and
+   * can sync with its own file again by linking it anew.
+   */
+  const detachMoved = (id, path, now) => {
+    const f = workspaceRef.current.files.find((x) => x.id === id);
+    if (!f) return;
+    unbindFile(id);
+    lossRef.current.delete(id);
+    clearFailure(id);
+    toast.warning(`${f.name} isn't synced with ${path.target ?? `${SYMLINKS}/${path.file}`} now`, {
+      id: `moved:${id}`,
+      description: `${SYMLINKS}/${path.file} links to ${now ?? "another file"} now. This copy keeps its edits, saved to scratch.`,
+      duration: Infinity,
+      ...(path.target ? { action: { label: "Sync it again", onClick: () => void relinkMovedRef.current?.(id, path.target) } } : {}),
+    });
   };
 
   const isHeld = (path) => holdsRef.current.has(`${path.folder}/`) || holdsRef.current.has(`${path.folder}/${path.file}`);
@@ -686,7 +902,12 @@ export default function App() {
     async (targets) => {
       const adopted = [];
       for (const { file, path } of targets) {
-        const raw = await readTemplate(path.folder, path.file);
+        const result = await readTemplate(path);
+        if (result?.moved) {
+          detachMoved(file.id, path, result.moved.target);
+          continue;
+        }
+        const raw = result?.doc;
         if (!raw) continue;
         let doc;
         try {
@@ -700,10 +921,18 @@ export default function App() {
         // record, and only a real disk change may replace it.
         const live = workspaceRef.current.files.find((f) => f.id === file.id);
         if (!live) continue;
+        if (isSavable(path.folder) && noteLoss(file.id, path, lossOf(file.kind, raw, doc))) {
+          warnLoss(file.id, live.name, whereIs(linkedRef.current, path.folder, path.file, savedTemplatesRef.current), lossRef.current.get(file.id).issues);
+        }
         if (json === JSON.stringify(live.doc)) {
           writtenRef.current.set(file.id, { ...path, json });
           continue;
         }
+        // The file still says what it said when this copy last synced with
+        // it: news of nothing — a watcher catching up on a write made before
+        // it looked. Edits made here since are newer, and their save is due.
+        const record = writtenRef.current.get(file.id);
+        if (record && boundTo({ disk: record }, path) && record.json === json) continue;
         adopted.push({ id: file.id, path, doc });
       }
       adoptFromDisk(adopted);
@@ -717,6 +946,16 @@ export default function App() {
     probeTemplates().then(async (probe) => {
       if (!live || !probe) return;
       applyListing(probe);
+      // A binding to a link made before links were checked names no target:
+      // it takes the one its link points at now, and is checked from here on.
+      const targetOf = (f) =>
+        f.disk?.folder === SYMLINKS && !f.disk.target ? probe.templates.find((t) => t.folder === SYMLINKS && t.file === f.disk.file)?.target : undefined;
+      if (workspaceRef.current.files.some(targetOf)) {
+        updateWorkspace((ws) => ({
+          ...ws,
+          files: ws.files.map((f) => (targetOf(f) ? { ...f, disk: { ...f.disk, target: targetOf(f) } } : f)),
+        }));
+      }
       // Disk wins at startup too. Auto-save stays off (no `templatesDir`)
       // until this pass is done — otherwise it would write the workspace's
       // stored copies over files another program changed while the app was
@@ -724,12 +963,25 @@ export default function App() {
       const { files: current } = workspaceRef.current;
       const paths = diskPaths(current);
       await reconcile(current.map((file) => ({ file, path: paths.get(file.id) })));
-      if (live) setTemplatesDir(probe.dirs);
+      if (!live) return;
+      setTemplatesDir(probe.dirs);
+      // `?open=<folder>/<file>`: a link straight to one file — what
+      // `better-diagrams path/to/plan.json` opens the browser at.
+      const wanted = new URLSearchParams(window.location.search).get("open");
+      if (wanted) {
+        const cut = wanted.indexOf("/");
+        const entry = probe.templates.find((t) => t.folder === wanted.slice(0, cut) && t.file === wanted.slice(cut + 1));
+        if (entry && entry.kind !== "unreadable") await openTemplateRef.current?.(entry);
+        else toast.error(`Couldn't open ${wanted.slice(cut + 1)}`, { description: entry?.reason ?? "The disk store doesn't list it" });
+        const url = new URL(window.location.href);
+        url.searchParams.delete("open");
+        window.history.replaceState(null, "", url);
+      }
     });
     return () => {
       live = false;
     };
-  }, [reconcile, applyListing]);
+  }, [reconcile, applyListing, updateWorkspace]);
 
   // Another program changed a template on disk: reload whichever open file
   // is synced with it. The server never announces its own writes, and a file
@@ -773,6 +1025,10 @@ export default function App() {
       const listedLinks = probe?.linked ?? [];
       const lost = (folder) => folder.startsWith(LINKED_PREFIX) && !listedLinks.some((l) => l.folder === folder && !l.missing);
       for (const { file, path, result } of failures) {
+        if (result.moved) {
+          detachMoved(file.id, path, result.moved.target);
+          continue;
+        }
         if (result.status === 0 || lost(path.folder) || failingRef.current.has(file.id)) continue;
         failingRef.current.add(file.id);
         // A link whose file has moved can be pointed at where it is now.
@@ -828,14 +1084,25 @@ export default function App() {
         if (before && !moved && before.json === json) continue;
         // Mid re-link: written once the hold lifts, if the answer still says to.
         if (isHeld(path)) continue;
+        // Would drop something from the file: written once the person says so.
+        const loss = lossRef.current.get(file.id);
+        if (loss && !loss.acknowledged && loss.key === `${path.folder}/${path.file}`) {
+          askLoss(file, path, loss);
+          continue;
+        }
         if (cancelled) return;
-        const result = await writeTemplate(path.folder, path.file, file.doc);
+        const result = await writeTemplate(path, file.doc);
         if (cancelled) return;
         if (!result.ok) {
           failures.push({ file, path, result });
           continue;
         }
         clearFailure(file.id);
+        // The file holds this copy now, and nothing more to lose.
+        if (loss) {
+          lossRef.current.delete(file.id);
+          toast.dismiss(`loss:${file.id}`);
+        }
         // A rename of an unbound file writes the new name and takes the old
         // scratch file with it, rather than leaving a stale twin behind.
         if (moved && before.folder === SCRATCH && !claimed.has(`${before.folder}/${before.file}`)) {
@@ -881,75 +1148,15 @@ export default function App() {
         const json = JSON.stringify(file.doc);
         if (before && before.folder === path.folder && before.file === path.file && before.json === json) continue;
         if (isHeld(path)) continue;
-        flushTemplate(path.folder, path.file, file.doc);
+        const loss = lossRef.current.get(file.id);
+        if (loss && !loss.acknowledged && loss.key === `${path.folder}/${path.file}`) continue;
+        flushTemplate(path, file.doc);
       }
     };
     window.addEventListener("pagehide", flush);
     return () => window.removeEventListener("pagehide", flush);
   }, [templatesDir]);
 
-  /**
-   * Open a template. A file from scratch or examples opens as its OWN
-   * workspace file, bound to that file on disk — edits save back to it and
-   * outside edits reload into it — or, if a workspace file is already bound
-   * to it, switches there. (Loading it over the active file would have
-   * thrown that file's content away.)
-   */
-  const openTemplate = useCallback(
-    async (entry) => {
-      if (entry.folder === "folders") {
-        // A folder-format tree: fetched whole, converted on the client, so
-        // the same code path a dropped directory takes is what runs here.
-        const tree = await readFolderTree(entry.file);
-        if (!tree) return;
-        const result = importFolder(new Map(Object.entries(tree.files)), {
-          validate: VALIDATE,
-        });
-        setActiveDoc(result.template);
-        setSettingsOpen(false);
-        const { nodes, edges } = result.stats;
-        toast.success(`Imported ${entry.name}`, {
-          description: `${result.dialect} · ${nodes} nodes · ${edges} edges${
-            result.warnings.length ? ` · ${result.warnings.length} warnings (see console)` : ""
-          }`,
-        });
-        if (result.warnings.length) console.warn(`importFolder(${entry.file}):`, result.warnings);
-        return;
-      }
-      const raw = await readTemplate(entry.folder, entry.file);
-      if (!raw) return;
-      const kind = entry.kind === "sequence" ? "sequence" : "architecture";
-      const doc = validateDoc(kind, raw);
-      // A linked file's binding also keeps the folder's path, so a later
-      // session started without that link can say which folder it needs.
-      const link = linkedRef.current.find((l) => l.folder === entry.folder);
-      const path = { folder: entry.folder, file: entry.file, ...(link ? { display: link.display } : {}) };
-      const where = whereIs(linkedRef.current, entry.folder, entry.file, [entry]);
-      setSettingsOpen(false);
-      const { files: current } = workspaceRef.current;
-      const paths = diskPaths(current);
-      const open = current.find((f) => paths.get(f.id)?.folder === path.folder && paths.get(f.id)?.file === path.file);
-      if (open) {
-        updateWorkspace((ws) => ({ ...ws, activeId: open.id }));
-        await reconcile([{ file: open, path }]);
-        toast.success(`Switched to ${open.name}`, { description: `${where} — already open` });
-        return;
-      }
-      const id = nextFileId();
-      // In sync from the start: opening writes nothing back.
-      if (isSavable(entry.folder)) writtenRef.current.set(id, { ...path, json: JSON.stringify(doc) });
-      updateWorkspace((ws) => ({
-        ...ws,
-        files: [
-          ...ws.files,
-          { id, name: entry.name, kind, doc, ...(isSavable(entry.folder) ? { disk: path } : {}) },
-        ],
-        activeId: id,
-      }));
-      toast.success(`Opened ${entry.name}`, { description: `${where} — saved back as you edit` });
-    },
-    [setActiveDoc, updateWorkspace, reconcile],
-  );
 
   // ── Linking folders outside the repo ──────────────────────────────────────
   //
@@ -1070,7 +1277,7 @@ export default function App() {
     async (id, target, where) => {
       const f = workspaceRef.current.files.find((x) => x.id === id);
       if (!f) return "closed";
-      const raw = await readTemplate(target.folder, target.file);
+      const raw = (await readTemplate(target))?.doc;
       let doc;
       try {
         doc = raw && validateDoc(f.kind, raw);
@@ -1081,11 +1288,13 @@ export default function App() {
       const json = JSON.stringify(doc);
       const live = workspaceRef.current.files.find((x) => x.id === id);
       if (!live) return "closed";
+      // Whichever copy wins, the next save asks first if it would drop something of the file's.
+      noteLoss(id, target, lossOf(f.kind, raw, doc));
       if (json === JSON.stringify(live.doc)) {
         bindTo(id, target, json);
         return "synced";
       }
-      const held = live.disk?.folder === target.folder && live.disk?.file === target.file;
+      const held = boundTo(live, target);
       if (held) {
         updateWorkspace((ws) => ({
           ...ws,
@@ -1224,6 +1433,89 @@ export default function App() {
     [applyListing, unbind],
   );
 
+  /**
+   * Open a template. A file from the menu opens as its OWN workspace file,
+   * bound to that file on disk — edits save back to it and outside edits
+   * reload into it — or, if a workspace file is already bound to it,
+   * switches there: quietly when that copy is in sync, asking when it holds
+   * edits the file doesn't. (Loading it over the active file would have
+   * thrown that file's content away.)
+   */
+  const openTemplate = useCallback(
+    /** `opening` words the toast: `verb` for "Opened", a `note` before where the file is. */
+    async (entry, { verb = "Opened", note } = {}) => {
+      if (entry.folder === "folders") {
+        // A folder-format tree: fetched whole, converted on the client, so
+        // the same code path a dropped directory takes is what runs here.
+        const tree = await readFolderTree(entry.file);
+        if (!tree) return;
+        const result = importFolder(new Map(Object.entries(tree.files)), {
+          validate: VALIDATE,
+        });
+        setActiveDoc(result.template);
+        setSettingsOpen(false);
+        const { nodes, edges } = result.stats;
+        toast.success(`Imported ${entry.name}`, {
+          description: `${result.dialect} · ${nodes} nodes · ${edges} edges${
+            result.warnings.length ? ` · ${result.warnings.length} warnings (see console)` : ""
+          }`,
+        });
+        if (result.warnings.length) console.warn(`importFolder(${entry.file}):`, result.warnings);
+        return;
+      }
+      // A linked file's binding also keeps the folder's path, so a later
+      // session started without that link can say which folder it needs; a
+      // link's keeps the file it points at.
+      const path = bindingOf(entry, linkedRef.current);
+      const result = await readTemplate(path);
+      if (!result?.doc) {
+        // Re-pointed between the listing and the read: the menu is out of date.
+        if (result?.moved) void refreshTemplates();
+        return;
+      }
+      const raw = result.doc;
+      const kind = entry.kind === "sequence" ? "sequence" : "architecture";
+      const doc = validateDoc(kind, raw);
+      const where = whereIs(linkedRef.current, entry.folder, entry.file, [entry]);
+      setSettingsOpen(false);
+      const { files: current } = workspaceRef.current;
+      const paths = diskPaths(current);
+      const open = current.find((f) => paths.get(f.id)?.folder === path.folder && paths.get(f.id)?.file === path.file);
+      if (open?.disk?.target && path.target && open.disk.target !== path.target) {
+        // Bound to a link of this name that pointed at another file: that
+        // copy isn't this file. It stops syncing, and this one opens beside it.
+        detachMoved(open.id, open.disk, path.target);
+      } else if (open) {
+        updateWorkspace((ws) => ({ ...ws, activeId: open.id }));
+        // Edits it couldn't save — or hasn't yet — are work of their own:
+        // asked about, never replaced by the file unseen.
+        const record = writtenRef.current.get(open.id);
+        const unsynced =
+          failingRef.current.has(open.id) || !record || !boundTo({ disk: record }, path) || record.json !== JSON.stringify(open.doc);
+        if (open.disk && unsynced) {
+          await syncOrAsk(open.id, path, where);
+          return;
+        }
+        await reconcile([{ file: open, path }]);
+        toast.success(`Switched to ${open.name}`, { description: `${where} — already open` });
+        return;
+      }
+      const id = nextFileId();
+      const savable = isSavable(entry.folder);
+      // In sync from the start: opening writes nothing back.
+      if (savable) writtenRef.current.set(id, { ...path, json: JSON.stringify(doc) });
+      updateWorkspace((ws) => ({
+        ...ws,
+        files: [...ws.files, { id, name: entry.name, kind, doc, ...(savable ? { disk: path } : {}) }],
+        activeId: id,
+      }));
+      toast.success(`${verb} ${entry.name}`, { description: `${note ? `${note}: ` : ""}${where} — saved back as you edit` });
+      if (savable && noteLoss(id, path, lossOf(kind, raw, doc))) warnLoss(id, entry.name, where, lossRef.current.get(id).issues);
+    },
+    [setActiveDoc, updateWorkspace, reconcile, refreshTemplates, syncOrAsk],
+  );
+  openTemplateRef.current = openTemplate;
+
   // ── Linking single files ──────────────────────────────────────────────────
   //
   // A diagram written in another project — by an agent, a script, someone
@@ -1231,15 +1523,19 @@ export default function App() {
   // beside it. Link a file… has the dev server show the system's file dialog
   // and symlink the pick into templates/symlinks/, and the file opens bound
   // to that link: edits go through it to the file, and the file's own
-  // changes reload here.
+  // changes reload here. New file on disk… is the same for a file that isn't
+  // there yet: the server's save dialog names it, and the server makes it
+  // blank before linking it.
 
   /** A file dialog is up: another click would only stack a second dialog behind it. */
   const pickingRef = useRef(false);
 
   /**
    * Have the dev server show its file dialog and link the pick — `replaces`
-   * re-points that link instead. The server's answer, or null once the
-   * person has been told why not.
+   * re-points that link instead; `create`, a blank diagram, has it show its
+   * save dialog and make the file first if it isn't there; `open` is Open
+   * file…, whose pick may be any file and comes back as `copy` unless it is
+   * a diagram. The server's answer, or null once the person has been told why not.
    */
   const pickAndLink = useCallback(
     async (request = {}) => {
@@ -1248,16 +1544,33 @@ export default function App() {
         return null;
       }
       pickingRef.current = true;
+      const creating = request.create !== undefined;
+      const opening = request.open === true;
       try {
         const answer = await linkFile({ pick: true, ...request });
         if (answer.cancelled) return null;
         if (answer.unsupported) {
-          setFilePicker(false);
-          toast.error("No file dialog on this system", { description: "Link the folder it's in instead, from Settings → Templates." });
+          (creating ? setSavePicker : opening ? setOpenPicker : setFilePicker)(false);
+          toast.error(`No ${creating ? "save" : "file"} dialog on this system`, {
+            description: creating
+              ? "Start it from a terminal instead: npx @mosphere/better-diagrams --new path/to/file.json"
+              : opening
+                ? "Open file… uses the browser's picker from now on, and reads a copy."
+                : "Link the folder it's in instead, from Settings → Templates.",
+          });
           return null;
         }
+        // Not a diagram: its text, for the editor to read in as a copy.
+        if (opening && answer.copy) return answer;
         if (!answer.entry) {
-          toast.error(request.replaces ? `Couldn't re-link ${request.replaces}` : "Couldn't link that file", { description: answer.error });
+          const failed = request.replaces
+            ? `Couldn't re-link ${request.replaces}`
+            : creating
+              ? "Couldn't start that file"
+              : opening
+                ? "Couldn't open that file"
+                : "Couldn't link that file";
+          toast.error(failed, { description: answer.error });
           return null;
         }
         applyListing(answer);
@@ -1269,19 +1582,58 @@ export default function App() {
     [applyListing],
   );
 
+  /**
+   * Open a file just linked. The blank file the welcome modal greeted makes
+   * way for it, rather than lingering as an empty Untitled beside it.
+   */
+  const openLinked = useCallback(
+    async (entry, opening) => {
+      const { files: before, activeId } = workspaceRef.current;
+      const blank = before.find((f) => f.id === activeId && !f.disk && isBlank(f.kind, f.doc));
+      await openTemplate(entry, opening);
+      if (blank) {
+        updateWorkspace((ws) => (ws.activeId === blank.id ? ws : { ...ws, files: ws.files.filter((f) => f.id !== blank.id) }));
+      }
+    },
+    [openTemplate, updateWorkspace],
+  );
+
   /** Pick a file through the system's dialog, link it, and open it. */
   const linkDiskFile = useCallback(async () => {
     const answer = await pickAndLink();
+    if (answer) await openLinked(answer.entry);
+  }, [pickAndLink, openLinked]);
+
+  /**
+   * Open file… through the system's dialog, which knows where the pick
+   * lives: a diagram is linked and opens bound to it, as Link a file… does;
+   * anything else goes back to the editor as a File, to read in as a copy.
+   */
+  const openDiskFile = useCallback(async () => {
+    const answer = await pickAndLink({ open: true });
+    if (!answer) return null;
+    if (answer.copy) return new File([answer.copy.text], answer.copy.name);
+    await openLinked(answer.entry);
+    return null;
+  }, [pickAndLink, openLinked]);
+
+  /**
+   * Name a file that isn't there yet through the system's save dialog: the
+   * server makes it — blank, of the open file's kind — links it, and it
+   * opens. A name picked that is there already is linked as it is.
+   */
+  const newDiskFile = useCallback(async () => {
+    const { files: current, activeId } = workspaceRef.current;
+    const f = current.find((x) => x.id === activeId);
+    const near = nearOf(f, linkedRef.current);
+    const answer = await pickAndLink({
+      create: f?.kind === "sequence" ? EMPTY_SEQUENCE : EMPTY_TEMPLATE,
+      name: "diagram.json",
+      ...(near ? { near } : {}),
+    });
     if (!answer) return;
-    // The blank file the welcome modal greeted makes way for the linked one,
-    // rather than lingering as an empty Untitled beside it.
-    const { files: before, activeId } = workspaceRef.current;
-    const blank = before.find((f) => f.id === activeId && !f.disk && isBlank(f.kind, f.doc));
-    await openTemplate(answer.entry);
-    if (blank) {
-      updateWorkspace((ws) => (ws.activeId === blank.id ? ws : { ...ws, files: ws.files.filter((f) => f.id !== blank.id) }));
-    }
-  }, [pickAndLink, openTemplate, updateWorkspace]);
+    await openLinked(answer.entry, answer.created ? { verb: "Started" } : { note: "It was there already, so it's linked as it is" });
+  }, [pickAndLink, openLinked]);
 
   /**
    * A link whose file moved: pick where it is now and re-point the link. It
@@ -1295,7 +1647,7 @@ export default function App() {
       try {
         const answer = await pickAndLink({ replaces: entry.file, ...(entry.target ? { near: entry.target } : {}) });
         if (!answer) return;
-        const path = { folder: SYMLINKS, file: entry.file };
+        const path = bindingOf(answer.entry);
         const where = answer.entry.target ?? `${SYMLINKS}/${entry.file}`;
         const synced = [];
         for (const f of workspaceRef.current.files.filter((x) => x.disk?.folder === SYMLINKS && x.disk.file === entry.file)) {
@@ -1330,6 +1682,87 @@ export default function App() {
     },
     [applyListing, unbind],
   );
+
+  /** Sync a file `detachMoved` let go with its own file again: link that file anew, then compare. */
+  const relinkMoved = useCallback(
+    async (id, target) => {
+      const answer = await linkFile({ path: target });
+      if (!answer.entry) {
+        toast.error(`Couldn't link ${target}`, { description: answer.error });
+        return;
+      }
+      applyListing(answer);
+      const path = bindingOf(answer.entry, answer.linked);
+      const where = whereIs(answer.linked, path.folder, path.file, answer.templates);
+      const twin = workspaceRef.current.files.find((x) => x.id !== id && boundTo(x, path));
+      if (twin) {
+        toast.info(`${target} is already open as ${twin.name}`, { description: "Close one, then sync the other." });
+        return;
+      }
+      toast.dismiss(`moved:${id}`);
+      const f = workspaceRef.current.files.find((x) => x.id === id);
+      if ((await syncOrAsk(id, path, where)) === "synced" && f) toast.success(`${f.name} syncs with ${where} again`);
+    },
+    [applyListing, syncOrAsk],
+  );
+  relinkMovedRef.current = relinkMoved;
+
+  // ── Save as… ──────────────────────────────────────────────────────────────
+  //
+  // A diagram made here belongs with the code it describes. Save as… has the
+  // dev server show the system's save dialog, writes the file there —
+  // formatted the way that repo formats JSON — and binds the open file to it
+  // as if it had been opened from there: a folder the menu lists binds
+  // there, anywhere else is symlinked into templates/symlinks/. From then on
+  // edits save there, and edits made there reload here.
+
+  /** A save dialog is up: another click would only stack a second one behind it. */
+  const savingAsRef = useRef(false);
+
+  const saveAs = useCallback(async () => {
+    const { files: current, activeId } = workspaceRef.current;
+    const f = current.find((x) => x.id === activeId);
+    if (!f) return;
+    if (savingAsRef.current) {
+      toast.info("The save dialog is already open", { description: "It may be behind the browser window." });
+      return;
+    }
+    savingAsRef.current = true;
+    try {
+      const before = diskPaths(current).get(f.id);
+      // The dialog opens beside the file this one is synced with, and suggests its name.
+      const near = nearOf(f, linkedRef.current);
+      const name = f.disk ? f.disk.file.split("/").pop() : templateFile(f.name, "diagram");
+      const answer = await saveFileAs({ pick: true, name, ...(near ? { near } : {}), doc: f.doc });
+      if (answer.cancelled) return;
+      if (answer.unsupported) {
+        setSavePicker(false);
+        toast.error("No save dialog on this system", { description: "Link the folder from Settings → Templates instead, and open the file from there." });
+        return;
+      }
+      if (!answer.entry) {
+        toast.error(`Couldn't save ${f.name}`, { description: answer.error });
+        return;
+      }
+      applyListing(answer);
+      const path = bindingOf(answer.entry, answer.linked);
+      const where = whereIs(answer.linked, path.folder, path.file, answer.templates);
+      // A file open from the one just replaced is a copy of its own now: two bound to one would write over each other.
+      for (const twin of workspaceRef.current.files.filter((x) => x.id !== f.id && boundTo(x, path))) {
+        unbindFile(twin.id);
+        toast.info(`${twin.name} was open from ${where}`, { description: `It's a copy of its own now, saved to scratch — the file holds ${f.name}.` });
+      }
+      // In sync as of the document sent; an edit made while the dialog was up saves next.
+      bindTo(f.id, path, JSON.stringify(f.doc));
+      lossRef.current.delete(f.id);
+      toast.dismiss(`loss:${f.id}`);
+      // Its scratch copy has a real home now — unless that home is the scratch copy itself.
+      if (!f.disk && before?.folder === SCRATCH && !boundTo({ disk: before }, path)) void removeTemplate(before.file);
+      toast.success(`Saved ${f.name} to ${where}`, { description: "Edits save there as you work, and edits made there reload here." });
+    } finally {
+      savingAsRef.current = false;
+    }
+  }, [applyListing, bindTo, unbindFile]);
 
   // Guard against a stale-looking UI if another tab saves the workspace.
   useEffect(() => {
@@ -1405,6 +1838,34 @@ export default function App() {
   const isPlan = useMemo(() => !!active && active.kind !== "sequence" && readsAsPlan(active.doc), [active]);
   /** Link a file… needs the dev server's file dialog; without one, the editors don't offer it. */
   const onLinkFile = templatesDir && filePicker ? linkDiskFile : undefined;
+  /** Open file… links a diagram it opens — through that dialog, which says where the file is. */
+  const onOpenFile = templatesDir && openPicker ? openDiskFile : undefined;
+  /** Save as… and New file on disk… need its save dialog the same way. */
+  const onSaveFileAs = templatesDir && savePicker ? saveAs : undefined;
+  const onNewFileOnDisk = templatesDir && savePicker ? newDiskFile : undefined;
+  /**
+   * The Settings menu's Templates sections, `[folder, caption, note, title?,
+   * link?]` each: only the folders this server keeps (`better-diagrams` keeps
+   * no examples), then the linked ones.
+   */
+  const templateSections = templatesDir
+    ? [
+        ["examples", "Templates / examples", "Curated and tracked — opens live: edits save back, disk edits reload"],
+        ["scratch", "Templates / scratch", "Auto-saved as you work; git-ignored; live like examples"],
+        ["folders", "Templates / folders", "Folder-format trees — imported on open; git-ignored"],
+        [SYMLINKS, "Templates / symlinks", "Links to diagram files in other folders — live like examples; unlinking removes only the link"],
+      ]
+        .filter(([folder]) => templatesDir[folder])
+        .concat(
+          linked.map((l) => [
+            l.folder,
+            `Linked / ${l.name}${l.missing ? " — missing" : ""}`,
+            l.missing ? "Moved, renamed or deleted? Re-link it to where it is now" : linkedNote(l),
+            l.display,
+            l,
+          ]),
+        )
+    : [];
   const counts = !active
     ? ""
     : isSequence
@@ -1600,23 +2061,7 @@ export default function App() {
                         been writing, then the folders linked from outside the
                         repo. An empty folder still gets its caption, so every
                         place a template can live is always visible. */}
-                    {[
-                      ["examples", "Templates / examples", "Curated and tracked — opens live: edits save back, disk edits reload"],
-                      ["scratch", "Templates / scratch", "Auto-saved as you work; git-ignored; live like examples"],
-                      ["folders", "Templates / folders", "Folder-format trees — imported on open; git-ignored"],
-                      ...(templatesDir.symlinks
-                        ? [[SYMLINKS, "Templates / symlinks", "Links to diagram files in other folders — live like examples; unlinking removes only the link"]]
-                        : []),
-                      ...linked.map((l) => [
-                        l.folder,
-                        `Linked / ${l.name}${l.missing ? " — missing" : ""}`,
-                        l.missing
-                          ? "Moved, renamed or deleted? Re-link it to where it is now"
-                          : `Outside the repo${l.source === "env" ? ", from BD_LINKED_DIRS" : ""} — live like examples; never deleted`,
-                        l.display,
-                        l,
-                      ]),
-                    ].map(([folder, caption, note, title = templatesDir[folder], link]) => {
+                    {templateSections.map(([folder, caption, note, title = templatesDir[folder], link]) => {
                       const entries = savedTemplates.filter((entry) => entry.folder === folder);
                       return (
                         <Fragment key={folder}>
@@ -1753,6 +2198,34 @@ export default function App() {
                         <span className="app__dropdown-desc">One diagram from another folder, symlinked into templates/symlinks/</span>
                       </button>
                     ) : null}
+                    {savePicker ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="app__dropdown-item"
+                        onClick={() => {
+                          setSettingsOpen(false);
+                          void newDiskFile();
+                        }}
+                      >
+                        New file on disk…
+                        <span className="app__dropdown-desc">A blank diagram made where you pick — in another repo, say — and linked like Link a file…</span>
+                      </button>
+                    ) : null}
+                    {savePicker && active ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="app__dropdown-item"
+                        onClick={() => {
+                          setSettingsOpen(false);
+                          void saveAs();
+                        }}
+                      >
+                        Save {active.name} as…
+                        <span className="app__dropdown-desc">Write it to a folder you pick — another repo, say — and keep editing it there</span>
+                      </button>
+                    ) : null}
                   </>
                 ) : null}
                 <span className="app__dropdown-caption">Examples</span>
@@ -1814,6 +2287,8 @@ export default function App() {
               mode={studioMode}
               gradients={gradients}
               onLinkFile={onLinkFile}
+              onOpenFile={onOpenFile}
+              onNewFileOnDisk={onNewFileOnDisk}
               {...fileProps}
             />
           ) : isSequence ? (
@@ -1830,6 +2305,9 @@ export default function App() {
               filename={active.name}
               onSelectionChange={setSelection}
               onLinkFile={onLinkFile}
+              onOpenFile={onOpenFile}
+              onNewFileOnDisk={onNewFileOnDisk}
+              onSaveFileAs={onSaveFileAs}
               {...fileProps}
             />
           ) : (
@@ -1853,6 +2331,9 @@ export default function App() {
               onPinsChange={setPins}
               onCoverageChange={setCoverageKeys}
               onLinkFile={onLinkFile}
+              onOpenFile={onOpenFile}
+              onNewFileOnDisk={onNewFileOnDisk}
+              onSaveFileAs={onSaveFileAs}
               {...fileProps}
             />
           )}

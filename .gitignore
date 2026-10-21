@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# The built editor `better-diagrams` serves (npm run build:app), shipped in the package.
+packages/better-diagrams/app/
 
 # Build artefacts and local scratch
 *.tgz

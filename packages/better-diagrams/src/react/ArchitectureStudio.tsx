@@ -138,13 +138,16 @@ import {
   VersionTagChip,
   handOffImportReport,
   takeImportReport,
+  LINK_FILE_HINT,
+  NEW_FILE_HINT,
+  copyNote,
   type CanvasTool,
   type ImportReport,
   type StudioFile,
   type StudioFileInit,
 } from "./chrome";
 import { UiIcon } from "./ui-icons";
-import { useMarqueeSelect } from "./marquee";
+import { useMarqueeSelect, useZonesWholeInBand } from "./marquee";
 import {
   WelcomeModal,
   clearWelcomeSuppression,
@@ -562,6 +565,34 @@ export interface ArchitectureStudioProps {
    * Import menu and on the welcome modal. Absent, neither offers it.
    */
   onLinkFile?: () => void;
+  /**
+   * Import → Open file… through the host instead of the browser's picker,
+   * which never says where a file lives. The host shows its own dialog: a
+   * diagram JSON picked there it links and opens, as `onLinkFile` does, and
+   * resolves `null` (as it does when the person cancels); any other file it
+   * resolves as a `File`, which the editor reads in as a copy, the way Open
+   * file… always has. Absent, Open file… uses the browser's picker.
+   */
+  onOpenFile?: () => Promise<File | null>;
+  /**
+   * Start a new diagram file somewhere on disk the person picks — in another
+   * repo, say — and edit it there: `onLinkFile` for a file that isn't there
+   * yet. The host does the picking, the writing and the linking (the example
+   * app has its dev server show the system's save dialog, makes the file
+   * blank and opens it live; a file picked that exists is linked as it is,
+   * never written over); the editor only offers the action, beside Link a
+   * file on disk… in the Import menu and on the welcome modal. Absent,
+   * neither offers it.
+   */
+  onNewFileOnDisk?: () => void;
+  /**
+   * Save the open file somewhere the person picks, and keep editing it there.
+   * The host does the picking and the writing (the example app has its dev
+   * server show the system's save dialog, writes the file and links it as if
+   * it had been opened from there); the editor offers the action in the file
+   * menu and on ⇧⌘S. Absent, neither offers it.
+   */
+  onSaveFileAs?: () => void;
   onNavigateFile?: (ref: string) => void;
   /**
    * Fires with the {@link StudioSelection} on mount (empty) and whenever it
@@ -896,6 +927,9 @@ function StudioInner({
   removedFiles,
   onFileRestore,
   onLinkFile,
+  onOpenFile,
+  onNewFileOnDisk,
+  onSaveFileAs,
   onNavigateFile,
   onSelectionChange: onHostSelectionChange,
   onFocusChange,
@@ -2833,6 +2867,10 @@ function StudioInner({
     setNodes,
     setEdges,
   });
+
+  // React Flow's band, the Cursor tool's, catches a region on the same terms
+  // as ours: only when it takes in all of it.
+  useZonesWholeInBand({ flow, setNodes, keepRef: mergeBase });
 
   const onCanvasPointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -5543,14 +5581,15 @@ function StudioInner({
           ),
           into,
           file.name.replace(/\.json$/i, ""),
-          { message: `Loaded ${file.name}` },
+          // With a way to edit the file itself on offer, say this isn't it.
+          { message: `Loaded ${file.name}`, ...(onLinkFile ? { notes: [copyNote(file.name)] } : {}) },
         );
       } catch (err) {
         setError(`Could not load ${file.name}: ${(err as Error).message}`);
         setPanelOpen(true);
       }
     },
-    [registry, applyTemplate, showToast, applySchemaImport, applyTaskImport, landImport, studioMode],
+    [registry, applyTemplate, showToast, applySchemaImport, applyTaskImport, landImport, studioMode, onLinkFile],
   );
 
   /**
@@ -5669,6 +5708,23 @@ function StudioInner({
     : template.nodes.length
       ? "Replaces this diagram"
       : "Opens here";
+
+  /**
+   * Open file…: the host's dialog when it has one — it links a diagram it
+   * picks, and hands anything else back to read in — else the browser's.
+   */
+  const openFile = useCallback(() => {
+    if (!onOpenFile) {
+      fileInputRef.current?.click();
+      return;
+    }
+    onOpenFile().then(
+      (file) => {
+        if (file) runImport(file.name, (into) => void loadFile(file, into));
+      },
+      (err: unknown) => showToast(`Could not open the file: ${(err as Error).message}`),
+    );
+  }, [onOpenFile, runImport, loadFile, showToast]);
 
   const onDrop = useCallback(
     (event: DragEvent) => {
@@ -6868,6 +6924,11 @@ function StudioInner({
         linkInputRef.current?.select();
         return;
       }
+      if (mod && event.shiftKey && key === "s" && onSaveFileAs) {
+        event.preventDefault();
+        onSaveFileAs();
+        return;
+      }
       if (mod && key === "s" && onSave) {
         event.preventDefault();
         void handleSave();
@@ -7168,7 +7229,7 @@ function StudioInner({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doUndo, doRedo, deleteSelection, onSave, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, pathPanelOpen, refPanel, closeRefPanel, coverageOpen, usageOpen, analysis.state, closeAnalysis, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
+  }, [doUndo, doRedo, deleteSelection, onSave, onSaveFileAs, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, pathPanelOpen, refPanel, closeRefPanel, coverageOpen, usageOpen, analysis.state, closeAnalysis, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
 
   // ── Zone resize gesture ───────────────────────────────────────────────────
   //
@@ -7425,6 +7486,7 @@ function StudioInner({
               onDelete={onFileDelete}
               removedFiles={removedFiles}
               onFileRestore={onFileRestore}
+              onSaveAs={onSaveFileAs}
             />
           ) : (
             <div className="as-brand">arch·studio</div>
@@ -8494,30 +8556,18 @@ function StudioInner({
                     className="as-menu__item"
                     onClick={() => {
                       setOpenMenu(null);
-                      fileInputRef.current?.click();
+                      openFile();
                     }}
                   >
                     <div className="as-menu__label">Open file…</div>
                     <div className="as-menu__hint">
-                      {importLanding}: a document (.json), a SQL schema script (.sql), a dbt manifest.json, or a
-                      tracker's CSV
+                      {onOpenFile
+                        ? `A diagram .json is linked, so edits save to it. A .sql schema, dbt manifest or tracker CSV ${importLanding.toLowerCase()}`
+                        : `${importLanding}: a diagram .json, .sql schema, dbt manifest or tracker CSV${onLinkFile ? ", read in as a copy" : ""}`}
                     </div>
                   </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="as-menu__item"
-                    onClick={() => {
-                      setOpenMenu(null);
-                      folderInputRef.current?.click();
-                    }}
-                  >
-                    <div className="as-menu__label">Import folder…</div>
-                    <div className="as-menu__hint">
-                      {importLanding}: a data-model export, a Folder (.zip) export unzipped, or a dbt project's
-                      target/ (manifest.json and catalog.json)
-                    </div>
-                  </button>
+                  {/* Beside Open file…, since it is the choice a diagram that
+                      lives in a repo wants: Open file… reads a copy. */}
                   {onLinkFile ? (
                     <button
                       type="button"
@@ -8529,11 +8579,37 @@ function StudioInner({
                       }}
                     >
                       <div className="as-menu__label">Link a file on disk…</div>
-                      <div className="as-menu__hint">
-                        Diagram JSON from another folder, opened as its own file: edits save back to it
-                      </div>
+                      <div className="as-menu__hint">{LINK_FILE_HINT}</div>
                     </button>
                   ) : null}
+                  {onNewFileOnDisk ? (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="as-menu__item"
+                      onClick={() => {
+                        setOpenMenu(null);
+                        onNewFileOnDisk();
+                      }}
+                    >
+                      <div className="as-menu__label">New file on disk…</div>
+                      <div className="as-menu__hint">{NEW_FILE_HINT}</div>
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="as-menu__item"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      folderInputRef.current?.click();
+                    }}
+                  >
+                    <div className="as-menu__label">Import folder…</div>
+                    <div className="as-menu__hint">
+                      {importLanding}: a data-model export, an unzipped Folder (.zip) export, or a dbt target/ folder
+                    </div>
+                  </button>
                 </ToolbarMenu>
                 {/* The pickers stay mounted outside the menu: a menu row
                     closes the menu as it clicks one, and the change event
@@ -9489,8 +9565,11 @@ function StudioInner({
                   “{template.nodes.find((n) => n.id === focusId)?.label ?? focusId}” has no
                   internals yet.
                 </p>
+                {/* The level this canvas IS, named as the breadcrumb bar names
+                    it — "its next C4 level" read as C4 · Code one level down. */}
                 <p className="as-focus-empty__hint">
-                  Anything you add here becomes its next C4 level.
+                  Anything you add here sits inside it, at{" "}
+                  <span className="as-focus-empty__level">{levelLabel(focusStack.length)}</span>.
                 </p>
                 {!readOnly ? (
                   <div className="as-focus-empty__actions">
@@ -9624,6 +9703,7 @@ function StudioInner({
             systemPromptTasksContent={taskSystemPromptContent}
             onDismiss={handleWelcomeDismiss}
             onLinkFile={onLinkFile}
+            onNewFileOnDisk={onNewFileOnDisk}
             lint={welcomeLint}
           />
         ) : null}

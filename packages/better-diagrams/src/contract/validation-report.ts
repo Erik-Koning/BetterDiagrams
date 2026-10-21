@@ -30,6 +30,7 @@ import {
   MAX_NODE_FIELDS,
   NODE_FIELD_KEYS,
   NODE_KEYS,
+  defaultTextAlign,
   NODE_OUTLINES,
   NODE_STATUSES,
   NODE_TEXT_ALIGNS,
@@ -174,7 +175,7 @@ export function validateTemplateReport(raw: unknown, opts: ValidateOptions = {})
       if (bad) add("unknown-value", `${at}/${key}`, `${key} must be ${key === "x" || key === "y" ? "a number" : "a positive number"}, so the default was used.`);
     }
     vocab(node, "status", NODE_STATUSES, at, `the node is "active"`);
-    vocab(node, "textAlign", NODE_TEXT_ALIGNS, at, `the text is left-aligned`);
+    vocab(node, "textAlign", NODE_TEXT_ALIGNS, at, defaultTextAlign(out.kind) === "center" ? `the text is centred` : `the text is left-aligned`);
     vocab(node, "textVAlign", NODE_TEXT_VALIGNS, at, `the text is centred vertically`);
     vocab(node, "stage", TASK_STAGES, at, `the task reads as "to do"`);
     vocab(node, "priority", TASK_PRIORITIES, at, `it has no priority`);

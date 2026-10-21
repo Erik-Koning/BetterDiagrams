@@ -112,6 +112,9 @@ import {
   VersionTagChip,
   handOffImportReport,
   takeImportReport,
+  LINK_FILE_HINT,
+  NEW_FILE_HINT,
+  copyNote,
   type StudioFile,
   type StudioFileInit,
 } from "../chrome";
@@ -253,6 +256,12 @@ export interface SequenceStudioProps {
   onFileRestore?: (id: string) => void;
   /** Link a diagram file elsewhere on disk — same contract as the architecture editor. */
   onLinkFile?: () => void;
+  /** Open file… through the host's dialog, which links a diagram it picks — same contract as the architecture editor. */
+  onOpenFile?: () => Promise<File | null>;
+  /** Start a new diagram file on disk and edit it there — same contract as the architecture editor. */
+  onNewFileOnDisk?: () => void;
+  /** Save the open file somewhere the person picks — same contract as the architecture editor. */
+  onSaveFileAs?: () => void;
   /**
    * Fires with the {@link SequenceSelection} on mount (empty) and whenever it
    * changes — so a host that remounts the editor per file never holds a
@@ -341,6 +350,9 @@ function SequenceInner({
   removedFiles,
   onFileRestore,
   onLinkFile,
+  onOpenFile,
+  onNewFileOnDisk,
+  onSaveFileAs,
   onSelectionChange: onHostSelectionChange,
   toolbarExtras,
   inspectorExtras,
@@ -409,7 +421,8 @@ function SequenceInner({
 
   const showToast = useCallback((message: string) => {
     setToast(message);
-    window.setTimeout(() => setToast((cur) => (cur === message ? "" : cur)), 2200);
+    // Long enough to read: a sentence of advice needs longer than "Saved".
+    window.setTimeout(() => setToast((cur) => (cur === message ? "" : cur)), Math.max(2200, message.length * 45));
   }, []);
   // An import that opened as a new file said so in the editor that read it,
   // which a host keyed per file has just unmounted; say it here.
@@ -1183,6 +1196,11 @@ function SequenceInner({
         doRedo();
         return;
       }
+      if (mod && event.shiftKey && event.key.toLowerCase() === "s" && onSaveFileAs) {
+        event.preventDefault();
+        onSaveFileAs();
+        return;
+      }
       if (mod && event.key.toLowerCase() === "s" && onSave) {
         event.preventDefault();
         void handleSave();
@@ -1260,7 +1278,7 @@ function SequenceInner({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [doUndo, doRedo, deleteSelection, duplicateSelection, handleSave, onSave, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, readOnly, flow, setNodes, setEdges, addParticipant, addMessage, addNote]);
+  }, [doUndo, doRedo, deleteSelection, duplicateSelection, handleSave, onSave, onSaveFileAs, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, readOnly, flow, setNodes, setEdges, addParticipant, addMessage, addNote]);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -1376,8 +1394,10 @@ function SequenceInner({
     async (file: File) => {
       try {
         const doc = validateSequence(JSON.parse(await file.text()));
+        // With a way to edit the file itself on offer, say this isn't it (this editor has no notes bar).
+        const copy = onLinkFile ? ` — ${copyNote(file.name)}` : "";
         if (onFileCreate && templateRef.current.participants.length > 1) {
-          const message = `Loaded ${file.name} · in a new file`;
+          const message = `Loaded ${file.name} · in a new file${copy}`;
           handOffImportReport({ message });
           showToast(message);
           const title = typeof doc.meta?.title === "string" ? doc.meta.title.trim() : "";
@@ -1385,12 +1405,12 @@ function SequenceInner({
           return;
         }
         applyTemplate(doc);
-        showToast(`Loaded ${file.name}`);
+        showToast(`Loaded ${file.name}${copy}`);
       } catch (err) {
         showToast(`Could not load ${file.name}: ${(err as Error).message}`);
       }
     },
-    [applyTemplate, showToast, onFileCreate],
+    [applyTemplate, showToast, onFileCreate, onLinkFile],
   );
 
   const patchMeta = useCallback(
@@ -1418,6 +1438,19 @@ function SequenceInner({
   const participantCount = templateRef.current.participants.length;
   const importLanding =
     onFileCreate && participantCount > 1 ? "Opens as a new file" : participantCount ? "Replaces this diagram" : "Opens here";
+  /** Open file…: the host's dialog when it has one (it links a diagram it picks), else the browser's. */
+  const openFile = useCallback(() => {
+    if (!onOpenFile) {
+      fileInputRef.current?.click();
+      return;
+    }
+    onOpenFile().then(
+      (file) => {
+        if (file) void loadFile(file);
+      },
+      (err: unknown) => showToast(`Could not open the file: ${(err as Error).message}`),
+    );
+  }, [onOpenFile, loadFile, showToast]);
   /** See the architecture editor's reconciler — which side moved decides. */
   const titleSyncRef = useRef<{ fileId: string; title: string; name: string } | null>(null);
   useEffect(() => {
@@ -1569,6 +1602,7 @@ function SequenceInner({
               onDelete={onFileDelete}
               removedFiles={removedFiles}
               onFileRestore={onFileRestore}
+              onSaveAs={onSaveFileAs}
             />
           ) : (
             <div className="as-brand">seq·studio</div>
@@ -1738,7 +1772,7 @@ function SequenceInner({
               <>
                 {/* A menu only when there is a choice: with nothing to link,
                     Import is the one action, and opens the picker directly. */}
-                {onLinkFile ? (
+                {onLinkFile || onNewFileOnDisk || onOpenFile ? (
                   <ToolbarMenu label="Import" open={openMenu === "import"} onToggle={() => toggleMenu("import")}>
                     <button
                       type="button"
@@ -1746,32 +1780,48 @@ function SequenceInner({
                       className="as-menu__item"
                       onClick={() => {
                         setOpenMenu(null);
-                        fileInputRef.current?.click();
+                        openFile();
                       }}
                     >
                       <div className="as-menu__label">Open file…</div>
-                      <div className="as-menu__hint">{importLanding}: a sequence document (.json)</div>
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="as-menu__item"
-                      onClick={() => {
-                        setOpenMenu(null);
-                        onLinkFile();
-                      }}
-                    >
-                      <div className="as-menu__label">Link a file on disk…</div>
                       <div className="as-menu__hint">
-                        Diagram JSON from another folder, opened as its own file: edits save back to it
+                        {onOpenFile ? "A sequence .json is linked, so edits save to it" : `${importLanding}: a sequence .json, read in as a copy`}
                       </div>
                     </button>
+                    {onLinkFile ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="as-menu__item"
+                        onClick={() => {
+                          setOpenMenu(null);
+                          onLinkFile();
+                        }}
+                      >
+                        <div className="as-menu__label">Link a file on disk…</div>
+                        <div className="as-menu__hint">{LINK_FILE_HINT}</div>
+                      </button>
+                    ) : null}
+                    {onNewFileOnDisk ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="as-menu__item"
+                        onClick={() => {
+                          setOpenMenu(null);
+                          onNewFileOnDisk();
+                        }}
+                      >
+                        <div className="as-menu__label">New file on disk…</div>
+                        <div className="as-menu__hint">{NEW_FILE_HINT}</div>
+                      </button>
+                    ) : null}
                   </ToolbarMenu>
                 ) : (
                   <button
                     type="button"
                     className="as-btn"
-                    title={`${importLanding}: a sequence document (.json)`}
+                    title={`${importLanding}: a sequence .json`}
                     onClick={() => fileInputRef.current?.click()}
                   >
                     Import
@@ -2005,6 +2055,7 @@ function SequenceInner({
             systemPromptOtherContent={ARCHITECTURE_CONTENT_PROMPT}
             onDismiss={handleWelcomeDismiss}
             onLinkFile={onLinkFile}
+            onNewFileOnDisk={onNewFileOnDisk}
           />
         ) : null}
 

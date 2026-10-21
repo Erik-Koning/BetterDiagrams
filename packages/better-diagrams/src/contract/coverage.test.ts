@@ -141,14 +141,17 @@ describe("minimalKeyCover", () => {
       Array.from({ length: 3 }, (_, k) => fk(`${n.id}-${k}`, n.id, `t${(i + 1 + k * 7) % objects}`, `ref${k}_id`)),
     );
     const big = { nodes, edges };
+    // The default 300 ms budget stops greedy early on a runner about three
+    // times slower than a laptop, which a shared CI runner beside the rest of
+    // the suite can be. The test's own bound is the budget instead, looser on
+    // CI, so only an accidental blow-up (what this guards) truncates it.
+    const budgetMs = process.env.CI ? 2000 : 500;
     const started = performance.now();
-    const r = minimalKeyCover(big);
+    const r = minimalKeyCover(big, { budgetMs });
     const elapsed = performance.now() - started;
+    expect(r.truncated).toBe(false);
     expect(r.reached.size).toBe(objects);
-    // A shared CI runner, with the rest of the suite running beside it, has
-    // run this at twice the local time; the looser bound there still catches
-    // an accidental blow-up, which is what this guards.
-    expect(elapsed).toBeLessThan(process.env.CI ? 2000 : 500);
+    expect(elapsed).toBeLessThan(budgetMs);
     expect(marginalGains(big, r.keys.slice(0, 5))).toHaveLength(600 - 5);
   });
 

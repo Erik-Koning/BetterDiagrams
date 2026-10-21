@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const check = process.argv.includes("--check");
 const projectFolder = fileURLToPath(new URL("..", import.meta.url));
-const ENTRIES = ["better-diagrams", "contract", "contract-folder-node", "server"];
+const ENTRIES = ["better-diagrams", "contract", "contract-folder-node", "server", "disk"];
 const quiet = { logLevel: "none" };
 mkdirSync(`${projectFolder}etc`, { recursive: true });
 

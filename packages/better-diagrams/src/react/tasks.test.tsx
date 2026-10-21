@@ -325,6 +325,36 @@ describe("planning", () => {
     await waitFor(() => expect(within(node(container, "launch")).getByText("Reached")).toBeTruthy());
   });
 
+  it("insets a milestone's diamond as much at its foot as at its head, so the label sits mid-way", async () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={SPRINT} />);
+    await waitFor(() => expect(node(container, "launch")).toBeTruthy());
+    const { paddingTop, paddingBottom } = card(container, "launch").style;
+    // Deeper than a card's 6px: the diamond's points are no place for text.
+    expect(Number.parseFloat(paddingTop)).toBeGreaterThan(6);
+    expect(paddingBottom).toBe(paddingTop);
+  });
+
+  it("centres a milestone's label by default, so left is the one written down", async () => {
+    const seen: DiagramTemplate[] = [];
+    const { container } = mount(<ArchitectureStudio defaultValue={SPRINT} onChange={(d) => seen.push(d)} />);
+    await waitFor(() => expect(node(container, "launch")).toBeTruthy());
+    expect(card(container, "launch").classList.contains("as-node--align-center")).toBe(true);
+    // A task beside it keeps the left every card has.
+    expect(card(container, "qa").className).not.toMatch(/as-node--align-/);
+
+    fireEvent.click(node(container, "launch"));
+    const align = await screen.findByLabelText("Text alignment");
+    expect(align).toHaveTextContent("align: center");
+    const launch = () => seen.at(-1)?.nodes.find((n) => n.id === "launch");
+    fireEvent.click(align);
+    fireEvent.click(screen.getByRole("option", { name: "align: left" }));
+    await waitFor(() => expect(launch()?.textAlign).toBe("left"));
+    expect(card(container, "launch").classList.contains("as-node--align-center")).toBe(false);
+    fireEvent.click(align);
+    fireEvent.click(screen.getByRole("option", { name: "align: center" }));
+    await waitFor(() => expect(launch() && "textAlign" in launch()!).toBe(false));
+  });
+
   it("rolls a sprint's tasks up in its label, against its capacity", async () => {
     const { container } = mount(<ArchitectureStudio defaultValue={SPRINT} />);
     await waitFor(() => expect(node(container, "s1")).toBeTruthy());
@@ -441,10 +471,13 @@ describe("planning", () => {
     const { container } = mount(<ArchitectureStudio defaultValue={SPRINT} onChange={(d) => seen.push(d)} />);
     await waitFor(() => expect(node(container, "qa")).toBeTruthy());
     fireEvent.click(node(container, "qa"));
-    fireEvent.change(await screen.findByRole("combobox", { name: "Task status" }), { target: { value: "in-review" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "Priority" }), { target: { value: "p0" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Task status" }));
+    fireEvent.click(screen.getByRole("option", { name: "In review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Priority" }));
+    fireEvent.click(screen.getByRole("option", { name: "P0" }));
     await waitFor(() => expect(seen.at(-1)?.nodes.find((n) => n.id === "qa")).toMatchObject({ stage: "in-review", priority: "p0" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Task status" }), { target: { value: "done" } });
+    fireEvent.click(screen.getByRole("button", { name: "Task status" }));
+    fireEvent.click(screen.getByRole("option", { name: "Done" }));
     await waitFor(() => {
       const qa = seen.at(-1)?.nodes.find((n) => n.id === "qa");
       expect(qa?.done).toBe(true);

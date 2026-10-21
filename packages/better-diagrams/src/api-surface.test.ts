@@ -428,6 +428,20 @@ const SERVER_EXPORTS = [
   "createFetchHandler",
 ];
 
+// The disk entry (`@mosphere/better-diagrams/disk`).
+const DISK_EXPORTS = [
+  "createDiskStore",
+  "isDiagram",
+  "DISK_ROUTE",
+  "CHANGE_EVENT",
+  "LINKS_EVENT",
+  "LINKED_PREFIX",
+  "formatDiagram",
+  "plainJson",
+  "writeFileAtomic",
+  "startStandalone",
+];
+
 describe("public API surface", () => {
   it("contract entry exports exactly the curated list", async () => {
     const actual = Object.keys(await import("./contract/index")).sort();
@@ -442,6 +456,11 @@ describe("public API surface", () => {
   it("server entry exports exactly the curated list, and none of the browser halves", async () => {
     const actual = Object.keys(await import("./server/index")).sort();
     expect(actual).toEqual([...SERVER_EXPORTS].sort());
+  });
+
+  it("disk entry exports exactly the curated list", async () => {
+    const actual = Object.keys(await import("./disk/index")).sort();
+    expect(actual).toEqual([...DISK_EXPORTS].sort());
   });
 
   // The root barrel is a double `export *`; a name collision between the

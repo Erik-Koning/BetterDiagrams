@@ -422,6 +422,33 @@ describe("a card's description matches .as-node__desc", () => {
   });
 });
 
+describe("a diamond's label sits in its middle", () => {
+  // Marketing drops the eyebrow, so the title is the whole text block.
+  const label = (node: Record<string, unknown>) => {
+    const t = doc({ nodes: [{ id: "m", label: "Gate", kind: "milestone", x: 0, y: 0, w: 300, h: 120, ...node }] });
+    return texts(emitTemplate(t, registry, {}, { mode: "marketing" }).cmds).find((c) => c.text === "Gate")!;
+  };
+
+  it("as far from the top point as from the bottom one", () => {
+    const title = label({});
+    // The baseline, less half a cap height, is the glyph's middle.
+    const glyphMid = title.y - title.size * 0.35;
+    expect(Math.abs(glyphMid - 60)).toBeLessThan(4);
+  });
+
+  it("centred by default, on the diamond rather than right of it", () => {
+    const title = label({});
+    expect(title.anchor).toBe("middle");
+    // Within the card's own 14/10 inset skew — not the ~29px the diamond's
+    // one-sided corner inset used to push it.
+    expect(Math.abs(title.x - 150)).toBeLessThan(3);
+  });
+
+  it("left, where the document says so", () => {
+    expect(label({ textAlign: "left" }).anchor).toBeUndefined();
+  });
+});
+
 // ─── 7. Chrome gets its own margin ───────────────────────────────────────────
 
 describe("legend, title block and version tag never cover the drawing", () => {

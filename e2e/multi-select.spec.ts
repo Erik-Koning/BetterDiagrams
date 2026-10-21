@@ -51,8 +51,12 @@ test.describe("editing several things at once", () => {
 
     // Text styling reaches every node; the per-node fields are not offered.
     await expect(studio.inspector.getByLabel("Node label")).toHaveCount(0);
-    await studio.inspector.getByLabel("Text alignment", { exact: true }).selectOption("center");
-    await studio.inspector.getByLabel("Label size").selectOption("16");
+    // The pickers search: typing on the closed button opens it filtered.
+    await studio.inspector.getByLabel("Text alignment", { exact: true }).press("c");
+    await studio.page.keyboard.type("en");
+    await studio.page.keyboard.press("Enter");
+    await studio.inspector.getByLabel("Label size", { exact: true }).click();
+    await studio.inspector.getByRole("option", { name: "16px" }).click();
     await expect
       .poll(async () => (await studio.liveDoc()).nodes.map((n) => [n.textAlign, n.fontSize]))
       .toEqual([["center", 16], ["center", 16], ["center", 16]]);
@@ -60,9 +64,14 @@ test.describe("editing several things at once", () => {
     // And the lines: where each end leaves from, the heads, the style.
     await edgesTab.click();
     await expect(edgesTab).toHaveAttribute("aria-selected", "true");
-    await studio.inspector.getByLabel("Start anchor").selectOption("right");
-    await studio.inspector.getByLabel("End anchor").selectOption("left");
-    await studio.inspector.getByLabel("Edge style").selectOption("dashed");
+    await studio.inspector.getByLabel("Start anchor", { exact: true }).click();
+    await studio.inspector.getByRole("option", { name: "start: right" }).click();
+    await studio.inspector.getByLabel("End anchor", { exact: true }).click();
+    await studio.inspector.getByRole("option", { name: "end: left" }).click();
+    // Typed, as the node pickers are: "da" leaves dashed alone.
+    await studio.inspector.getByLabel("Edge style", { exact: true }).press("d");
+    await studio.page.keyboard.type("a");
+    await studio.page.keyboard.press("Enter");
     await expect
       .poll(async () => (await studio.liveDoc()).edges.map((e) => [e.start, e.end, e.style]))
       .toEqual([

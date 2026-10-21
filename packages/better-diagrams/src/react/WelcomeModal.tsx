@@ -149,6 +149,12 @@ export interface WelcomeModalProps {
    * modal only offers the button, beside Insert diagram. Absent, it doesn't.
    */
   onLinkFile?: () => void;
+  /**
+   * Start this diagram as a new file on disk, where the person picks — the
+   * host makes it and opens it in this one's place, as `onLinkFile` does.
+   * Absent, the modal doesn't offer it.
+   */
+  onNewFileOnDisk?: () => void;
 }
 
 const ARCH_PLACEHOLDER = JSON.stringify({ version: 1, nodes: [], edges: [] }, null, 2);
@@ -265,6 +271,7 @@ export function WelcomeModal({
   initialPreset,
   lockKind,
   onLinkFile,
+  onNewFileOnDisk,
 }: WelcomeModalProps) {
   const [name, setName] = useState(defaultName);
   // Clouds and their resources are one answer: ticking a cloud takes all of
@@ -568,7 +575,7 @@ export function WelcomeModal({
           </div>
         ) : null}
 
-        {text.trim() || onLinkFile ? (
+        {text.trim() || onLinkFile || onNewFileOnDisk ? (
           <div className="as-welcome__insert-row">
             {/* The JSON may already be a file in another project; linking
                 it keeps that file the one being edited, where a paste would
@@ -581,6 +588,16 @@ export function WelcomeModal({
                 onClick={onLinkFile}
               >
                 Link a file on disk…
+              </button>
+            ) : null}
+            {onNewFileOnDisk ? (
+              <button
+                type="button"
+                className="as-btn as-btn--outline as-welcome__link"
+                title="Name a new diagram JSON file where it belongs — in another repo, say. It opens in this one's place: edits save to it, and changes made to it there reload here."
+                onClick={onNewFileOnDisk}
+              >
+                New file on disk…
               </button>
             ) : null}
             {/* "Insert diagram", not "Insert": the toolbar behind this modal

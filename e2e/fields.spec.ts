@@ -47,6 +47,24 @@ test.describe("fields", () => {
     expect([after.x, after.y]).toEqual([before.x, before.y]);
   });
 
+  test("a field's key picker opens over the scrolling field list, not clipped inside it", async ({ studio, page }) => {
+    await studio.nodeTitled("Logs").click();
+    await studio.inspector.getByRole("button", { name: "Key role of id" }).click();
+    const fk = studio.inspector.getByRole("option", { name: "fk", exact: true });
+    // On top where it is drawn: a clipped row is in the DOM, and even in a
+    // bounding box, but whatever is painted at its centre is something else.
+    const box = (await fk.boundingBox())!;
+    const hit = await page.evaluate(
+      ([x, y]) => (document.elementFromPoint(x!, y!) as HTMLElement | null)?.textContent,
+      [box.x + box.width / 2, box.y + box.height / 2],
+    );
+    expect(hit).toBe("fk");
+    await fk.click();
+    await expect
+      .poll(async () => (await studio.liveDoc()).nodes.find((n) => n.id === "logs")!.fields)
+      .toMatchObject([{ id: "id", key: "fk" }]);
+  });
+
   test("pin two fields, show paths, hover a route, and the document never learns", async ({ studio }) => {
     const docBefore = await studio.liveDoc();
     let menu = await studio.openFieldMenu("items", "order_id");

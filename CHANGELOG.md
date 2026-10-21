@@ -35,6 +35,20 @@ This changelog starts with the editing API (October 2026). For what changed betw
   `settleRoadmap`, `roadmapLayout`, `roadmapAxisOf` and `roadmapTicks` do the same outside the
   editor, and `autoLayout` dispatches to it.
 - The `task-start-after-due` plan check, and a start date column in tracker CSV imports.
+- `@mosphere/better-diagrams/disk` — the disk store behind live files: `createDiskStore` (lists,
+  reads and writes diagram JSON, links folders and single files, saves wherever the person picks,
+  tells the page about outside edits), `startStandalone` (the built editor and the store on
+  127.0.0.1), `formatDiagram`, `plainJson`, `writeFileAtomic`, `isDiagram`. Prettier is an
+  optional peer dependency.
+- The `better-diagrams` command: `npx @mosphere/better-diagrams [file.json | folder]…` opens a
+  repo's diagrams live, with no checkout of this repo; `--new` starts a file that isn't there.
+- `onSaveFileAs` on both editors: **Save as…** in the file menu and on `⇧⌘S`. In the example app
+  it writes the file wherever the system's save dialog says and keeps editing it there.
+- `onNewFileOnDisk` on both editors and the welcome modal: **New file on disk…**, beside **Link a
+  file on disk…**, for a file that isn't there yet. In the example app the system's save dialog
+  names it and the dev server makes it blank, titled after its name, and links it; a name that is
+  there already is linked as it is, never written over. The store's `POST symlinks` takes
+  `create` (the diagram to make the file with) for it.
 
 ### Changed
 
@@ -52,12 +66,45 @@ This changelog starts with the editing API (October 2026). For what changed betw
 - `htmlExplorerData` moved module internally; it is still exported from the root entry.
 - `engines.node` is now `>=22`.
 - `tasksCsv` has a `start` column, before `due`.
+- Live files on disk are written the way their repo writes JSON — by its own Prettier, with its
+  config, `.editorconfig` and `.prettierignore`, where it has a Prettier config — and atomically,
+  through a temporary file renamed over the old one.
+- A linked folder lists its diagrams at any depth (by git's own idea of the project, in a work
+  tree), and leaves JSON that isn't a diagram out of the listing, counting it instead.
+- With `onLinkFile` set, the Import menu puts **Link a file on disk…** right after **Open file…**,
+  whose hint says it reads a copy, and a diagram read in through Open file… says so in a note.
+- `onOpenFile` on both editors runs **Open file…** through the host's own dialog. In the example
+  app the dev server shows the system's dialog: a diagram `.json` picked there is linked, as Link a
+  file on disk… links it, and anything else is read in as a copy. The store's `POST symlinks`
+  takes `open` for it, answering `copy` with the file's text when it isn't a diagram, and its
+  listing says `openPicker`; `BD_OPEN_PICKER` stands in for that dialog, and `none` turns a
+  dialog off. The Import menu's four hints are shorter.
+- The disk store no longer counts a React Flow export as a diagram: it is converted on import,
+  never edited in place, so it is neither listed, linked nor written over.
+- The inspector's pickers search: each opens with a search box at its top, and a key typed on a
+  closed one opens it already filtered — every picker for a node, a line or a zone.
+- A decision's and a milestone's text is centred unless the document says otherwise, so on those
+  kinds `"textAlign": "center"` is the default validation drops and `"left"` is the value it keeps.
+  Existing diamonds with no alignment set now draw centred.
 
 ### Fixed
 
 - The types compile under `@types/react` 19, and the suite passes on React 19; CI now runs both.
 - Deleting a node also drops the per-view layout (`meta.views`) recorded for it.
 - Exports that split a document into content and layout now keep custom annotation kinds' options.
+- A diamond's label (a decision, a milestone) sits in its middle, on the canvas and in exports;
+  centred text in one no longer drifts right in exports, and text in a pipe, diamond or
+  parallelogram no longer runs into the shape's right side there.
+- An empty drilled-in level names the level it is ("at C2 · Containers"), as the breadcrumb bar
+  does, instead of "its next C4 level".
+- Live files: a file opened through a link answers to the file the link pointed at, so a link
+  removed outside the app and remade under its name for another file never reads or writes that
+  file as this one; linking the same file again asks before the edits made meanwhile meet it,
+  rather than replacing them with the file's copy.
+- Live files: a save that would drop something from the file — a key the editor doesn't know, a
+  value outside its vocabulary — asks first, and nothing is written until it's answered.
+- Live files: a watcher reporting a write made before it looked no longer replaces an edit made
+  since; Save as… into a linked folder no longer reloads its own write over the next edit.
 
 ## 0.1.0-beta.0 — 2026-08-02
 

@@ -21,7 +21,7 @@
  * has no reason to re-render sixty times a second for a rectangle.
  */
 import { useCallback, useEffect, useRef } from "react";
-import type { Edge, Node } from "@xyflow/react";
+import { useStoreApi, type Edge, type Node } from "@xyflow/react";
 
 export interface Rect {
   x: number;
@@ -38,6 +38,8 @@ export interface Pt {
 /** A box the band can catch, in flow (absolute) coordinates. */
 export interface BandBox extends Rect {
   id: string;
+  /** Caught only when the band takes in all of it — see `idsInBand`. */
+  whole?: boolean;
 }
 
 /** How far the pointer must travel before a press becomes a drag. */
@@ -71,10 +73,44 @@ export function rectBetween(a: Pt, b: Pt): Rect {
   };
 }
 
+/** Whether `inner` lies entirely within `outer`, edges included. */
+export function rectContains(outer: Rect, inner: Rect): boolean {
+  return (
+    inner.x >= outer.x &&
+    inner.y >= outer.y &&
+    inner.x + inner.width <= outer.x + outer.width &&
+    inner.y + inner.height <= outer.y + outer.height
+  );
+}
+
+/**
+ * The ids the band catches: a box it touches, or a `whole` box it encloses.
+ *
+ * A region is the backdrop the boxes sit on, and this band starts wherever the
+ * press lands — inside a region as often as not. Touch-to-catch there meant
+ * every band drawn round a few boxes in a region took the region too, and the
+ * next drag under the Cursor carried the whole region off with them. The
+ * Cursor tool's band is held to the same rule by `useZonesWholeInBand`.
+ */
 export function idsInBand(band: Rect, boxes: readonly BandBox[]): Set<string> {
   const hit = new Set<string>();
-  for (const box of boxes) if (boxesOverlap(band, box)) hit.add(box.id);
+  for (const box of boxes) {
+    if (box.whole ? rectContains(band, box) : boxesOverlap(band, box)) hit.add(box.id);
+  }
   return hit;
+}
+
+/** A node as the band sees it, in flow (absolute) coordinates. */
+export function bandBox(node: Node, flow: Pick<MarqueeFlow, "getInternalNode">): BandBox {
+  const at = flow.getInternalNode(node.id)?.internals.positionAbsolute ?? node.position;
+  return {
+    id: node.id,
+    x: at.x,
+    y: at.y,
+    width: node.measured?.width ?? node.width ?? 0,
+    height: node.measured?.height ?? node.height ?? 0,
+    whole: node.type === "zone",
+  };
 }
 
 export function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
@@ -277,16 +313,7 @@ export function useMarqueeSelect({
         boxes: flow
           .getNodes()
           .filter((n) => n.selectable !== false && !n.hidden)
-          .map((n) => {
-            const at = flow.getInternalNode(n.id)?.internals.positionAbsolute ?? n.position;
-            return {
-              id: n.id,
-              x: at.x,
-              y: at.y,
-              width: n.measured?.width ?? n.width ?? 0,
-              height: n.measured?.height ?? n.height ?? 0,
-            };
-          }),
+          .map((n) => bandBox(n, flow)),
         applied: { nodes: new Set(), edges: new Set() },
         active: false,
         detach: () => {},
@@ -366,4 +393,58 @@ function swallowNextClick(surface: HTMLElement) {
   // A drag released outside the window never produces the click, so the
   // listener cannot wait for one that may not come.
   const timer = window.setTimeout(drop, 400);
+}
+
+/**
+ * Hold React Flow's band — the Cursor tool's — to `idsInBand`'s rule for
+ * regions: caught only when the band takes in all of one.
+ *
+ * Its band catches whatever it touches and has no per-node mode, so on every
+ * step of it this settles each region's selection from the same rectangle it
+ * measured. Every step, not only those where its catch changed: shrinking a
+ * band that had enclosed a region still touches the region, so React Flow
+ * reports nothing and the region would stay caught. A region this changes is
+ * handed back as a new object, which is what makes React Flow drop the
+ * `selected` flag it writes onto its own copy of the node.
+ */
+export function useZonesWholeInBand({
+  flow,
+  setNodes,
+  keepRef,
+}: {
+  flow: Pick<MarqueeFlow, "getInternalNode">;
+  setNodes: (updater: (nodes: Node[]) => Node[]) => void;
+  /** What was selected before a ⇧/⌘ band began — the merge keeps it. */
+  keepRef: { readonly current: { nodes: ReadonlySet<string> } | null };
+}): void {
+  const store = useStoreApi();
+  useEffect(
+    () =>
+      store.subscribe((state, prev) => {
+        const rect = state.userSelectionRect;
+        if (!state.userSelectionActive || !rect || rect === prev.userSelectionRect) return;
+        // Screen pixels from the pane's corner, converted the way React Flow
+        // converts them to decide what the band touches.
+        const [tx, ty, zoom] = state.transform;
+        const band = {
+          x: (rect.x - tx) / zoom,
+          y: (rect.y - ty) / zoom,
+          width: rect.width / zoom,
+          height: rect.height / zoom,
+        };
+        const kept = keepRef.current?.nodes;
+        setNodes((current) => {
+          let changed = false;
+          const next = current.map((n) => {
+            if (n.type !== "zone" || n.selectable === false || n.hidden) return n;
+            const want = !!kept?.has(n.id) || rectContains(band, bandBox(n, flow));
+            if (!!n.selected === want) return n;
+            changed = true;
+            return { ...n, selected: want };
+          });
+          return changed ? next : current;
+        });
+      }),
+    [store, flow, setNodes, keepRef],
+  );
 }

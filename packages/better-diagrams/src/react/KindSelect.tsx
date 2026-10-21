@@ -7,9 +7,14 @@
  * the bottom a dimmed "Other clouds" section holding every cloud the
  * document doesn't touch — visually demoted, still fully selectable, so
  * discovering a pack never requires leaving the dropdown.
+ *
+ * Typing searches, as in every inspector picker (`useSearchMenu`): the box
+ * at the top narrows every section at once, by kind name, id or cloud — so
+ * "lambda" or "aws queue" finds a pack kind without scrolling to it.
  */
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment } from "react";
 import type { ResolvedRegistry } from "./registry-types";
+import { matchesQuery, SearchMenuBox, useSearchMenu } from "./SearchSelect";
 
 export interface KindSelectProps {
   registry: ResolvedRegistry;
@@ -38,30 +43,16 @@ interface CloudGroup {
 }
 
 export function KindSelect({ registry, value, onChange, relevantProviders, omit, placeholder }: KindSelectProps) {
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
+  const menu = useSearchMenu({ selected: value || null });
+  const labelOf = (kind: string) => registry.nodeKinds[kind]?.label ?? kind;
 
   const coreKinds: string[] = [];
   const byProvider = new Map<string, string[]>();
   for (const kind of registry.kindOrder) {
     if (omit?.(kind)) continue;
     const provider = registry.nodeKinds[kind]?.provider;
+    const cloud = provider ? (registry.providers[provider]?.label ?? provider) : undefined;
+    if (!matchesQuery(menu.query, labelOf(kind), kind, cloud)) continue;
     if (!provider) {
       coreKinds.push(kind);
     } else {
@@ -79,64 +70,81 @@ export function KindSelect({ registry, value, onChange, relevantProviders, omit,
   const cloudProviders = [...byProvider.keys()];
   const relevant = cloudProviders.filter((p) => relevantProviders.has(p)).map(group);
   const demoted = cloudProviders.filter((p) => !relevantProviders.has(p)).map(group);
+  // The rows in the order they show, for the arrow keys.
+  const visible = [...coreKinds, ...relevant.flatMap((c) => c.kinds), ...demoted.flatMap((c) => c.kinds)].map(
+    (kind) => ({ value: kind }),
+  );
+  const active = visible.find((o) => o.value === menu.activeValue)?.value ?? visible[0]?.value;
 
   const pick = (kind: string) => {
+    menu.close(true);
     onChange(kind);
-    setOpen(false);
   };
 
   const option = (kind: string) => (
     <button
       key={kind}
+      id={menu.optionId(kind)}
       type="button"
       role="option"
+      tabIndex={-1}
       aria-selected={kind === value}
+      data-active={kind === active}
       className={`as-kindmenu__option${kind === value ? " as-kindmenu__option--active" : ""}`}
+      // Keep focus in the search box, so the keys go on working.
+      onMouseDown={(event) => event.preventDefault()}
+      onMouseEnter={() => menu.setActiveValue(kind)}
       onClick={() => pick(kind)}
     >
-      {registry.nodeKinds[kind]?.label ?? kind}
+      {labelOf(kind)}
     </button>
   );
 
   return (
-    <div className="as-kindselect" ref={wrapRef}>
+    <div className="as-kindselect" ref={menu.wrapRef}>
       <button
+        ref={menu.triggerRef}
         type="button"
         className="as-select as-kindselect__button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={menu.toggle}
+        onKeyDown={menu.onTriggerKeyDown}
         aria-haspopup="listbox"
-        aria-expanded={open}
+        aria-expanded={menu.open}
         aria-label="Node kind"
         title="Node kind"
       >
-        {value ? (registry.nodeKinds[value]?.label ?? value) : placeholder}
+        {value ? labelOf(value) : placeholder}
       </button>
-      {open ? (
-        <div className="as-menu as-kindmenu" role="listbox" aria-label="Node kind">
-          {coreKinds.map(option)}
-          {relevant.map((cloud) => (
-            <Fragment key={cloud.provider}>
-              <div className="as-kindmenu__header">
-                <span className="as-kindmenu__dot" style={{ background: cloud.color }} />
-                {cloud.label}
+      {menu.open ? (
+        <div className="as-menu as-kindmenu as-searchmenu">
+          <SearchMenuBox menu={menu} visible={visible} pick={pick} label="Node kind" />
+          <div ref={menu.listRef} id={menu.listId} role="listbox" aria-label="Node kind">
+            {coreKinds.map(option)}
+            {relevant.map((cloud) => (
+              <Fragment key={cloud.provider}>
+                <div className="as-kindmenu__header">
+                  <span className="as-kindmenu__dot" style={{ background: cloud.color }} />
+                  {cloud.label}
+                </div>
+                {cloud.kinds.map(option)}
+              </Fragment>
+            ))}
+            {demoted.length ? (
+              <div className="as-kindmenu__dim">
+                <div className="as-kindmenu__header">Other clouds</div>
+                {demoted.map((cloud) => (
+                  <Fragment key={cloud.provider}>
+                    <div className="as-kindmenu__header as-kindmenu__header--sub">
+                      <span className="as-kindmenu__dot" style={{ background: cloud.color }} />
+                      {cloud.label}
+                    </div>
+                    {cloud.kinds.map(option)}
+                  </Fragment>
+                ))}
               </div>
-              {cloud.kinds.map(option)}
-            </Fragment>
-          ))}
-          {demoted.length ? (
-            <div className="as-kindmenu__dim">
-              <div className="as-kindmenu__header">Other clouds</div>
-              {demoted.map((cloud) => (
-                <Fragment key={cloud.provider}>
-                  <div className="as-kindmenu__header as-kindmenu__header--sub">
-                    <span className="as-kindmenu__dot" style={{ background: cloud.color }} />
-                    {cloud.label}
-                  </div>
-                  {cloud.kinds.map(option)}
-                </Fragment>
-              ))}
-            </div>
-          ) : null}
+            ) : null}
+            {!visible.length ? <div className="as-searchmenu__empty">No matches</div> : null}
+          </div>
         </div>
       ) : null}
     </div>

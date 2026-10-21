@@ -43,6 +43,7 @@ import {
   uncrossFieldAnchors,
   withEndSlots,
   wrappedDescWidth,
+  defaultTextAlign,
   type DiagramNode,
   type DiagramTemplate,
 } from "../contract/schema";
@@ -1769,13 +1770,16 @@ export function emitTemplate(
     }
 
     const cTop = sil.contentTop;
+    const cBottom = sil.contentBottom;
     const icon = iconPaths(registry, node.icon);
     // The card's own padding and the flex gap either side of the icon chip —
     // `.as-node` is 6px/12px with a 10px gap, and marketing widens both.
     const chipInset = skin.marketing ? 14 : 12;
     const chipGap = skin.marketing ? 12 : 10;
     const textX = box.x + sil.contentInlinePad + (icon ? chipInset + skin.iconBox + chipGap : 14);
-    const textW = box.width - (textX - box.x) - 10;
+    // The shape's inset comes off the right as well as the left, as the
+    // canvas's `paddingInline` does — or text runs into a diamond's corner.
+    const textW = box.width - (textX - box.x) - 10 - sil.contentInlinePad;
     const kindText = def.label.toUpperCase();
     // After the kind: the lifecycle status, then a task's estimate.
     const pointsText = isTask && node.storyPoints !== undefined ? formatPoints(node.storyPoints).toUpperCase() : "";
@@ -1804,7 +1808,7 @@ export function emitTemplate(
     // it in the page never lands the pill on the title.)
     const hasPills = isTask ? !!node.priority || !!node.stage : reached;
     const eyebrow = skin.kindEyebrow || !!eyebrowTail || hasPills || (live && isMilestone);
-    const align = node.textAlign ?? "left";
+    const align = node.textAlign ?? defaultTextAlign(node.kind);
     const anchor = align === "center" ? "middle" : align === "right" ? "end" : "start";
     const anchorX = align === "center" ? textX + textW / 2 : align === "right" ? textX + textW : textX;
     const aligned = anchor === "start" ? {} : ({ anchor } as const);
@@ -1839,7 +1843,7 @@ export function emitTemplate(
     // silhouette.
     const descRoom = Math.max(
       1,
-      Math.floor((box.height - cTop - 49 - titleOverflow) / descLineH) + 1,
+      Math.floor((box.height - cTop - cBottom - 49 - titleOverflow) / descLineH) + 1,
     );
     const descLines = node.description
       ? wrapText(node.description, descSize, "sans", descW, rows.length ? 1 : node.wrap ? descRoom : 2)
@@ -1865,7 +1869,7 @@ export function emitTemplate(
     const TITLE_DY = eyebrow ? 31 : Math.round(fontSize * 1.2) + 2;
     const DESC_DY = TITLE_DY + 14;
     const blockH = DESC_DY + titleOverflow + descLines.length * descLineH;
-    const slack = Math.max(0, box.height - cTop - blockH);
+    const slack = Math.max(0, box.height - cTop - cBottom - blockH);
     const vShift = rows.length || textBelow
       ? 0
       : node.textVAlign === "top"
@@ -1875,7 +1879,7 @@ export function emitTemplate(
           : slack / 2;
     const ty = (offset: number) => box.y + cTop + offset + vShift;
 
-    const contentMidY = box.y + cTop + (box.height - cTop) / 2;
+    const contentMidY = box.y + cTop + (box.height - cTop - cBottom) / 2;
     // Icon and text share one flex line on the canvas, so the icon follows
     // the node's vertical alignment too — centred by default, pinned to the
     // padding edge when the text is (records included, which pin to the top).
@@ -1890,7 +1894,7 @@ export function emitTemplate(
       : node.fields?.length || node.textVAlign === "top"
         ? box.y + cTop + iconInset
         : node.textVAlign === "bottom"
-          ? box.y + box.height - iconInset
+          ? box.y + box.height - cBottom - iconInset
           : contentMidY;
     if (icon) {
       const chipX = box.x + sil.contentInlinePad + chipInset;

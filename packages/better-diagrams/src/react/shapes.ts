@@ -25,6 +25,12 @@ export interface Silhouette {
   detail?: string;
   /** Extra top inset the node content needs to clear the shape. */
   contentTop: number;
+  /**
+   * Extra bottom inset, for a shape that narrows at the foot as well as the
+   * head. Centred text sits midway between the two insets, so a shape that
+   * set only `contentTop` would centre its label below its middle.
+   */
+  contentBottom: number;
   /** Extra horizontal inset (the pipe's rounded ends eat into the box). */
   contentInlinePad: number;
 }
@@ -60,7 +66,7 @@ export function silhouettePath(
         // Head as its own subpath — same fill, one shape to the eye.
         `M ${cx - headR} ${y + headR} A ${headR} ${headR} 0 1 1 ${cx + headR} ${y + headR} ` +
         `A ${headR} ${headR} 0 1 1 ${cx - headR} ${y + headR} Z`;
-      return { body, contentTop: headR * 1.1, contentInlinePad: 0 };
+      return { body, contentTop: headR * 1.1, contentBottom: 0, contentInlinePad: 0 };
     }
     case "cylinder": {
       const ry = Math.min(9, h * 0.14);
@@ -69,26 +75,27 @@ export function silhouettePath(
         `V ${y + h - ry} A ${w / 2} ${ry} 0 0 1 ${x} ${y + h - ry} Z`;
       // The lid's lower arc — the line that makes a cylinder read as one.
       const detail = `M ${x} ${y + ry} A ${w / 2} ${ry} 0 0 0 ${x + w} ${y + ry}`;
-      return { body, detail, contentTop: ry * 1.6, contentInlinePad: 0 };
+      return { body, detail, contentTop: ry * 1.6, contentBottom: 0, contentInlinePad: 0 };
     }
     case "pipe": {
       const r = h / 2;
       const body =
         `M ${x + r} ${y} H ${x + w - r} A ${r} ${r} 0 0 1 ${x + w - r} ${y + h} ` +
         `H ${x + r} A ${r} ${r} 0 0 1 ${x + r} ${y} Z`;
-      return { body, contentTop: 0, contentInlinePad: r * 0.55 };
+      return { body, contentTop: 0, contentBottom: 0, contentInlinePad: r * 0.55 };
     }
     case "diamond": {
       const cx = x + w / 2;
       const cy = y + h / 2;
       const body = `M ${cx} ${y} L ${x + w} ${cy} L ${cx} ${y + h} L ${x} ${cy} Z`;
-      // The corners are gone: keep the text in the middle band.
-      return { body, contentTop: h * 0.16, contentInlinePad: w * 0.18 };
+      // The corners are gone: keep the text in the middle band — inset the
+      // same at the foot as at the head, or a centred label sits low.
+      return { body, contentTop: h * 0.16, contentBottom: h * 0.16, contentInlinePad: w * 0.18 };
     }
     case "parallelogram": {
       const skew = Math.min(18, w * 0.16);
       const body = `M ${x + skew} ${y} H ${x + w} L ${x + w - skew} ${y + h} H ${x} Z`;
-      return { body, contentTop: 0, contentInlinePad: skew * 0.7 };
+      return { body, contentTop: 0, contentBottom: 0, contentInlinePad: skew * 0.7 };
     }
     default: {
       const r = opts.radius ?? 8;
@@ -97,7 +104,7 @@ export function silhouettePath(
         `V ${y + h - r} A ${r} ${r} 0 0 1 ${x + w - r} ${y + h} ` +
         `H ${x + r} A ${r} ${r} 0 0 1 ${x} ${y + h - r} ` +
         `V ${y + r} A ${r} ${r} 0 0 1 ${x + r} ${y} Z`;
-      return { body, contentTop: 0, contentInlinePad: 0 };
+      return { body, contentTop: 0, contentBottom: 0, contentInlinePad: 0 };
     }
   }
 }

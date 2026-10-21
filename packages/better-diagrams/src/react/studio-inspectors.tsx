@@ -33,6 +33,7 @@ import {
   type TaskStage,
   NODE_TEXT_ALIGNS,
   NODE_TEXT_VALIGNS,
+  defaultTextAlign,
   DEFAULT_CONTAINER_OPACITY,
   DEFAULT_FONT_SIZE,
   type NodeOutline,
@@ -70,6 +71,7 @@ import {
 } from "../contract/tasks";
 import { assigneeSwatch, swatchColor } from "./shapes";
 import { KindSelect } from "./KindSelect";
+import { SearchSelect } from "./SearchSelect";
 import type { ResolvedRegistry } from "./registry-types";
 import { kindDef, providerDef, relationDef, zoneInk } from "./registry-types";
 import { relationDressing } from "../contract/relations";
@@ -583,11 +585,11 @@ export function ZoneInspector({
           onChange={(event) => onPatch(zone.id, { label: event.target.value })}
           aria-label="Zone label"
         />
-        <select
-          className="as-select"
+        <SearchSelect
           value={zone.shape}
-          onChange={(event) => {
-            const shape = event.target.value as ZoneShape;
+          options={ZONE_SHAPE_OPTIONS}
+          onChange={(value) => {
+            const shape = value as ZoneShape;
             onPatch(zone.id, {
               shape,
               // Seed an editable outline the first time polygon is chosen.
@@ -595,13 +597,7 @@ export function ZoneInspector({
             });
           }}
           aria-label="Zone shape"
-        >
-          {ZONE_SHAPES.map((shape) => (
-            <option key={shape} value={shape}>
-              {shape}
-            </option>
-          ))}
-        </select>
+        />
       </InspectorSection>
 
       {/* The picker sets the OUTLINE colour — the vivid one a human reads —
@@ -643,23 +639,16 @@ export function ZoneInspector({
       </InspectorSection>
 
       <InspectorSection caption="Style">
-        <select
-          className="as-select"
+        <SearchSelect
           value={zone.outline ?? "solid"}
-          onChange={(event) => {
-            const value = event.target.value as ZoneOutline;
+          options={ZONE_OUTLINE_OPTIONS}
+          onChange={(value) =>
             // `solid` is the default and never stored.
-            onPatch(zone.id, { outline: value === "solid" ? undefined : value });
-          }}
+            onPatch(zone.id, { outline: value === "solid" ? undefined : (value as ZoneOutline) })
+          }
           aria-label="Zone outline style"
           title="Outline — solid, dashed, dotted, or none"
-        >
-          {ZONE_OUTLINES.map((o) => (
-            <option key={o} value={o}>
-              outline: {o}
-            </option>
-          ))}
-        </select>
+        />
         <label className="as-check" title="Draw the derived background tint">
           <input
             type="checkbox"
@@ -756,14 +745,40 @@ function sharedField<D, T>(datas: readonly D[], pick: (d: D) => T): { value: T; 
   return { value: first, mixed };
 }
 
-/** The placeholder row a <select> shows while the selection disagrees. */
-function MixedOption({ when }: { when: boolean }) {
-  return when ? (
-    <option value="" disabled>
-      Mixed
-    </option>
-  ) : null;
-}
+// The node inspector's fixed choices, built once rather than on every render.
+const TASK_STAGE_OPTIONS = [
+  { value: "todo", label: "To do" },
+  { value: "in-progress", label: "In progress" },
+  { value: "in-review", label: "In review" },
+  { value: "done", label: "Done" },
+];
+const TASK_PRIORITY_OPTIONS = [
+  { value: "", label: "No priority" },
+  ...TASK_PRIORITIES.map((p) => ({ value: p, label: p.toUpperCase() })),
+];
+const FONT_SIZE_OPTIONS = [11, 13, 16, 20, 26].map((size) => ({ value: String(size), label: `${size}px` }));
+const FIELD_KEY_OPTIONS = [
+  { value: "", label: "—", keywords: "none" },
+  ...FIELD_KEYS.map((key) => ({ value: key, label: key })),
+];
+
+// …and the edge and zone inspectors'.
+const EDGE_DIRECTION_OPTIONS = [
+  { value: "forward", label: "→", keywords: "arrow one way" },
+  { value: "both", label: "↔", keywords: "arrows two way" },
+  { value: "none", label: "—", keywords: "plain line" },
+];
+const EDGE_TAIL_OPTIONS = ["default", ...EDGE_HEADS].map((head) => ({ value: head, label: `tail: ${head}` }));
+const EDGE_HEAD_OPTIONS = ["default", ...EDGE_HEADS].map((head) => ({ value: head, label: `head: ${head}` }));
+const EDGE_STYLE_OPTIONS = EDGE_STYLES.map((s) => ({ value: s, label: s }));
+const EDGE_ROUTING_OPTIONS = [
+  { value: "default", label: "routing: default" },
+  ...EDGE_ROUTINGS.map((mode) => ({ value: mode, label: mode })),
+];
+const EDGE_START_OPTIONS = ["auto", ...EDGE_ANCHOR_SIDES].map((side) => ({ value: side, label: `start: ${side}` }));
+const EDGE_END_OPTIONS = ["auto", ...EDGE_ANCHOR_SIDES].map((side) => ({ value: side, label: `end: ${side}` }));
+const ZONE_SHAPE_OPTIONS = ZONE_SHAPES.map((shape) => ({ value: shape, label: shape }));
+const ZONE_OUTLINE_OPTIONS = ZONE_OUTLINES.map((o) => ({ value: o, label: `outline: ${o}` }));
 
 /** A checkbox that reads indeterminate while the selection disagrees. */
 function SharedCheck({
@@ -898,7 +913,7 @@ export function NodeInspector({
   const icon = read((d) => d.icon as string);
   const fontSize = read((d) => d.fontSize ?? DEFAULT_FONT_SIZE);
   const plain = read((d) => !!d.plain);
-  const textAlign = read((d) => d.textAlign ?? "left");
+  const textAlign = read((d) => d.textAlign ?? defaultTextAlign(d.kind));
   const textVAlign = read((d) => d.textVAlign ?? "middle");
   const wrap = read((d) => !!d.wrap);
   const outline = read((d) => d.outline ?? "dashed");
@@ -948,45 +963,29 @@ export function NodeInspector({
           }}
         />
         {noAnnotations ? (
-          <select
-            className="as-select"
-            value={status.mixed ? "" : status.value}
-            onChange={(event) => {
-              const value = event.target.value as NodeStatus;
-              if (!value) return;
+          <SearchSelect
+            value={status.value}
+            mixed={status.mixed}
+            options={NODE_STATUSES.map((s) => ({ value: s, label: s }))}
+            onChange={(value) =>
               // `active` is the default and never stored.
-              patch({ status: value === "active" ? undefined : value });
-            }}
+              patch({ status: value === "active" ? undefined : (value as NodeStatus) })
+            }
             aria-label="Lifecycle status"
             title="Lifecycle stage — proposed/planned/stubbed outline, dark hazard-taped, deprecated/retired dim"
-          >
-            <MixedOption when={status.mixed} />
-            {NODE_STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
+          />
         ) : null}
       </InspectorSection>
 
       {allPlainBoxes ? (
         <InspectorSection caption="Style">
-          <select
-            className="as-select"
-            value={icon.mixed ? "" : icon.value}
-            onChange={(event) => {
-              if (event.target.value) patch({ icon: event.target.value });
-            }}
+          <SearchSelect
+            value={icon.value}
+            mixed={icon.mixed}
+            options={registry.iconNames.map((name) => ({ value: name, label: name === "none" ? "no icon" : name }))}
+            onChange={(value) => patch({ icon: value })}
             aria-label="Node icon"
-          >
-            <MixedOption when={icon.mixed} />
-            {registry.iconNames.map((name) => (
-              <option key={name} value={name}>
-                {name === "none" ? "no icon" : name}
-              </option>
-            ))}
-          </select>
+          />
           {single && allTasks ? (
             // A ticket's detail runs to sentences and lines; the card shows
             // the first two.
@@ -1026,43 +1025,29 @@ export function NodeInspector({
             aria-label="Story points"
             title="Estimate in story points — shown in the card's header"
           />
-          <select
-            className="as-select"
-            value={stage.mixed ? "" : stage.value}
-            onChange={(event) => {
-              const next = event.target.value;
-              if (!next) return;
+          <SearchSelect
+            value={stage.value}
+            mixed={stage.mixed}
+            options={TASK_STAGE_OPTIONS}
+            onChange={(next) =>
               // Done is the corner check; the others are an open task's stage.
               patch(
                 next === "done"
                   ? { done: true, stage: undefined }
                   : { done: undefined, stage: next === "todo" ? undefined : (next as TaskStage) },
-              );
-            }}
+              )
+            }
             aria-label="Task status"
             title="Where the task stands — to do, in progress, in review, or done"
-          >
-            <MixedOption when={stage.mixed} />
-            <option value="todo">To do</option>
-            <option value="in-progress">In progress</option>
-            <option value="in-review">In review</option>
-            <option value="done">Done</option>
-          </select>
-          <select
-            className="as-select"
-            value={priority.mixed ? "" : priority.value}
-            onChange={(event) => patch({ priority: (event.target.value || undefined) as TaskPriority | undefined })}
+          />
+          <SearchSelect
+            value={priority.value}
+            mixed={priority.mixed}
+            options={TASK_PRIORITY_OPTIONS}
+            onChange={(value) => patch({ priority: (value || undefined) as TaskPriority | undefined })}
             aria-label="Priority"
             title="How urgent — P0 the most; shown as a badge on the card"
-          >
-            <MixedOption when={priority.mixed} />
-            <option value="">No priority</option>
-            {TASK_PRIORITIES.map((p) => (
-              <option key={p} value={p}>
-                {p.toUpperCase()}
-              </option>
-            ))}
-          </select>
+          />
           <SharedCheck
             checked={done.value}
             mixed={done.mixed}
@@ -1075,21 +1060,13 @@ export function NodeInspector({
 
       {allAnnotations ? (
         <InspectorSection caption="Style">
-          <select
-            className="as-select"
-            value={fontSize.mixed ? "" : fontSize.value}
-            onChange={(event) => {
-              if (event.target.value) patch({ fontSize: Number(event.target.value) });
-            }}
+          <SearchSelect
+            value={String(fontSize.value)}
+            mixed={fontSize.mixed}
+            options={FONT_SIZE_OPTIONS}
+            onChange={(value) => patch({ fontSize: Number(value) })}
             aria-label="Font size"
-          >
-            <MixedOption when={fontSize.mixed} />
-            {[11, 13, 16, 20, 26].map((size) => (
-              <option key={size} value={size}>
-                {size}px
-              </option>
-            ))}
-          </select>
+          />
           <SharedCheck
             checked={!plain.value}
             mixed={plain.mixed}
@@ -1113,35 +1090,29 @@ export function NodeInspector({
         </InspectorSection>
       ) : null}
 
-      {/* Text layout. Every default is left/middle/unwrapped, and validation
-          stores a value only when it differs — so touching nothing here leaves
-          the document byte-identical. Annotations keep their own editor. */}
+      {/* Text layout. Every default is left (centred in a diamond) / middle /
+          unwrapped, and validation stores a value only when it differs — so
+          touching nothing here leaves the document byte-identical.
+          Annotations keep their own editor. */}
       {noAnnotations ? (
         <InspectorSection caption="Text">
-          <select
-            className="as-select"
-            value={textAlign.mixed ? "" : textAlign.value}
-            onChange={(event) => {
-              const value = event.target.value as NodeTextAlign;
-              if (value) patch({ textAlign: value === "left" ? undefined : value });
-            }}
+          <SearchSelect
+            value={textAlign.value}
+            mixed={textAlign.mixed}
+            options={NODE_TEXT_ALIGNS.map((a) => ({ value: a, label: `align: ${a}` }))}
+            // Per node: in a mixed selection, "left" is a service's default
+            // but has to be written down on a diamond.
+            onChange={(value) =>
+              patch((d) => ({ textAlign: value === defaultTextAlign(d.kind) ? undefined : (value as NodeTextAlign) }))
+            }
             aria-label="Text alignment"
             title="Horizontal alignment of the label and description"
-          >
-            <MixedOption when={textAlign.mixed} />
-            {NODE_TEXT_ALIGNS.map((a) => (
-              <option key={a} value={a}>
-                align: {a}
-              </option>
-            ))}
-          </select>
-          <select
-            className="as-select"
-            value={textVAlign.mixed ? "" : textVAlign.value}
-            onChange={(event) => {
-              const value = event.target.value as NodeTextVAlign;
-              if (value) patch({ textVAlign: value === "middle" ? undefined : value });
-            }}
+          />
+          <SearchSelect
+            value={textVAlign.value}
+            mixed={textVAlign.mixed}
+            options={NODE_TEXT_VALIGNS.map((a) => ({ value: a, label: `vertical: ${a}` }))}
+            onChange={(value) => patch({ textVAlign: value === "middle" ? undefined : (value as NodeTextVAlign) })}
             aria-label="Vertical text alignment"
             // A wrapped card reads from the top whatever this says (see
             // `.as-node--wrap`); the value is kept for when it unwraps.
@@ -1151,31 +1122,18 @@ export function NodeInspector({
                 ? "A wrapped card reads from the top"
                 : "Where the text block sits in the box"
             }
-          >
-            <MixedOption when={textVAlign.mixed} />
-            {NODE_TEXT_VALIGNS.map((a) => (
-              <option key={a} value={a}>
-                vertical: {a}
-              </option>
-            ))}
-          </select>
-          <select
-            className="as-select"
-            value={fontSize.mixed ? "" : fontSize.value}
-            onChange={(event) => {
-              const value = Number(event.target.value);
-              if (value) patch({ fontSize: value === DEFAULT_FONT_SIZE ? undefined : value });
+          />
+          <SearchSelect
+            value={String(fontSize.value)}
+            mixed={fontSize.mixed}
+            options={FONT_SIZE_OPTIONS}
+            onChange={(value) => {
+              const size = Number(value);
+              patch({ fontSize: size === DEFAULT_FONT_SIZE ? undefined : size });
             }}
             aria-label="Label size"
             title="Label size"
-          >
-            <MixedOption when={fontSize.mixed} />
-            {[11, 13, 16, 20, 26].map((size) => (
-              <option key={size} value={size}>
-                {size}px
-              </option>
-            ))}
-          </select>
+          />
           <SharedCheck
             checked={wrap.value}
             mixed={wrap.mixed}
@@ -1212,24 +1170,17 @@ export function NodeInspector({
           box that still nests, still accepts drops, and still drills in. */}
       {allContainers ? (
         <InspectorSection caption="Frame">
-          <select
-            className="as-select"
-            value={outline.mixed ? "" : outline.value}
-            onChange={(event) => {
-              const value = event.target.value as NodeOutline;
+          <SearchSelect
+            value={outline.value}
+            mixed={outline.mixed}
+            options={NODE_OUTLINES.map((o) => ({ value: o, label: `outline: ${o}` }))}
+            onChange={(value) =>
               // `dashed` is the group default and never stored.
-              if (value) patch({ outline: value === "dashed" ? undefined : value });
-            }}
+              patch({ outline: value === "dashed" ? undefined : (value as NodeOutline) })
+            }
             aria-label="Frame outline style"
             title="Outline — solid, dashed, dotted, or none"
-          >
-            <MixedOption when={outline.mixed} />
-            {NODE_OUTLINES.map((o) => (
-              <option key={o} value={o}>
-                outline: {o}
-              </option>
-            ))}
-          </select>
+          />
           <SharedCheck
             checked={fill.value}
             mixed={fill.mixed}
@@ -1550,22 +1501,14 @@ function FieldsEditor({
       <span className="as-fields__list">
         {fields.map((field, index) => (
           <span className="as-fieldrow" key={field.id}>
-            <select
-              className="as-select as-fieldrow__key"
+            <SearchSelect
+              className="as-fieldrow__key"
               value={field.key ?? ""}
-              onChange={(event) =>
-                patch(index, { key: (event.target.value || undefined) as FieldKey | undefined })
-              }
+              options={FIELD_KEY_OPTIONS}
+              onChange={(value) => patch(index, { key: (value || undefined) as FieldKey | undefined })}
               aria-label={`Key role of ${field.name || "field"}`}
               title="Key role — primary, foreign, or both"
-            >
-              <option value="">—</option>
-              {FIELD_KEYS.map((key) => (
-                <option key={key} value={key}>
-                  {key}
-                </option>
-              ))}
-            </select>
+            />
             <input
               className="as-input as-fieldrow__name"
               data-field-id={field.id}
@@ -1873,56 +1816,30 @@ export function EdgeInspector({
       </InspectorSection>
 
       <InspectorSection caption="Flow">
-        <select
-          className="as-select"
-          value={direction.mixed ? "" : direction.value}
-          onChange={(event) => {
-            if (event.target.value) patch({ direction: event.target.value as EdgeDirection });
-          }}
+        <SearchSelect
+          value={direction.value}
+          mixed={direction.mixed}
+          options={EDGE_DIRECTION_OPTIONS}
+          onChange={(value) => patch({ direction: value as EdgeDirection })}
           aria-label="Edge direction"
           title="Arrowheads"
-        >
-          <MixedOption when={direction.mixed} />
-          <option value="forward">→</option>
-          <option value="both">↔</option>
-          <option value="none">—</option>
-        </select>
-        <select
-          className="as-select"
-          value={startHead.mixed ? "" : startHead.value}
-          onChange={(event) => {
-            const value = event.target.value;
-            if (value) patch({ startHead: value === "default" ? undefined : (value as EdgeHead) });
-          }}
+        />
+        <SearchSelect
+          value={startHead.value}
+          mixed={startHead.mixed}
+          options={EDGE_TAIL_OPTIONS}
+          onChange={(value) => patch({ startHead: value === "default" ? undefined : (value as EdgeHead) })}
           aria-label="Start glyph"
           title="Glyph at the source end — default follows the direction setting"
-        >
-          <MixedOption when={startHead.mixed} />
-          <option value="default">tail: default</option>
-          {EDGE_HEADS.map((head) => (
-            <option key={head} value={head}>
-              tail: {head}
-            </option>
-          ))}
-        </select>
-        <select
-          className="as-select"
-          value={endHead.mixed ? "" : endHead.value}
-          onChange={(event) => {
-            const value = event.target.value;
-            if (value) patch({ endHead: value === "default" ? undefined : (value as EdgeHead) });
-          }}
+        />
+        <SearchSelect
+          value={endHead.value}
+          mixed={endHead.mixed}
+          options={EDGE_HEAD_OPTIONS}
+          onChange={(value) => patch({ endHead: value === "default" ? undefined : (value as EdgeHead) })}
           aria-label="End glyph"
           title="Glyph at the target end — default follows the direction setting"
-        >
-          <MixedOption when={endHead.mixed} />
-          <option value="default">head: default</option>
-          {EDGE_HEADS.map((head) => (
-            <option key={head} value={head}>
-              head: {head}
-            </option>
-          ))}
-        </select>
+        />
         {single ? (
           <input
             className="as-input as-inspector__seq"
@@ -1974,30 +1891,31 @@ export function EdgeInspector({
               line the way the legend shows that kind — style, colour, end
               glyphs, cardinality — as one edit; clearing it leaves the
               dressing alone, so a line keeps looking as it did. */}
-          <select
-            className="as-select"
-            value={relation.mixed ? "" : relation.value}
-            onChange={(event) => {
-              const id = event.target.value;
-              patch(id ? { relation: id, ...relationDressing(relationDef(registry, id)) } : { relation: undefined });
-            }}
+          <SearchSelect
+            value={relation.value}
+            mixed={relation.mixed}
+            options={[
+              { value: "", label: "relation: none", keywords: "none" },
+              // A dependency is a task graph's line (see the switch above), so a
+              // data model's picker offers it only to a line already wearing it.
+              ...registry.relationOrder
+                .filter((id) => id !== DEPENDENCY_RELATION || relation.value === id)
+                .map((id) => ({
+                  value: id,
+                  label: registry.relationKinds[id]?.label ?? id,
+                  title: registry.relationKinds[id]?.description,
+                })),
+              // A kind the document names that nobody registered stays pickable rather than reading as "none".
+              ...(!relation.mixed && relation.value && !registry.relationKinds[relation.value]
+                ? [{ value: relation.value, label: relationDef(registry, relation.value).label }]
+                : []),
+            ]}
+            onChange={(id) =>
+              patch(id ? { relation: id, ...relationDressing(relationDef(registry, id)) } : { relation: undefined })
+            }
             aria-label="Relationship kind"
             title="What kind of relationship this is — picking one dresses the line to match"
-          >
-            <MixedOption when={relation.mixed} />
-            <option value="">relation: none</option>
-            {/* A dependency is a task graph's line (see the switch above), so a
-                data model's picker offers it only to a line already wearing it. */}
-            {registry.relationOrder.filter((id) => id !== DEPENDENCY_RELATION || relation.value === id).map((id) => (
-              <option key={id} value={id} title={registry.relationKinds[id]?.description}>
-                {registry.relationKinds[id]?.label ?? id}
-              </option>
-            ))}
-            {/* A kind the document names that nobody registered stays pickable rather than reading as "none". */}
-            {!relation.mixed && relation.value && !registry.relationKinds[relation.value] ? (
-              <option value={relation.value}>{relationDef(registry, relation.value).label}</option>
-            ) : null}
-          </select>
+          />
           <input
             className="as-input as-inspector__end"
             value={startLabel.mixed ? "" : startLabel.value}
@@ -2007,36 +1925,28 @@ export function EdgeInspector({
             title="Cardinality at the source end — 1, 0..1, 0..*, 1..*"
           />
           {sourceFields.length ? (
-            <select
-              className="as-select"
+            <SearchSelect
               value={data.startField ?? ""}
-              onChange={(event) => patch({ startField: event.target.value || undefined })}
+              options={[
+                { value: "", label: "from: box" },
+                ...sourceFields.map((field) => ({ value: field.id, label: field.name || field.id })),
+              ]}
+              onChange={(value) => patch({ startField: value || undefined })}
               aria-label="Source field"
               title="Which row of the source this line leaves from"
-            >
-              <option value="">from: box</option>
-              {sourceFields.map((field) => (
-                <option key={field.id} value={field.id}>
-                  {field.name || field.id}
-                </option>
-              ))}
-            </select>
+            />
           ) : null}
           {targetFields.length ? (
-            <select
-              className="as-select"
+            <SearchSelect
               value={data.endField ?? ""}
-              onChange={(event) => patch({ endField: event.target.value || undefined })}
+              options={[
+                { value: "", label: "to: box" },
+                ...targetFields.map((field) => ({ value: field.id, label: field.name || field.id })),
+              ]}
+              onChange={(value) => patch({ endField: value || undefined })}
               aria-label="Target field"
               title="Which row of the target this line lands on"
-            >
-              <option value="">to: box</option>
-              {targetFields.map((field) => (
-                <option key={field.id} value={field.id}>
-                  {field.name || field.id}
-                </option>
-              ))}
-            </select>
+            />
           ) : null}
           <input
             className="as-input as-inspector__end"
@@ -2062,77 +1972,39 @@ export function EdgeInspector({
       />
 
       <InspectorSection caption="Style">
-        <select
-          className="as-select"
-          value={style.mixed ? "" : style.value}
-          onChange={(event) => {
-            if (event.target.value) patch({ style: event.target.value as EdgeStyle });
-          }}
+        <SearchSelect
+          value={style.value}
+          mixed={style.mixed}
+          options={EDGE_STYLE_OPTIONS}
+          onChange={(value) => patch({ style: value as EdgeStyle })}
           aria-label="Edge style"
-        >
-          <MixedOption when={style.mixed} />
-          {EDGE_STYLES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
-        <select
-          className="as-select"
-          value={routing.mixed ? "" : routing.value}
-          onChange={(event) => {
-            const value = event.target.value;
-            if (value) patch({ routing: value === "default" ? undefined : (value as EdgeRouting) });
-          }}
+        />
+        <SearchSelect
+          value={routing.value}
+          mixed={routing.mixed}
+          options={EDGE_ROUTING_OPTIONS}
+          onChange={(value) => patch({ routing: value === "default" ? undefined : (value as EdgeRouting) })}
           aria-label="Edge routing"
           title="Routing — default follows the diagram setting"
-        >
-          <MixedOption when={routing.mixed} />
-          <option value="default">routing: default</option>
-          {EDGE_ROUTINGS.map((mode) => (
-            <option key={mode} value={mode}>
-              {mode}
-            </option>
-          ))}
-        </select>
-        <select
-          className="as-select"
-          value={startSide.mixed ? "" : startSide.value}
-          onChange={(event) => {
-            const value = event.target.value;
-            // Choosing a side drops any stored fraction: the picker pins the
-            // centre of that side; drag the line itself for finer routing.
-            if (value) patch({ start: value === "auto" ? undefined : { side: value as EdgeAnchorSide } });
-          }}
+        />
+        <SearchSelect
+          value={startSide.value}
+          mixed={startSide.mixed}
+          options={EDGE_START_OPTIONS}
+          // Choosing a side drops any stored fraction: the picker pins the
+          // centre of that side; drag the line itself for finer routing.
+          onChange={(value) => patch({ start: value === "auto" ? undefined : { side: value as EdgeAnchorSide } })}
           aria-label="Start anchor"
           title="Which side of the source box the line leaves — auto faces wherever it's going"
-        >
-          <MixedOption when={startSide.mixed} />
-          <option value="auto">start: auto</option>
-          {EDGE_ANCHOR_SIDES.map((side) => (
-            <option key={side} value={side}>
-              start: {side}
-            </option>
-          ))}
-        </select>
-        <select
-          className="as-select"
-          value={endSide.mixed ? "" : endSide.value}
-          onChange={(event) => {
-            const value = event.target.value;
-            if (value) patch({ end: value === "auto" ? undefined : { side: value as EdgeAnchorSide } });
-          }}
+        />
+        <SearchSelect
+          value={endSide.value}
+          mixed={endSide.mixed}
+          options={EDGE_END_OPTIONS}
+          onChange={(value) => patch({ end: value === "auto" ? undefined : { side: value as EdgeAnchorSide } })}
           aria-label="End anchor"
           title="Which side of the target box the line arrives at"
-        >
-          <MixedOption when={endSide.mixed} />
-          <option value="auto">end: auto</option>
-          {EDGE_ANCHOR_SIDES.map((side) => (
-            <option key={side} value={side}>
-              end: {side}
-            </option>
-          ))}
-        </select>
+        />
         {routed.length ? (
           <button
             type="button"

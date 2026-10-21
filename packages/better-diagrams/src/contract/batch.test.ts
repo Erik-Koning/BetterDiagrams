@@ -142,6 +142,19 @@ describe("new node fields", () => {
     expect("textAlign" in t.nodes.find((n) => n.id === "c")!).toBe(false);
   });
 
+  it("centres a diamond's text by default, so there it is left that gets stored", () => {
+    const t = validateTemplate({
+      nodes: [
+        node({ id: "m", kind: "milestone", textAlign: "center" }),
+        node({ id: "d", kind: "decision", textAlign: "left" }),
+        node({ id: "x", kind: "milestone", textAlign: "diagonal" }),
+      ],
+    });
+    expect("textAlign" in t.nodes.find((n) => n.id === "m")!).toBe(false);
+    expect(t.nodes.find((n) => n.id === "d")!.textAlign).toBe("left");
+    expect("textAlign" in t.nodes.find((n) => n.id === "x")!).toBe(false);
+  });
+
   it("grows a wrapped node's height to hold every line, and only when wrapping", () => {
     const long = "A deliberately long component label that cannot fit on one line";
     const t = validateTemplate({

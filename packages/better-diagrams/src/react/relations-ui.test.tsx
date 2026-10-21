@@ -150,16 +150,23 @@ describe("inspector", () => {
     await waitFor(() => expect(container.querySelector('[data-id="coupons"] .as-edge__hit')).toBeTruthy());
     fireEvent.click(container.querySelector('[data-id="coupons"] .as-edge__hit')!);
     const picker = await screen.findByLabelText("Relationship kind");
-    expect(picker).toHaveValue("reference");
-    expect(within(picker).getAllByRole("option").map((o) => o.textContent)).toEqual(["relation: none", "Composition", "Aggregation", "Reference", "Hierarchy", "Polymorphic", "Generalization"]);
+    expect(picker).toHaveTextContent("Reference");
+    fireEvent.click(picker);
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["relation: none", "Composition", "Aggregation", "Reference", "Hierarchy", "Polymorphic", "Generalization"]);
+    // Each kind still says what it means on hover.
+    expect(screen.getByRole("option", { name: "Composition" })).toHaveAttribute(
+      "title",
+      createRegistry().relationKinds.composition!.description,
+    );
 
-    fireEvent.change(picker, { target: { value: "composition" } });
+    fireEvent.click(screen.getByRole("option", { name: "Composition" }));
     await waitFor(() => {
       const edge = (onChange.mock.calls.at(-1)?.[0] as DiagramTemplate).edges.find((e) => e.id === "coupons")!;
       expect(edge).toMatchObject({ relation: "composition", style: "solid", color: "rose", startHead: "diamond-filled", startLabel: "*", endLabel: "1" });
     });
 
-    fireEvent.change(picker, { target: { value: "" } });
+    fireEvent.click(picker);
+    fireEvent.click(screen.getByRole("option", { name: "relation: none" }));
     await waitFor(() => {
       const edge = (onChange.mock.calls.at(-1)?.[0] as DiagramTemplate).edges.find((e) => e.id === "coupons")!;
       expect(edge.relation).toBeUndefined();

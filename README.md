@@ -37,6 +37,10 @@ npm run test:e2e   # Playwright, end to end through the example app (see e2e/)
 npm run build      # builds the library to packages/better-diagrams/dist
 ```
 
+A repo that keeps its diagrams beside its code opens them without a checkout of this one:
+`npx @mosphere/better-diagrams docs/BetterDiagram.json` serves the editor with that file live — see
+**Diagrams in another repo, without this one** below, beside **Live files on disk**.
+
 The end-to-end suite starts its own dev server on :5174 and drives the example in
 Chromium — first run `npx playwright install chromium`. It never writes to
 `/templates`: the auto-save route is blocked for the duration of a test.
@@ -100,7 +104,10 @@ shadow.
 | `filename` | `string` | Base name for exports. Default `"architecture"`. |
 | `files` / `activeFileId` / `onFileSelect` / `onFileCreate` / `onFileRename` / `onFileDelete` | `StudioFile[]`, callbacks | When `files` is provided the brand becomes a **file selector** (switch, new, rename, delete). The host owns all storage — the editor only calls back. Both editors take these. **The file name and the document's `meta.title` are one title with two homes**: renaming the active file writes `meta.title` (committed, emitted, undoable), and a document title arriving any other way — AI generation, import, a controlled `value` — is pushed back out through `onFileRename`, so the dropdown always shows what exports will print. The sync is a reconciler, not two blind pushes: on a mismatch, *which side moved since they last agreed* decides — a title edit (including undo) renames the file, while a **host-side rename** (another tab, the host's own UI, a changed `files` prop) is adopted as the document's new title rather than being reverted; when both moved at once, the document wins. The editor can only do this for the document it holds; a host that stores the other documents should mirror renames into them too (the example app does). Set `StudioFile.empty` and a blank file deletes straight away; anything else asks for confirmation first. `onFileCreate` receives an optional `StudioFileInit` (`{ name?, kind?, doc? }`): the menu's New file row passes nothing, the welcome modal passes a name and — when JSON was inserted — a validated document to seed the file with. **Imports open as new files through it too**: once the open diagram has more than one top-level node (sequence: participant), **Import → Open file…**, **Import folder…** and a dropped file pass the name and the document they read, rather than replacing the diagram; an emptier one is replaced in place, after asking if anything is there. Without `onFileCreate`, an import always replaces. |
 | `removedFiles` / `onFileRestore` | `StudioFile[]`, `(id) => void` | Deleted documents the host still holds. The menu grows a **Recently removed…** entry opening a recovery modal. |
-| `onLinkFile` | `() => void` | Offer **Link a file on disk…** in the Import menu and on the welcome modal. The host does the picking and linking (the example app has its dev server show the system's file dialog, symlinks the pick into `templates/symlinks/` and opens it live); the editor only calls back. Both editors take it. |
+| `onLinkFile` | `() => void` | Offer **Link a file on disk…** in the Import menu (right after **Open file…**, whose hint then says it reads a copy) and on the welcome modal. The host does the picking and linking (the example app has its dev server show the system's file dialog, symlinks the pick into `templates/symlinks/` and opens it live); the editor only calls back. A diagram read in through **Open file…** while it's set gets an import note saying edits don't go back to that file. Both editors take it. |
+| `onOpenFile` | `() => Promise<File \| null>` | Run **Open file…** through the host instead of the browser's picker, which never says where a file lives. The host shows its own dialog: a diagram JSON picked there it links and opens, as `onLinkFile` does, and resolves `null` (as it does on a cancel); any other file it resolves as a `File`, which the editor reads in as a copy, as Open file… always has. The example app has its dev server show the system's dialog for it. Both editors take it. |
+| `onNewFileOnDisk` | `() => void` | Offer **New file on disk…** right after **Link a file on disk…**, in the Import menu and on the welcome modal: the same thing for a file that isn't there yet. The host does the picking, making and linking (the example app has its dev server show the system's save dialog, makes a blank diagram of the open file's kind there, titled after its name, and opens it live; a name picked that is there already is linked as it is, never written over); the editor only calls back. Both editors take it. |
+| `onSaveFileAs` | `() => void` | Offer **Save as…** in the file menu, and on `⇧⌘S`. The host does the picking and writing (the example app has its dev server show the system's save dialog, writes the file there and keeps editing it there, as if it had been opened from there); the editor only calls back. Both editors take it. |
 | `onNavigateFile` | `(ref) => void` | Fired when a node url with the `file:` prefix (e.g. `file:Order flow`) has its ↗ clicked — resolve by id, then name, and switch documents. |
 | `onSelectionChange` | `(sel) => void` | The canvas selection in **document terms** — ids bucketed by template section (`{ nodes, edges, zones }` here; `{ participants, messages, activations, fragments, notes }` on the sequence editor), so a host can mirror it, e.g. highlight the matching entries of a live JSON view (the example app does exactly this). Fires on mount too, so a host that remounts per file never keeps a stale selection. |
 | `onPinsChange` | `(pins: Pin[]) => void` | The **pins** — a field (`{ nodeId, fieldId }`) or a whole table (`{ nodeId }`) — mirrored like the two above: fires on mount (empty) and on every change. View state — never in the document; a pin is dropped when its node leaves the document. See **Fields beyond the rows** below. |
@@ -199,6 +206,9 @@ ways in:
   insert instead of stacking at (0,0); any explicitly placed node disables that.
 - **Link a file on disk…** — when the host passes `onLinkFile`: the diagram already exists as a
   file in another folder, and the host opens that file rather than a pasted copy.
+- **New file on disk…** — when the host passes `onNewFileOnDisk`: the diagram should be a file
+  in another folder that isn't there yet, and the host makes it there and opens it in this
+  one's place.
 
 Escape and a backdrop click behave like the manual CTA — the modal never traps. It reappears
 for each new blank file, closes itself the moment the document gains content, and is suppressed
@@ -1759,9 +1769,10 @@ may be a plan — and the dialog starts on it when the file `readsAsPlan`, so on
 architecture doesn't turn its copy into a work plan. **Edit template JSON** offers the same choice,
 starting in the same place.
 
-**Live files on disk, while developing.** `npm run dev` mounts a small dev-only route
-(`example/vite-plugin-templates.js`) that keeps every open file in sync with a plain `.json`
-at the repo root, one per document:
+**Live files on disk, while developing.** `npm run dev` mounts the library's disk store
+(`@mosphere/better-diagrams/disk`, plugged into Vite by `example/vite-plugin-templates.js`), which
+keeps every open file in sync with a plain `.json` on disk, one per document — under `templates/`
+at the repo root, or beside the code of another repo:
 
 - **Opening** a file from **Settings → Templates** (`templates/examples/` or
   `templates/scratch/`) opens it as its own workspace file, **bound** to that file. If it's
@@ -1783,8 +1794,12 @@ at the repo root, one per document:
   (git-ignored) across restarts. `BD_LINKED_DIRS=~/work/tracker npm run dev` adds more
   (several are separated like `PATH`). Each folder gets its own **Linked /** section, and its
   files behave like examples: bound on open, saved back, reloaded on outside edits, never
-  deleted. A JSON file there that isn't a diagram (a `package.json`, say) is listed but can't
-  be opened, and the server refuses to write over it.
+  deleted. A linked folder is usually a whole repo, so its diagrams are listed **at any depth**
+  (`docs/architecture/BetterDiagram.json` shows by that path): in a git work tree git says which
+  files belong to the project, so whatever its `.gitignore` leaves out stays out; elsewhere the
+  folder is walked, skipping hidden folders, `node_modules` and build output. JSON there that
+  isn't a diagram (`package.json`, `tsconfig.json`) isn't listed — the section's note counts it —
+  and the server refuses to write over it, or anywhere outside the folder.
 - **A lost link is re-linked, not lost.** When a linked folder is moved, renamed or deleted
   (noticed live, through the watcher), or isn't linked by this run, files bound to it are
   *stranded*: a warning names them, their edits stay in the browser, and the folder is never
@@ -1807,13 +1822,81 @@ at the repo root, one per document:
   the save warning, or beside the link in the menu) points the link at where the file is now.
   The link keeps its name, so the open file stays bound and syncs again, asking whether to keep
   your edits or use the file when the two differ — saves wait for that, as for a folder.
+- **Open file…** links too. With the dev server's dialogs on hand, Open file… asks through the
+  system's own dialog, which says where the pick lives: a diagram `.json` is linked and opens
+  bound to it, exactly as through Link a file on disk…; a `.sql` script, a dbt manifest, a
+  tracker CSV or a React Flow export is read in as a copy, as before. (A React Flow export is
+  converted, never edited in place, so it is never linked.) Without that dialog, Open file… uses
+  the browser's picker and reads everything in as a copy.
+- **New file on disk…** (beside Link a file on disk…, or **Settings → Templates**) is the same
+  for a file that isn't there yet: the system's save dialog names it, the dev server makes it —
+  a blank diagram of the open file's kind, titled after its name, formatted the way that repo
+  formats JSON — and it opens linked, in place of a blank file, exactly as a linked file does
+  (in a folder the menu lists, it binds there). A name that is there already is linked as it
+  is, never written over — even though the dialog asks whether to replace it — and a file that
+  isn't a diagram is refused. It is the start of a repo's `BetterDiagram.json`, made from here.
+- **A link answers to its file, not its name.** A file opened through a link remembers the file
+  the link pointed at. If the link is removed outside the app (by hand, or a `git clean -X` —
+  `templates/symlinks/` is git-ignored) and another file of the same name is linked later, it
+  takes the free name; the old copy is never read or written as that file. The server refuses
+  it (`409`, `moved`), and the app says the copy isn't synced any more, keeps its edits in
+  scratch, and offers **Sync it again**. Linking the *same* file again, after its link went,
+  asks whether to keep the edits made meanwhile or use the file, as a re-link does.
+- **Save as…** — in the editor's file menu, on `⇧⌘S`, or **Settings → Templates → Save … as…** —
+  has the dev server show the system's save dialog (which asks before replacing a file, and
+  never writes over one that isn't a diagram), writes the open file there, and binds it as if
+  it had been opened from there: a folder the menu lists binds there, at any depth; anywhere
+  else is symlinked into `templates/symlinks/`. From then on edits save there and edits made
+  there reload. A new diagram's scratch copy goes, since it has a real home now. This is the
+  way to put a diagram made here into another repo.
+- **Nothing is dropped without asking.** Validation repairs rather than rejects, so a key this
+  editor doesn't know (an agent's typo, a field of your own), a value outside its vocabulary or
+  an edge to nowhere loads fine and would simply be gone from the next save. When a file read
+  from disk has any of that, the app says so as it opens (the full list goes to the console),
+  and the first save that would drop it **asks first** — **Save anyway** writes it; **Keep the
+  file** stops syncing this copy, which keeps its edits in scratch, and leaves the file exactly
+  as it was. Nothing is written to it while the question stands.
+- **Written the way the repo writes JSON.** Every save is formatted for where it lands: a file
+  covered by a Prettier config is formatted by Prettier with that config — its overrides,
+  `.editorconfig` and `.prettierignore` count, as for Prettier's own CLI — using the repo's own
+  Prettier from its `node_modules` (one installed beside the library is the fallback; it's an
+  optional peer). Without a config it's `JSON.stringify(doc, null, 2)` and a newline. A repo's
+  pre-commit hook and the editor stop fighting over the same file, and a diff is one line per
+  change. (Formatting runs that repo's Prettier config, which can be code — it's the same trust
+  you give its editor setup.)
+- **Every write is atomic**: to a temporary file beside the target, flushed, then renamed over
+  it, keeping its permissions — so a crash mid-save leaves the old file whole, and a watcher in
+  that repo never reads half a diagram. A symlink is written through, so the link stays a link.
 
 A conflict needs both sides to change the same file within about a second. When it happens,
-whichever write reaches the disk last is kept. `scratch/` is git-ignored; `templates/examples/`
+whichever write reaches the disk last is kept. A change event for a file that still says what
+the open copy last synced (a watcher catching up on a write made before it looked) is news of
+nothing, and never replaces edits made since. `scratch/` is git-ignored; `templates/examples/`
 is tracked, so editing an opened example in the app shows up in `git diff`. The files are
 ordinary templates — the same shape Import and the paste box accept. The route and the
 watcher exist only in the dev server: a built app finds nothing there and carries on with
 localStorage, which is still its source of truth.
+
+**Diagrams in another repo, without this one: `better-diagrams`.** The package ships the example
+app, built, and a command that serves it with the same disk store — so a repo that keeps its
+architecture as code opens it with no checkout of Better Diagrams:
+
+```bash
+npx @mosphere/better-diagrams docs/BetterDiagram.json        # open that file, live
+npx @mosphere/better-diagrams                                # link this folder: its diagrams, at any depth
+npx @mosphere/better-diagrams docs/arch/Context.json --new   # start one that isn't there yet
+```
+
+It links the folders it's given (this one by default) and opens the browser at the first file;
+everything above works the same — live files, Save as…, the question before a lossy save,
+Prettier formatting — with outside edits reaching the page as Server-Sent Events rather than
+over Vite's HMR socket. Links and scratch live in `~/.better-diagrams` (`BD_HOME` moves them).
+`--port` picks the first port to try (5199), `--no-open` skips the browser. It listens on
+127.0.0.1 only and answers only requests addressed to `127.0.0.1` or `localhost`, so a page
+elsewhere that points its own name at this machine (DNS rebinding) gets nothing; anything that
+links, picks or saves takes `application/json` only, so another site's form can't send it. There
+is no AI route in it: the AI panel stays off. Under the hood it's `startStandalone` from
+`@mosphere/better-diagrams/disk`; `createDiskStore` mounts the store on any Node server.
 
 **AI is optional, per editor.** Pass the same `generate` function the architecture editor takes
 (`createProxyGenerator` works unchanged — the sequence system prompt travels with each request)
@@ -2118,7 +2201,7 @@ wherever this editor has the same concept, so muscle memory carries over.
 
 | | |
 |---|---|
-| **Essentials** | `⌘Z` undo · `⇧⌘Z` / `⌘Y` redo · `⌘S` save · `⌘A` select all · `F2` (or `Enter`) rename in place · `Delete` remove selection (cascades into groups) · `Esc` one thing at a time — see below |
+| **Essentials** | `⌘Z` undo · `⇧⌘Z` / `⌘Y` redo · `⌘S` save · `⇧⌘S` save as… (when the host passes `onSaveFileAs`) · `⌘A` select all · `F2` (or `Enter`) rename in place · `Delete` remove selection (cascades into groups) · `Esc` one thing at a time — see below |
 | **Clipboard** | `⌘C` · `⌘V` · `⌘X` cut · `⌘D` duplicate with connections · `⌥`-drag to drag a copy and leave the original |
 | **Tools** | `V` cursor · `M` select (rubber-band) · `H` pan · `⇧`/`⌘`-click adds to the selection · `⇧`/`⌘`-drag bands *into* it |
 | **Insert** | `N` node · `G` group · `T` text note · `Z` zone — all land at the canvas centre, exactly as the Insert menu does |
@@ -2126,7 +2209,7 @@ wherever this editor has the same concept, so muscle memory carries over.
 | **View** | `⌘=`/`⌘-`/`⌘0` zoom · `⇧1` fit · `⇧2` fit selection · `⌘'` snap to grid · `⌘K` search (`⇧Enter` for the previous match) · `⌘⇧K` the selected node's link · `⌘⇧E` export PNG · `Space`-drag pan |
 | **Timeline** | `←`/`→` step between stops, while scrubbing with nothing selected |
 
-`⌘S`, `⌘K` and `⌘⇧K` are **global**: they work from inside a text field, because "rename the
+`⌘S`, `⇧⌘S`, `⌘K` and `⌘⇧K` are **global**: they work from inside a text field, because "rename the
 node, hit `⌘S`" is the most natural sequence here and yielding to the field would hand the key
 to the browser. Every other binding stands down while you are typing, and all of them stand
 down while a dialog is open — a shortcut that edits a canvas nobody can see is not a shortcut.
@@ -2198,10 +2281,12 @@ manages files; otherwise in place, asking first when that replaces something.
 | `@mosphere/better-diagrams/contract` | The document: types, validation and its report, edit helpers, JSON Schema, prompts, layout, lint, diff | anywhere — no dependencies |
 | `@mosphere/better-diagrams/contract/folder/node` | The folder format's file-system adapter | Node |
 | `@mosphere/better-diagrams/server` | The AI route | Node, or any Fetch API runtime |
+| `@mosphere/better-diagrams/disk` | The disk store behind live files (`createDiskStore`), the standalone editor server (`startStandalone`), and the formatting and atomic write it saves with | Node — a local tool, never a public server |
 | `@mosphere/better-diagrams/styles.css` | The editor's styles, React Flow's included | — |
 | `@mosphere/better-diagrams/schema.json` | The document's JSON Schema | — |
 
-Each entry is ESM and CommonJS with its own types. The build keeps one file per source module, so a
+Two commands come with it: `better-diagrams` (the editor for a repo's diagrams, above) and
+`bd-folder` (the folder format from a shell). Each entry is ESM and CommonJS with its own types. The build keeps one file per source module, so a
 host's bundler drops what it never imports — a host using only the architecture editor doesn't
 ship the sequence editor — and two heavy, occasional pieces load on first use: the interactive
 HTML page builder and the JSON code editor (CodeMirror, which the welcome modal uses). React,

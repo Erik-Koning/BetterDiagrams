@@ -47,6 +47,7 @@ import {
   FIELD_TAG_HIDDEN,
   FIELD_TAG_RO,
   NODE_MIN_SIZE,
+  defaultTextAlign,
   fieldTagBadge,
   ghostSourceId,
   isBoundaryNodeId,
@@ -436,7 +437,11 @@ export const ShapeNode = memo(function ShapeNode({
       : {}),
     ...(domainTint?.get(docId) ? { "--as-node-domain": domainTint.get(docId) } : {}),
     ...(sil
-      ? { paddingTop: 6 + sil.contentTop, paddingInline: 12 + sil.contentInlinePad }
+      ? {
+          paddingTop: 6 + sil.contentTop,
+          paddingBottom: 6 + sil.contentBottom,
+          paddingInline: 12 + sil.contentInlinePad,
+        }
       : {}),
   } as CSSProperties;
 
@@ -444,6 +449,7 @@ export const ShapeNode = memo(function ShapeNode({
   // (see `wrappedNodeHeight`).
   const textBelow = !!data.wrap && !data.fields?.length;
   const dateChip = <DateChip date={data.date} start={data.startDate} prefix={isWork ? "Due" : "Lands"} overdue={overdue} />;
+  const textAlign = data.textAlign ?? defaultTextAlign(data.kind);
 
   const className = [
     "as-node",
@@ -466,8 +472,9 @@ export const ShapeNode = memo(function ShapeNode({
     isTask ? "as-node--task" : "",
     done ? "as-node--done" : "",
     blockers?.length ? "as-node--blocked" : "",
-    // Text layout. Absent data means the pre-existing look, so no class.
-    data.textAlign ? `as-node--align-${data.textAlign}` : "",
+    // Text layout. Absent data means the pre-existing look, so no class —
+    // except the centring a diamond has by default.
+    textAlign !== "left" ? `as-node--align-${textAlign}` : "",
     data.textVAlign ? `as-node--valign-${data.textVAlign}` : "",
     data.wrap ? "as-node--wrap" : "",
   ]

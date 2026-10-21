@@ -20,6 +20,13 @@ describe("validateTemplateReport", () => {
     expect(codes({ nodes: [{ id: "a", status: "active", textAlign: "left", done: false }], edges: [] })).toEqual([]);
   });
 
+  it("names the alignment an unreadable one falls back to: the kind's own", () => {
+    const message = (kind: string) =>
+      validateTemplateReport({ nodes: [{ id: "a", kind, textAlign: "diagonal" }], edges: [] }).issues[0]!.message;
+    expect(message("service")).toMatch(/left-aligned\.$/);
+    expect(message("milestone")).toMatch(/centred\.$/);
+  });
+
   it("lists what the silent repairs did, pointing into the input", () => {
     const report = validateTemplateReport({
       nodes: [

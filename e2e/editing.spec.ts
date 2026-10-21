@@ -16,6 +16,24 @@ test.describe("editing an architecture", () => {
     await expect(studio.nodeTitled("New Service")).toHaveCount(0);
   });
 
+  test("a long picker walked by the arrows keeps its row in sight, below the search box", async ({ page, studio }) => {
+    await studio.goto();
+    await studio.fromMenu("Insert", /^Node /);
+    await studio.inspector.getByRole("button", { name: "Node icon" }).click();
+    const listbox = studio.inspector.getByRole("listbox", { name: "Node icon" });
+    for (let i = 0; i < 30; i++) await page.keyboard.press("ArrowDown");
+    for (let i = 0; i < 25; i++) await page.keyboard.press("ArrowUp");
+    // Still open — scrolling the rows never scrolled anything that closes it —
+    // and what is painted at the active row's centre is that row, not the box.
+    await expect(listbox).toBeVisible();
+    const box = (await listbox.locator("[data-active='true']").boundingBox())!;
+    const hit = await page.evaluate(
+      ([x, y]) => (document.elementFromPoint(x!, y!) as HTMLElement | null)?.dataset.active,
+      [box.x + box.width / 2, box.y + box.height / 2],
+    );
+    expect(hit).toBe("true");
+  });
+
   test("undo removes an inserted node and redo brings it back", async ({ studio }) => {
     await studio.goto();
     await expect(studio.undoButton).toBeDisabled();

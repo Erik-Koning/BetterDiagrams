@@ -42,6 +42,7 @@ import { LIGHT_THEME, paletteFromTheme } from "./theme";
 import { copyFragment } from "../contract/clipboard";
 import { PRESENTATION_FORMAT, splitTemplate } from "../contract/presentation";
 import {
+  EMPTY_TEMPLATE,
   EXAMPLE_TEMPLATE,
   EXAMPLE_ZONED_TEMPLATE,
   validateTemplate,
@@ -1489,8 +1490,10 @@ describe("ArchitectureStudio", () => {
     );
 
     fireEvent.click(screen.getByText("Postgres"));
-    await user.selectOptions(screen.getByLabelText("Text alignment"), "center");
-    await user.selectOptions(screen.getByLabelText("Vertical text alignment"), "top");
+    await user.click(screen.getByLabelText("Text alignment"));
+    await user.click(screen.getByRole("option", { name: "align: center" }));
+    await user.click(screen.getByLabelText("Vertical text alignment"));
+    await user.click(screen.getByRole("option", { name: "vertical: top" }));
     await user.click(screen.getByRole("checkbox", { name: "Wrap" }));
 
     const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
@@ -1598,7 +1601,8 @@ describe("ArchitectureStudio", () => {
     );
 
     fireEvent.click(screen.getByText("Application VPC"));
-    await user.selectOptions(screen.getByLabelText("Frame outline style"), "none");
+    await user.click(screen.getByLabelText("Frame outline style"));
+    await user.click(screen.getByRole("option", { name: "outline: none" }));
     await user.click(screen.getByRole("checkbox", { name: "Fill" }));
 
     const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
@@ -1900,14 +1904,16 @@ describe("ArchitectureStudio", () => {
     );
 
     fireEvent.click(screen.getByText("Postgres"));
-    await user.selectOptions(screen.getByLabelText("Lifecycle status"), "deprecated");
+    await user.click(screen.getByLabelText("Lifecycle status"));
+    await user.click(screen.getByRole("option", { name: "deprecated" }));
 
     const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
     expect(latest.nodes.find((n) => n.id === "db")!.status).toBe("deprecated");
     expect(container.querySelector('[data-id="db"] .as-node--status-deprecated')).not.toBeNull();
 
     // Back to active removes the field entirely.
-    await user.selectOptions(screen.getByLabelText("Lifecycle status"), "active");
+    await user.click(screen.getByLabelText("Lifecycle status"));
+    await user.click(screen.getByRole("option", { name: "active" }));
     const reverted = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
     expect("status" in reverted.nodes.find((n) => n.id === "db")!).toBe(false);
   });
@@ -2326,7 +2332,8 @@ describe("ArchitectureStudio", () => {
     mount(<ArchitectureStudio defaultValue={EXAMPLE_ZONED_TEMPLATE} onChange={onChange} />);
 
     fireEvent.click(screen.getByText("Cloud Region"));
-    await user.selectOptions(await screen.findByLabelText("Zone outline style"), "dashed");
+    await user.click(await screen.findByLabelText("Zone outline style"));
+    await user.click(screen.getByRole("option", { name: "outline: dashed" }));
     await waitFor(() => {
       const last = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
       expect(last.zones!.find((z) => z.id === "region")?.outline).toBe("dashed");
@@ -2837,6 +2844,74 @@ describe("ArchitectureStudio", () => {
 
     await user.click(screen.getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("offers Save as… in the file menu and on ⇧⌘S when the host can, and hands off to it", async () => {
+    const user = userEvent.setup();
+    const { unmount } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} files={workspaceFiles} activeFileId="f1" />);
+    await user.click(screen.getByRole("button", { name: "Platform" }));
+    expect(screen.queryByRole("menuitem", { name: /^Save as…/ })).not.toBeInTheDocument();
+    unmount();
+
+    const onSaveFileAs = vi.fn();
+    const onSave = vi.fn();
+    mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} files={workspaceFiles} activeFileId="f1" onSave={onSave} onSaveFileAs={onSaveFileAs} />,
+    );
+    await user.click(screen.getByRole("button", { name: "Platform" }));
+    // It names the file it saves.
+    expect(screen.getByRole("menuitem", { name: /^Save as…/ })).toHaveTextContent(/Platform, to a folder you pick/);
+    await user.click(screen.getByRole("menuitem", { name: /^Save as…/ }));
+    expect(onSaveFileAs).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menuitem", { name: /^Save as…/ })).not.toBeInTheDocument();
+    // ⇧⌘S is Save as…, never Save.
+    await user.keyboard("{Meta>}{Shift>}s{/Shift}{/Meta}");
+    expect(onSaveFileAs).toHaveBeenCalledTimes(2);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("says Open file… reads a copy when the host can link the file itself, offering that beside it", async () => {
+    const user = userEvent.setup();
+    const one = { version: 1, meta: { title: "Kept" }, nodes: [{ id: "solo", label: "Solo", kind: "service", x: 0, y: 0 }], edges: [] };
+    const { container, unmount } = mount(<ArchitectureStudio defaultValue={EMPTY_TEMPLATE} welcome={false} onLinkFile={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    expect(screen.getByRole("menuitem", { name: /^Open file…/ })).toHaveTextContent(/read in as a copy/);
+    const rows = screen.getAllByRole("menuitem").map((row) => row.textContent ?? "");
+    expect(rows.findIndex((t) => t.startsWith("Link a file on disk…"))).toBe(rows.findIndex((t) => t.startsWith("Open file…")) + 1);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    fireEvent.change(container.querySelector('input[type="file"][accept*=".sql"]') as HTMLInputElement, {
+      target: { files: [new File([JSON.stringify(one)], "BetterDiagram.json", { type: "application/json" })] },
+    });
+    expect(await screen.findByText(/BetterDiagram\.json was read in as a copy: edits here don't go back to it/)).toBeInTheDocument();
+    unmount();
+
+    // Without a way to link, Open file… is simply Open file….
+    mount(<ArchitectureStudio defaultValue={EMPTY_TEMPLATE} welcome={false} />);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    expect(screen.getByRole("menuitem", { name: /^Open file…/ })).not.toHaveTextContent(/copy/);
+  });
+
+  it("opens through the host's dialog when it has one: a diagram it links, anything else it hands back to read in", async () => {
+    const user = userEvent.setup();
+    const sql = "create table customers (id int primary key, name text);\n";
+    const onOpenFile = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(new File([sql], "schema.sql"));
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={EMPTY_TEMPLATE} welcome={false} onLinkFile={vi.fn()} onOpenFile={onOpenFile} />,
+    );
+    const browserPicker = vi.spyOn(container.querySelector('input[type="file"][accept*=".sql"]') as HTMLInputElement, "click");
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    expect(screen.getByRole("menuitem", { name: /^Open file…/ })).toHaveTextContent(
+      "A diagram .json is linked, so edits save to it. A .sql schema, dbt manifest or tracker CSV opens here",
+    );
+    // The host linked a diagram (or the person cancelled): nothing is read in.
+    await user.click(screen.getByRole("menuitem", { name: /^Open file…/ }));
+    expect(onOpenFile).toHaveBeenCalledTimes(1);
+    expect(browserPicker).not.toHaveBeenCalled();
+    // A schema script comes back and is read in, as the browser's picker would have.
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await user.click(screen.getByRole("menuitem", { name: /^Open file…/ }));
+    expect(await screen.findByText(/customers/)).toBeInTheDocument();
+    expect(browserPicker).not.toHaveBeenCalled();
   });
 
   it("renders file: urls as a jump to the linked file, https as a real link", async () => {
@@ -3646,6 +3721,10 @@ describe("drill-down (C4 levels)", () => {
     mount(<ArchitectureStudio defaultValue={DRILL_DOC} />);
     await drillIntoLabel("Storefront");
     expect(await screen.findByText(/has no internals yet/)).toBeInTheDocument();
+    // It names the level it is, as the breadcrumb bar does — one drill deep.
+    expect(screen.getByText(/sits inside it, at/)).toHaveTextContent(
+      "Anything you add here sits inside it, at C2 · Containers.",
+    );
     expect(screen.getByRole("button", { name: "Add node" })).toBeInTheDocument();
     // Its external contracts still show: the card it talks to stands in.
     expect(screen.getByTitle("External to this view — double-click to visit")).toBeInTheDocument();
@@ -3843,7 +3922,7 @@ describe("host access to view state (ref + callbacks)", () => {
     expect(doc.meta.folderFormat.dialect).toBe("generic");
   });
 
-  it("Import is one menu: Open file… and Import folder… open their pickers, and Link a file on disk… is the host's", async () => {
+  it("Import is one menu: Open file… and Import folder… open their pickers, and Link a file on disk… and New file on disk… are the host's", async () => {
     const user = userEvent.setup();
     const { container, unmount } = mount(<ArchitectureStudio defaultValue={HOST_DOC} />);
     // The pickers stay mounted outside the menu, so a pick lands after it closes.
@@ -3858,13 +3937,23 @@ describe("host access to view state (ref + callbacks)", () => {
     expect(folderClick).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: "Import" }));
     expect(screen.queryByRole("menuitem", { name: /^Link a file on disk…/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /^New file on disk…/ })).not.toBeInTheDocument();
     unmount();
 
     const onLinkFile = vi.fn();
-    mount(<ArchitectureStudio defaultValue={HOST_DOC} onLinkFile={onLinkFile} />);
+    const onNewFileOnDisk = vi.fn();
+    mount(<ArchitectureStudio defaultValue={HOST_DOC} onLinkFile={onLinkFile} onNewFileOnDisk={onNewFileOnDisk} />);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    const rows = screen.getAllByRole("menuitem").map((item) => item.textContent ?? "");
+    // The twins sit together: one for a file that's there, one for a file that isn't yet.
+    expect(rows.findIndex((t) => t.startsWith("New file on disk…"))).toBe(rows.findIndex((t) => t.startsWith("Link a file on disk…")) + 1);
+    await user.click(screen.getByRole("button", { name: "Import" }));
     await fromMenu(user, "Import", /^Link a file on disk…/);
     expect(onLinkFile).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("menuitem", { name: /^Open file…/ })).not.toBeInTheDocument();
+    await fromMenu(user, "Import", /^New file on disk…/);
+    expect(onNewFileOnDisk).toHaveBeenCalledTimes(1);
+    expect(onLinkFile).toHaveBeenCalledTimes(1);
   });
 
   it("ref.navigateTo drills to the level a node lives on and selects it", async () => {

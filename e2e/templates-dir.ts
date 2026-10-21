@@ -34,3 +34,12 @@ export const E2E_PICK_FILE = join(tmpdir(), "better-diagrams-e2e-pick-file", "pi
 
 /** …unless this file exists, and names another path: a re-link's answer. */
 export const E2E_PICK_ANSWER = join(tmpdir(), "better-diagrams-e2e-pick-file", "answer.txt");
+
+/**
+ * Where the dev server's "save dialog" saves under test — `BD_SAVE_PICKER`
+ * prints this folder and the name Save as… suggested…
+ */
+export const E2E_SAVE_DIR = join(tmpdir(), "better-diagrams-e2e-save");
+
+/** …unless this file exists, and names the path to save to instead. */
+export const E2E_SAVE_ANSWER = join(tmpdir(), "better-diagrams-e2e-save", "answer.txt");

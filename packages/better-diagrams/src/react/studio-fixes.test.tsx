@@ -302,7 +302,8 @@ describe("the inspector", () => {
     expect(screen.queryByLabelText("Node label")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Node description")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Documentation link")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Text alignment"), { target: { value: "center" } });
+    fireEvent.click(screen.getByLabelText("Text alignment"));
+    fireEvent.click(screen.getByRole("option", { name: "align: center" }));
     await waitFor(() =>
       expect(latest(onChange).nodes.map((n) => n.textAlign)).toEqual(["center", "center", "center"]),
     );
@@ -318,9 +319,12 @@ describe("the inspector", () => {
     expect(screen.queryByLabelText("Text alignment")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Edge label")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Sequence number")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Start anchor"), { target: { value: "right" } });
-    fireEvent.change(screen.getByLabelText("End anchor"), { target: { value: "left" } });
-    fireEvent.change(screen.getByLabelText("Edge direction"), { target: { value: "both" } });
+    fireEvent.click(screen.getByLabelText("Start anchor"));
+    fireEvent.click(screen.getByRole("option", { name: "start: right" }));
+    fireEvent.click(screen.getByLabelText("End anchor"));
+    fireEvent.click(screen.getByRole("option", { name: "end: left" }));
+    fireEvent.click(screen.getByLabelText("Edge direction"));
+    fireEvent.click(screen.getByRole("option", { name: "↔" }));
     await waitFor(() => {
       for (const e of latest(onChange).edges) {
         expect(e).toMatchObject({ start: { side: "right" }, end: { side: "left" }, direction: "both" });
@@ -367,14 +371,17 @@ describe("the inspector", () => {
     fireEvent.keyDown(window, { key: "a", metaKey: true });
     await waitFor(() => expect(screen.getByText(/2 nodes/)).toBeInTheDocument());
 
-    const status = screen.getByLabelText("Lifecycle status") as HTMLSelectElement;
-    expect(status.value).toBe("");
-    expect(screen.getByRole("option", { name: "Mixed" })).toBeInTheDocument();
-    fireEvent.change(status, { target: { value: "deprecated" } });
+    const status = screen.getByLabelText("Lifecycle status");
+    expect(status).toHaveTextContent("Mixed");
+    fireEvent.click(status);
+    // Mixed is what the button reads, not a row anyone can pick.
+    expect(screen.queryByRole("option", { name: "Mixed" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "planned" })).toHaveAttribute("aria-selected", "false");
+    fireEvent.click(screen.getByRole("option", { name: "deprecated" }));
     await waitFor(() =>
       expect(latest(onChange).nodes.map((n) => n.status)).toEqual(["deprecated", "deprecated"]),
     );
-    expect(screen.queryByRole("option", { name: "Mixed" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Lifecycle status")).toHaveTextContent("deprecated");
 
     // Tags: every tag anyone carries is offered; a chip is ON only when all
     // carry it. Toggling the shared one strips it everywhere; toggling the

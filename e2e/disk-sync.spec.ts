@@ -10,7 +10,16 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { basename, dirname, join } from "node:path";
 import type { BrowserContext, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import { E2E_LINKED_DIR, E2E_LINKS_ROOT, E2E_PICK_ANSWER, E2E_PICK_DIR, E2E_PICK_FILE, E2E_TEMPLATES_DIR } from "./templates-dir";
+import {
+  E2E_LINKED_DIR,
+  E2E_LINKS_ROOT,
+  E2E_PICK_ANSWER,
+  E2E_PICK_DIR,
+  E2E_PICK_FILE,
+  E2E_SAVE_ANSWER,
+  E2E_SAVE_DIR,
+  E2E_TEMPLATES_DIR,
+} from "./templates-dir";
 
 test.use({ diskTemplates: true });
 
@@ -219,12 +228,21 @@ test("a diagram in a linked folder outside the repo is live: app edits save back
   await expect(reloadToasts(page)).toHaveCount(1);
 });
 
-test("a linked folder is never deleted from, never written over a non-diagram, and never escaped", async ({ studio, page, request }) => {
+test("a linked folder lists its diagrams at any depth and leaves other JSON out; it is never deleted from, written over a non-diagram, or escaped", async ({
+  studio,
+  page,
+  request,
+}) => {
   needsLink();
   const diagram = `${base}.json`;
+  const docs = join(E2E_LINKED_DIR, `${base}-docs`);
+  const nested = `${base}-docs/${base}-nested.json`;
   const pkg = `${base}-package.json`;
+  mkdirSync(docs, { recursive: true });
+  created.push(docs);
   for (const [file, doc] of [
     [diagram, plan(`Linked ${base}`)],
+    [nested, plan(`Nested ${base}`)],
     [pkg, { name: "not-a-diagram", version: "1.0.0" }],
   ] as const) {
     const path = join(E2E_LINKED_DIR, file);
@@ -232,15 +250,22 @@ test("a linked folder is never deleted from, never written over a non-diagram, a
     writeFileSync(path, JSON.stringify(doc, null, 2));
   }
 
-  // Listed under its own caption; the package.json shows but cannot open.
+  // Listed under its own caption, the nested diagram by its path; the
+  // package.json is counted under the caption rather than listed.
   await studio.goto();
   await page.getByRole("button", { name: "Settings" }).click();
   const menu = page.getByRole("menu", { name: "Settings" });
   await expect(menu.getByText("Linked / better-diagrams-e2e-linked")).toBeVisible();
   await expect(menu.getByRole("menuitem").filter({ hasText: diagram }).first()).toBeEnabled();
-  const pkgItem = menu.getByRole("menuitem").filter({ hasText: pkg });
-  await expect(pkgItem).toBeDisabled();
-  await expect(pkgItem).toContainText("not a diagram");
+  await expect(menu.getByRole("menuitem").filter({ hasText: nested })).toBeEnabled();
+  await expect(menu.getByRole("menuitem").filter({ hasText: pkg })).toHaveCount(0);
+  await expect(menu.getByText(/other JSON files? (isn't a diagram|aren't diagrams)/)).toBeVisible();
+
+  // The nested one opens live like any other: an edit saves back to it.
+  await menu.getByRole("menuitem").filter({ hasText: nested }).click();
+  await expect(title(page, "design")).toHaveText("Design");
+  await page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox").click();
+  await expect.poll(() => (nodeOf(read(join(E2E_LINKED_DIR, nested)), "design") as { done?: boolean }).done).toBe(true);
 
   const pkgBefore = readFileSync(join(E2E_LINKED_DIR, pkg), "utf8");
   const overwrite = await request.put(`/__templates/${linkedId}/${pkg}`, { data: plan("Overwrite") });
@@ -251,7 +276,7 @@ test("a linked folder is never deleted from, never written over a non-diagram, a
   expect(removed.status()).toBe(403);
   expect(read(join(E2E_LINKED_DIR, diagram)).nodes).toHaveLength(3);
 
-  for (const name of ["..%2Fescape.json", ".hidden.json"]) {
+  for (const name of ["..%2Fescape.json", ".hidden.json", `${base}-docs%2F..%2F..%2Fescape.json`, `.git%2F${base}.json`, `node_modules%2F${base}.json`]) {
     const escaped = await request.put(`/__templates/${linkedId}/${name}`, { data: plan("Escape") });
     expect(escaped.status(), name).toBe(400);
   }
@@ -281,6 +306,61 @@ test("a file bound to a linked folder the server isn't linking says its edits st
   await page.reload();
   const warning = page.locator("[data-sonner-toast]").filter({ hasText: "Stranded plan isn't synced to disk" });
   await expect(warning).toContainText("~/gone/tracker");
+});
+
+/** A plan in the linked folder whose first node carries a key the schema doesn't define. */
+async function openLossyPlan(studio: { goto(): Promise<void>; openTemplate(file: string): Promise<void>; page: Page }) {
+  const file = `${base}.json`;
+  const path = join(E2E_LINKED_DIR, file);
+  created.push(path);
+  const doc = plan(`${base} lossy`);
+  Object.assign(doc.nodes[0], { owner: "team-payments" });
+  writeFileSync(path, JSON.stringify(doc, null, 2));
+  await studio.goto();
+  await studio.openTemplate(file);
+  await expect(title(studio.page, "design")).toHaveText("Design");
+  // Said as it opens: this editor won't keep the key.
+  await expect(studio.page.locator("[data-sonner-toast]").filter({ hasText: "1 thing this editor doesn't keep" })).toBeVisible();
+  // An edit (Design: Build waits on it): the save that would drop the key
+  // asks first, and nothing is written meanwhile.
+  await studio.page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox").click();
+  const ask = studio.page.locator("[data-sonner-toast]").filter({ hasText: `Saving ${base} lossy will remove 1 thing` });
+  await expect(ask).toContainText('"owner"');
+  await studio.page.waitForTimeout(1500);
+  expect(read(path).nodes[0]).toHaveProperty("owner", "team-payments");
+  expect((nodeOf(read(path), "design") as { done?: boolean }).done).toBeUndefined();
+  return { path, ask };
+}
+
+test("a save that would drop something from the file asks first; Save anyway writes it", async ({ studio, page }) => {
+  needsLink();
+  const { path, ask } = await openLossyPlan(studio);
+  await expect(ask.locator("[data-close-button]")).toHaveCount(0);
+  await ask.getByRole("button", { name: "Save anyway" }).click();
+  await expect.poll(() => (nodeOf(read(path), "design") as { done?: boolean }).done).toBe(true);
+  expect(read(path).nodes[0]).not.toHaveProperty("owner");
+  // Answered once: the next edit saves without asking again.
+  await page.locator('.react-flow__node[data-id="build"]').getByRole("checkbox").click();
+  await expect.poll(() => (nodeOf(read(path), "build") as { done?: boolean }).done).toBe(true);
+  await expect(page.locator("[data-sonner-toast]").filter({ hasText: "will remove" })).toHaveCount(0);
+});
+
+test("a save that would drop something: Keep the file leaves it as it was, and the copy carries on unsynced", async ({ studio, page }) => {
+  needsLink();
+  const { path, ask } = await openLossyPlan(studio);
+  const before = readFileSync(path, "utf8");
+  await ask.getByRole("button", { name: "Keep the file" }).click();
+  await expect
+    .poll(async () => ((await studio.workspace()).files.find((f) => f.name === `${base} lossy`) as { disk?: unknown } | undefined)?.disk)
+    .toBeUndefined();
+  // Its scratch copy, named so no other test's `${base}.json` lookup matches it.
+  created.push(join(SCRATCH, `${base}-lossy.json`));
+  await page.waitForTimeout(1500);
+  expect(readFileSync(path, "utf8")).toBe(before);
+  // The copy kept its edit.
+  await expect(page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox")).toHaveAttribute("aria-checked", "true");
+  // Closed before the cleanup, so no save lands after it.
+  await page.close();
 });
 
 /** The links the app saved, as the dev server keeps them across restarts. */
@@ -413,6 +493,14 @@ test.describe("linked files", () => {
   test.describe.configure({ mode: "serial" });
 
   const link = join(E2E_TEMPLATES_DIR, "symlinks", basename(E2E_PICK_FILE));
+  // A link to the picked file left by an interrupted run would be handed back
+  // instead of a new one (`picked-plan-2.json`), so none survives into a test.
+  test.beforeEach(() => {
+    const links = dirname(link);
+    for (const name of existsSync(links) ? readdirSync(links) : []) {
+      if (name.startsWith(basename(E2E_PICK_FILE, ".json"))) rmSync(join(links, name), { force: true });
+    }
+  });
   const isLink = () => {
     try {
       return lstatSync(link).isSymbolicLink();
@@ -470,6 +558,59 @@ test.describe("linked files", () => {
     await expect
       .poll(async () => ((await studio.workspace()).files.find((f) => f.name === `Linked ${base}`) as { disk?: unknown } | undefined)?.disk)
       .toBeUndefined();
+  });
+
+  test("a link removed and remade under its name for another file never takes the open copy for that file", async ({ studio, page }) => {
+    await linkFromWelcome(studio, page);
+    const other = join(dirname(E2E_PICK_FILE), `other-${base}`, basename(E2E_PICK_FILE));
+    created.push(dirname(other));
+    mkdirSync(dirname(other), { recursive: true });
+    writeFileSync(other, JSON.stringify(plan(`Other ${base}`), null, 2));
+    const otherBefore = readFileSync(other, "utf8");
+
+    // The link goes outside the app (by hand, or a `git clean` — symlinks/ is
+    // git-ignored): an edit can't save, and stays in the browser.
+    rmSync(link);
+    await page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox").click();
+    await expect(page.locator("[data-sonner-toast]").filter({ hasText: `Couldn't save Linked ${base}` })).toBeVisible();
+
+    // Another file of the same name is linked: it takes the name that's free now.
+    writeFileSync(E2E_PICK_ANSWER, other);
+    await page.getByRole("button", { name: "Import", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^Link a file on disk…/ }).click();
+    await expect.poll(() => isLink() && realpathSync(link)).toBe(realpathSync(other));
+
+    // The open copy is told it isn't that file, and the other opens beside it.
+    await expect(page.locator("[data-sonner-toast]").filter({ hasText: `Linked ${base} isn't synced with` })).toBeVisible();
+    await expect.poll(async () => (await studio.workspace()).files.map((f) => f.name)).toEqual([`${base}-seed`, `Linked ${base}`, `Other ${base}`]);
+    const ws = await studio.workspace();
+    expect(ws.files.find((f) => f.name === `Linked ${base}`)).not.toHaveProperty("disk");
+    expect((ws.files.find((f) => f.name === `Other ${base}`) as { disk?: unknown }).disk).toEqual({
+      folder: "symlinks",
+      file: basename(E2E_PICK_FILE),
+      target: other,
+    });
+    // Past the save debounce: the stale copy's edit never reached the other file.
+    await page.waitForTimeout(1500);
+    expect(readFileSync(other, "utf8")).toBe(otherBefore);
+    // Closed before the cleanup, so the detached copy's scratch save can't land after it.
+    await page.close();
+  });
+
+  test("linking a file again after its link went asks before the edits made meanwhile meet the file", async ({ studio, page }) => {
+    await linkFromWelcome(studio, page);
+    rmSync(link);
+    await page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox").click();
+    await expect(page.locator("[data-sonner-toast]").filter({ hasText: `Couldn't save Linked ${base}` })).toBeVisible();
+
+    // The same file, linked again — the warning's own advice.
+    await page.getByRole("button", { name: "Import", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^Link a file on disk…/ }).click();
+    const ask = page.locator("[data-sonner-toast]").filter({ hasText: "differs from" });
+    await ask.getByRole("button", { name: "Keep my edits" }).click();
+    await expect.poll(() => (nodeOf(read(E2E_PICK_FILE), "design") as { done?: boolean }).done).toBe(true);
+    expect(isLink()).toBe(true);
+    expect((await studio.workspace()).files.filter((f) => f.name === `Linked ${base}`)).toHaveLength(1);
   });
 
   test("the server links a file once, only a diagram, under a free name; Unlink and saves never touch what isn't a link", async ({
@@ -555,7 +696,8 @@ test.describe("linked files", () => {
     await expect(warning).toHaveCount(0);
     const bound = async () =>
       ((await studio.workspace()).files.find((f) => f.name === `Linked ${base}`) as { disk?: { folder: string; file: string } } | undefined)?.disk;
-    await expect.poll(bound).toEqual({ folder: "symlinks", file: basename(E2E_PICK_FILE) });
+    // Bound to the same link, which answers to the file where it is now.
+    await expect.poll(bound).toEqual({ folder: "symlinks", file: basename(E2E_PICK_FILE), target: moved });
 
     // And it is live there: an edit made in the new place reloads.
     editOnDisk(moved, (doc) => {
@@ -611,7 +753,107 @@ test.describe("linked files", () => {
     await expect(page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox")).toHaveAttribute("aria-checked", "false");
     await expect
       .poll(async () => ((await studio.workspace()).files.find((f) => f.name === `Linked ${base}`) as { disk?: unknown } | undefined)?.disk)
-      .toEqual({ folder: "symlinks", file: basename(E2E_PICK_FILE) });
+      .toEqual({ folder: "symlinks", file: basename(E2E_PICK_FILE), target: moved });
     expect(readFileSync(moved, "utf8")).toBe(onDisk);
+  });
+});
+
+/**
+ * Save as…. The stand-in save dialog answers E2E_SAVE_DIR and the name the
+ * app suggested, or the path a test writes to E2E_SAVE_ANSWER — one answer
+ * for the whole server, so these tests take turns.
+ */
+test.describe("save as", () => {
+  test.describe.configure({ mode: "serial" });
+
+  test("Save as… writes the file where the dialog says, links it as if opened from there, and keeps editing it there", async ({ studio, page }) => {
+    rmSync(E2E_SAVE_ANSWER, { force: true });
+    const name = `${base}-seed.json`;
+    const target = join(E2E_SAVE_DIR, name);
+    const linkPath = join(E2E_TEMPLATES_DIR, "symlinks", name);
+    created.push(target, linkPath);
+    await studio.goto();
+    // The seed file auto-saves to scratch: it has no other home yet.
+    await expect.poll(() => existsSync(join(SCRATCH, name))).toBe(true);
+
+    const menu = await studio.openFileMenu();
+    await menu.getByRole("menuitem", { name: /^Save as…/ }).click();
+    await expect(page.locator("[data-sonner-toast]").filter({ hasText: `Saved ${base}-seed to ${target}` })).toBeVisible();
+    expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    expect(realpathSync(linkPath)).toBe(realpathSync(target));
+    expect(read(target).nodes.map((n) => n.id)).toEqual(["s"]);
+    // Bound to it — its scratch copy is gone — and an edit saves there.
+    await expect.poll(() => existsSync(join(SCRATCH, name))).toBe(false);
+    expect((await studio.workspace()).files[0]).toMatchObject({ disk: { folder: "symlinks", file: name, target } });
+    await page.locator('.react-flow__node[data-id="s"]').getByRole("checkbox").click();
+    await expect.poll(() => (read(target).nodes[0] as { done?: boolean }).done).toBe(true);
+    // And an edit made there reloads here.
+    editOnDisk(target, (doc) => {
+      doc.nodes[0].label = "Seed, edited there";
+    });
+    await expect(title(page, "s")).toHaveText("Seed, edited there");
+  });
+
+  test("New file on disk… starts a blank diagram where the dialog says, linked, in the blank file's place, and live from there", async ({
+    studio,
+    page,
+  }) => {
+    const name = `${base}-new.json`;
+    const target = join(E2E_SAVE_DIR, name);
+    const linkPath = join(E2E_TEMPLATES_DIR, "symlinks", name);
+    writeFileSync(E2E_SAVE_ANSWER, target);
+    created.push(target, linkPath, E2E_SAVE_ANSWER);
+    await studio.goto();
+    await studio.newFile();
+    await page.getByRole("dialog", { name: "Get started" }).getByRole("button", { name: "New file on disk…" }).click();
+    await expect(page.locator("[data-sonner-toast]").filter({ hasText: `Started ${base}-new` })).toBeVisible();
+    // Blank, titled after its name, and symlinked as if it had been linked.
+    expect(read(target)).toEqual({ version: 1, meta: { title: `${base}-new` }, nodes: [], edges: [] });
+    expect(realpathSync(linkPath)).toBe(realpathSync(target));
+    await expect.poll(async () => (await studio.workspace()).files.map((f) => f.name)).toEqual([`${base}-seed`, `${base}-new`]);
+    expect((await studio.workspace()).files[1]).toMatchObject({ disk: { folder: "symlinks", file: name, target } });
+    // Live both ways: an edit made there reloads here, and one made here saves there.
+    editOnDisk(target, (doc) => {
+      doc.nodes.push(task("design", "Design", 80, 120));
+    });
+    await expect(title(page, "design")).toHaveText("Design");
+    await page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox").click();
+    await expect.poll(() => (nodeOf(read(target), "design") as { done?: boolean }).done).toBe(true);
+  });
+
+  test("New file on disk… naming a file that's there links it as it is, and never writes a blank over it", async ({ studio, page }) => {
+    const name = `${base}-kept.json`;
+    const target = join(E2E_SAVE_DIR, name);
+    const text = JSON.stringify(plan(`Kept ${base}`), null, 2);
+    writeFileSync(target, text);
+    writeFileSync(E2E_SAVE_ANSWER, target);
+    created.push(target, join(E2E_TEMPLATES_DIR, "symlinks", name), E2E_SAVE_ANSWER);
+    await studio.goto();
+    await page.getByRole("button", { name: "Import", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^New file on disk…/ }).click();
+    await expect(page.locator("[data-sonner-toast]").filter({ hasText: `Opened Kept ${base}` })).toContainText("It was there already");
+    await expect(title(page, "design")).toHaveText("Design");
+    expect(readFileSync(target, "utf8")).toBe(text);
+    // Beside the seed file, which has work in it, rather than in its place.
+    expect((await studio.workspace()).files.map((f) => f.name)).toEqual([`${base}-seed`, `Kept ${base}`]);
+  });
+
+  test("Save as… into a linked folder binds the file there, at any depth, rather than linking it", async ({ studio, page }) => {
+    needsLink();
+    const dir = join(E2E_LINKED_DIR, `${base}-saved`);
+    const target = join(dir, "Architecture.json");
+    mkdirSync(dir, { recursive: true });
+    created.push(dir);
+    writeFileSync(E2E_SAVE_ANSWER, target);
+    created.push(E2E_SAVE_ANSWER);
+    await studio.goto();
+    const menu = await studio.openFileMenu();
+    await menu.getByRole("menuitem", { name: /^Save as…/ }).click();
+    await expect(page.locator("[data-sonner-toast]").filter({ hasText: `Saved ${base}-seed to` })).toBeVisible();
+    expect(read(target).nodes.map((n) => n.id)).toEqual(["s"]);
+    expect((await studio.workspace()).files[0]).toMatchObject({ disk: { folder: linkedId, file: `${base}-saved/Architecture.json` } });
+    expect(existsSync(join(E2E_TEMPLATES_DIR, "symlinks", "Architecture.json"))).toBe(false);
+    await page.locator('.react-flow__node[data-id="s"]').getByRole("checkbox").click();
+    await expect.poll(() => (read(target).nodes[0] as { done?: boolean }).done).toBe(true);
   });
 });

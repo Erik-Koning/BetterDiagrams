@@ -89,7 +89,7 @@ export function diagramJsonSchema(options: JsonSchemaOptions = {}): JsonSchema {
       w: num("Width.", { exclusiveMinimum: 0 }),
       h: num("Height. Grows to fit fields and wrapped text.", { exclusiveMinimum: 0 }),
       fontSize: num("Title size in px. Default 13.", { exclusiveMinimum: 0 }),
-      textAlign: oneOf(NODE_TEXT_ALIGNS, "Horizontal text alignment. Default left."),
+      textAlign: oneOf(NODE_TEXT_ALIGNS, "Horizontal text alignment. Default left; center on a decision or milestone, which draw as diamonds."),
       textVAlign: oneOf(NODE_TEXT_VALIGNS, "Vertical text alignment. Default middle; a wrapped card reads from the top."),
       wrap: bool("Show all the text: the title wraps and the card grows to fit."),
       fill: bool("Containers: false draws the frame without its tint."),

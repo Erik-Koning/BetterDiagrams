@@ -517,9 +517,10 @@ describe("type picker", () => {
     expect(screen.getByRole("button", { name: "Architecture" })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("Link a file on disk… is offered only when the host can link, and hands off to it", async () => {
+  it("Link a file on disk… and New file on disk… are offered only when the host can, and hand off to it", async () => {
     const user = userEvent.setup();
     const onLinkFile = vi.fn();
+    const onNewFileOnDisk = vi.fn();
     const { unmount } = render(
       <WelcomeModal
         kind="architecture"
@@ -532,12 +533,16 @@ describe("type picker", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: "Link a file on disk…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New file on disk…" })).not.toBeInTheDocument();
     unmount();
 
-    const props = mountModal({ onLinkFile });
+    const props = mountModal({ onLinkFile, onNewFileOnDisk });
     // Offered before anything is pasted — it is a way in of its own.
     expect(screen.queryByRole("button", { name: "Insert diagram" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Link a file on disk…" }));
+    expect(onLinkFile).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "New file on disk…" }));
+    expect(onNewFileOnDisk).toHaveBeenCalledTimes(1);
     expect(onLinkFile).toHaveBeenCalledTimes(1);
     // The host closes the modal by opening the linked file; the modal itself
     // neither inserts nor dismisses, so a cancelled dialog leaves it be.

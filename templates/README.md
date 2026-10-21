@@ -20,7 +20,7 @@ edits back here, so they show in `git diff` like any other change. Add one by
 dropping a file in (or copying it up from `scratch/`); it appears the next time
 the menu opens. The app never deletes a file here.
 
-Five ship:
+Seven ship:
 
 - `multi-cloud-deployment`: zones and provider toggles.
 - `order-flow`: a sequence.
@@ -30,6 +30,11 @@ Five ship:
 - `project-process`: a project run as phases. Four phase frames (Discover →
   Design → Build → Launch) hold the tasks that flow down them, with arrows
   crossing between phases.
+- `roadmap`: a dated plan, arranged by date on a calendar under a ruler.
+- `charity-phases`: phases and gates, not dates. Three phase frames stacked
+  top to bottom, joined by milestone gates; each card's team badge is the
+  track that owns it, and a plain text note under each header stands in for
+  a subtitle.
 
 Every architecture here is also a round-trip case in
 `folder/generic.test.ts` — it must survive export → import unchanged, so a file
@@ -59,12 +64,19 @@ name folders when starting the dev server:
 BD_LINKED_DIRS=~/work/tracker npm run dev        # several: ~/work/tracker:~/notes
 ```
 
-Its `.json` diagrams appear under **Linked / tracker** in the menu and are live
-like `examples/`: edits in the app save back to the original file, and edits
-made there (by an editor, a script, an agent working in that project) reload
-in the app. The app never deletes a file in a linked folder, never recreates a
-linked folder that has gone, and never writes over a JSON file that isn't a
-diagram: a `package.json` beside the diagram is listed but can't be opened.
+Its `.json` diagrams appear under **Linked / tracker** in the menu — at any
+depth, by their path in it (`docs/architecture/BetterDiagram.json`) — and are
+live like `examples/`: edits in the app save back to the original file, and
+edits made there (by an editor, a script, an agent working in that project)
+reload in the app. In a git work tree the listing is what git calls the
+project, so whatever its `.gitignore` leaves out stays out. The app never
+deletes a file in a linked folder, never recreates a linked folder that has
+gone, never writes outside it, and never writes over a JSON file that isn't a
+diagram: a `package.json` beside the diagram isn't listed at all (the menu
+counts it under the folder).
+
+Saves are written the way that repo writes JSON: by its own Prettier, with its
+config, when it has one (see the main README).
 
 If the folder moves, the files bound to it stop syncing and a warning says so;
 **Re-link…** points them at the folder's new place, and asks before choosing
@@ -91,3 +103,15 @@ the menu — points the link at where the file is now; the link keeps its name,
 so what was open from it syncs again (asking first if your copy and the file
 differ). A link made by hand
 (`ln -s ~/work/tracker/plan.json templates/symlinks/`) works the same.
+
+A file opened through a link answers to the file the link pointed at, not to
+the link's name: if a link goes (a `git clean -X` takes this folder) and
+another file of the same name is linked later, the copy that was open from the
+first one stops syncing rather than writing into the second.
+
+**Save as…** (the editor's file menu, `⇧⌘S`) makes links here too: it writes
+the open file wherever the system's save dialog says — another repo, say — and
+links it as if it had been opened from there. Saved into a linked folder, it is
+bound there instead. **New file on disk…** (beside Link a file on disk…) does
+the same with a blank diagram, for a file that isn't there yet; a name picked
+that is there already is linked as it is, never written over.

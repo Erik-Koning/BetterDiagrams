@@ -10,9 +10,9 @@
  */
 import { useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Edge, Node } from "@xyflow/react";
+import { ReactFlowProvider, useStoreApi, type Edge, type Node } from "@xyflow/react";
 import { ArchitectureStudio } from "./ArchitectureStudio";
 import { clearWelcomeSuppression } from "./WelcomeModal";
 import {
@@ -21,8 +21,10 @@ import {
   edgePan,
   idsInBand,
   rectBetween,
+  rectContains,
   sameSet,
   useMarqueeSelect,
+  useZonesWholeInBand,
   type MarqueeFlow,
 } from "./marquee";
 
@@ -238,6 +240,16 @@ describe("band geometry", () => {
     expect([...idsInBand({ x: -5, y: -5, width: 400, height: 60 }, boxes)]).toEqual(["a", "b"]);
   });
 
+  it("catches a region only when the band takes in all of it", () => {
+    const region = { id: "z", x: 0, y: 0, width: 100, height: 100, whole: true };
+    expect(idsInBand({ x: 10, y: 10, width: 20, height: 20 }, [region]).size).toBe(0);
+    expect(idsInBand({ x: -10, y: -10, width: 50, height: 200 }, [region]).size).toBe(0);
+    // Edge-to-edge counts as inside: a band snapped to the region's border
+    // was drawn round it.
+    expect([...idsInBand({ x: 0, y: 0, width: 100, height: 100 }, [region])]).toEqual(["z"]);
+    expect(rectContains({ x: 0, y: 0, width: 100, height: 100 }, { x: 0, y: 0, width: 101, height: 1 })).toBe(false);
+  });
+
   it("pans harder the further past the edge the pointer is", () => {
     const bounds = { left: 0, top: 0, right: 800, bottom: 600 };
     expect(edgePan({ x: 400, y: 300 }, bounds)).toEqual({ x: 0, y: 0 });
@@ -266,10 +278,19 @@ const BOXES: Node[] = [
   { id: "c", position: { x: 400, y: 0 }, data: {}, measured: { width: 100, height: 60 } },
 ];
 
-function Board({ enabled = true, preselected = [] as string[], hiddenEdge = false }) {
+/** A region behind "a" and "b", the way a zone sits behind its boxes. */
+const ZONE: Node = {
+  id: "zone",
+  type: "zone",
+  position: { x: -40, y: -40 },
+  data: {},
+  measured: { width: 380, height: 140 },
+};
+
+function Board({ enabled = true, preselected = [] as string[], hiddenEdge = false, zone = false }) {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const [nodes, setNodes] = useState<Node[]>(() =>
-    BOXES.map((n) => ({ ...n, selected: preselected.includes(n.id) })),
+    [...(zone ? [ZONE] : []), ...BOXES].map((n) => ({ ...n, selected: preselected.includes(n.id) })),
   );
   const [edges, setEdges] = useState<Edge[]>(() => [
     { id: "a-b", source: "a", target: "b" },
@@ -337,6 +358,24 @@ describe("the Select tool's band", () => {
     expect(screen.getByTestId("nodes")).toHaveTextContent("a,b");
     // A caught box brings its wiring, so a copied selection arrives connected.
     expect(screen.getByTestId("edges")).toHaveTextContent("a-b,b-c");
+  });
+
+  it("leaves the region it starts in alone, so the next drag moves only the boxes", () => {
+    render(<Board zone />);
+    // Starts on the region's bare floor and sweeps "a" and "b" — the region
+    // is touched by every pixel of this band and must still not be caught.
+    drag([-20, -20], [310, 80]);
+    expect(screen.getByTestId("nodes")).toHaveTextContent("a,b");
+    expect(screen.getByTestId("nodes")).not.toHaveTextContent("zone");
+
+    // Crossing its border is not enough either…
+    drag([-20, -20], [450, 80]);
+    expect(screen.getByTestId("nodes")).toHaveTextContent("a,b,c");
+    expect(screen.getByTestId("nodes")).not.toHaveTextContent("zone");
+
+    // …but a band drawn all the way round it takes it, with what it holds.
+    drag([-50, -50], [350, 110]);
+    expect(screen.getByTestId("nodes")).toHaveTextContent("zone,a,b");
   });
 
   it("leaves a hidden line alone", () => {
@@ -425,5 +464,95 @@ describe("the Select tool's band", () => {
     render(<Board enabled={false} />);
     drag([-10, -10], [310, 80]);
     expect(screen.getByTestId("nodes")).toBeEmptyDOMElement();
+  });
+});
+
+describe("the Cursor tool's band, over a region", () => {
+  let store: ReturnType<typeof useStoreApi> | null = null;
+
+  /**
+   * React Flow's store, with the band written into it by hand — its pane
+   * writes one rectangle per pointer step, and jsdom could not lay out the
+   * pane that would.
+   */
+  function CursorBoard({ kept = [] as string[] }) {
+    store = useStoreApi();
+    // As React Flow leaves it: the band touches the region, so it is caught.
+    const [nodes, setNodes] = useState<Node[]>(() => [{ ...ZONE, selected: true }, ...BOXES]);
+    const live = useRef(nodes);
+    live.current = nodes;
+    const flow = useRef<Pick<MarqueeFlow, "getInternalNode">>({
+      getInternalNode: (id) => {
+        const found = live.current.find((n) => n.id === id);
+        return found ? { internals: { positionAbsolute: found.position } } : undefined;
+      },
+    }).current;
+    const keepRef = useRef(kept.length ? { nodes: new Set(kept) } : null);
+    useZonesWholeInBand({ flow, setNodes, keepRef });
+    return (
+      <output data-testid="nodes">
+        {nodes.filter((n) => n.selected).map((n) => n.id).join(",")}
+      </output>
+    );
+  }
+
+  const step = (x: number, y: number, width: number, height: number) =>
+    act(() => {
+      store!.setState({
+        userSelectionActive: true,
+        userSelectionRect: { startX: x, startY: y, x, y, width, height },
+      });
+    });
+
+  it("lets go of a region it only touches, and takes one it encloses", () => {
+    render(
+      <ReactFlowProvider>
+        <CursorBoard />
+      </ReactFlowProvider>,
+    );
+    step(-20, -20, 330, 100);
+    expect(screen.getByTestId("nodes")).not.toHaveTextContent("zone");
+
+    step(-50, -50, 400, 160);
+    expect(screen.getByTestId("nodes")).toHaveTextContent("zone");
+
+    // Shrunk back inside: React Flow still counts the region as touched and
+    // reports no change, so this is the only thing that lets go of it.
+    step(-20, -20, 330, 100);
+    expect(screen.getByTestId("nodes")).not.toHaveTextContent("zone");
+  });
+
+  it("keeps a region that was selected before a ⇧ band began", () => {
+    render(
+      <ReactFlowProvider>
+        <CursorBoard kept={["zone"]} />
+      </ReactFlowProvider>,
+    );
+    step(-20, -20, 330, 100);
+    expect(screen.getByTestId("nodes")).toHaveTextContent("zone");
+  });
+
+  it("follows the viewport — the band is in screen pixels", () => {
+    render(
+      <ReactFlowProvider>
+        <CursorBoard />
+      </ReactFlowProvider>,
+    );
+    // At half zoom, panned 100px right: the region spans screen x 80–270.
+    act(() => store!.setState({ transform: [100, 0, 0.5] }));
+    step(70, -30, 210, 100);
+    expect(screen.getByTestId("nodes")).toHaveTextContent("zone");
+    step(90, -30, 190, 100);
+    expect(screen.getByTestId("nodes")).not.toHaveTextContent("zone");
+  });
+
+  it("stands down once the band is released", () => {
+    render(
+      <ReactFlowProvider>
+        <CursorBoard />
+      </ReactFlowProvider>,
+    );
+    act(() => store!.setState({ userSelectionActive: false, userSelectionRect: null }));
+    expect(screen.getByTestId("nodes")).toHaveTextContent("zone");
   });
 });
