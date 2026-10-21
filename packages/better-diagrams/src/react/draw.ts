@@ -973,7 +973,9 @@ export interface EmitOptions {
   /**
    * Stamp what the interactive HTML export's viewer reads: each line's group
    * names the two boxes it is drawn between (`data-from`, `data-to`), so the
-   * page can show a node's lines while it is hovered, and the legend's own
+   * page can show a node's lines while it is hovered — and carries
+   * `data-keep` when it is structure the page always draws (it touches a
+   * group, or joins two boxes outside every group) — and the legend's own
    * commands group under `legend:` with the box they fill (`data-box`), so
    * the page can dock the legend in the window. Off by default: a picture
    * has no use for either.
@@ -1434,6 +1436,16 @@ export function emitTemplate(
     const p = byId.get(id);
     return p && { fields: p.node.fields, description: p.node.description, box: p.box };
   });
+  // For the viewer, the lines that are the picture's structure and stay
+  // drawn whatever the page's setting: one touching a group, or joining two
+  // boxes outside every group. "Inside" is as drawn — within an open frame's
+  // box — because a drill-down level's children sit in its boundary frame
+  // without being its children in the document.
+  const isGroup = (p: Placed) => !!kindDef(registry, p.node.kind).container;
+  const frames = opts.viewerHooks ? placed.filter((p) => isGroup(p) && !p.chip).map((p) => p.box) : [];
+  const framed = ({ box }: Placed) =>
+    frames.some((f) => f !== box && f.x <= box.x && f.y <= box.y && f.x + f.width >= box.x + box.width && f.y + f.height >= box.y + box.height);
+  const keepsLine = (s: Placed, t: Placed) => isGroup(s) || isGroup(t) || (!framed(s) && !framed(t));
   for (const edge of edges) {
     const edgeStart = cmds.length;
     const s = byId.get(edge.source);
@@ -1561,7 +1573,9 @@ export function emitTemplate(
       dayOf(laterDate(edge.date, laterDate(nodeDates.get(edge.source), nodeDates.get(edge.target)))),
       // The boxes it is DRAWN between — after any re-route onto a chip —
       // which are the boxes the reader hovers to see it.
-      opts.viewerHooks ? { "data-from": edge.source, "data-to": edge.target } : undefined,
+      opts.viewerHooks
+        ? { "data-from": edge.source, "data-to": edge.target, ...(keepsLine(s, t) ? { "data-keep": "" } : {}) }
+        : undefined,
     );
     // Text first — it is the tail of this edge's commands, so lifting it out
     // leaves the line and its glyphs as the tail for the band splice below.

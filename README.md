@@ -1379,11 +1379,13 @@ rather than with the editor; its `run` resolves asynchronously (as any exporter'
 
 In that page the legend leaves the picture for the window's top-right corner, so it stays in view
 however far the picture scrolls; a drill-down page shows the legend of the level on show. Lines
-stay hidden except the hovered box's. The ⋯ menu's **Show all lines** brings every line back, and
-**Legend** hides the legend. A lit path or route keeps its lines either way. Where a viewer strips
-the page's scripts, the picture keeps its legend in place and draws every line. The page builders
-take these as `dockLegend` and `hoverLines`, over an SVG drawn with `viewerHooks`, which names
-each line's two boxes (`data-from`, `data-to`) and groups the legend under `legend:`.
+stay hidden except the hovered box's, and except the structure: a line that touches a group, or
+joins two boxes outside every group, is always drawn. The ⋯ menu's **Show all lines** brings every
+line back, and **Legend** hides the legend. A lit path or route keeps its lines either way. Where a
+viewer strips the page's scripts, the picture keeps its legend in place and draws every line. The
+page builders take these as `dockLegend` and `hoverLines`, over an SVG drawn with `viewerHooks`,
+which names each line's two boxes (`data-from`, `data-to`), marks the structure (`data-keep`), and
+groups the legend under `legend:`.
 
 A custom exporter receives the mode and its gradient setting alongside the palette
 (`{ template, registry, filename, palette, mode, gradients }`), and returns — or resolves to — a

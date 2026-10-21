@@ -15,19 +15,25 @@ import bakeryJson from "../../../../templates/examples/bakery-data-model.json";
 
 const registry = createRegistry();
 
-/** a → b → c, and a dependency a ⇢ c; Ana holds a and b, so the legend has People rows. */
+/**
+ * A sprint holding a → b → c, and a dependency a ⇢ c, feeding a release
+ * outside it; Ana holds a and b, so the legend has People rows.
+ */
 const PLAN = validateTemplate({
   version: 1,
   meta: { title: "Plan" },
   nodes: [
-    { id: "a", label: "A", kind: "task", x: 0, y: 0, assignees: ["Ana"] },
-    { id: "b", label: "B", kind: "task", x: 300, y: 0, assignees: ["Ana"] },
-    { id: "c", label: "C", kind: "task", x: 600, y: 0 },
+    { id: "sprint", label: "Sprint", kind: "group", x: 0, y: 0, w: 920, h: 200 },
+    { id: "a", label: "A", kind: "task", parentId: "sprint", x: 24, y: 60, assignees: ["Ana"] },
+    { id: "b", label: "B", kind: "task", parentId: "sprint", x: 324, y: 60, assignees: ["Ana"] },
+    { id: "c", label: "C", kind: "task", parentId: "sprint", x: 624, y: 60 },
+    { id: "release", label: "Release", kind: "milestone", x: 380, y: 300 },
   ],
   edges: [
     { id: "ab", source: "a", target: "b" },
     { id: "bc", source: "b", target: "c" },
     { id: "ac", source: "a", target: "c", relation: "dependency", style: "dashed" },
+    { id: "sr", source: "sprint", target: "release" },
   ],
 });
 
@@ -109,6 +115,12 @@ describe("lines on hover", () => {
     expect(p.lit()).toEqual(["edge:ab", "edge:ac"]);
     p.pointer(p.$("#bd-stage")!, "pointerleave");
     expect(p.lit()).toEqual([]);
+  });
+
+  it("always draws the structure: the sprint's line to the release is kept, the lines inside it hover", async () => {
+    const p = await openPage(PLAN);
+    const keep = (id: string) => p.groups(`edge:${id}`).every((g) => g.hasAttribute("data-keep"));
+    expect(["ab", "bc", "ac", "sr"].filter(keep)).toEqual(["sr"]);
   });
 
   it("shows them all while the menu's Show all lines is on", async () => {

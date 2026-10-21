@@ -71,11 +71,33 @@ describe("SVG element tagging", () => {
   it("names a line's ends and groups the legend only for the viewer", () => {
     // z7 runs queue → worker; the zoned example's legend keys its providers.
     const hooked = drawToSvg(emitTemplate(EXAMPLE_ZONED_TEMPLATE, registry, {}, { viewerHooks: true }).cmds);
-    expect(hooked).toMatch(/data-el="edge:z7"[^>]* data-from="q" data-to="wrk"/);
+    expect(hooked).toMatch(/data-el="edge:z7"[^>]* data-from="q"[^>]* data-to="wrk"/);
     expect(hooked).toMatch(/data-el="legend:" data-box="[\d.-]+ [\d.-]+ 150 [\d.]+"/);
     // A picture carries neither.
     expect(svg).not.toContain("data-from=");
     expect(svg).not.toContain('data-el="legend:"');
+  });
+
+  it("marks the structure the viewer always draws: a line touching a group, or joining two boxes outside every group", () => {
+    const t = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "g", label: "G", kind: "group", icon: "none", description: "", parentId: null, x: 0, y: 0, w: 500, h: 300 },
+        { id: "a", label: "A", kind: "service", icon: "box", description: "", parentId: "g", x: 30, y: 60, w: 170, h: 76 },
+        { id: "b", label: "B", kind: "service", icon: "box", description: "", parentId: "g", x: 280, y: 60, w: 170, h: 76 },
+        { id: "c", label: "C", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 400, w: 170, h: 76 },
+        { id: "d", label: "D", kind: "service", icon: "box", description: "", parentId: null, x: 300, y: 400, w: 170, h: 76 },
+      ],
+      edges: [
+        { id: "ab", source: "a", target: "b" },
+        { id: "ac", source: "a", target: "c" },
+        { id: "cd", source: "c", target: "d" },
+        { id: "gc", source: "g", target: "c" },
+      ],
+    });
+    const out = drawToSvg(emitTemplate(t, registry, {}, { viewerHooks: true }).cmds);
+    const kept = (id: string) => new RegExp(`data-el="edge:${id}"[^>]* data-keep=""`).test(out);
+    expect(["ab", "ac", "cd", "gc"].filter(kept)).toEqual(["cd", "gc"]);
   });
 });
 

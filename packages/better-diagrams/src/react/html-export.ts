@@ -80,8 +80,9 @@ export interface TimelineHtmlOptions {
   dockLegend?: boolean;
   /**
    * Hide every line but the hovered node's — the SVG drawn under
-   * `viewerHooks`. The menu's **Show all lines** check brings them all back;
-   * a lit path or route keeps its lines either way.
+   * `viewerHooks`. The menu's **Show all lines** check brings them all back.
+   * Either way the structure stays drawn (a line touching a group, or joining
+   * two boxes outside every group), and so do a lit path's or route's lines.
    */
   hoverLines?: boolean;
 }
@@ -261,8 +262,10 @@ export function buildTimelineHtml(opts: TimelineHtmlOptions): string {
     hoverLines
       ? `
   /* ── Lines on hover: a line shows while a box it joins is hovered, unless
-     the menu's "Show all lines" is on. A lit path or route keeps its lines. ── */
-  body.bd-lines-hover .bd-el[data-from]:not(.bd-line-on):not(:has([data-path], [data-route])) {
+     the menu's "Show all lines" is on. The structure (data-keep: a line
+     touching a group, or joining two boxes outside every group) always shows,
+     and a lit path or route keeps its lines. ── */
+  body.bd-lines-hover .bd-el[data-from]:not([data-keep]):not(.bd-line-on):not(:has([data-path], [data-route])) {
     opacity: 0; pointer-events: none;
   }`
       : ""

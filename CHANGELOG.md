@@ -39,8 +39,9 @@ This changelog starts with the editing API (October 2026). For what changed betw
 ### Changed
 
 - The interactive HTML page docks the legend in the window's top-right corner, where it stays as
-  the picture scrolls, and hides every line except the hovered box's. Its ⋯ menu has **Show all
-  lines** (off) and **Legend** (on). `buildTimelineHtml` and `buildMultiViewHtml` take this as
+  the picture scrolls, and hides every line except the hovered box's and the structure (a line
+  touching a group, or joining two boxes outside every group). Its ⋯ menu has **Show all lines**
+  (off) and **Legend** (on). `buildTimelineHtml` and `buildMultiViewHtml` take this as
   `dockLegend` and `hoverLines`, over an SVG drawn with the new `viewerHooks` picture option.
 - A new `value` from the host is an undo step instead of clearing the undo history; a change of
   `activeFileId` starts a fresh history.
