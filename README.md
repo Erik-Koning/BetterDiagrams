@@ -422,7 +422,7 @@ The glow is themed: `LIGHT_THEME` ships a tighter, denser halo (`glowAlpha`, `gl
 dark default, because a glow on white has nothing to bloom into, and the hue itself follows the
 theme's `edgeColors`. Under `prefers-reduced-motion` the halo stays and nothing travels. The
 **Interactive HTML** export carries the paths too: its ⋯ menu lists them, lighting one adds the
-same glow and dash flow to the exported SVG, with a key over the stage.
+same glow and dash flow to the exported SVG, with a key docked in the window's top-right corner.
 
 ### Finding paths: graph search
 
@@ -1376,6 +1376,14 @@ records the active selection as `%% zone:` comments and reserves subgraphs for g
 
 The interactive HTML page carries its own runtime, so its builder loads when that export runs
 rather than with the editor; its `run` resolves asynchronously (as any exporter's may).
+
+In that page the legend leaves the picture for the window's top-right corner, so it stays in view
+however far the picture scrolls; a drill-down page shows the legend of the level on show. Lines
+stay hidden except the hovered box's. The ⋯ menu's **Show all lines** brings every line back, and
+**Legend** hides the legend. A lit path or route keeps its lines either way. Where a viewer strips
+the page's scripts, the picture keeps its legend in place and draws every line. The page builders
+take these as `dockLegend` and `hoverLines`, over an SVG drawn with `viewerHooks`, which names
+each line's two boxes (`data-from`, `data-to`) and groups the legend under `legend:`.
 
 A custom exporter receives the mode and its gradient setting alongside the palette
 (`{ template, registry, filename, palette, mode, gradients }`), and returns — or resolves to — a

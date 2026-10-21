@@ -970,6 +970,15 @@ export interface EmitOptions {
    * shows one state and draws it baked in.
    */
   taskHits?: boolean;
+  /**
+   * Stamp what the interactive HTML export's viewer reads: each line's group
+   * names the two boxes it is drawn between (`data-from`, `data-to`), so the
+   * page can show a node's lines while it is hovered, and the legend's own
+   * commands group under `legend:` with the box they fill (`data-box`), so
+   * the page can dock the legend in the window. Off by default: a picture
+   * has no use for either.
+   */
+  viewerHooks?: boolean;
 }
 
 /**
@@ -986,6 +995,8 @@ export interface PictureOptions {
   fieldHits?: boolean;
   /** See `EmitOptions.taskHits` — the interactive HTML export's task parts. */
   taskHits?: boolean;
+  /** See `EmitOptions.viewerHooks` — the interactive HTML export's line ends and legend. */
+  viewerHooks?: boolean;
 }
 
 export function emitOptions(opts: PictureOptions): EmitOptions {
@@ -994,6 +1005,7 @@ export function emitOptions(opts: PictureOptions): EmitOptions {
     gradients: opts.gradients !== false,
     ...(opts.fieldHits ? { fieldHits: true } : {}),
     ...(opts.taskHits ? { taskHits: true } : {}),
+    ...(opts.viewerHooks ? { viewerHooks: true } : {}),
   };
 }
 
@@ -1547,6 +1559,9 @@ export function emitTemplate(
       edgeStart,
       `edge:${edge.id}`,
       dayOf(laterDate(edge.date, laterDate(nodeDates.get(edge.source), nodeDates.get(edge.target)))),
+      // The boxes it is DRAWN between — after any re-route onto a chip —
+      // which are the boxes the reader hovers to see it.
+      opts.viewerHooks ? { "data-from": edge.source, "data-to": edge.target } : undefined,
     );
     // Text first — it is the tail of this edge's commands, so lifting it out
     // leaves the line and its glyphs as the tail for the band splice below.
@@ -2228,6 +2243,7 @@ export function emitTemplate(
     const boxH = legendH;
     const lx = b.maxX + padRight - boxW - LEGEND_INSET;
     const ly = b.minY - padTop + LEGEND_INSET;
+    const legendStart = cmds.length;
     cmds.push({
       op: "path",
       d: roundedRectPath(lx, ly, boxW, boxH, skin.radius),
@@ -2344,6 +2360,9 @@ export function emitTemplate(
         cursor += rowH;
       }
     }
+    // For the viewer to dock: everything here the Plan bar and People rows
+    // haven't tagged as their own groups under `legend:`, each naming the box.
+    if (opts.viewerHooks) stamp(legendStart, "legend:", undefined, { "data-box": `${lx} ${ly} ${boxW} ${boxH}` });
   }
 
   // Title block — top-left, in the headroom reserved above the content.

@@ -72,6 +72,18 @@ export interface TimelineHtmlOptions {
    * without tasks, which stays exactly the page it was.
    */
   tasks?: HtmlTaskData;
+  /**
+   * Lift the legend out of the picture into the window's top-right corner,
+   * where it stays however far the picture scrolls — the SVG drawn under
+   * `viewerHooks`. The menu's **Legend** check hides it.
+   */
+  dockLegend?: boolean;
+  /**
+   * Hide every line but the hovered node's — the SVG drawn under
+   * `viewerHooks`. The menu's **Show all lines** check brings them all back;
+   * a lit path or route keeps its lines either way.
+   */
+  hoverLines?: boolean;
 }
 
 /** Rough perceptual luminance test — enough to pick between two accents. */
@@ -224,6 +236,120 @@ export function buildTimelineHtml(opts: TimelineHtmlOptions): string {
   $("bd-paths-none").addEventListener("click", function () { pathBoxes.forEach(function (b) { b.checked = false; }); applyPaths(); });
 `
     : "";
+  // The viewer's two habits — a docked legend, lines on hover — are emitted
+  // only when asked for, so a page without them is the page it always was.
+  // The script sets both up: where scripts are stripped, the picture keeps
+  // its legend in place and every line drawn.
+  const dock = opts.dockLegend === true;
+  const hoverLines = opts.hoverLines === true;
+  const viewerCss = `${
+    dock
+      ? `
+  /* ── The legend, docked: lifted out of the picture into the window's
+     top-right corner, so it stays in view however far the picture scrolls.
+     The script keeps it under the bars and clear of the scrollbar. ── */
+  .bd-dock {
+    position: fixed; top: 64px; right: 16px; z-index: 6;
+    display: flex; flex-direction: column; align-items: flex-end; gap: 8px; pointer-events: none;
+  }
+  .bd-dock > * { pointer-events: auto; }
+  .bd-key[hidden] { display: none; }
+  .bd-key svg { display: block; }${hasPaths ? `
+  .bd-dock .bd-pathlegend { position: static; }` : ""}`
+      : ""
+  }${
+    hoverLines
+      ? `
+  /* ── Lines on hover: a line shows while a box it joins is hovered, unless
+     the menu's "Show all lines" is on. A lit path or route keeps its lines. ── */
+  body.bd-lines-hover .bd-el[data-from]:not(.bd-line-on):not(:has([data-path], [data-route])) {
+    opacity: 0; pointer-events: none;
+  }`
+      : ""
+  }`;
+  const viewerJs = `${
+    dock || hoverLines
+      ? `
+  var stage = $("bd-stage");`
+      : ""
+  }${
+    hoverLines
+      ? `
+  // ── Lines on hover: every line hides but the hovered box's, until the
+  //    menu's "Show all lines" brings them all back. Lines by the boxes they
+  //    join, looked up by key — an id is free text, never a selector. ──
+  var allLines = $("bd-alllines"), linesAt = {}, hoverId = null;
+  [].slice.call(document.querySelectorAll(".bd-el[data-from]")).forEach(function (g) {
+    [g.getAttribute("data-from"), g.getAttribute("data-to")].forEach(function (id) {
+      (linesAt[id] = linesAt[id] || []).push(g);
+    });
+  });
+  function showLinesOf(id) {
+    if (id === hoverId) return;
+    if (hoverId !== null) (linesAt[hoverId] || []).forEach(function (g) { g.classList.remove("bd-line-on"); });
+    hoverId = id;
+    if (id !== null) (linesAt[id] || []).forEach(function (g) { g.classList.add("bd-line-on"); });
+  }
+  stage.addEventListener("pointerover", function (e) {
+    var g = e.target && e.target.closest ? e.target.closest('.bd-el[data-el^="node:"]') : null;
+    showLinesOf(g ? g.getAttribute("data-el").slice(5) : null);
+  });
+  stage.addEventListener("pointerleave", function () { showLinesOf(null); });
+  function applyLines() { document.body.classList.toggle("bd-lines-hover", !allLines.checked); }
+  allLines.addEventListener("change", applyLines);
+  applyLines();`
+      : ""
+  }${
+    dock
+      ? `
+  // ── The legend, docked: each picture's legend moves out of it into the
+  //    window's corner (moved, not copied, so its rows keep their handlers),
+  //    and the one for the level on show is the one shown. ──
+  var dockEl = $("bd-dock"), showKey = $("bd-showkey"), keys = [], keyView = "";
+  [].slice.call(document.querySelectorAll("#bd-stage svg")).forEach(function (svg) {
+    var parts = [].slice.call(svg.querySelectorAll('.bd-el[data-el="legend:"], .bd-el[data-plan], .bd-el[data-person]'));
+    var box = parts.length ? (parts[0].getAttribute("data-box") || "").split(" ").map(Number) : [];
+    if (box.length !== 4 || box.some(isNaN)) return;
+    var key = document.createElement("div"), section = svg.closest("section[data-view]");
+    key.className = "bd-key";
+    key.setAttribute("data-view", section ? section.getAttribute("data-view") : "");
+    var inner = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    inner.setAttribute("viewBox", box.join(" "));
+    inner.setAttribute("width", String(box[2]));
+    inner.setAttribute("height", String(box[3]));
+    inner.setAttribute("role", "img");
+    inner.setAttribute("aria-label", "Legend");
+    parts.forEach(function (g) { inner.appendChild(g); });
+    key.appendChild(inner);
+    dockEl.appendChild(key);
+    keys.push(key);
+  });
+${hasPaths ? `
+  // A lit path's legend rides in the dock too, under the key, rather than
+  // scrolling away with the picture.
+  dockEl.appendChild(pathLegend);` : ""}
+  function applyKeys() {
+    keys.forEach(function (k) { k.hidden = !showKey.checked || k.getAttribute("data-view") !== keyView; });
+  }
+  document.addEventListener("bd:view", function (e) { keyView = e.detail; applyKeys(); });
+  showKey.addEventListener("change", applyKeys);
+  applyKeys();
+  // Hung from the stage's top-right corner, which moves as bars come and go.
+  function placeDock() {
+    var r = stage.getBoundingClientRect();
+    if (!r.width) return;
+    dockEl.style.top = Math.max(12, r.top + 12) + "px";
+    dockEl.style.right = Math.max(12, window.innerWidth - r.right + (stage.offsetWidth - stage.clientWidth) + 12) + "px";
+  }
+  window.addEventListener("resize", placeDock);
+  if (typeof ResizeObserver === "function") new ResizeObserver(placeDock).observe(stage);
+  placeDock();`
+      : ""
+  }`;
+  const viewerMenu = `${hoverLines ? `
+        <label><input type="checkbox" id="bd-alllines" /> Show all lines</label>` : ""}${dock ? `
+        <label><input type="checkbox" id="bd-showkey" checked /> Legend</label>` : ""}`;
+
   const pathsSection = hasPaths
     ? `
         <div class="bd-caption">Paths</div>${paths
@@ -346,7 +472,7 @@ export function buildTimelineHtml(opts: TimelineHtmlOptions): string {
   .bd-el { transition: opacity 160ms; }
   .bd-dim { opacity: 0.22; filter: grayscale(1); }
   .bd-hidden { display: none; }
-  ${pathCss}${explorer ? explorerCss(palette, accent, explorer.routeColor, light) : ""}${opts.tasks ? htmlTaskCss(palette, accent) : ""}`;
+  ${pathCss}${explorer ? explorerCss(palette, accent, explorer.routeColor, light) : ""}${opts.tasks ? htmlTaskCss(palette, accent) : ""}${viewerCss}`;
 
   // The player. Plain script, no modules, nothing external; every hook is
   // looked up by id so the markup above stays the single source of structure.
@@ -381,7 +507,7 @@ export function buildTimelineHtml(opts: TimelineHtmlOptions): string {
   var full2 = $("bd-full2"); if (full2) full2.addEventListener("click", function () { dropdown.hidden = true; fullscreen(); });
   var fit = $("bd-fit");
   fit.addEventListener("change", function () { $("bd-stage").classList.toggle("fit", fit.checked); });
-${pathJs}
+${pathJs}${viewerJs}
   if (!STOPS.length) return; // undated document: a plain viewer, and that is all
 
   // ── The scrubber. Cursor is a DAY; stops are where ticks and snapping live. ──
@@ -530,7 +656,7 @@ ${pathJs}
     <button class="bd-btn bd-btn--icon" id="bd-full" title="Full screen" aria-label="Full screen">&#x26F6;</button>
     <div class="bd-menuwrap">
       <button class="bd-btn bd-btn--icon" id="bd-menu" title="Presentation options" aria-haspopup="menu" aria-label="Presentation options">&#8943;</button>
-      <div class="bd-menu" id="bd-dropdown" hidden>${modeSection}${pathsSection}
+      <div class="bd-menu" id="bd-dropdown" hidden>${modeSection}${viewerMenu}${pathsSection}
         <label><input type="checkbox" id="bd-fit" checked /> Fit to window</label>
         <button class="bd-menubtn" id="bd-full2">Full screen</button>${explorer ? explorerMenuMarkup : ""}
       </div>
@@ -538,7 +664,8 @@ ${pathJs}
   </header>${timelineBar}${explorer ? explorerStripMarkup : ""}
   <main class="bd-stage fit" id="bd-stage">${pathLegend}
 ${opts.svg}
-  </main>${explorer ? explorerOverlayMarkup : ""}
+  </main>${dock ? `
+  <div class="bd-dock" id="bd-dock"></div>` : ""}${explorer ? explorerOverlayMarkup : ""}
 <script>
 (function () {
 ${js}
@@ -578,6 +705,10 @@ export interface MultiViewHtmlOptions {
   explorer?: HtmlExplorerData;
   /** See `TimelineHtmlOptions.tasks`. */
   tasks?: HtmlTaskData;
+  /** See `TimelineHtmlOptions.dockLegend` — each level's legend, the one on show docked. */
+  dockLegend?: boolean;
+  /** See `TimelineHtmlOptions.hoverLines`. */
+  hoverLines?: boolean;
 }
 
 /**
@@ -738,6 +869,8 @@ export function buildMultiViewHtml(opts: MultiViewHtmlOptions): string {
     paths: opts.paths,
     explorer: opts.explorer,
     tasks: opts.tasks,
+    dockLegend: opts.dockLegend,
+    hoverLines: opts.hoverLines,
   });
 
   return page

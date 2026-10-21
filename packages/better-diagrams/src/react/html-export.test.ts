@@ -67,6 +67,16 @@ describe("SVG element tagging", () => {
     expect((svg.match(/<g class="bd-el"/g) ?? []).length).toBeGreaterThan(0);
     expect(closes).toBe(opens);
   });
+
+  it("names a line's ends and groups the legend only for the viewer", () => {
+    // z7 runs queue → worker; the zoned example's legend keys its providers.
+    const hooked = drawToSvg(emitTemplate(EXAMPLE_ZONED_TEMPLATE, registry, {}, { viewerHooks: true }).cmds);
+    expect(hooked).toMatch(/data-el="edge:z7"[^>]* data-from="q" data-to="wrk"/);
+    expect(hooked).toMatch(/data-el="legend:" data-box="[\d.-]+ [\d.-]+ 150 [\d.]+"/);
+    // A picture carries neither.
+    expect(svg).not.toContain("data-from=");
+    expect(svg).not.toContain('data-el="legend:"');
+  });
 });
 
 describe("sequence SVG tagging", () => {
@@ -145,6 +155,18 @@ describe("buildTimelineHtml", () => {
     // The viewer chrome stays.
     expect(plain).toContain('id="bd-full"');
     expect(plain).toContain("Fit to window");
+  });
+
+  it("docks the legend and hides lines only when asked, each with its menu check", () => {
+    const plain = buildTimelineHtml({ svg, title: "Plain", stops: [] });
+    for (const marker of ['id="bd-dock"', 'id="bd-alllines"', 'id="bd-showkey"', "bd-lines-hover", "bd-line-on"]) {
+      expect(plain).not.toContain(marker);
+    }
+    const viewer = buildTimelineHtml({ svg, title: "Plain", stops: [], dockLegend: true, hoverLines: true });
+    expect(viewer).toContain('<div class="bd-dock" id="bd-dock"></div>');
+    // Lines start hidden: "Show all lines" is off, the legend on.
+    expect(viewer).toContain('<input type="checkbox" id="bd-alllines" /> Show all lines');
+    expect(viewer).toContain('<input type="checkbox" id="bd-showkey" checked /> Legend');
   });
 });
 
@@ -250,10 +272,12 @@ describe("buildMultiViewHtml — the drill-down page", () => {
     const result = await BUILTIN_EXPORTERS.html.run({ template: flat, registry, filename: "flat" });
     const text = await result!.blob.text();
     const direct = buildTimelineHtml({
-      svg: renderTemplateToSvg(flat, registry, {}, { fieldHits: true }),
+      svg: renderTemplateToSvg(flat, registry, {}, { fieldHits: true, viewerHooks: true }),
       title: "Flat",
       stops: [],
       explorer: htmlExplorerData(flat, registry, {}),
+      dockLegend: true,
+      hoverLines: true,
     });
     expect(text).toBe(direct);
     expect(text).not.toContain("bd-crumbbar");

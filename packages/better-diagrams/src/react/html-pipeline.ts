@@ -209,13 +209,25 @@ export function exportHtmlPage({ template, registry, filename, palette, mode, gr
       })
     : undefined;
   // Rows are drawn as targets too, so the page can pin, mark and open
-  // them — and a task's states as parts, so the page can change them.
-  const dress = { mode, gradients, fieldHits: true, ...(tasks ? { taskHits: true } : {}) };
+  // them — and a task's states as parts, so the page can change them; and
+  // each line names its ends and the legend its box, so the page can show a
+  // node's lines on hover and keep the legend in view.
+  const dress = { mode, gradients, fieldHits: true, viewerHooks: true, ...(tasks ? { taskHits: true } : {}) };
   // Any nesting makes the page multi-view: one pre-rendered SVG per
   // drillable level, clickable in place. A flat document keeps the
   // single-view page.
   const page = drillableIds(template).length
-    ? buildMultiViewHtml({ views: buildDrillViews(template, registry, palette, dress), title, stops, palette, paths, explorer, tasks })
+    ? buildMultiViewHtml({
+        views: buildDrillViews(template, registry, palette, dress),
+        title,
+        stops,
+        palette,
+        paths,
+        explorer,
+        tasks,
+        dockLegend: true,
+        hoverLines: true,
+      })
     : buildTimelineHtml({
         svg: renderTemplateToSvg(template, registry, palette, dress),
         title,
@@ -224,6 +236,8 @@ export function exportHtmlPage({ template, registry, filename, palette, mode, gr
         paths,
         explorer,
         tasks,
+        dockLegend: true,
+        hoverLines: true,
       });
   return { blob: new Blob([page], { type: "text/html" }), filename: `${filename}.html` };
 }

@@ -2400,8 +2400,10 @@ export function moveParticipant(t: SequenceTemplate, id: string, toIndex: number
 export interface MultiViewHtmlOptions {
     // (undocumented)
     accent?: string;
+    dockLegend?: boolean;
     // (undocumented)
     explorer?: HtmlExplorerData;
+    hoverLines?: boolean;
     // (undocumented)
     palette?: Partial<ExportPalette>;
     // (undocumented)
@@ -4089,7 +4091,9 @@ export type TimelineFutureMode = (typeof TIMELINE_FUTURE_MODES)[number];
 // @public (undocumented)
 export interface TimelineHtmlOptions {
     accent?: string;
+    dockLegend?: boolean;
     explorer?: HtmlExplorerData;
+    hoverLines?: boolean;
     palette?: Partial<ExportPalette>;
     paths?: HtmlPathEntry[];
     stops: string[];
