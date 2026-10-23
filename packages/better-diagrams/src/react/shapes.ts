@@ -17,6 +17,13 @@
  */
 import type { NodeShape } from "./registry-types";
 import { approxTextWidth } from "../contract/text";
+import {
+  cylinderLidRadius,
+  parallelogramSkew,
+  personHeadRadius,
+  pipeEndRadius,
+  shapeInsets,
+} from "../contract/shapes";
 
 export interface Silhouette {
   /** The filled+stroked outline. May contain multiple subpaths. */
@@ -50,10 +57,13 @@ export function silhouettePath(
    */
   opts: { radius?: number } = {},
 ): Silhouette {
+  // The room each outline leaves for text is the contract's: validation
+  // measures a wrapped card inside the same insets (`wrappedNodeHeight`).
+  const insets = shapeInsets(shape, w, h);
+  const room = { contentTop: insets.top, contentBottom: insets.bottom, contentInlinePad: insets.inline };
   switch (shape) {
     case "person": {
-      // Head sized against both axes so squat or narrow nodes stay plausible.
-      const headR = Math.min(13, h * 0.24, w * 0.16);
+      const headR = personHeadRadius(w, h);
       const cx = x + w / 2;
       const bodyTop = y + headR * 1.55;
       const r = Math.min(10, (h - (bodyTop - y)) / 2);
@@ -66,36 +76,38 @@ export function silhouettePath(
         // Head as its own subpath — same fill, one shape to the eye.
         `M ${cx - headR} ${y + headR} A ${headR} ${headR} 0 1 1 ${cx + headR} ${y + headR} ` +
         `A ${headR} ${headR} 0 1 1 ${cx - headR} ${y + headR} Z`;
-      return { body, contentTop: headR * 1.1, contentBottom: 0, contentInlinePad: 0 };
+      return { body, ...room };
     }
     case "cylinder": {
-      const ry = Math.min(9, h * 0.14);
+      const ry = cylinderLidRadius(h);
       const body =
         `M ${x} ${y + ry} A ${w / 2} ${ry} 0 0 1 ${x + w} ${y + ry} ` +
         `V ${y + h - ry} A ${w / 2} ${ry} 0 0 1 ${x} ${y + h - ry} Z`;
       // The lid's lower arc — the line that makes a cylinder read as one.
       const detail = `M ${x} ${y + ry} A ${w / 2} ${ry} 0 0 0 ${x + w} ${y + ry}`;
-      return { body, detail, contentTop: ry * 1.6, contentBottom: 0, contentInlinePad: 0 };
+      return { body, detail, ...room };
     }
     case "pipe": {
-      const r = h / 2;
+      // Half-circle ends on an ordinary box; past `pipeEndRadius`'s cap the
+      // sides run straight between quarter-circle corners.
+      const r = pipeEndRadius(w, h);
       const body =
-        `M ${x + r} ${y} H ${x + w - r} A ${r} ${r} 0 0 1 ${x + w - r} ${y + h} ` +
-        `H ${x + r} A ${r} ${r} 0 0 1 ${x + r} ${y} Z`;
-      return { body, contentTop: 0, contentBottom: 0, contentInlinePad: r * 0.55 };
+        `M ${x + r} ${y} H ${x + w - r} A ${r} ${r} 0 0 1 ${x + w} ${y + r} ` +
+        `V ${y + h - r} A ${r} ${r} 0 0 1 ${x + w - r} ${y + h} ` +
+        `H ${x + r} A ${r} ${r} 0 0 1 ${x} ${y + h - r} ` +
+        `V ${y + r} A ${r} ${r} 0 0 1 ${x + r} ${y} Z`;
+      return { body, ...room };
     }
     case "diamond": {
       const cx = x + w / 2;
       const cy = y + h / 2;
       const body = `M ${cx} ${y} L ${x + w} ${cy} L ${cx} ${y + h} L ${x} ${cy} Z`;
-      // The corners are gone: keep the text in the middle band — inset the
-      // same at the foot as at the head, or a centred label sits low.
-      return { body, contentTop: h * 0.16, contentBottom: h * 0.16, contentInlinePad: w * 0.18 };
+      return { body, ...room };
     }
     case "parallelogram": {
-      const skew = Math.min(18, w * 0.16);
+      const skew = parallelogramSkew(w);
       const body = `M ${x + skew} ${y} H ${x + w} L ${x + w - skew} ${y + h} H ${x} Z`;
-      return { body, contentTop: 0, contentBottom: 0, contentInlinePad: skew * 0.7 };
+      return { body, ...room };
     }
     default: {
       const r = opts.radius ?? 8;
@@ -104,7 +116,7 @@ export function silhouettePath(
         `V ${y + h - r} A ${r} ${r} 0 0 1 ${x + w - r} ${y + h} ` +
         `H ${x + r} A ${r} ${r} 0 0 1 ${x} ${y + h - r} ` +
         `V ${y + r} A ${r} ${r} 0 0 1 ${x + r} ${y} Z`;
-      return { body, contentTop: 0, contentBottom: 0, contentInlinePad: 0 };
+      return { body, ...room };
     }
   }
 }

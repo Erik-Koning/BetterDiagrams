@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createRegistry as resolveRegistry } from "./create-registry";
-import { kindDef, iconPaths, providerDef, zoneFill, zoneInk } from "./registry-types";
+import { kindDef, iconPaths, providerDef, registryValidateOptions, zoneFill, zoneInk } from "./registry-types";
 import { silhouettePath } from "./shapes";
 import { LIGHT_THEME, themeToStyle } from "./theme";
 import {
@@ -15,6 +15,7 @@ import {
   EXAMPLE_TEMPLATE,
   EXAMPLE_ZONED_TEMPLATE,
   ICON_NAMES,
+  KIND_SHAPES,
   validateTemplate,
   type DiagramTemplate,
 } from "../contract/schema";
@@ -278,6 +279,23 @@ describe("text exporters", () => {
   it("cuts flow-chart silhouettes the canvas and exports share", () => {
     expect(silhouettePath("diamond", 0, 0, 100, 60).body).toBe("M 50 0 L 100 30 L 50 60 L 0 30 Z");
     expect(silhouettePath("parallelogram", 0, 0, 100, 60).body).toBe("M 16 0 H 100 L 84 60 H 0 Z");
+  });
+
+  it("rounds a pipe's ends into half-circles, and a tall pipe's into corners", () => {
+    // An ordinary pipe is a stadium: its straight sides have no length.
+    expect(silhouettePath("pipe", 0, 0, 170, 60).body).toContain("V 30 A 30 30");
+    // A tall one keeps its corners at 40px and runs straight between them.
+    const tall = silhouettePath("pipe", 0, 0, 170, 200).body;
+    expect(tall).toContain("A 40 40");
+    expect(tall).toContain("V 160");
+  });
+
+  it("validates with the shape every kind draws as, which the contract knows for the built-ins", () => {
+    // Validation runs without a registry, so the contract keeps its own list;
+    // the two must agree or a wrapped card is sized for the wrong outline.
+    expect(registryValidateOptions(resolveRegistry()).kindShapes).toEqual(KIND_SHAPES);
+    const custom = resolveRegistry({ nodeKinds: { gate: { label: "Gate", fill: "#000", accent: "#fff", text: "#fff", icon: "none", shape: "diamond" } } });
+    expect(registryValidateOptions(custom).kindShapes?.gate).toBe("diamond");
   });
 
   it("exports a dangling arrow as a dot in mermaid, and not at all in C4", () => {

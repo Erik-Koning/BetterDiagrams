@@ -27,7 +27,10 @@ export function approxTextWidth(text: string, size: number, font: TextFont): num
  * Greedy word wrap, ellipsising the last line when it runs out of `maxLines`.
  *
  * A word longer than `maxWidth` is not broken — it overhangs. Breaking mid-word
- * would be worse for the identifiers these labels are usually made of.
+ * would be worse for the identifiers these labels are usually made of. With
+ * `breakWords` it is broken, at the character that would overrun, as the
+ * canvas's `overflow-wrap: anywhere` does: for text inside an outline it must
+ * not cross, where an overhang is worse than a split.
  *
  * An explicit newline is a HARD break, not whitespace to collapse: the canvas
  * renders annotations with `white-space: pre-wrap`, so a note typed as three
@@ -41,6 +44,7 @@ export function wrapText(
   font: TextFont,
   maxWidth: number,
   maxLines: number,
+  breakWords = false,
 ): string[] {
   const paragraphs = String(text).split(/\r\n|\r|\n/);
   const lines: string[] = [];
@@ -68,7 +72,10 @@ export function wrapText(
         continue;
       }
     }
-    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    for (const word of breakWords ? words.flatMap((w) => breakWord(w, size, font, maxWidth)) : words) {
+      // A broken word's pieces each fill a line, so no two of them ever
+      // share one — the space this join would put between them never shows.
       const candidate = line ? `${line} ${word}` : word;
       if (approxTextWidth(candidate, size, font) > maxWidth && line) {
         lines.push(line);
@@ -93,6 +100,19 @@ export function wrapText(
   return lines.slice(0, maxLines);
 }
 
+/** A word cut into pieces no wider than `maxWidth`, at least a character each. */
+function breakWord(word: string, size: number, font: TextFont, maxWidth: number): string[] {
+  const pieces: string[] = [];
+  let rest = word;
+  while (approxTextWidth(rest, size, font) > maxWidth) {
+    const fit = Math.max(1, Math.floor(maxWidth / approxTextWidth("m", size, font)));
+    pieces.push(rest.slice(0, fit));
+    rest = rest.slice(fit);
+  }
+  if (rest) pieces.push(rest);
+  return pieces;
+}
+
 export function ellipsise(text: string, size: number, font: TextFont, maxWidth: number): string {
   let s = text;
   while (s.length > 1 && approxTextWidth(`${s}…`, size, font) > maxWidth) s = s.slice(0, -1);
@@ -106,7 +126,62 @@ export function ellipsise(text: string, size: number, font: TextFont, maxWidth: 
  * must not impose a maximum of its own — the whole point of `wrap` is that
  * nothing is hidden.
  */
-export function wrappedLineCount(text: string, size: number, font: TextFont, maxWidth: number): number {
+export function wrappedLineCount(
+  text: string,
+  size: number,
+  font: TextFont,
+  maxWidth: number,
+  breakWords = false,
+): number {
   if (maxWidth <= 0) return 1;
-  return Math.max(1, wrapText(text, size, font, maxWidth, Number.MAX_SAFE_INTEGER).length);
+  return Math.max(1, countWrappedLines(text, size, font, maxWidth, breakWords));
+}
+
+/**
+ * `wrapText(…).length` with no line cap, counted in characters rather than
+ * built as strings — every width is length × size × factor, so the count
+ * needs nothing else. A wrapped diamond tries dozens of column widths for its
+ * fit on every keystroke, and building each line it only wanted to count
+ * made typing lag.
+ */
+function countWrappedLines(text: string, size: number, font: TextFont, maxWidth: number, breakWords: boolean): number {
+  const unit = size * CHAR_FACTOR[font];
+  const perPiece = Math.max(1, Math.floor(maxWidth / unit));
+  let lines = 0;
+  let line = 0;
+  for (const [p, paragraph] of String(text).split(/\r\n|\r|\n/).entries()) {
+    if (p > 0) {
+      if (line) {
+        lines++;
+        line = 0;
+      } else if (paragraph.trim() === "") {
+        lines++;
+        continue;
+      }
+    }
+    for (const word of paragraph.split(/\s+/)) {
+      if (!word) continue;
+      // A broken word's pieces, as `breakWord` cuts them.
+      let rest = word.length;
+      while (breakWords && rest * unit > maxWidth) {
+        if (line) lines++;
+        lines++;
+        line = 0;
+        rest -= perPiece;
+      }
+      // The last piece is the line's start only if the word was broken.
+      if (breakWords && rest !== word.length) {
+        line = rest;
+        continue;
+      }
+      const candidate = line ? line + 1 + rest : rest;
+      if (candidate * unit > maxWidth && line) {
+        lines++;
+        line = rest;
+      } else {
+        line = candidate;
+      }
+    }
+  }
+  return lines + (line ? 1 : 0);
 }

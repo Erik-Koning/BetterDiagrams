@@ -78,6 +78,8 @@ const CONTRACT_EXPORTS = [
   "nodeTextWidth",
   "wrappedTitleHeight",
   "wrappedNodeHeight",
+  // the silhouettes a wrapped card is measured inside (contract/shapes.ts)
+  "NODE_SHAPES",
   // the shared text measurement (contract/text.ts)
   "approxTextWidth",
   "ellipsise",

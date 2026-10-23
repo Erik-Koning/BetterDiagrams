@@ -4,17 +4,19 @@
  * contract/cloud.ts owns WHICH components exist and what the prompt says;
  * this maps the same ids to NodeKindDef visuals: one palette per provider
  * (brand color on a dark fill, matching how the builtin kinds are styled),
- * icon and silhouette by role. Registered as built-ins in registry.ts, after
- * the generic kinds — always valid data, surfaced in the UI by relevance.
+ * icon by role, and the silhouette the contract gives the role
+ * (`CLOUD_ROLE_SHAPES`). Registered as built-ins in registry.ts, after the
+ * generic kinds — always valid data, surfaced in the UI by relevance.
  */
 import {
   CLOUD_COMPONENTS,
   CLOUD_PROVIDER_IDS,
+  CLOUD_ROLE_SHAPES,
   type CloudComponentRole,
   type CloudProviderId,
 } from "../contract/cloud";
 import type { IconName } from "../contract/schema";
-import type { NodeKindDef, NodeShape } from "./registry-types";
+import type { NodeKindDef } from "./registry-types";
 
 /** Brand color on a dark fill — the same recipe the builtin kinds use. */
 const PROVIDER_PALETTE: Record<CloudProviderId, { fill: string; accent: string; text: string }> = {
@@ -86,11 +88,6 @@ const COMPONENT_ICON: Record<string, IconName> = {
   "gcp-load-balancing": "balance",
 };
 
-const ROLE_SHAPE: Partial<Record<CloudComponentRole, NodeShape>> = {
-  database: "cylinder",
-  queue: "pipe",
-};
-
 function buildCloudKinds(): { kinds: Record<string, NodeKindDef>; order: string[] } {
   const kinds: Record<string, NodeKindDef> = {};
   const order: string[] = [];
@@ -101,7 +98,7 @@ function buildCloudKinds(): { kinds: Record<string, NodeKindDef>; order: string[
         label: component.label,
         ...palette,
         icon: COMPONENT_ICON[component.id] ?? ROLE_ICON[component.role],
-        ...(ROLE_SHAPE[component.role] ? { shape: ROLE_SHAPE[component.role] } : {}),
+        ...(CLOUD_ROLE_SHAPES[component.role] ? { shape: CLOUD_ROLE_SHAPES[component.role] } : {}),
         provider,
       };
       order.push(component.id);

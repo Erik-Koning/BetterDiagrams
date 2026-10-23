@@ -20,13 +20,17 @@ import {
   DEFAULT_FONT_SIZE,
   NODE_MIN_SIZE,
   fieldsBoxHeight,
+  wrappedBoxSize,
   wrappedNodeHeight,
+  wrappedTextBox,
   wrappedTitleHeight,
   isBoundaryNodeId,
   isGhostNodeId,
   isZoneNodeId,
   type DiagramNodeData,
+  type WrappedTextBox,
 } from "../contract/schema";
+import type { NodeShape } from "../contract/shapes";
 import { kindDef } from "./registry-types";
 import type { ResolvedRegistry } from "./registry-types";
 
@@ -34,11 +38,11 @@ import type { ResolvedRegistry } from "./registry-types";
 export const GROUP_CONTENT_PAD = 12;
 
 /**
- * The shortest a card can be at `width` and still hold what it shows — the
- * same measurement `validateTemplate` uses, so the canvas and the document
- * can never disagree about how tall a box has to be.
+ * The shortest a card can be at `width` and still hold what it shows, in its
+ * kind's `shape` — the same measurement `validateTemplate` uses, so the
+ * canvas and the document can never disagree about how tall a box has to be.
  */
-export function shapeMinHeight(data: DiagramNodeData, width: number): number {
+export function shapeMinHeight(data: DiagramNodeData, width: number, shape: NodeShape = "card"): number {
   return Math.max(
     NODE_MIN_SIZE.shape.h,
     data.fields?.length ? fieldsBoxHeight(data.fields.length, !!data.description) : 0,
@@ -46,8 +50,29 @@ export function shapeMinHeight(data: DiagramNodeData, width: number): number {
       ? 0
       : data.fields?.length
         ? wrappedTitleHeight(data.label, data.fontSize ?? DEFAULT_FONT_SIZE, width, hasIcon(data))
-        : wrappedNodeHeight(data, width, hasIcon(data)),
+        : wrappedNodeHeight(data, width, hasIcon(data), shape),
   );
+}
+
+/**
+ * The box an edit leaves a wrapped node in: fitted to its text again, both
+ * ways — a card by its height, a diamond in proportion about its middle
+ * (`wrappedBoxSize`). `x`/`y` are the node's corner, in whatever frame its
+ * position is in.
+ */
+export function fittedWrappedBox(
+  data: DiagramNodeData,
+  shape: NodeShape | undefined,
+  box: { x: number; y: number; w: number; h: number },
+): { x: number; y: number; w: number; h: number } {
+  if (data.fields?.length || shape !== "diamond") return { ...box, h: shapeMinHeight(data, box.w, shape) };
+  const fit = wrappedBoxSize(data, box, hasIcon(data), shape, "fit");
+  return { x: box.x + fit.dx, y: box.y + fit.dy, w: fit.w, h: fit.h };
+}
+
+/** Where a wrapped card's text sits in its shape — the room `shapeMinHeight` measured it in. */
+export function wrappedTextRoom(data: DiagramNodeData, shape: NodeShape, width: number, height: number): WrappedTextBox {
+  return wrappedTextBox(data, width, height, hasIcon(data), shape);
 }
 
 function hasIcon(data: DiagramNodeData): boolean {
@@ -100,7 +125,7 @@ export function nodeSizeFloor(
   // A wrapped title's height depends on the width it wraps at — the width
   // the box will actually get, never one below the floor.
   const w = Math.max(NODE_MIN_SIZE.shape.w, width);
-  return { w: NODE_MIN_SIZE.shape.w, h: shapeMinHeight(data, w) };
+  return { w: NODE_MIN_SIZE.shape.w, h: shapeMinHeight(data, w, kindDef(registry, data.kind).shape) };
 }
 
 /** The node's ancestors and descendants — what a resize must not drag along. */

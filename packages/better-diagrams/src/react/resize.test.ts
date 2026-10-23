@@ -159,4 +159,14 @@ describe("fanOutResize", () => {
     const clamped = node("clamped", { data: { kind: "task", icon: "none", description } });
     expect(nodeSizeFloor(clamped, registry, [clamped], 200).h).toBe(NODE_MIN_SIZE.shape.h);
   });
+
+  it("holds a wrapped decision to the diamond its text fits inside", () => {
+    const description = "One preparing or purchasing checkout per operator and item.";
+    const wrapped = node("ask", { data: { kind: "decision", label: "Same item already in flight?", icon: "none", description, wrap: true } });
+    const floor = nodeSizeFloor(wrapped, registry, [wrapped], 250);
+    expect(floor.h).toBe(
+      wrappedNodeHeight({ label: "Same item already in flight?", kind: "decision", description }, 250, false, "diamond"),
+    );
+    expect(floor.h).toBeGreaterThan(wrappedNodeHeight({ label: "Same item already in flight?", kind: "decision", description }, 250, false));
+  });
 });

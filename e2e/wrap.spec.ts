@@ -31,6 +31,10 @@ const STORIES = {
     card("narrow", { label: STORY, description: CRITERIA, w: 160, x: 260 }),
     card("api", { kind: "service", icon: "server", label: "Checkout API", description: `${STORY} ${CRITERIA}`, w: 240, x: 480 }),
     card("logout", { label: "Log out", x: 780 }),
+    card("inflight", {
+      kind: "decision", label: "Same item already in flight?", w: 250, h: 120, x: 1000,
+      description: "checkouts_in_flight_idx: one preparing or purchasing checkout per operator and item.",
+    }),
   ],
   edges: [],
 };
@@ -57,6 +61,39 @@ async function layoutOf(page: Page, id: string) {
       date: piece(".as-date"),
       icon: piece(".as-node__iconbox"),
     };
+  }, id);
+}
+
+/**
+ * How far the furthest line of a diamond's text reaches past its outline, as
+ * a fraction of the way from the middle to the edge: 0 or less is inside.
+ * Line by line — a range's client rects are the lines as laid out.
+ */
+async function diamondOverrun(page: Page, id: string) {
+  return page.evaluate((nodeId) => {
+    const host = document.querySelector(`.react-flow__node[data-id="${nodeId}"]`)!;
+    const cardEl = host.querySelector<HTMLElement>(".as-node")!;
+    const r = cardEl.getBoundingClientRect();
+    const zoom = r.width / cardEl.offsetWidth;
+    const half = { w: cardEl.offsetWidth / 2, h: cardEl.offsetHeight / 2 };
+    let worst = -Infinity;
+    let lines = 0;
+    for (const el of host.querySelectorAll(".as-node__kind, .as-node__title, .as-node__desc")) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      for (const b of range.getClientRects()) {
+        if (!b.width || !b.height) continue;
+        lines++;
+        for (const x of [b.left, b.right]) {
+          for (const y of [b.top, b.bottom]) {
+            const dx = Math.abs((x - r.left) / zoom - half.w) / half.w;
+            const dy = Math.abs((y - r.top) / zoom - half.h) / half.h;
+            worst = Math.max(worst, dx + dy - 1);
+          }
+        }
+      }
+    }
+    return { worst, lines, h: cardEl.offsetHeight };
   }, id);
 }
 
@@ -131,4 +168,39 @@ test.describe("wrapped cards", () => {
     await expect.poll(async () => (await layoutOf(page, "logout")).h).toBeGreaterThan(before + 30);
     await expectAllTextShown(page, "logout");
   });
+
+  test("draw a shaped card's description over its silhouette, not under it", async ({ page, studio }) => {
+    // The silhouette ignores the pointer, so hit-testing would pass straight
+    // through it; let it answer, and whatever is painted on top is hit.
+    await page.addStyleTag({ content: ".as-node__silhouette { pointer-events: auto !important; }" });
+    const hit = await page.evaluate(() => {
+      const desc = document.querySelector('.react-flow__node[data-id="inflight"] .as-node__desc')!;
+      const b = desc.getBoundingClientRect();
+      const el = document.elementFromPoint(b.left + b.width / 2, b.top + Math.min(b.height / 2, 8));
+      return el?.closest(".as-node__desc, .as-node__silhouette")?.getAttribute("class") ?? el?.tagName;
+    });
+    expect(hit).toBe("as-node__desc");
+  });
+
+  for (const marketing of [true, false]) {
+    test(`set a wrapped decision's text inside its diamond in ${marketing ? "marketing" : "technical"}, growing it to fit`, async ({ studio, page }) => {
+      if (!marketing) await (await studio.setting("Marketing")).uncheck();
+      const at = await diamondOverrun(page, "inflight");
+      // Grown from the 250 × 120 it was imported at, in proportion and about
+      // its middle: the text needs the diamond's middle band, and a wider
+      // band costs far less height.
+      expect(at.h).toBeGreaterThan(120);
+      const node = (await studio.liveDoc()).nodes.find((n) => n.id === "inflight")!;
+      expect(node.w / node.h).toBeCloseTo(250 / 120, 1);
+      expect(node.x + node.w / 2).toBeCloseTo(1000 + 125, 0);
+      expect(at.lines).toBeGreaterThan(3);
+      expect(at.worst).toBeLessThanOrEqual(0);
+
+      // A longer description grows it again, and still nothing crosses.
+      await studio.node("inflight").click();
+      await studio.inspector.getByLabel("Node description").fill(`${CRITERIA}`);
+      await expect.poll(async () => (await diamondOverrun(page, "inflight")).h).toBeGreaterThan(at.h);
+      expect((await diamondOverrun(page, "inflight")).worst).toBeLessThanOrEqual(0);
+    });
+  }
 });

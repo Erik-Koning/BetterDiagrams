@@ -2082,6 +2082,9 @@ export const NODE_KINDS: readonly ["service", "database", "queue", "gateway", "c
 export const NODE_OUTLINES: readonly ["solid", "dashed", "dotted", "none"];
 
 // @public
+export const NODE_SHAPES: readonly ["card", "person", "cylinder", "pipe", "diamond", "parallelogram"];
+
+// @public
 export const NODE_STATUSES: readonly ["proposed", "planned", "stubbed", "dark", "active", "deprecated", "retired"];
 
 // @public
@@ -2146,6 +2149,9 @@ export interface NodePlacement {
     y: number;
     zone?: string;
 }
+
+// @public
+export type NodeShape = (typeof NODE_SHAPES)[number];
 
 // @public (undocumented)
 export type NodeStatus = (typeof NODE_STATUSES)[number];
@@ -3446,6 +3452,7 @@ export function validateLineage(raw: unknown, ctx?: {
 export interface ValidateOptions {
     annotationKinds?: readonly string[];
     containerKinds?: readonly string[];
+    kindShapes?: Readonly<Record<string, NodeShape>>;
     knownIcons?: readonly string[];
     knownKinds?: readonly string[];
     knownProviders?: readonly string[];
@@ -3548,7 +3555,7 @@ export function withEndSlots(anchors: {
 export function workDone(doc: TaskDocument): Map<string, boolean>;
 
 // @public
-export function wrappedLineCount(text: string, size: number, font: TextFont, maxWidth: number): number;
+export function wrappedLineCount(text: string, size: number, font: TextFont, maxWidth: number, breakWords?: boolean): number;
 
 // @public
 export function wrappedNodeHeight(node: {
@@ -3557,13 +3564,13 @@ export function wrappedNodeHeight(node: {
     fontSize?: number;
     kind?: string;
     date?: string;
-}, w: number, hasIcon: boolean): number;
+}, w: number, hasIcon: boolean, shape?: NodeShape): number;
 
 // @public
 export function wrappedTitleHeight(label: string, fontSize: number, w: number, hasIcon: boolean): number;
 
 // @public
-export function wrapText(text: string, size: number, font: TextFont, maxWidth: number, maxLines: number): string[];
+export function wrapText(text: string, size: number, font: TextFont, maxWidth: number, maxLines: number, breakWords?: boolean): string[];
 
 // @public
 export const ZONE_OUTLINES: readonly ["solid", "dashed", "dotted", "none"];

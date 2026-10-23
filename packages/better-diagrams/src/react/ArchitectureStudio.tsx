@@ -155,7 +155,7 @@ import {
   welcomeSuppressed,
 } from "./WelcomeModal";
 import { buildArchitectureLint } from "./schema-lint";
-import { fanOutResize, shapeMinHeight } from "./resize";
+import { fanOutResize, fittedWrappedBox } from "./resize";
 import { NestingModal } from "./NestingModal";
 import { inlineContents, nestContents } from "../contract/nesting";
 import { removeElements } from "../contract/edit";
@@ -3658,21 +3658,25 @@ function StudioInner({
                 ? "point"
                 : "shape";
 
-          // Wrapped text decides the node's height. `validateTemplate` grows
-          // the stored `h` for it, but the DOCUMENT is derived from the canvas
-          // — so unless the canvas node grows too, the next derive reads the
-          // old height back off it and the extra lines spill out of the box.
+          // Wrapped text decides the node's size. `validateTemplate` grows the
+          // stored box for it, but the DOCUMENT is derived from the canvas —
+          // so unless the canvas node grows too, the next derive reads the
+          // old size back off it and the extra lines spill out of the box.
           // Anything that changes how many lines the title or description
           // takes, or what sits under them, lands here — and the box fits the
-          // text again, shrinking as well as growing.
+          // text again, shrinking as well as growing: a card by its height, a
+          // diamond in proportion about its middle.
           const affectsHeight =
             "wrap" in own ||
             (!!data.wrap && WRAP_MEASURED_KEYS.some((key) => key in own));
           const grown =
             affectsHeight && data.wrap && !def.container && !def.annotation
-              ? shapeMinHeight(data, firstNumber(n.width, n.style?.width, n.measured?.width) ?? 170)
+              ? fittedWrappedBox(data, def.shape, {
+                  ...n.position,
+                  w: firstNumber(n.width, n.style?.width, n.measured?.width) ?? 170,
+                  h: firstNumber(n.height, n.style?.height, n.measured?.height) ?? 76,
+                })
               : null;
-          const height = grown ?? firstNumber(n.height, n.style?.height, n.measured?.height);
 
           // Materializing a dangling arrow's dot: changing a point's kind is
           // how "the thing this arrow points at" comes into existence, and a
@@ -3697,8 +3701,13 @@ function StudioInner({
                   height: bodied.h,
                   style: { ...(n.style ?? {}), width: bodied.w, height: bodied.h },
                 }
-              : grown && height
-                ? { height, style: { ...(n.style ?? {}), height } }
+              : grown
+                ? {
+                    position: { x: grown.x, y: grown.y },
+                    width: grown.w,
+                    height: grown.h,
+                    style: { ...(n.style ?? {}), width: grown.w, height: grown.h },
+                  }
                 : {}),
             // React Flow reads draggability from the node object, not data.
             ...("locked" in own ? { draggable: !data.locked } : {}),

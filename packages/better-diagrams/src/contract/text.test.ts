@@ -51,9 +51,41 @@ describe("wrapText", () => {
     // uses overflow-wrap for the same case.
     expect(wrapText("supercalifragilistic", 13, "sans", 20, 3)).toEqual(["supercalifragilistic"]);
   });
+
+  it("breaks a word too wide for the line when asked, as overflow-wrap: anywhere does", () => {
+    const text = "see checkouts_in_flight_idx: one per item";
+    const lines = wrapText(text, 11, "sans", 60, 20, true);
+    for (const line of lines) expect(approxTextWidth(line, 11, "sans")).toBeLessThanOrEqual(60);
+    // Only the long word is cut, and nothing is lost or reordered.
+    expect(lines).toContain("see");
+    expect(lines.join(" ").replace(/\s+/g, "")).toBe(text.replace(/\s+/g, ""));
+    expect(wrappedLineCount(text, 11, "sans", 60, true)).toBe(lines.length);
+    expect(wrappedLineCount(text, 11, "sans", 60)).toBeLessThan(lines.length);
+  });
 });
 
 describe("wrappedLineCount", () => {
+  it("counts exactly the lines wrapText draws, broken words, blank lines and all", () => {
+    const texts = [
+      "",
+      "one",
+      "alpha beta gamma delta epsilon zeta eta theta",
+      "checkouts_in_flight_idx: one preparing or purchasing checkout per operator and item.",
+      "Given a returning customer\nWhen they tap Reorder\n\nThen   every item is in the basket",
+      "\n\nleading blank lines\n",
+      "averyveryveryverylongidentifierwithnospaces then short words after it",
+      "a b c d e f g h i j k l m n o p",
+    ];
+    for (const text of texts) {
+      for (const width of [10, 24, 40, 61, 88, 137, 200, 400]) {
+        for (const breakWords of [false, true]) {
+          const drawn = wrapText(text, 11, "sans", width, Number.MAX_SAFE_INTEGER, breakWords).length;
+          expect(wrappedLineCount(text, 11, "sans", width, breakWords), `${JSON.stringify(text)} @${width} ${breakWords}`).toBe(Math.max(1, drawn));
+        }
+      }
+    }
+  });
+
   it("never reports fewer than one line, even for nothing", () => {
     expect(wrappedLineCount("", 13, "sans", 100)).toBe(1);
     expect(wrappedLineCount("short", 13, "sans", 1000)).toBe(1);

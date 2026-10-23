@@ -7,6 +7,7 @@
  */
 import type { IconPaths } from "./icons";
 import type { DiagramTemplate, IconName, NodeKind, ValidateOptions } from "../contract/schema";
+import type { NodeShape } from "../contract/shapes";
 import { DEFAULT_ZONE_OPACITY } from "../contract/schema";
 import type { DiagramZone } from "../contract/zones";
 import type { LintRuleDef } from "../contract/lint";
@@ -17,8 +18,9 @@ import { stableColor } from "./shapes";
 
 // ─── Node kinds ──────────────────────────────────────────────────────────────
 
-/** Node silhouette, C4-style: shape conveys the element's nature at a glance. */
-export type NodeShape = "card" | "person" | "cylinder" | "pipe" | "diamond" | "parallelogram";
+// The contract owns the vocabulary: validation measures a wrapped card inside
+// its shape, so it has to know them too.
+export type { NodeShape } from "../contract/shapes";
 
 export interface NodeKindDef {
   /** Shown in the inspector dropdown and as the small caps label on the node. */
@@ -307,9 +309,10 @@ export function zoneFill(
 
 /**
  * The validation options a registry implies: its kinds, icons, container and
- * annotation kinds, and providers. Validate a document anywhere but the
- * editor — a server, a pipeline, a test — with these, or a custom kind is
- * "repaired" into a service and its frame styling dropped:
+ * annotation kinds, providers, and the shape each kind draws as. Validate a
+ * document anywhere but the editor — a server, a pipeline, a test — with
+ * these, or a custom kind is "repaired" into a service, its frame styling
+ * dropped, and a wrapped one sized as a card rather than its shape:
  *
  *   const opts = registryValidateOptions(createRegistry(myExtensions));
  *   validateTemplateReport(doc, opts);
@@ -322,5 +325,10 @@ export function registryValidateOptions(registry: ResolvedRegistry): ValidateOpt
     containerKinds: registry.containerKinds,
     annotationKinds: registry.annotationKinds,
     knownProviders: registry.providerOrder,
+    kindShapes: Object.fromEntries(
+      Object.entries(registry.nodeKinds).flatMap(([kind, def]) =>
+        def.shape && def.shape !== "card" ? [[kind, def.shape] as const] : [],
+      ),
+    ),
   };
 }

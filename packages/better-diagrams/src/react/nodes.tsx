@@ -8,7 +8,7 @@
  * Which renderer a kind uses is decided by the registry (`container` /
  * `annotation` flags), not by a hard-coded list — see `toReactFlow`.
  */
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Handle,
   NodeResizer,
@@ -39,7 +39,7 @@ import { MILESTONE_KIND, TASK_KIND, hasAssigneeStrip, rollupFraction, rollupLabe
 /** The words an open task's stage reads as on its card. */
 const STAGE_LABELS: Record<string, string> = { "in-progress": "In progress", "in-review": "In review" };
 import { approxTextWidth } from "../contract/text";
-import { groupContentBox, shapeMinHeight } from "./resize";
+import { fittedWrappedBox, groupContentBox, shapeMinHeight, wrappedTextRoom } from "./resize";
 import { useResizeHandles } from "./resize-handles";
 import {
   DEFAULT_CONTAINER_OPACITY,
@@ -383,10 +383,23 @@ export const ShapeNode = memo(function ShapeNode({
   // The same measurement `validateTemplate` uses, so the canvas and the
   // document can never disagree about how tall this box has to be — and the
   // same floor a multi-selection resize holds this box to (see resize.ts).
-  const minHeight = shapeMinHeight(data, w);
+  // A wrapped diamond tries every column for its fit, so both are kept
+  // until the text or the box changes.
+  const minHeight = useMemo(() => shapeMinHeight(data, w, shape), [data, w, shape]);
   // Absolute-coordinate silhouette in a 1:1 viewBox — no stretch, so the
   // person's head and the pipe's ends stay circular at any aspect ratio.
   const sil = shape !== "card" ? silhouettePath(shape, 0.75, 0.75, w - 1.5, h - 1.5) : null;
+  // A record keeps its one-line description above its rows, wrapped or not
+  // (see `wrappedNodeHeight`).
+  const textBelow = !!data.wrap && !data.fields?.length;
+  // Wrapped text inside a shape sits in the room it was measured in: the
+  // outline's own insets, or for a diamond the centred column that fits it.
+  const wrappedRoom = useMemo(
+    () => (shape !== "card" && textBelow ? wrappedTextRoom(data, shape, w, h) : null),
+    [data, shape, textBelow, w, h],
+  );
+  const room =
+    wrappedRoom ?? (sil ? { top: sil.contentTop, bottom: sil.contentBottom, inline: sil.contentInlinePad, centred: false } : null);
 
   // The document node this card stands for — a ghost's rows and its place
   // in a reachable set belong to the real thing.
@@ -436,18 +449,15 @@ export const ShapeNode = memo(function ShapeNode({
       ? { "--as-node-font": `${data.fontSize}px` }
       : {}),
     ...(domainTint?.get(docId) ? { "--as-node-domain": domainTint.get(docId) } : {}),
-    ...(sil
+    ...(room
       ? {
-          paddingTop: 6 + sil.contentTop,
-          paddingBottom: 6 + sil.contentBottom,
-          paddingInline: 12 + sil.contentInlinePad,
+          paddingTop: 6 + room.top,
+          paddingBottom: 6 + room.bottom,
+          paddingInline: 12 + room.inline,
         }
       : {}),
   } as CSSProperties;
 
-  // A record keeps its one-line description above its rows, wrapped or not
-  // (see `wrappedNodeHeight`).
-  const textBelow = !!data.wrap && !data.fields?.length;
   const dateChip = <DateChip date={data.date} start={data.startDate} prefix={isWork ? "Due" : "Lands"} overdue={overdue} />;
   const textAlign = data.textAlign ?? defaultTextAlign(data.kind);
 
@@ -477,6 +487,7 @@ export const ShapeNode = memo(function ShapeNode({
     textAlign !== "left" ? `as-node--align-${textAlign}` : "",
     data.textVAlign ? `as-node--valign-${data.textVAlign}` : "",
     data.wrap ? "as-node--wrap" : "",
+    room?.centred ? "as-node--wrap-centred" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -595,10 +606,18 @@ export const ShapeNode = memo(function ShapeNode({
             onCommit={(label) => {
               updateNodeData(id, { label });
               // A wrapped card fits its text, as the inspector's edits keep it
-              // (`patchNodes`): a longer name needs a taller box.
+              // (`patchNodes`): a longer name needs a taller box, or a
+              // bigger diamond.
               if (data.wrap) {
-                const fit = shapeMinHeight({ ...data, label }, w);
-                updateNode(id, (n) => ({ height: fit, style: { ...n.style, height: fit } }));
+                updateNode(id, (n) => {
+                  const fit = fittedWrappedBox({ ...data, label }, shape, { ...n.position, w, h });
+                  return {
+                    position: { x: fit.x, y: fit.y },
+                    width: fit.w,
+                    height: fit.h,
+                    style: { ...n.style, width: fit.w, height: fit.h },
+                  };
+                });
               }
               requestCommit();
             }}

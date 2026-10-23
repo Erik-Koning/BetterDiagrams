@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createRegistry } from "./create-registry";
 import { teamColor } from "./shapes";
 import { drawToCanvas, emitTemplate, type DrawCmd } from "./draw";
+import { approxTextWidth } from "../contract/text";
 import { emittedToCanvas } from "./export-helpers";
 import {
   BUILTIN_EXPORTERS,
@@ -446,6 +447,62 @@ describe("a diamond's label sits in its middle", () => {
 
   it("left, where the document says so", () => {
     expect(label({ textAlign: "left" }).anchor).toBeUndefined();
+  });
+});
+
+describe("a wrapped diamond keeps all of its text inside the outline", () => {
+  const description = "checkouts_in_flight_idx: one preparing or purchasing checkout per operator and item.";
+  const question = (w: number, over: Record<string, unknown> = {}) =>
+    doc({
+      nodes: [{ id: "ask", label: "Same item already in flight?", kind: "decision", description, wrap: true, x: 0, y: 0, w, h: 120, ...over }],
+    });
+
+  /** How far outside the diamond a run of text reaches: 0 when it is inside. */
+  const overrun = (t: TextCmd, box: { x: number; y: number; w: number; h: number }) => {
+    const width = approxTextWidth(t.text, t.size, t.font ?? "sans");
+    const left = t.anchor === "middle" ? t.x - width / 2 : t.anchor === "end" ? t.x - width : t.x;
+    const cx = box.x + box.w / 2;
+    const cy = box.y + box.h / 2;
+    let worst = 0;
+    for (const x of [left, left + width]) {
+      for (const y of [t.y - t.size * 0.8, t.y + t.size * 0.2]) {
+        worst = Math.max(worst, Math.abs(x - cx) / (box.w / 2) + Math.abs(y - cy) / (box.h / 2) - 1);
+      }
+    }
+    return worst;
+  };
+
+  for (const mode of ["technical", "marketing"] as const) {
+    for (const w of [170, 250, 400]) {
+      it(`${mode}, ${w} wide: every line inside, none dropped`, () => {
+        const t = question(w);
+        const n = t.nodes[0]!;
+        const runs = texts(emitTemplate(t, registry, {}, { mode }).cmds);
+        const inside = runs.filter((r) => r.y > n.y && r.y < n.y + n.h + 20);
+        expect(inside.length).toBeGreaterThan(2);
+        for (const run of inside) expect(overrun(run, { x: n.x, y: n.y, w: n.w, h: n.h }), run.text).toBeLessThanOrEqual(0);
+        // Every word of the description is there — the box was grown to hold
+        // it, so no line was capped away.
+        const drawn = inside.map((r) => r.text).join("").replace(/\s+/g, "");
+        expect(drawn).toContain(description.replace(/\s+/g, ""));
+      });
+    }
+  }
+
+  it("a wrapped milestone's date sits in the middle, under the last line of its title", () => {
+    const t = doc({
+      nodes: [{ id: "m", label: "Public beta launch for every region", kind: "milestone", date: "2026-11-01", wrap: true, x: 0, y: 0, w: 170, h: 96 }],
+    });
+    const n = t.nodes[0]!;
+    const runs = texts(emitTemplate(t, registry).cmds);
+    const title = runs.filter((r) => r.size === 13);
+    const chip = runs.find((r) => r.text.startsWith("Nov 1"))!;
+    expect(title.length).toBeGreaterThan(1);
+    // The chip's text is centred in its pill, so its middle is the pill's.
+    const chipMid = chip.x + approxTextWidth(chip.text, chip.size, chip.font ?? "sans") / 2;
+    expect(Math.abs(chipMid - (n.x + n.w / 2))).toBeLessThan(3);
+    expect(chip.y).toBeGreaterThan(Math.max(...title.map((r) => r.y)));
+    for (const run of [...title, chip]) expect(overrun(run, { x: n.x, y: n.y, w: n.w, h: n.h }), run.text).toBeLessThanOrEqual(0);
   });
 });
 

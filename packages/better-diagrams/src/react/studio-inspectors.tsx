@@ -1138,7 +1138,7 @@ export function NodeInspector({
             checked={wrap.value}
             mixed={wrap.mixed}
             label="Wrap"
-            title="Show all the text: the title wraps, the description runs the full width below it, and the box grows to fit"
+            title="Show all the text: the title wraps, the description runs on below it, and the box grows to fit — a diamond in proportion, keeping its middle"
             // One ellipsised line is the default, so only the opt-IN is stored.
             onChange={(checked) => patch({ wrap: checked ? true : undefined })}
           />

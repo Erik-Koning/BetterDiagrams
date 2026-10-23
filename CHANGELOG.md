@@ -49,6 +49,10 @@ This changelog starts with the editing API (October 2026). For what changed betw
   names it and the dev server makes it blank, titled after its name, and links it; a name that is
   there already is linked as it is, never written over. The store's `POST symlinks` takes
   `create` (the diagram to make the file with) for it.
+- `NODE_SHAPES` and `NodeShape` from `contract`; `ValidateOptions.kindShapes`, which
+  `registryValidateOptions` now fills from the registry, so validation measures a wrapped card in
+  its kind's shape. `wrappedNodeHeight` takes the `shape`; `wrapText` and `wrappedLineCount` take
+  `breakWords`, which cuts a word too wide for the line as `overflow-wrap: anywhere` does.
 
 ### Changed
 
@@ -86,6 +90,13 @@ This changelog starts with the editing API (October 2026). For what changed betw
 - A decision's and a milestone's text is centred unless the document says otherwise, so on those
   kinds `"textAlign": "center"` is the default validation drops and `"left"` is the value it keeps.
   Existing diamonds with no alignment set now draw centred.
+- A wrapped diamond (a decision, a milestone) too small for its text grows in proportion, about
+  its middle: `validateTemplate` scales its `w` and `h` together and moves its `x`/`y` so the
+  centre stays, and an edit fits it both ways. Its text sits in the middle, in the column that
+  needs the shortest diamond, widening when the diamond is taller than that. A document laid out
+  for smaller diamonds may need **Arrange → Tidy** afterwards.
+- A pipe's rounded ends stop at a 40px radius (and half its width), so a pipe grown tall keeps
+  straight sides rather than becoming a capsule whose ends eat its text.
 
 ### Fixed
 
@@ -95,6 +106,11 @@ This changelog starts with the editing API (October 2026). For what changed betw
 - A diamond's label (a decision, a milestone) sits in its middle, on the canvas and in exports;
   centred text in one no longer drifts right in exports, and text in a pipe, diamond or
   parallelogram no longer runs into the shape's right side there.
+- A wrapped decision, milestone or other shaped card draws its description over the shape on the
+  canvas, not hidden behind it, and keeps all of its text inside the outline — on the canvas and
+  in exports, which dropped the lines that didn't fit. Wrapped shapes were measured as plain cards.
+- Exports: a wrapped card's date chip sits under the last line of its title rather than over the
+  second, and a centred or right-aligned node's chip is centred or right-aligned, as on the canvas.
 - An empty drilled-in level names the level it is ("at C2 · Containers"), as the breadcrumb bar
   does, instead of "its next C4 level".
 - Live files: a file opened through a link answers to the file the link pointed at, so a link

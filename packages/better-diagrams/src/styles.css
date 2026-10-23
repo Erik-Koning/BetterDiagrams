@@ -1381,9 +1381,11 @@
   stroke-width: 1.2;
 }
 
-/* Content overlays the silhouette. */
+/* Content overlays the silhouette — a wrapped card's description too, which
+   runs on beneath the body in a box of its own. */
 .as-node--shaped .as-node__iconbox,
-.as-node--shaped .as-node__body {
+.as-node--shaped .as-node__body,
+.as-node--shaped .as-node__below {
   position: relative;
 }
 
@@ -1569,6 +1571,13 @@
 
 .as-node--wrap .as-node__body {
   flex-basis: 0;
+}
+
+/* A diamond narrows to a point above and below, so its wrapped text sits in
+   the middle, the one band wide enough for it. The padding nodes.tsx sets
+   is the column `wrappedTextBox` fitted inside the outline. */
+.as-node--wrap-centred {
+  align-content: center;
 }
 
 .as-node__below {

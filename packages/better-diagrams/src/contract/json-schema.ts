@@ -91,7 +91,7 @@ export function diagramJsonSchema(options: JsonSchemaOptions = {}): JsonSchema {
       fontSize: num("Title size in px. Default 13.", { exclusiveMinimum: 0 }),
       textAlign: oneOf(NODE_TEXT_ALIGNS, "Horizontal text alignment. Default left; center on a decision or milestone, which draw as diamonds."),
       textVAlign: oneOf(NODE_TEXT_VALIGNS, "Vertical text alignment. Default middle; a wrapped card reads from the top."),
-      wrap: bool("Show all the text: the title wraps and the card grows to fit."),
+      wrap: bool("Show all the text: the title wraps and the card grows to fit — a diamond in proportion, about its middle."),
       fill: bool("Containers: false draws the frame without its tint."),
       outline: oneOf(NODE_OUTLINES, "Containers: the frame's line. Default dashed."),
       color: ref("color", "Accent colour, `#rrggbb`. Absent means the kind's own."),

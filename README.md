@@ -568,6 +568,19 @@ canvas and the PNG/SVG exporters all call it — which is the only reason an exp
 to look like the screen. It errs a line long rather than ever clipping, so a long card can have a
 little room under its last line.
 
+**In a shape, the text stays inside the outline.** A pipe, cylinder, person or parallelogram is
+measured in the room its outline leaves — the column narrows where the ends round off, the box
+grows by the head or the lid. A diamond (a decision, a milestone) sets its text in its middle,
+the one band wide enough, in the column that needs the shortest diamond: a line fewer is worth up
+to a tenth more height, a long identifier is kept whole for up to a quarter more and broken past
+that. Made taller than it needs, a diamond widens the column rather than leaving it empty. A
+diamond too small for its text grows **in proportion, about its middle** — `validateTemplate`
+scales its `w` and `h` together and moves `x`/`y` so its centre stays put, which keeps it a
+decision's shape and the lines into its points straight; an edit fits it both ways, the same way.
+A document laid out for smaller diamonds can end up with neighbours touching them: **Arrange →
+Tidy** makes the room. A host's own shaped kinds are measured in their shape when validation is
+given the registry's shapes (`registryValidateOptions`, or `kindShapes`).
+
 A wrapped card reads from the top, like a document, so vertical alignment is set aside while it
 wraps (the inspector greys it out) and comes back when it unwraps. A record node is excluded from
 vertical alignment too: its rows sit at offsets that field-anchored edges also compute, so moving

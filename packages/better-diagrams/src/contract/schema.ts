@@ -28,10 +28,11 @@ import {
   type ZonePoint,
   type ZoneShape,
 } from "./zones";
-import { ALL_CLOUD_KIND_IDS } from "./cloud";
+import { ALL_CLOUD_KIND_IDS, CLOUD_KIND_SHAPES } from "./cloud";
+import { shapeInsets, type NodeShape, type ShapeInsets } from "./shapes";
 import { normalizeDate, type DiagramDate } from "./timeline";
 import { parseLlmJsonReport } from "./json-repair";
-import { wrappedLineCount } from "./text";
+import { approxTextWidth, wrappedLineCount } from "./text";
 import { MILESTONE_KIND, TASK_KIND } from "./tasks";
 import { validatePaths, type DiagramPath, type PathGlow } from "./paths";
 import { validateAnalyses, type SavedAnalysis } from "./analyses";
@@ -80,6 +81,21 @@ export const ANNOTATION_KINDS: readonly string[] = ["text"];
  * exports, diff, re-attachment) works on the loose end unchanged.
  */
 export const POINT_KINDS: readonly string[] = ["point"];
+/**
+ * The silhouette each built-in kind draws as, where it is not a card. A
+ * wrapped card is measured inside its shape (`wrappedNodeHeight`) and
+ * validation runs without a registry, so the shapes it assumes are listed
+ * here; a registry's own arrive as `ValidateOptions.kindShapes`.
+ */
+export const KIND_SHAPES: Readonly<Record<string, NodeShape>> = {
+  database: "cylinder",
+  queue: "pipe",
+  decision: "diamond",
+  terminator: "pipe",
+  io: "parallelogram",
+  milestone: "diamond",
+  ...CLOUD_KIND_SHAPES,
+};
 
 export const ICON_NAMES = [
   "none",
@@ -338,6 +354,15 @@ export function wrappedDescWidth(w: number): number {
   return Math.max(24, w - 26);
 }
 
+/** What a wrapped card's height is measured from. */
+interface WrappedText {
+  label: string;
+  description?: string;
+  fontSize?: number;
+  kind?: string;
+  date?: string;
+}
+
 /**
  * The height a WRAPPED card needs to show all of its text, by the same
  * measurement the renderer and the exporters use (contract/text.ts).
@@ -348,6 +373,11 @@ export function wrappedDescWidth(w: number): number {
  * description; each further line adds a line, and a date adds its chip. A
  * task's title keeps clear of its corner check.
  *
+ * A shape other than a card holds the same text inside the room its outline
+ * leaves (`wrappedTextBox`): the column narrows by the side insets and the
+ * box grows by the top and bottom ones, and a diamond sets its text in the
+ * middle, in the column that suits it best (`wrappedTextBox`).
+ *
  * Only for cards: a record holds its description to one line and is sized by
  * its rows (`fieldsBoxHeight`). With no description, no date and no task
  * check this is exactly `wrappedTitleHeight`, so those documents keep their
@@ -357,7 +387,23 @@ export function wrappedNodeHeight(
   node: { label: string; description?: string; fontSize?: number; kind?: string; date?: string },
   w: number,
   hasIcon: boolean,
+  shape: NodeShape = "card",
 ): number {
+  if (shape === "diamond") return diamondLayout(node, w, Infinity, hasIcon).minHeight;
+  let h = cardTextHeight(node, w, hasIcon);
+  // A pipe's rounded ends deepen as it grows and take more of the column, so
+  // its room is settled by growing until it holds. Every other shape's
+  // insets barely move with its height, and settle on the first pass.
+  for (let pass = 0; pass < 8; pass++) {
+    const room = shapeInsets(shape, w - SILHOUETTE_INSET, h - SILHOUETTE_INSET);
+    const need = Math.ceil(cardTextHeight(node, w - 2 * room.inline, hasIcon) + room.top + room.bottom);
+    if (need <= h) break;
+    h = need;
+  }
+  return h;
+}
+
+function cardTextHeight(node: WrappedText, w: number, hasIcon: boolean): number {
   const fontSize = node.fontSize ?? DEFAULT_FONT_SIZE;
   const titleW = nodeTextWidth(w, hasIcon) - (node.kind === TASK_KIND ? TASK_CHECK_ROOM : 0);
   const titleLines = wrappedLineCount(node.label, fontSize, "sans", Math.max(24, titleW));
@@ -370,6 +416,204 @@ export function wrappedNodeHeight(
     Math.max(0, descLines - 1) * DESC_LINE_H +
     (node.date ? DATE_CHIP_H : 0)
   );
+}
+
+/** A box's size, and how far its corner moves when the size changes. */
+export interface WrappedBoxSize {
+  w: number;
+  h: number;
+  /** Added to `x`: a diamond grows about its middle. */
+  dx: number;
+  /** Added to `y`. */
+  dy: number;
+}
+
+/** How far a wrapped diamond may be scaled, either way, looking for its fit. */
+const DIAMOND_MAX_SCALE = 8;
+
+/**
+ * The box a WRAPPED card needs for all of its text, from the box it has.
+ *
+ * A card, and every shape but one, keeps its width and takes the height its
+ * text needs (`wrappedNodeHeight`), growing downward. A diamond scales
+ * instead, about its middle, keeping its proportions: taller alone, its text
+ * keeps a column no wider than before and the diamond towers; scaled, it
+ * needs a fraction of the height, keeps its shape, and the lines into its
+ * points stay where they were.
+ *
+ * `grow` only ever enlarges the box — what validation does to a document.
+ * `fit` follows the text both ways, as an edit does: a wrapped card shrinks
+ * back when its description is cleared, never below `NODE_MIN_SIZE`.
+ */
+export function wrappedBoxSize(
+  node: WrappedText,
+  box: { w: number; h: number },
+  hasIcon: boolean,
+  shape: NodeShape,
+  mode: "grow" | "fit" = "grow",
+): WrappedBoxSize {
+  if (shape !== "diamond") {
+    const need = wrappedNodeHeight(node, box.w, hasIcon, shape);
+    return { w: box.w, h: mode === "grow" ? Math.max(box.h, need) : Math.max(NODE_MIN_SIZE.shape.h, need), dx: 0, dy: 0 };
+  }
+  const fits = (s: number) => wrappedNodeHeight(node, box.w * s, hasIcon, "diamond") <= box.h * s;
+  let lo = mode === "grow" ? 1 : Math.max(NODE_MIN_SIZE.shape.w / box.w, NODE_MIN_SIZE.shape.h / box.h);
+  let hi = DIAMOND_MAX_SCALE;
+  if (fits(lo)) {
+    if (mode === "grow") return { w: box.w, h: box.h, dx: 0, dy: 0 };
+    hi = lo;
+  } else {
+    // Twelve halvings of an 8× range: well under a pixel on any real box.
+    for (let i = 0; i < 12; i++) {
+      const mid = (lo + hi) / 2;
+      if (fits(mid)) hi = mid;
+      else lo = mid;
+    }
+  }
+  const w = Math.ceil(box.w * hi);
+  // Whole pixels, and settled at them: re-validating the result must find
+  // it fits, or every load would grow it again.
+  const h = Math.max(Math.ceil(box.h * hi), wrappedNodeHeight(node, w, hasIcon, "diamond"));
+  return { w, h, dx: Math.round((box.w - w) / 2), dy: Math.round((box.h - h) / 2) };
+}
+
+/** Where a wrapped card's text goes inside its shape (`wrappedTextBox`). */
+export interface WrappedTextBox extends ShapeInsets {
+  /** The text sits in the middle of the box, whatever its vertical alignment says. */
+  centred: boolean;
+}
+
+/**
+ * Where a WRAPPED card's text goes inside its shape: the insets the canvas
+ * pads it by and the exporters place it from, on top of the card's own
+ * 6px × 12px padding — the room `wrappedNodeHeight` measured it in.
+ *
+ * A card and most shapes keep their outline's insets (`shapeInsets`) and
+ * read from the top, as a wrapped card does. A diamond narrows to a point on
+ * every side, so its text sits in the middle, in a column chosen to fit
+ * there: the one the measurement picked, or in a box taller than that, the
+ * widest one that still fits — fewer, longer lines, where the diamond is
+ * widest.
+ */
+export function wrappedTextBox(node: WrappedText, w: number, h: number, hasIcon: boolean, shape: NodeShape): WrappedTextBox {
+  if (shape !== "diamond") {
+    return { ...shapeInsets(shape, w - SILHOUETTE_INSET, h - SILHOUETTE_INSET), centred: false };
+  }
+  const { column } = diamondLayout(node, w, h, hasIcon);
+  // The tallest block that column leaves room for, centred on the diamond.
+  // What the text may take, and what an exporter's line cap reads.
+  const air = 2 * DIAMOND_TEXT_AIR;
+  const room = Math.max(0, (h - SILHOUETTE_INSET) * (1 - (column.width + air) / (w - SILHOUETTE_INSET)) - air);
+  const band = Math.max(0, (h - 2 * CARD_PAD_Y - room) / 2);
+  return { top: band, bottom: band, inline: column.inline, centred: true };
+}
+
+/** The outline is drawn 0.75px inside the box on every side, so its stroke stays on it. */
+const SILHOUETTE_INSET = 1.5;
+/** `.as-node`: 6px above and below the content, 12px either side of it. */
+const CARD_PAD_Y = 6;
+const CARD_PAD_X = 12;
+/** `.as-node__kind`: the eyebrow's 10px line at 1.2. */
+const EYEBROW_H = 12;
+/** `.as-node__iconbox`: the chip a wrapped title sits beside. */
+const ICON_CHIP = 28;
+/** The chip and the 10px gap after it — what the title gives up to an icon. */
+const ICON_COLUMN = ICON_CHIP + 10;
+/** Air between a diamond's outline and the text set inside it. */
+const DIAMOND_TEXT_AIR = 3;
+/** How finely the column is narrowed while a diamond looks for its fit. */
+const DIAMOND_COLUMN_STEP = 2;
+/**
+ * How much taller a diamond may grow to keep every word whole: a quarter.
+ * Past that, a narrower column that breaks a long identifier wins — a
+ * diamond four times its width is worse than a split word.
+ */
+const WHOLE_WORDS_ALLOWANCE = 1.25;
+/**
+ * How much taller a diamond may grow to set its text in fewer lines: a
+ * tenth. The shortest diamond often wraps a two-word title onto two lines to
+ * save a few pixels; a line fewer reads better than the pixels.
+ */
+const FEWER_LINES_ALLOWANCE = 1.1;
+
+interface DiamondColumn {
+  /** Extra inset each side, beyond the card's padding. */
+  inline: number;
+  /** The text column: the card's content width less both insets. */
+  width: number;
+  /** The box height a diamond needs for the text to sit wholly inside it. */
+  need: number;
+  /** No word is wider than the column, so none has to break. */
+  whole: boolean;
+  /** Title and description lines together. */
+  lines: number;
+}
+
+/**
+ * The columns a wrapped diamond's text could take, widest first, and what
+ * each one costs in height.
+ *
+ * A centred block `bw` wide and `bh` tall fits inside a `W` × `H` diamond
+ * while bw / W + bh / H ≤ 1: the diamond is widest across its middle and
+ * narrows to a point on every side. A wider column takes fewer lines but
+ * leaves less of the height for them, so every width is tried. Lines are
+ * counted with long words broken, as the canvas and the exporters break them
+ * here: an overhanging word would cross the outline.
+ */
+function diamondColumns(node: WrappedText, w: number, hasIcon: boolean): DiamondColumn[] {
+  const W = w - SILHOUETTE_INSET;
+  const air = 2 * DIAMOND_TEXT_AIR;
+  const fontSize = node.fontSize ?? DEFAULT_FONT_SIZE;
+  const titleRoom = (hasIcon ? ICON_COLUMN : 0) + (node.kind === TASK_KIND ? TASK_CHECK_ROOM : 0);
+  const longest = Math.max(
+    longestWordWidth(node.label, fontSize) + titleRoom,
+    node.description ? longestWordWidth(node.description, DESC_FONT_SIZE) + 2 : 0,
+  );
+  // On even widths whatever the box's own width, so a diamond a fraction of a
+  // pixel wider weighs the same columns and never fits worse.
+  const most = 2 * Math.floor(Math.min(w - 2 * CARD_PAD_X, W - air - 1) / 2);
+  const least = Math.min(most, 24 + titleRoom);
+  const columns: DiamondColumn[] = [];
+  for (let width = most; ; width -= DIAMOND_COLUMN_STEP) {
+    const titleLines = wrappedLineCount(node.label, fontSize, "sans", Math.max(24, width - titleRoom), true);
+    const descLines = node.description
+      ? wrappedLineCount(node.description, DESC_FONT_SIZE, "sans", Math.max(24, width - 2), true)
+      : 0;
+    const header = EYEBROW_H + Math.round(titleLines * fontSize * TITLE_LINE_HEIGHT);
+    const block = Math.max(hasIcon ? ICON_CHIP : 0, header) + descLines * DESC_LINE_H + (node.date ? DATE_CHIP_H : 0);
+    const need = (block + air) / (1 - (width + air) / W) + SILHOUETTE_INSET;
+    columns.push({
+      inline: (w - 2 * CARD_PAD_X - width) / 2,
+      width,
+      need,
+      whole: width >= longest,
+      lines: titleLines + descLines,
+    });
+    if (width - DIAMOND_COLUMN_STEP < least) break;
+  }
+  return columns;
+}
+
+/** The shortest a wrapped diamond can be, and the column its text takes at height `h`. */
+function diamondLayout(node: WrappedText, w: number, h: number, hasIcon: boolean): { minHeight: number; column: DiamondColumn } {
+  const columns = diamondColumns(node, w, hasIcon);
+  const shortest = (from: DiamondColumn[]) => from.reduce((a, b) => (b.need < a.need ? b : a));
+  const best = shortest(columns);
+  const whole = columns.filter((c) => c.whole);
+  const bestWhole = whole.length ? shortest(whole) : null;
+  const pool = bestWhole && bestWhole.need <= best.need * WHOLE_WORDS_ALLOWANCE ? whole : columns;
+  // Within reach of the shortest diamond, the one that takes fewest lines.
+  const least = shortest(pool).need;
+  const fit = pool
+    .filter((c) => c.need <= least * FEWER_LINES_ALLOWANCE)
+    .reduce((a, b) => (b.lines < a.lines || (b.lines === a.lines && b.need < a.need) ? b : a));
+  // In a box taller than it has to be, the widest column that fits: fewer,
+  // longer lines, across the middle where the diamond is widest.
+  return { minHeight: Math.ceil(fit.need), column: columns.find((c) => c.need <= h) ?? fit };
+}
+
+function longestWordWidth(text: string, size: number): number {
+  return Math.max(0, ...String(text).split(/\s+/).map((word) => approxTextWidth(word, size, "sans")));
 }
 
 /**
@@ -1142,7 +1386,7 @@ Rules:
 - meta.routing "orthogonal" gives right-angle connectors (formal/dense diagrams), "straight" direct point-to-point lines (classic flow charts); omit for curved. meta.title names the diagram. meta.versionTag labels the revision ("v2.1", "2026-Q3 draft") when the user gives one; omit otherwise.
 - "settings" holds document-wide rendering preferences. settings.groupContents "hide" folds every group with contents into a chip (a high-level overview the reader expands from the toolbar); set it ONLY when the user asks for collapsed/folded groups or a summary view, and omit the "settings" key otherwise.
 - Node "tags" = short lowercase labels for cross-cutting concerns the user mentions ("pci","gdpr","deprecated","planned"); omit when none. Node "url" = deep link to docs/repo if the user supplies one; omit otherwise. Node "team" = the owning or contact team when the user names one ("Payments", "Platform"); omit otherwise. Node "status" = lifecycle stage when stated: "planned" for future work, "stubbed" for scaffolding that exists but does nothing yet, "dark" for built-and-shipped but not yet enabled, "deprecated" for being sunset; omit for normal active components. Text notes draw a subtle box by default; set "plain":true only when the user wants bare text with no outline.
-- Node text layout, all optional and all rarely needed — omit unless the user asks: "textAlign":"left"/"center"/"right" (default left, centred on a "decision" or "milestone"), "textVAlign":"top"/"bottom" (default middle), "wrap":true to show a long label and description in full instead of truncating them (the editor grows the node's height to fit). "fontSize" sets the label size in px (default 13).
+- Node text layout, all optional and all rarely needed — omit unless the user asks: "textAlign":"left"/"center"/"right" (default left, centred on a "decision" or "milestone"), "textVAlign":"top"/"bottom" (default middle), "wrap":true to show a long label and description in full instead of truncating them (the editor grows the node's height to fit; a "decision" or "milestone" diamond grows in both directions, so keep its description short). "fontSize" sets the label size in px (default 13).
 - A "group" may also be styled as a purely visual grouping frame: "fill":false drops its background, "outline":"none" drops its border, "outline":"dotted"/"solid" changes it (default dashed), and "color" is an "#rrggbb" ink the background tint derives from. Use "fill":false with "outline":"none" only when the user explicitly wants an invisible/abstract grouping box.
 - Node/edge/zone "date" = when that piece lands or landed, as "YYYY-MM-DD". Set it ONLY when the user gives a roadmap, phases, quarters, or a migration order; omit it everywhere else. Undated elements are treated as always present, so a phased plan dates the new pieces and leaves today's system undated. A node inside a group is never shown before the group, so date the group with its earliest phase.
 - parentId may reference ANY existing node. A child of a "group" renders inside its frame. A child of any other node is that component's INTERNAL decomposition (the next C4 level) — shown only when the user drills into that component, never on the parent's own diagram. Do NOT decompose a component into children unless the user explicitly asks for its internal detail. Never create a parent cycle.
@@ -1186,6 +1430,12 @@ export interface ValidateOptions {
   annotationKinds?: readonly string[];
   /** Provider ids to accept (supplied by a provider registry). */
   knownProviders?: readonly string[];
+  /**
+   * The silhouette each kind draws as, where it is not a card: a wrapped
+   * card's height is measured inside its shape. Defaults to the built-in
+   * kinds' shapes.
+   */
+  kindShapes?: Readonly<Record<string, NodeShape>>;
 }
 
 /** Fill opacity for a zone when it doesn't specify one — a tint, not a slab. */
@@ -1223,6 +1473,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
   const containerSet = new Set<string>(opts.containerKinds ?? CONTAINER_KINDS);
   const annotationSet = new Set<string>(opts.annotationKinds ?? ANNOTATION_KINDS);
   const providerSet = new Set<string>([...PROVIDER_IDS, ...(opts.knownProviders ?? [])]);
+  const kindShapes = opts.kindShapes ?? KIND_SHAPES;
 
   const zones = validateZones(r.zones, providerSet);
   const zoneIds = new Set(zones.map((z) => z.id));
@@ -1297,6 +1548,40 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         : "dashed";
       const data = validateDataBag(n.data);
 
+      // The box. x/y may legitimately be 0; w/h/fontSize may not, so they
+      // fall back to the kind default rather than collapsing the node to a
+      // sliver.
+      //
+      // A node never renders fewer rows than it carries: whatever height the
+      // model (or an old document written before a column was added) asks
+      // for, it grows to fit the list. Rows are content; clipping them would
+      // silently drop meaning, unlike clipping a description.
+      //
+      // Wrapped text is content by the same argument: `wrap` promises
+      // nothing is hidden, so a card grows to hold every line of its title
+      // and its description (a frame or a note, only its title), inside the
+      // outline of its shape — a diamond in proportion, about its middle
+      // (`wrappedBoxSize`). This is the one measurement the canvas, the
+      // exports and validation all share (contract/text.ts), or the PNG
+      // would disagree with the screen.
+      const hasIcon = iconSet.has(n.icon as string) && n.icon !== "none";
+      const given = { x: num(n.x, 0), y: num(n.y, 0), w: positive(n.w, size.w), h: positive(n.h, size.h) };
+      const box = fields
+        ? { ...given, h: Math.max(given.h, fieldsBoxHeight(fields.length, !!description)) }
+        : !wrap
+          ? given
+          : isContainer || annotationSet.has(kind)
+            ? { ...given, h: Math.max(given.h, wrappedTitleHeight(String(n.label ?? id), fontSize, given.w, hasIcon)) }
+            : (() => {
+                const fit = wrappedBoxSize(
+                  { label: String(n.label ?? id), description, fontSize, kind, ...(date ? { date } : {}) },
+                  given,
+                  hasIcon,
+                  kindShapes[kind] ?? "card",
+                );
+                return { x: given.x + fit.dx, y: given.y + fit.dy, w: fit.w, h: fit.h };
+              })();
+
       return {
         id,
         label: String(n.label ?? id),
@@ -1354,40 +1639,10 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
             }
           : {}),
         ...(data ? { data } : {}),
-        // x/y may legitimately be 0; w/h/fontSize may not, so they fall back
-        // to the kind default rather than collapsing the node to a sliver.
-        x: num(n.x, 0),
-        y: num(n.y, 0),
-        w: positive(n.w, size.w),
-        // A node never renders fewer rows than it carries: whatever height the
-        // model (or an old document written before a column was added) asks
-        // for, it grows to fit the list. Rows are content; clipping them would
-        // silently drop meaning, unlike clipping a description.
-        //
-        // Wrapped text is content by the same argument: `wrap` promises
-        // nothing is hidden, so a card grows to hold every line of its title
-        // and its description (a frame or a note, only its title). This is the
-        // one measurement the canvas, the exports and validation all share
-        // (contract/text.ts), or the PNG would disagree with the screen.
-        h: fields
-          ? Math.max(positive(n.h, size.h), fieldsBoxHeight(fields.length, !!description))
-          : wrap
-            ? Math.max(
-                positive(n.h, size.h),
-                isContainer || annotationSet.has(kind)
-                  ? wrappedTitleHeight(
-                      String(n.label ?? id),
-                      fontSize,
-                      positive(n.w, size.w),
-                      iconSet.has(n.icon as string) && n.icon !== "none",
-                    )
-                  : wrappedNodeHeight(
-                      { label: String(n.label ?? id), description, fontSize, kind, ...(date ? { date } : {}) },
-                      positive(n.w, size.w),
-                      iconSet.has(n.icon as string) && n.icon !== "none",
-                    ),
-              )
-            : positive(n.h, size.h),
+        x: box.x,
+        y: box.y,
+        w: box.w,
+        h: box.h,
         fontSize,
       };
     });

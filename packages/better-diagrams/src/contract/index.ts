@@ -85,6 +85,9 @@ export {
   wrappedTitleHeight,
   wrappedNodeHeight,
 } from "./schema";
+// The silhouettes a kind can draw as — what a wrapped card is measured inside.
+export { NODE_SHAPES } from "./shapes";
+export type { NodeShape } from "./shapes";
 // The one text measurement validation, the canvas and every exporter share.
 // Public because a host drawing its own node bodies has to agree with it.
 export { approxTextWidth, ellipsise, wrapText, wrappedLineCount } from "./text";

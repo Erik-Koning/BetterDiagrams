@@ -21,12 +21,15 @@ import {
   EDGE_Z_INDEX,
   validateTemplate,
   visibleAnchor,
+  wrappedBoxSize,
   wrappedNodeHeight,
+  wrappedTextBox,
   wrappedTitleHeight,
   fieldsBoxHeight,
   DESC_LINE_H,
   type DiagramTemplate,
 } from "./schema";
+import { approxTextWidth } from "./text";
 import {
   edgeGeometryFor,
   floatingEdgeGeometry,
@@ -244,6 +247,139 @@ describe("new node fields", () => {
         wrappedNodeHeight({ label: "API" }, 170, true) + 20,
       );
     });
+
+    describe("in a shape", () => {
+      const question = {
+        label: "Same item already in flight?",
+        description: "checkouts_in_flight_idx: one preparing or purchasing checkout per operator and item.",
+        kind: "decision",
+      };
+      /** The text column a diamond gives its words at height h. */
+      const column = (n: typeof question, w: number, h: number) => w - 24 - 2 * wrappedTextBox(n, w, h, false, "diamond").inline;
+
+      it("a card is measured exactly as before", () => {
+        expect(wrappedNodeHeight({ label: long, description: criteria }, 170, true, "card")).toBe(
+          wrappedNodeHeight({ label: long, description: criteria }, 170, true),
+        );
+      });
+
+      it("a diamond sets its text in the middle, in a column wholly inside the outline", () => {
+        for (const w of [170, 250, 400]) {
+          const h = wrappedNodeHeight(question, w, false, "diamond");
+          const box = wrappedTextBox(question, w, h, false, "diamond");
+          expect(box.centred).toBe(true);
+          expect(box.top).toBe(box.bottom);
+          // The text's room — the column by the band between the two insets —
+          // has its corners on or inside the diamond: bw / W + bh / H ≤ 1.
+          const room = { w: w - 24 - 2 * box.inline, h: h - 12 - box.top - box.bottom };
+          expect(room.w / (w - 1.5) + room.h / (h - 1.5)).toBeLessThanOrEqual(1);
+          // And it is far taller than the card measurement, which assumed
+          // the text had the whole box.
+          expect(h).toBeGreaterThan(wrappedNodeHeight(question, w, false));
+        }
+      });
+
+      it("a wider diamond is a shorter one", () => {
+        const at = (w: number) => wrappedNodeHeight(question, w, false, "diamond");
+        expect(at(250)).toBeLessThan(at(170));
+        expect(at(400)).toBeLessThan(at(250));
+      });
+
+      it("a diamond taller than it needs widens its column rather than leaving it empty", () => {
+        const h = wrappedNodeHeight(question, 250, false, "diamond");
+        expect(column(question, 250, h + 120)).toBeGreaterThan(column(question, 250, h));
+      });
+
+      it("keeps a long identifier whole while that costs at most a quarter more height", () => {
+        const identifier = approxTextWidth("checkouts_in_flight_idx:", 11, "sans");
+        // Wide enough: the column holds the identifier on one line.
+        expect(column(question, 250, wrappedNodeHeight(question, 250, false, "diamond"))).toBeGreaterThanOrEqual(identifier);
+        // Too narrow to hold it without towering: the word breaks instead, and
+        // the diamond stays a sane height.
+        const narrow = wrappedNodeHeight(question, 170, false, "diamond");
+        expect(column(question, 170, narrow)).toBeLessThan(identifier);
+        expect(narrow).toBeLessThan(170 * 2.5);
+      });
+
+      it("a short question in a wrapped diamond asks for no more than a default decision", () => {
+        expect(wrappedNodeHeight({ label: "Approved?", kind: "decision" }, 170, false, "diamond")).toBeLessThanOrEqual(100);
+      });
+
+      it("a diamond grows in proportion and fits both ways when edited; a card only by its height", () => {
+        const box = { w: 250, h: 120 };
+        const grow = wrappedBoxSize(question, box, false, "diamond");
+        expect(grow.w / grow.h).toBeCloseTo(250 / 120, 1);
+        expect(grow.dx).toBe(Math.round((250 - grow.w) / 2));
+        expect(grow.dy).toBe(Math.round((120 - grow.h) / 2));
+        // A short question grows nothing, but an edit fits it closer.
+        const short = { label: "Approved?", kind: "decision" };
+        expect(wrappedBoxSize(short, box, false, "diamond")).toEqual({ w: 250, h: 120, dx: 0, dy: 0 });
+        const fitted = wrappedBoxSize(short, box, false, "diamond", "fit");
+        expect(fitted.w).toBeLessThan(250);
+        expect(fitted.w).toBeGreaterThanOrEqual(110);
+        expect(wrappedNodeHeight(short, fitted.w, false, "diamond")).toBeLessThanOrEqual(fitted.h);
+        // A card keeps its width and corner whatever the mode.
+        const card = wrappedBoxSize({ label: long, description: criteria }, { w: 170, h: 76 }, true, "card");
+        expect(card).toEqual({ w: 170, h: wrappedNodeHeight({ label: long, description: criteria }, 170, true), dx: 0, dy: 0 });
+      });
+
+      it("other shapes keep their outline's insets: the column narrows, the box grows", () => {
+        const text = { label: long, description: criteria };
+        const card = wrappedNodeHeight(text, 170, true);
+        for (const shape of ["person", "cylinder", "pipe", "parallelogram"] as const) {
+          const h = wrappedNodeHeight(text, 170, true, shape);
+          expect(h, shape).toBeGreaterThan(card);
+          const box = wrappedTextBox(text, 170, h, true, shape);
+          expect(box.centred, shape).toBe(false);
+          // Settled: the card's text, measured in the room the shape leaves at
+          // that height, needs no more than the height.
+          expect(wrappedNodeHeight(text, 170 - 2 * box.inline, true) + box.top + box.bottom, shape).toBeLessThanOrEqual(h);
+        }
+        // A pipe's ends stop growing with it, so its text keeps a usable
+        // column however long it runs.
+        expect(wrappedNodeHeight(text, 170, true, "pipe")).toBeLessThan(card * 2);
+      });
+    });
+  });
+
+  it("grows a wrapped decision in proportion, about its middle, until its text sits inside", () => {
+    const question = {
+      label: "Same item already in flight?",
+      description: "checkouts_in_flight_idx: one preparing or purchasing checkout per operator and item.",
+    };
+    const raw = {
+      nodes: [
+        node({ id: "wrapped", kind: "decision", icon: "none", wrap: true, x: 100, y: 200, w: 250, h: 120, ...question }),
+        node({ id: "unwrapped", kind: "decision", icon: "none", x: 100, y: 400, w: 250, h: 120, ...question }),
+        node({ id: "roomy", kind: "decision", icon: "none", wrap: true, label: "Approved?", x: 100, y: 600, w: 250, h: 120 }),
+      ],
+    };
+    const t = validateTemplate(raw);
+    const at = (doc: DiagramTemplate, id: string) => doc.nodes.find((n) => n.id === id)!;
+    const grown = at(t, "wrapped");
+    // Bigger both ways, the same shape, the same middle.
+    expect(grown.w).toBeGreaterThan(250);
+    expect(grown.h).toBeGreaterThan(120);
+    expect(grown.w / grown.h).toBeCloseTo(250 / 120, 1);
+    expect(grown.x + grown.w / 2).toBeCloseTo(100 + 125, 0);
+    expect(grown.y + grown.h / 2).toBeCloseTo(200 + 60, 0);
+    // And it fits — far shorter than growing the height alone would need.
+    expect(wrappedNodeHeight({ ...question, kind: "decision" }, grown.w, false, "diamond")).toBeLessThanOrEqual(grown.h);
+    expect(grown.h).toBeLessThan(wrappedNodeHeight({ ...question, kind: "decision" }, 250, false, "diamond"));
+    // Unwrapped, or already roomy enough: left exactly as it was.
+    expect(at(t, "unwrapped")).toMatchObject({ x: 100, y: 400, w: 250, h: 120 });
+    expect(at(t, "roomy")).toMatchObject({ x: 100, y: 600, w: 250, h: 120 });
+    // Settled: validating the result again changes nothing, so a document
+    // does not creep bigger every time it is opened and saved.
+    expect(validateTemplate(t)).toEqual(t);
+  });
+
+  it("measures a host's own kind in the shape the options give it", () => {
+    const raw = { nodes: [node({ id: "gate", kind: "gate", icon: "none", wrap: true, w: 250, h: 120, label: "Same item already in flight?", description: "One preparing or purchasing checkout per operator and item." })] };
+    const asCard = validateTemplate(raw, { knownKinds: ["gate"] }).nodes[0]!;
+    const asDiamond = validateTemplate(raw, { knownKinds: ["gate"], kindShapes: { gate: "diamond" } }).nodes[0]!;
+    expect(asCard.w).toBe(250);
+    expect(asDiamond.w).toBeGreaterThan(250);
   });
 
   it("keeps frame styling only on container kinds, and only when non-default", () => {

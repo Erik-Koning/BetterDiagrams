@@ -43,6 +43,7 @@ import {
   uncrossFieldAnchors,
   withEndSlots,
   wrappedDescWidth,
+  wrappedTextBox,
   defaultTextAlign,
   type DiagramNode,
   type DiagramTemplate,
@@ -1769,17 +1770,28 @@ export function emitTemplate(
       cmds.push({ op: "path", d: sil.body, stroke: "#f8fafc", strokeWidth: 1.8, dash: [6, 6] });
     }
 
-    const cTop = sil.contentTop;
-    const cBottom = sil.contentBottom;
+    const rows = node.fields ?? [];
+    // A wrapped card reads like a document (`.as-node__below`): its
+    // description runs the card's full width under the icon and title, in the
+    // technical type it was measured in (`wrappedNodeHeight`) — in either mode.
+    const textBelow = !!node.wrap && !rows.length;
+    // In a shape, wrapped text keeps to the room it was measured in — for a
+    // diamond, a centred column fitted inside the outline — exactly as the
+    // canvas pads it (`wrappedTextBox`).
+    const room = textBelow
+      ? wrappedTextBox(node, box.width, box.height, !!node.icon && node.icon !== "none", def.shape ?? "card")
+      : { top: sil.contentTop, bottom: sil.contentBottom, inline: sil.contentInlinePad, centred: false };
+    const cTop = room.top;
+    const cBottom = room.bottom;
     const icon = iconPaths(registry, node.icon);
     // The card's own padding and the flex gap either side of the icon chip —
     // `.as-node` is 6px/12px with a 10px gap, and marketing widens both.
     const chipInset = skin.marketing ? 14 : 12;
     const chipGap = skin.marketing ? 12 : 10;
-    const textX = box.x + sil.contentInlinePad + (icon ? chipInset + skin.iconBox + chipGap : 14);
+    const textX = box.x + room.inline + (icon ? chipInset + skin.iconBox + chipGap : 14);
     // The shape's inset comes off the right as well as the left, as the
     // canvas's `paddingInline` does — or text runs into a diamond's corner.
-    const textW = box.width - (textX - box.x) - 10 - sil.contentInlinePad;
+    const textW = box.width - (textX - box.x) - 10 - room.inline;
     const kindText = def.label.toUpperCase();
     // After the kind: the lifecycle status, then a task's estimate.
     const pointsText = isTask && node.storyPoints !== undefined ? formatPoints(node.storyPoints).toUpperCase() : "";
@@ -1823,15 +1835,10 @@ export function emitTemplate(
     // after the title.
     const titleOverflow = Math.max(0, titleLines.length - 1) * lineH;
 
-    const rows = node.fields ?? [];
-    // A wrapped card reads like a document (`.as-node__below`): its
-    // description runs the card's full width under the icon and title, in the
-    // technical type it was measured in (`wrappedNodeHeight`) — in either mode.
-    const textBelow = !!node.wrap && !rows.length;
     const descSize = textBelow ? DESC_FONT_SIZE : skin.descSize;
     const descLineH = textBelow ? DESC_LINE_H : skin.descLineH;
-    const descX = textBelow ? box.x + sil.contentInlinePad + 14 : textX;
-    const descW = textBelow ? wrappedDescWidth(box.width) - 2 * sil.contentInlinePad : textW;
+    const descX = textBelow ? box.x + room.inline + 14 : textX;
+    const descW = textBelow ? wrappedDescWidth(box.width) - 2 * room.inline : textW;
     const descAnchorX = align === "center" ? descX + descW / 2 : align === "right" ? descX + descW : descX;
     // A node with rows holds its description to ONE line: the rows below are
     // placed by a shared formula, and a second line would shift every one of
@@ -1868,15 +1875,22 @@ export function emitTemplate(
     // the canvas closes it by having one fewer flex child.
     const TITLE_DY = eyebrow ? 31 : Math.round(fontSize * 1.2) + 2;
     const DESC_DY = TITLE_DY + 14;
-    const blockH = DESC_DY + titleOverflow + descLines.length * descLineH;
+    // A wrapped diamond centres its date with the rest of the block, as the
+    // canvas stacks it: 3px above a 17px chip.
+    const blockH =
+      DESC_DY + titleOverflow + descLines.length * descLineH + (room.centred && node.date ? 20 : 0);
     const slack = Math.max(0, box.height - cTop - cBottom - blockH);
-    const vShift = rows.length || textBelow
-      ? 0
-      : node.textVAlign === "top"
+    // Wrapped text reads from the top, as a document does — except in a
+    // diamond, which only has room for it in the middle.
+    const vShift = room.centred
+      ? slack / 2
+      : rows.length || textBelow
         ? 0
-        : node.textVAlign === "bottom"
-          ? slack
-          : slack / 2;
+        : node.textVAlign === "top"
+          ? 0
+          : node.textVAlign === "bottom"
+            ? slack
+            : slack / 2;
     const ty = (offset: number) => box.y + cTop + offset + vShift;
 
     const contentMidY = box.y + cTop + (box.height - cTop - cBottom) / 2;
@@ -1897,7 +1911,7 @@ export function emitTemplate(
           ? box.y + box.height - cBottom - iconInset
           : contentMidY;
     if (icon) {
-      const chipX = box.x + sil.contentInlinePad + chipInset;
+      const chipX = box.x + room.inline + chipInset;
       const chipY = iconMidY - skin.iconBox / 2;
       const glyph = skin.iconBox * (17 / 28);
       cmds.push({
@@ -2140,17 +2154,27 @@ export function emitTemplate(
       // thing this emitter exists to prevent.
       const below = rows.length
         ? listTop + rows.length * FIELD_ROW_H + 2
-        : ty(DESC_DY - 9 + descLines.length * descLineH);
+        : ty(DESC_DY - 9 + titleOverflow + descLines.length * descLineH);
+      // Aligned with the text it follows, as the canvas's inline chip is: in
+      // the middle of a centred node, at the end of a right-aligned one.
+      const chipW = dateChipW(node.date, node.startDate);
+      const dateX = rows.length
+        ? descX
+        : align === "center"
+          ? descX + (descW - chipW) / 2
+          : align === "right"
+            ? descX + descW - chipW
+            : descX;
       // Work's date is a due date: late once it passes unfinished, whatever
       // the lifecycle status says. A live page decides "late" itself, on the
       // day it is opened, so both chips go in as parts.
       if (live) {
         const date = node.date;
         const late = overdue.has(node.id);
-        liveParts.push({ name: "due", on: !late, draw: () => pushDateChip(date, descX, below, false, node.startDate) });
-        liveParts.push({ name: "due-late", on: late, draw: () => pushDateChip(date, descX, below, true, node.startDate) });
+        liveParts.push({ name: "due", on: !late, draw: () => pushDateChip(date, dateX, below, false, node.startDate) });
+        liveParts.push({ name: "due-late", on: late, draw: () => pushDateChip(date, dateX, below, true, node.startDate) });
       } else {
-        pushDateChip(node.date, descX, below, isWork ? overdue.has(node.id) : isOverdue(node.date, node.status), node.startDate);
+        pushDateChip(node.date, dateX, below, isWork ? overdue.has(node.id) : isOverdue(node.date, node.status), node.startDate);
       }
       dateBottom = below + DATE_CHIP_H;
     }

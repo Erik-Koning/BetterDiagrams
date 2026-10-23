@@ -5,12 +5,15 @@
  * "azure-functions", "gcp-pubsub") with the one-line hints the system prompt
  * teaches an LLM with. This file is the single source of truth for WHICH
  * components exist and what the prompt says about them; the react registry
- * (react/cloud-kinds.ts) maps the same ids to colors, icons, and shapes.
+ * (react/cloud-kinds.ts) maps the same ids to colors and icons. Shapes are
+ * here (`CLOUD_ROLE_SHAPES`) because validation measures a wrapped card
+ * inside its shape.
  *
  * Zero dependencies, like everything in contract/ — safe for a backend or an
  * LLM pipeline. Kind ids are provider-prefixed so two clouds' same-named
  * services ("api-gateway") can never collide.
  */
+import type { NodeShape } from "./shapes";
 
 export const CLOUD_PROVIDER_IDS = ["aws", "azure", "gcp"] as const;
 export type CloudProviderId = (typeof CLOUD_PROVIDER_IDS)[number];
@@ -139,6 +142,22 @@ export interface CloudSectionOptions {
  * backend or a host that never touches the react registry.
  */
 export const ALL_CLOUD_KIND_IDS: readonly string[] = cloudKindIds(CLOUD_PROVIDER_IDS);
+
+/** The silhouette a role draws as, where it is not a card. */
+export const CLOUD_ROLE_SHAPES: Readonly<Partial<Record<CloudComponentRole, NodeShape>>> = {
+  database: "cylinder",
+  queue: "pipe",
+};
+
+/** Every cloud kind that draws as something other than a card, and its shape. */
+export const CLOUD_KIND_SHAPES: Readonly<Record<string, NodeShape>> = Object.fromEntries(
+  CLOUD_PROVIDER_IDS.flatMap((provider) =>
+    CLOUD_COMPONENTS[provider].flatMap((component) => {
+      const shape = CLOUD_ROLE_SHAPES[component.role];
+      return shape ? [[component.id, shape] as const] : [];
+    }),
+  ),
+);
 
 /**
  * The prompt appendix for the selected clouds — appended AFTER the base
