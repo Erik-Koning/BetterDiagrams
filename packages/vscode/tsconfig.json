@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": false,
+    "noEmit": true,
+    "types": ["node", "vscode"],
+    // The library from source, as the builds take it (see the vite configs).
+    "paths": {
+      "@mosphere/better-diagrams": ["../better-diagrams/src/index.ts"],
+      "@mosphere/better-diagrams/disk": ["../better-diagrams/src/disk/index.ts"]
+    }
+  },
+  "include": ["src", "test", "*.config.ts"]
+}

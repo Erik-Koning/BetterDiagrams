@@ -57,6 +57,12 @@ jobs:
         if: matrix.react == '18'
         run: npm run api:check -w @mosphere/better-diagrams
 
+      - name: The VS Code extension typechecks and its sync rules hold
+        if: matrix.react == '18'
+        run: |
+          npm run typecheck -w better-diagrams-vscode
+          npm run test -w better-diagrams-vscode
+
       - name: The package as npm would publish it
         if: matrix.react == '18'
         working-directory: packages/better-diagrams
@@ -77,6 +83,8 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      # The VS Code extension's webview, built, in the same Chromium.
+      - run: npm run test:webview -w better-diagrams-vscode
       - name: Keep the report when something failed
         if: failure()
         uses: actions/upload-artifact@v4

@@ -9,6 +9,9 @@
   "scripts": {
     "build": "npm run build -w @mosphere/better-diagrams",
     "build:app": "npm run build:app -w example",
+    "build:vscode": "npm run build -w better-diagrams-vscode",
+    "package:vscode": "npm run package -w better-diagrams-vscode",
+    "release:vscode": "npm run release -w better-diagrams-vscode",
     "dev": "npm run dev -w example",
     "test": "npm run test -w @mosphere/better-diagrams",
     "typecheck": "npm run typecheck -w @mosphere/better-diagrams",

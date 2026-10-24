@@ -13,7 +13,8 @@ npm install @mosphere/better-diagrams
 packages/better-diagrams/
   src/contract/    zero-dependency: the document, validation, prompt, layout, clipboard
   src/react/       the editor component, registry, exporters
-example/           a small React JS app that integrates it
+example/           a small React JS app that integrates it (the `better-diagrams` command serves it)
+packages/vscode/   the VS Code extension: the same editor, for a diagram's .json in VS Code
 legacy/            the original single-file prototype, superseded
 ```
 
@@ -39,7 +40,8 @@ npm run build      # builds the library to packages/better-diagrams/dist
 
 A repo that keeps its diagrams beside its code opens them without a checkout of this one:
 `npx @mosphere/better-diagrams docs/BetterDiagram.json` serves the editor with that file live — see
-**Diagrams in another repo, without this one** below, beside **Live files on disk**.
+**Diagrams in another repo, without this one** below, beside **Live files on disk**. In VS Code,
+the extension opens the same file in the same editor, in a tab — see **VS Code** below.
 
 The end-to-end suite starts its own dev server on :5174 and drives the example in
 Chromium — first run `npx playwright install chromium`. It never writes to
@@ -1903,6 +1905,9 @@ npx @mosphere/better-diagrams                                # link this folder:
 npx @mosphere/better-diagrams docs/arch/Context.json --new   # start one that isn't there yet
 ```
 
+Installed once (`npm install -g @mosphere/better-diagrams`), it's `better-diagrams
+docs/BetterDiagram.json` from any folder.
+
 It links the folders it's given (this one by default) and opens the browser at the first file;
 everything above works the same — live files, Save as…, the question before a lossy save,
 Prettier formatting — with outside edits reaching the page as Server-Sent Events rather than
@@ -2288,6 +2293,45 @@ is dragged by its label bar, so the space between its children is free for a rub
 **Right-click** anything for the actions that apply to it. Drop a `.json` template file on the
 canvas to load it — as a new file beside a diagram with more than one top-level node, when the host
 manages files; otherwise in place, asking first when that replaces something.
+
+## VS Code
+
+`packages/vscode` is a VS Code extension that opens a diagram's `.json` in the same editor:
+**Open With… → Better Diagrams** on any `.json`, or the **Open Diagram to the Side** button a
+diagram's JSON gets in its title bar. Its webview renders the library's `ArchitectureStudio` and
+`SequenceStudio` with the web app's own document handling — `example/src/documents.js`, which
+`App.jsx` imports too: the registry, the registry-aware validation, the report of what an edit
+would drop, and the default view (marketing cards, no minimap) — so a file looks the same in
+VS Code, in the browser the `better-diagrams` command opens, and in `npm run dev`. Light or dark
+follows VS Code's colour theme (`betterDiagrams.theme` pins one).
+
+The file's text in VS Code is the only copy: an edit in the diagram is one edit of the text,
+formatted as the `better-diagrams` command formats a save (the repo's own Prettier and config,
+by `formatDiagram`), so ⌘Z, the dirty dot, ⌘S and source control are VS Code's own, and typing
+in the JSON beside it moves the picture. The first edit that would drop something asks first;
+JSON that isn't a diagram (by the disk store's `isDiagram`) is never written over; opening a file
+never changes it. Exports ask where to save, and a `file:Name` link opens the diagram it names
+beside it.
+
+**Agents.** The extension hands an agent the format and a check of what it wrote. For agents in
+VS Code's chat there are two language model tools: `#betterDiagramsSchema` (the prompt the
+copy-schema button copies, with the app's registry, tailored to a kind, clouds or an existing
+file) and `#betterDiagramsValidate` (what the editor would repair or drop in a file, and its
+Checks). For agents that read files instead, **Better Diagrams: Add Agent Instructions…** writes
+the same format into the repo and points `AGENTS.md`, `CLAUDE.md` or
+`.github/copilot-instructions.md` at it.
+
+```bash
+npm run build:vscode     # packages/vscode/dist
+npm run package:vscode   # packages/vscode/better-diagrams.vsix
+code --install-extension packages/vscode/better-diagrams.vsix
+npm run release:vscode   # publish it to the VS Code Marketplace and Open VSX (VSCE_PAT, OVSX_PAT)
+```
+
+Its tests: `npm test -w better-diagrams-vscode` (the sync rules and the agent text), `npm run test:webview -w
+better-diagrams-vscode` (the built webview in Chromium, under its own content security policy),
+and `npm run test:vscode -w better-diagrams-vscode` (the extension in a real VS Code window).
+See `packages/vscode/README.md`.
 
 ## Packaging
 

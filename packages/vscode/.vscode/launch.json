@@ -1,0 +1,13 @@
+{
+  // F5: the extension in an Extension Development Host, from dist/ (`npm run build` first).
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Better Diagrams",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/dist/**/*.cjs"]
+    }
+  ]
+}

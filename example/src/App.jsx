@@ -35,12 +35,10 @@ import {
   themeToStyle,
   importFolder,
   readsAsPlan,
-  validateSequence,
   validateTemplate,
-  validateTemplateReport,
 } from "@mosphere/better-diagrams";
 import "@mosphere/better-diagrams/styles.css";
-import { registry } from "./extensions.js";
+import { DEFAULT_VIEW, VALIDATE, completeTheme, lossOf, registry, studioTheme, templateFile, validateDoc } from "./documents.js";
 import {
   LINKED_PREFIX,
   SCRATCH,
@@ -56,7 +54,6 @@ import {
   readTemplate,
   removeTemplate,
   saveFileAs,
-  templateFile,
   unlinkFile,
   unlinkFolder,
   writeTemplate,
@@ -70,48 +67,6 @@ const LEGACY_SEQ_KEY = "architecture-studio:example-sequence";
 
 let fileCounter = 0;
 const nextFileId = () => `f_${Date.now().toString(36)}${(fileCounter++).toString(36)}`;
-
-/**
- * Registry-aware, like the folder import below: a plain `validateTemplate`
- * knows only the built-in kinds and rewrites every other one to "service",
- * so a data model read back from localStorage or a template file would lose
- * its entities before the studio ever saw it.
- */
-const VALIDATE = { knownKinds: Object.keys(registry.nodeKinds) };
-const validateDoc = (kind, doc) =>
-  kind === "sequence" ? validateSequence(doc) : validateTemplate(doc, VALIDATE);
-
-/**
- * What saving `doc` — validated from `raw`, a file read from disk — would
- * drop from that file: one sentence each. Validation repairs rather than
- * rejects, so a key this editor doesn't know, a value outside its vocabulary
- * or an edge to nowhere loads fine and is simply gone from the next save.
- * Architecture files get the library's own report; a sequence, the keys that
- * didn't survive.
- */
-function lossOf(kind, raw, doc) {
-  if (kind !== "sequence") return validateTemplateReport(raw, VALIDATE).issues.map((issue) => issue.message);
-  const lost = [];
-  const walk = (given, kept, at) => {
-    if (Array.isArray(given)) {
-      const keptById = new Map((Array.isArray(kept) ? kept : []).map((el) => [el?.id, el]));
-      given.forEach((el, i) => {
-        const match = el && typeof el === "object" && "id" in el ? keptById.get(el.id) : Array.isArray(kept) ? kept[i] : undefined;
-        if (match === undefined) lost.push(`${at}/${i} isn't something a sequence keeps, so it was dropped.`);
-        else walk(el, match, `${at}/${i}`);
-      });
-      return;
-    }
-    if (!given || typeof given !== "object") return;
-    for (const [key, value] of Object.entries(given)) {
-      if (value === undefined || value === null || value === "") continue;
-      if (!kept || typeof kept !== "object" || !(key in kept)) lost.push(`"${key}" at ${at || "/"} isn't a sequence property, so it was dropped.`);
-      else walk(value, kept[key], `${at}/${key}`);
-    }
-  };
-  walk(raw, doc, "");
-  return lost;
-}
 
 /** `3 things` — counted the way a person reads it. */
 const thingsOf = (n) => `${n} ${n === 1 ? "thing" : "things"}`;
@@ -332,17 +287,17 @@ export default function App() {
   const [workspace, setWorkspace] = useState(seedWorkspace);
   const [savedAt, setSavedAt] = useState(null);
   const [readOnly, setReadOnly] = useState(false);
-  const [minimap, setMinimap] = useState(false);
-  const [mode, setMode] = useState("light");
+  const [minimap, setMinimap] = useState(DEFAULT_VIEW.minimap);
+  const [mode, setMode] = useState(DEFAULT_VIEW.mode);
   // "technical" | "marketing" — the editor's presentation mode, independent
   // of light/dark.
-  const [studioMode, setStudioMode] = useState("marketing");
+  const [studioMode, setStudioMode] = useState(DEFAULT_VIEW.studioMode);
   // Marketing's one setting: its gradients, or one flat coat per card. Kept
   // while the mode is technical (where it is inert) so flipping back to
   // marketing finds it where it was left.
-  const [gradients, setGradients] = useState(false);
+  const [gradients, setGradients] = useState(DEFAULT_VIEW.gradients);
   // Draw a connection only while the pointer is over a node it touches.
-  const [edgesOnHover, setEdgesOnHover] = useState(false);
+  const [edgesOnHover, setEdgesOnHover] = useState(DEFAULT_VIEW.edgesOnHover);
   // null = "use the active theme's accent"; set once the user picks a colour.
   const [accent, setAccent] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(false);
@@ -622,26 +577,12 @@ export default function App() {
 
   // ── Presentation state ────────────────────────────────────────────────────
 
-  // LIGHT_THEME is a complete token set; dark is the stylesheet's default, so
-  // it needs no theme at all. Either way a hand-picked accent wins.
-  const theme = useMemo(
-    () => ({
-      ...(mode === "light" ? LIGHT_THEME : {}),
-      ...(accent ? { accent } : {}),
-    }),
-    [mode, accent],
-  );
+  // See studioTheme in documents.js: dark needs no theme, a picked accent wins.
+  const theme = useMemo(() => studioTheme(mode, accent), [mode, accent]);
   // The Edit-JSON modal renders OUTSIDE the studio roots, so its wrapper must
-  // carry a COMPLETE token set — the empty-dark shorthand above would leave
-  // every --as-* variable undefined out there, and the modal renders
-  // transparent over the live canvas.
-  const modalTheme = useMemo(
-    () => ({
-      ...(mode === "light" ? LIGHT_THEME : DARK_THEME),
-      ...(accent ? { accent } : {}),
-    }),
-    [mode, accent],
-  );
+  // carry a COMPLETE token set, or the modal renders transparent over the
+  // live canvas.
+  const modalTheme = useMemo(() => completeTheme(mode, accent), [mode, accent]);
   const themeAccent = accent ?? (mode === "light" ? LIGHT_THEME.accent : DARK_THEME.accent);
 
   // Prompt context for the Edit-JSON modal, computed from the LIVE document

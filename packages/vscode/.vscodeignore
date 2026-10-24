@@ -1,0 +1,10 @@
+# Only what the extension runs: the two bundles, the manifest, its pages and its icon.
+**
+!dist/extension.cjs
+!dist/webview.js
+!dist/webview.css
+!media/icon.png
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE
