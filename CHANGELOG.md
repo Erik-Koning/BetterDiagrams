@@ -53,6 +53,9 @@ This changelog starts with the editing API (October 2026). For what changed betw
   `registryValidateOptions` now fills from the registry, so validation measures a wrapped card in
   its kind's shape. `wrappedNodeHeight` takes the `shape`; `wrapText` and `wrappedLineCount` take
   `breakWords`, which cuts a word too wide for the line as `overflow-wrap: anywhere` does.
+- `hostHistory` (`HostHistory`) on both editors: a host that keeps the document's undo history
+  itself (the VS Code extension: its text's) gets the toolbar's Undo and Redo and `⌘Z`, `⇧⌘Z`
+  and `⌘Y`, so there is one history rather than two. The handle's `undo` and `redo` are unchanged.
 
 ### Changed
 
@@ -100,6 +103,10 @@ This changelog starts with the editing API (October 2026). For what changed betw
 
 ### Fixed
 
+- Marketing cards keep their fills and icon strokes on a page that declares no `color-scheme` of
+  its own. Built for browsers without `light-dark()` (Vite's lightningcss does this, for this
+  package's stylesheet and most hosts'), those paints only switch under a literal `color-scheme`,
+  which the root now declares from the theme, as `data-color-scheme`.
 - The types compile under `@types/react` 19, and the suite passes on React 19; CI now runs both.
 - Deleting a node also drops the per-view layout (`meta.views`) recorded for it.
 - Exports that split a document into content and layout now keep custom annotation kinds' options.

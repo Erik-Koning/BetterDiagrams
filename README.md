@@ -108,6 +108,7 @@ shadow.
 | `onOpenFile` | `() => Promise<File \| null>` | Run **Open file…** through the host instead of the browser's picker, which never says where a file lives. The host shows its own dialog: a diagram JSON picked there it links and opens, as `onLinkFile` does, and resolves `null` (as it does on a cancel); any other file it resolves as a `File`, which the editor reads in as a copy, as Open file… always has. The example app has its dev server show the system's dialog for it. Both editors take it. |
 | `onNewFileOnDisk` | `() => void` | Offer **New file on disk…** right after **Link a file on disk…**, in the Import menu and on the welcome modal: the same thing for a file that isn't there yet. The host does the picking, making and linking (the example app has its dev server show the system's save dialog, makes a blank diagram of the open file's kind there, titled after its name, and opens it live; a name picked that is there already is linked as it is, never written over); the editor only calls back. Both editors take it. |
 | `onSaveFileAs` | `() => void` | Offer **Save as…** in the file menu, and on `⇧⌘S`. The host does the picking and writing (the example app has its dev server show the system's save dialog, writes the file there and keeps editing it there, as if it had been opened from there); the editor only calls back. Both editors take it. |
+| `hostHistory` | `HostHistory` | Leave the undo history to the host: the toolbar's Undo and Redo, and `⌘Z`, `⇧⌘Z` and `⌘Y`, call its `undo` and `redo` instead of stepping the editor's own, and the host's next `value` shows the result. For a host whose file already has an undo (the VS Code extension: the text's), so there is one history, not two. The buttons stay enabled unless `canUndo` / `canRedo` is `false`; the handle's `undo` and `redo` still step the editor's own. Both editors take it. |
 | `onNavigateFile` | `(ref) => void` | Fired when a node url with the `file:` prefix (e.g. `file:Order flow`) has its ↗ clicked — resolve by id, then name, and switch documents. |
 | `onSelectionChange` | `(sel) => void` | The canvas selection in **document terms** — ids bucketed by template section (`{ nodes, edges, zones }` here; `{ participants, messages, activations, fragments, notes }` on the sequence editor), so a host can mirror it, e.g. highlight the matching entries of a live JSON view (the example app does exactly this). Fires on mount too, so a host that remounts per file never keeps a stale selection. |
 | `onPinsChange` | `(pins: Pin[]) => void` | The **pins** — a field (`{ nodeId, fieldId }`) or a whole table (`{ nodeId }`) — mirrored like the two above: fires on mount (empty) and on every change. View state — never in the document; a pin is dropped when its node leaves the document. See **Fields beyond the rows** below. |
@@ -150,11 +151,13 @@ border, a shadow you can actually see, and an icon chip that **inverts**: a pale
 near-saturated glyph, rather than a pool of the kind's colour that would only wash an
 already-tinted card twice. The stylesheet does this with `light-dark()`, which reads the
 `colorScheme` token — `LIGHT_THEME` sets it; a partial theme that omits it is read as dark, exactly
-as the browser already reads it for its own widgets.
+as the browser already reads it for its own widgets. The root declares it as a literal
+`color-scheme` too (from `data-color-scheme`), which is what `light-dark()` reads once a build has
+compiled it for older browsers, as Vite's does; a host page needn't declare one of its own.
 
-The root element carries `as-root--marketing` and `data-mode`, so a host stylesheet can reach in;
-technical adds no class at all, so existing host CSS keeps matching exactly what it matched before.
-Cards that are set to wrap keep their technical font sizes and chip width, because the stored
+The root element carries `as-root--marketing`, `data-mode` and `data-color-scheme`, so a host
+stylesheet can reach in; technical adds no class at all, so existing host CSS keeps matching
+exactly what it matched before. Cards that are set to wrap keep their technical font sizes and chip width, because the stored
 height was measured with those, and a sequence participant's name stops one step short of a card
 title's for the same reason — its header is a fixed lane box.
 

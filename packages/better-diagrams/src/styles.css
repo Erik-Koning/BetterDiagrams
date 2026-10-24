@@ -130,6 +130,22 @@
 }
 
 /*
+ * The same scheme again, written LITERALLY, keyed off the `data-color-scheme`
+ * the root takes from the theme. `light-dark()` (the marketing cards' paints,
+ * below) gets compiled by lightningcss — Vite's CSS minifier, for this build
+ * and for most hosts' — into a pair of variables that only a literal
+ * `color-scheme` declaration switches, and the `var()` above isn't one. Without
+ * these, every one of those paints resolves to nothing (no card fill, no icon
+ * stroke) on any page that doesn't happen to declare a scheme of its own.
+ */
+.as-root[data-color-scheme="dark"] {
+  color-scheme: dark;
+}
+.as-root[data-color-scheme="light"] {
+  color-scheme: light;
+}
+
+/*
  * ── Stacking order ──────────────────────────────────────────────────────────
  *
  * One ledger for the whole editor. Everything below shares the page's root
@@ -6689,7 +6705,8 @@ button.as-task__check--blocked {
  * that has no accent — the trap `--as-node-ink` is declared on `.as-node` to
  * dodge, and the one that quietly left every resting card's shadow the same
  * grey. And `light-dark()` reads the element's `color-scheme`, which the root
- * sets from the theme's `colorScheme` (LIGHT_THEME sets it; a partial theme
+ * sets from the theme's `colorScheme`, literally (see `[data-color-scheme]`
+ * above; LIGHT_THEME sets it; a partial theme
  * that omits it is read as dark here, exactly as the browser already reads it
  * for its own widgets).
  *

@@ -142,6 +142,7 @@ import {
   NEW_FILE_HINT,
   copyNote,
   type CanvasTool,
+  type HostHistory,
   type ImportReport,
   type StudioFile,
   type StudioFileInit,
@@ -249,6 +250,7 @@ import {
   modeLayoutOptions,
   paletteFromTheme,
   resolveStudioMode,
+  colorSchemeOf,
   themeToStyle,
   type StudioMode,
   type Theme,
@@ -593,6 +595,14 @@ export interface ArchitectureStudioProps {
    * menu and on ⇧⌘S. Absent, neither offers it.
    */
   onSaveFileAs?: () => void;
+  /**
+   * Leave the document's undo history to the host: the toolbar's Undo and
+   * Redo, ⌘Z, ⇧⌘Z and ⌘Y call these instead of stepping the editor's own,
+   * and the host's next `value` shows the result. For a host whose file has
+   * an undo of its own (the VS Code extension: the text's), so there is one
+   * history, not two. The handle's `undo` and `redo` still step the editor's.
+   */
+  hostHistory?: HostHistory;
   onNavigateFile?: (ref: string) => void;
   /**
    * Fires with the {@link StudioSelection} on mount (empty) and whenever it
@@ -930,6 +940,7 @@ function StudioInner({
   onOpenFile,
   onNewFileOnDisk,
   onSaveFileAs,
+  hostHistory,
   onNavigateFile,
   onSelectionChange: onHostSelectionChange,
   onFocusChange,
@@ -4321,6 +4332,13 @@ function StudioInner({
     return !!snapshot;
   }, [redoHistory, applySnapshot]);
 
+  // What the toolbar's Undo and Redo and the history keys do: the host's
+  // history when it keeps one, else this editor's.
+  const undoStep = useCallback(() => (hostHistory ? hostHistory.undo() : void doUndo()), [hostHistory, doUndo]);
+  const redoStep = useCallback(() => (hostHistory ? hostHistory.redo() : void doRedo()), [hostHistory, doRedo]);
+  const undoDisabled = hostHistory ? hostHistory.canUndo === false : !history.canUndo;
+  const redoDisabled = hostHistory ? hostHistory.canRedo === false : !history.canRedo;
+
   // ── Drill navigation (C4 levels) ──────────────────────────────────────────
 
   /** Set the whole focus stack — the one write path for drill state. */
@@ -6967,13 +6985,13 @@ function StudioInner({
       // ── History ──
       if (mod && key === "z") {
         event.preventDefault();
-        if (event.shiftKey) doRedo();
-        else doUndo();
+        if (event.shiftKey) redoStep();
+        else undoStep();
         return;
       }
       if (mod && key === "y") {
         event.preventDefault();
-        doRedo();
+        redoStep();
         return;
       }
 
@@ -7238,7 +7256,7 @@ function StudioInner({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doUndo, doRedo, deleteSelection, onSave, onSaveFileAs, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, pathPanelOpen, refPanel, closeRefPanel, coverageOpen, usageOpen, analysis.state, closeAnalysis, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
+  }, [undoStep, redoStep, deleteSelection, onSave, onSaveFileAs, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, pathPanelOpen, refPanel, closeRefPanel, coverageOpen, usageOpen, analysis.state, closeAnalysis, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
 
   // ── Zone resize gesture ───────────────────────────────────────────────────
   //
@@ -7474,6 +7492,7 @@ function StudioInner({
         ref={rootRef}
         className={`as-root${modeClass ? ` ${modeClass}` : ""}${className ? ` ${className}` : ""}`}
         data-mode={studioMode}
+        data-color-scheme={colorSchemeOf(rootStyle)}
         style={rootStyle}
         onPointerDownCapture={() => {
           activeStudio = studioId;
@@ -8371,8 +8390,8 @@ function StudioInner({
               <button
                 type="button"
                 className="as-btn as-btn--icon"
-                onClick={doUndo}
-                disabled={!history.canUndo}
+                onClick={undoStep}
+                disabled={undoDisabled}
                 title={`Undo (${modKey}Z)`}
                 aria-label="Undo"
               >
@@ -8381,8 +8400,8 @@ function StudioInner({
               <button
                 type="button"
                 className="as-btn as-btn--icon"
-                onClick={doRedo}
-                disabled={!history.canRedo}
+                onClick={redoStep}
+                disabled={redoDisabled}
                 title={`Redo (⇧${modKey}Z)`}
                 aria-label="Redo"
               >

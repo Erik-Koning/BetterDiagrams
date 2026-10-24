@@ -73,6 +73,7 @@ export interface ArchitectureStudioProps {
     files?: StudioFile[];
     generate?: DiagramGenerator;
     gradients?: boolean;
+    hostHistory?: HostHistory;
     inspectorExtras?: ReactNode | ((ctx: StudioSlotContext) => ReactNode);
     legend?: boolean;
     minimap?: boolean;
@@ -1909,6 +1910,14 @@ export function hasOverlaps(template: DiagramTemplate, opts?: {
 // @public
 export type HopMultiplicity = "one" | "many" | "unknown";
 
+// @public
+export interface HostHistory {
+    canRedo?: boolean;
+    canUndo?: boolean;
+    redo: () => void;
+    undo: () => void;
+}
+
 // @public (undocumented)
 export interface HtmlExplorerData {
     analyses?: SavedAnalysis[];
@@ -3507,6 +3516,7 @@ export interface SequenceStudioProps {
     files?: StudioFile[];
     generate?: DiagramGenerator;
     gradients?: boolean;
+    hostHistory?: HostHistory;
     // (undocumented)
     inspectorExtras?: ReactNode;
     mode?: StudioMode;
