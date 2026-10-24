@@ -107,6 +107,8 @@ This changelog starts with the editing API (October 2026). For what changed betw
   its own. Built for browsers without `light-dark()` (Vite's lightningcss does this, for this
   package's stylesheet and most hosts'), those paints only switch under a literal `color-scheme`,
   which the root now declares from the theme, as `data-color-scheme`.
+- `better-diagrams file.json --no-open` printed the editor's bare address, which opens on its
+  starter diagram; it prints the link that opens the file, the one a browser would be sent to.
 - The types compile under `@types/react` 19, and the suite passes on React 19; CI now runs both.
 - Deleting a node also drops the per-view layout (`meta.views`) recorded for it.
 - Exports that split a document into content and layout now keep custom annotation kinds' options.

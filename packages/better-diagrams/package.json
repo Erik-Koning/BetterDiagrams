@@ -179,7 +179,7 @@
     "vitest": "^5.0.3"
   },
   "bin": {
-    "bd-folder": "./bin/bd-folder.mjs",
-    "better-diagrams": "./bin/better-diagrams.mjs"
+    "bd-folder": "bin/bd-folder.mjs",
+    "better-diagrams": "bin/better-diagrams.mjs"
   }
 }
