@@ -2325,7 +2325,6 @@ the same format into the repo and points `AGENTS.md`, `CLAUDE.md` or
 npm run build:vscode     # packages/vscode/dist
 npm run package:vscode   # packages/vscode/better-diagrams.vsix
 code --install-extension packages/vscode/better-diagrams.vsix
-npm run release:vscode   # publish it to the VS Code Marketplace and Open VSX (VSCE_PAT, OVSX_PAT)
 ```
 
 Its tests: `npm test -w better-diagrams-vscode` (the sync rules and the agent text), `npm run test:webview -w
@@ -2359,14 +2358,48 @@ shape — every signature, prop and type — in the API reports under `packages/
 (`npm run api:update` after a build rewrites them; CI fails while they differ from the build). A
 change to the public API therefore arrives as a diff someone reviews. Releases are listed in
 `CHANGELOG.md`. CI (`.github/workflows/ci.yml`) typechecks and tests the library on React 18 and
-19, checks the API reports, lints the packed tarball with publint and arethetypeswrong, and runs
-the end-to-end suite.
+19, checks the API reports, lints the packed tarball with publint and arethetypeswrong, runs the
+`better-diagrams` command from it (`scripts/smoke-cli.mjs`), and runs the end-to-end suite.
 
 **Documents.** Documents carry a `version`, and `migrateTemplate` runs them up to `CURRENT_VERSION` through a
 registered migration chain. A document from a **newer** build throws rather than being coerced —
 silently dropping fields a future release added would turn "open an old client" into irreversible
 data loss on the next save. `MIGRATIONS` is empty today; the hook exists so v2 has somewhere to
 go.
+
+## Releasing
+
+Releases publish from CI, never from a working tree: a tag runs the CI that guards `main` on the
+tagged commit, then waits for you to approve before anything is published.
+
+- **The library**: tag `v<version>`, the version in `packages/better-diagrams/package.json`.
+  `.github/workflows/release-npm.yml` publishes it to npm by trusted publishing (OIDC — there is
+  no npm token anywhere), with provenance. A prerelease (`0.2.0-beta.1`) goes out under `beta`,
+  never `latest`.
+- **The VS Code extension**: tag `vscode-v<version>`, the version in
+  `packages/vscode/package.json`. `.github/workflows/release-vscode.yml` packages the `.vsix` once,
+  publishes that file to Open VSX and the VS Code Marketplace, and attaches it to a GitHub Release.
+
+```bash
+# bump the version and its CHANGELOG heading, merge to main, then:
+git tag v0.1.0 && git push origin v0.1.0                 # the library
+git tag vscode-v0.1.0 && git push origin vscode-v0.1.0   # the extension
+```
+
+Either workflow run by hand (Actions → Run workflow, on `main`) rehearses — the same checks and
+build, then `npm publish --dry-run` or each store's sign-in check — and never publishes.
+`npm run release:dry` rehearses the npm side locally.
+
+Once, before the first release:
+
+1. **npm.** On npmjs.com, `@mosphere/better-diagrams` → Settings → Trusted Publisher → GitHub
+   Actions: `Erik-Koning` / `BetterDiagrams`, workflow `release-npm.yml`, environment `npm`. A
+   trusted publisher that hasn't published within two days lapses, so add it just before the
+   first tag. After that publish, Publishing access → *Require two-factor authentication and
+   disallow tokens*.
+2. **GitHub.** An environment `npm` with you as its required reviewer, deployments allowed from
+   `main` and `v*` tags.
+3. **The extension's stores**: `packages/vscode/README.md` → Publishing.
 
 ## Known issue
 

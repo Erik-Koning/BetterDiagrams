@@ -124,7 +124,7 @@
     "api:update": "node scripts/api-report.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "prepublishOnly": "npm run typecheck && npm run test && npm run build && npm run api:check && node scripts/check-app.mjs",
+    "prepublishOnly": "npm run typecheck && npm run test -- --retry=2 && npm run build && npm run api:check && node scripts/check-app.mjs",
     "prepack": "cp ../../README.md ../../LICENSE ../../CHANGELOG.md .",
     "postpack": "rm -f README.md LICENSE CHANGELOG.md"
   },

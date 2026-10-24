@@ -99,7 +99,7 @@
                   "gcp"
                 ]
               },
-              "description": "Clouds whose component kinds (aws-lambda, azure-functions\u2026) the diagram may use. Default: the ones the file already uses, else none."
+              "description": "Clouds whose component kinds (aws-lambda, azure-functions…) the diagram may use. Default: the ones the file already uses, else none."
             },
             "geometry": {
               "type": "boolean",
@@ -123,7 +123,7 @@
           "diagrams"
         ],
         "userDescription": "Check a Better Diagrams file the way the editor reads it.",
-        "modelDescription": "Checks a Better Diagrams diagram the way the Better Diagrams editor reads it: whether it parses and is a diagram, what the editor would repair or drop when it opens it (unknown keys, values outside the vocabulary, edges to nothing), and the diagram's checks (unconnected components, cycles, \u2026). Call it after writing or editing a diagram file, and fix what it reports. Reads the file as VS Code has it, unsaved edits included.",
+        "modelDescription": "Checks a Better Diagrams diagram the way the Better Diagrams editor reads it: whether it parses and is a diagram, what the editor would repair or drop when it opens it (unknown keys, values outside the vocabulary, edges to nothing), and the diagram's checks (unconnected components, cycles, …). Call it after writing or editing a diagram file, and fix what it reports. Reads the file as VS Code has it, unsaved edits included.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -160,12 +160,12 @@
       },
       {
         "command": "betterDiagrams.new",
-        "title": "New Diagram File\u2026",
+        "title": "New Diagram File…",
         "category": "Better Diagrams"
       },
       {
         "command": "betterDiagrams.addAgentInstructions",
-        "title": "Add Agent Instructions\u2026",
+        "title": "Add Agent Instructions…",
         "category": "Better Diagrams"
       }
     ],
@@ -231,10 +231,7 @@
     "test": "vitest run",
     "test:webview": "npm run build && playwright test",
     "test:vscode": "npm run build && node test/vscode/run.mjs",
-    "package": "npm run build && cp ../../LICENSE LICENSE && npx --yes @vscode/vsce@3 package --no-dependencies --out better-diagrams.vsix; status=$?; rm -f LICENSE; exit $status",
-    "publish:marketplace": "npx --yes @vscode/vsce@3 publish --packagePath better-diagrams.vsix",
-    "publish:openvsx": "npx --yes ovsx@0 publish better-diagrams.vsix",
-    "release": "npm run package && npm run publish:marketplace && npm run publish:openvsx"
+    "package": "npm run build && cp ../../LICENSE LICENSE && vsce package --no-dependencies --out better-diagrams.vsix; status=$?; rm -f LICENSE; exit $status"
   },
   "devDependencies": {
     "@mosphere/better-diagrams": "*",
@@ -243,6 +240,8 @@
     "@types/react-dom": "^18.3.1",
     "@types/vscode": "~1.95.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "@vscode/vsce": "4.0.0",
+    "ovsx": "1.3.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "typescript": "^7.0.2",

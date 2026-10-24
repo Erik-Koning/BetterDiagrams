@@ -1,0 +1,70 @@
+# A tag v<version> publishes @mosphere/better-diagrams to npm. The CI that
+# guards main runs on the tagged commit; then, once you approve the `npm`
+# environment, npm publishes it by OIDC trusted publishing — no token
+# anywhere — with a provenance attestation. A prerelease version (x.y.z-…)
+# goes out under `beta`, never `latest`. Only committed code can ship: the
+# package is built from the tag, not from anyone's working tree.
+#
+# Run it by hand (Actions → Release npm → Run workflow, on main) to rehearse:
+# the same checks and build, then `npm publish --dry-run`. A run by hand
+# never publishes.
+#
+# One-time setup: README.md → Releasing.
+name: Release npm
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: checks
+    runs-on: ubuntu-latest
+    # npm's trusted publisher names this file and this environment.
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      DRY_RUN: ${{ github.event_name != 'push' }}
+    steps:
+      - uses: actions/checkout@v5
+      # Node 24's npm (11) is new enough for trusted publishing (11.5.1+).
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+
+      - name: The tag names the package's version
+        id: version
+        working-directory: packages/better-diagrams
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "$DRY_RUN" != true ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::$GITHUB_REF_NAME doesn't name the package's version, $version"
+            exit 1
+          fi
+          case "$version" in *-*) tag=beta ;; *) tag=latest ;; esac
+          echo "$version under $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # The editor the better-diagrams command serves (app/).
+      - run: npm run build:app
+
+      # prepublishOnly checks it all again first: types, tests, build, API reports, app/.
+      - name: Publish
+        working-directory: packages/better-diagrams
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            npm publish --tag "${{ steps.version.outputs.tag }}" --dry-run
+          else
+            npm publish --tag "${{ steps.version.outputs.tag }}"
+          fi

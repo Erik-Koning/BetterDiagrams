@@ -93,12 +93,36 @@ npm test               # the sync rules and the agent text (Vitest)
 npm run test:webview   # the webview, built, in Chromium under its own CSP (Playwright)
 npm run test:vscode    # the extension in a real VS Code window, with a throwaway profile
 npm run package        # better-diagrams.vsix — `code --install-extension better-diagrams.vsix`
-npm run release        # package it, then publish it to the VS Code Marketplace and Open VSX
 ```
 
-`release` publishes as the `mosphere` publisher: it needs that publisher on the
-[Marketplace](https://marketplace.visualstudio.com/manage) and that namespace on
-[Open VSX](https://open-vsx.org) (`npx ovsx create-namespace mosphere`), with their tokens in
-`VSCE_PAT` and `OVSX_PAT`. Open VSX is where Cursor, Windsurf and VSCodium install from.
-
 After a build, **F5** with `packages/vscode` open in VS Code runs it in an Extension Development Host.
+
+## Publishing
+
+A tag publishes it, never a working tree: `vscode-v<version>` (the version in this
+`package.json`) runs `.github/workflows/release-vscode.yml`, which runs the repo's CI on the tagged
+commit, packages the `.vsix` once, and — as you approve each store's environment — publishes that
+file to [Open VSX](https://open-vsx.org) (where Cursor, Windsurf and VSCodium install from) and the
+[VS Code Marketplace](https://marketplace.visualstudio.com), and attaches it to a GitHub Release.
+Run by hand on `main`, the workflow rehearses: each store's sign-in is checked, nothing is published.
+
+```bash
+git tag vscode-v0.1.0 && git push origin vscode-v0.1.0
+```
+
+It publishes as `mosphere`. Once, before the first release:
+
+1. **GitHub.** Environments `openvsx` and `vscode-marketplace`, each with you as a required
+   reviewer and deployments allowed from `main` and `vscode-v*` tags.
+2. **Open VSX.** An eclipse.org account with the Publisher Agreement signed; an access token
+   from open-vsx.org → Settings → Access Tokens, saved as the `openvsx` environment's secret
+   `OVSX_PAT`; then `OVSX_PAT=… npx ovsx create-namespace mosphere`, and claim the namespace
+   (until it's claimed, anyone can publish into it).
+3. **Marketplace.** The `mosphere` publisher at
+   [marketplace.visualstudio.com/manage](https://marketplace.visualstudio.com/manage). It signs in
+   with Microsoft Entra ID, not a token (global Azure DevOps PATs end on 1 December 2026): an
+   Azure user-assigned managed identity with a federated credential for
+   `repo:Erik-Koning/BetterDiagrams:environment:vscode-marketplace`, added to the publisher as a
+   Contributor, its client and tenant IDs in the environment's variables `AZURE_CLIENT_ID` and
+   `AZURE_TENANT_ID`. If the Marketplace won't take that sign-in for your publisher, upload the
+   GitHub Release's `.vsix` on the manage page instead — no token either way.
