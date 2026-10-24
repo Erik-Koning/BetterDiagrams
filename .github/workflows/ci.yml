@@ -1,6 +1,7 @@
 # Every push to main and every pull request: the library is typechecked,
-# tested on React 18 and 19, built, and packed the way npm will publish it;
-# the example app is driven end to end in a browser.
+# tested on React 18 and 19, built, and packed the way npm will publish it,
+# with its better-diagrams command run from the tarball; the example app is
+# driven end to end in a browser.
 name: CI
 
 on:
@@ -63,6 +64,12 @@ jobs:
           npm run typecheck -w better-diagrams-vscode
           npm run test -w better-diagrams-vscode
 
+      # The editor the better-diagrams command serves ships in the package
+      # (app/), built from the example app; without it the command exits.
+      - name: The editor the command serves
+        if: matrix.react == '18'
+        run: npm run build:app
+
       - name: The package as npm would publish it
         if: matrix.react == '18'
         working-directory: packages/better-diagrams
@@ -70,6 +77,7 @@ jobs:
           npm pack
           npx --yes publint@0.3 ./mosphere-better-diagrams-*.tgz
           npx --yes @arethetypeswrong/cli@0.18 ./mosphere-better-diagrams-*.tgz --exclude-entrypoints styles.css schema.json
+          node scripts/smoke-cli.mjs ./mosphere-better-diagrams-*.tgz
 
   e2e:
     name: End to end
