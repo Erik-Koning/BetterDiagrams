@@ -3771,6 +3771,11 @@ button.as-task__check--blocked {
   gap: 4px;
 }
 
+/* Icons the node's name suggests, under the icon picker. */
+.as-icon-picks {
+  margin-top: 4px;
+}
+
 /* "3 nodes · 1 connection" — a readout, not a control, so it takes the
    secondary ink and the inspector's caption size. */
 .as-inspector__count {
@@ -6593,6 +6598,12 @@ button.as-task__check--blocked {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* An option's own glyph in a search picker (the node icon list). */
+.as-searchselect__icon {
+  margin-right: 6px;
+  vertical-align: -2px;
 }
 
 /* The same button-over-a-menu as the kind picker, for every other choice in

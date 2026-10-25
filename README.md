@@ -611,7 +611,10 @@ zone has:
 ```
 
 `color` is **not** container-only: on any other kind it overrides that kind's registry accent,
-which is what `"color": "#ff0000"` on a service can only mean. `fill`, `outline` and `opacity`
+which is what `"color": "#ff0000"` on a service can only mean. The inspector's **Colour** row
+sets it on any box — the six colours a line can take, so a cluster's boxes and lines can match,
+or any colour from the picker, and *Auto* gives back the kind's own. It colours a whole
+selection at once, which is the quick way to group boxes by hue. `fill`, `outline` and `opacity`
 stay frame concepts — a leaf draws its own silhouette — and the JSON editor's lint says so
 rather than letting them vanish on save.
 
@@ -631,7 +634,9 @@ resolve overlap by `z`, not by containment. If you want boxes inside boxes, they
 A node's children (`parentId`) are its next C4 level — any kind can have them, not just
 groups. A `group` still renders its children inline inside its frame; a **card of any other
 kind keeps its normal look** and its children live behind it, visible only by drilling in.
-Double-click a node (or its `⊞ n` badge) to slide into its level: the focused node becomes an
+Double-click a node that has something inside (it wears a `⊞ n` badge), or click the badge, to
+slide into its level; an empty box's level — where a breakdown starts — is *Open its level* on
+its right-click menu, because double-clicking an empty box names it. The focused node becomes an
 open boundary frame, its direct children render at their stored coordinates, and everything
 they talk to outside appears as dashed **ghost** stand-ins — double-click a ghost to visit the
 real thing. Breadcrumbs, a `C2 · Containers`-style level pill, and `Esc` step you back out.
@@ -838,6 +843,25 @@ All three routings honour them: curved threads a smooth spline through every way
 orthogonal keeps every segment axis-aligned and always leaves/arrives square to a pinned side;
 straight runs direct point-to-point strokes, the classic flow-chart line. The same geometry
 function drives the screen and every image export, so a routed edge exports exactly as drawn.
+
+**An unpinned line is as straight as its boxes allow.** It runs between the two faces that look
+at each other across the **gap** between the boxes — apart sideways, it leaves a side; apart
+vertically, the top or bottom; apart both ways, along the wider gap. Where those two faces
+overlap, both ends sit in the middle of the overlap, so two boxes that are merely *roughly*
+level, or of different heights, get one straight line instead of a jog or an S. (The ends used
+to sit at the middles of their sides, so a line was straight only when both middles matched to
+the pixel, and the side came from the angle between the centres — which sent the line between
+two wide, slightly offset boxes out of one's side and back across both.) An unpinned end
+opposite a pinned one lines up with it the same way. Drawing a connection out of a box's dot,
+or dropping it on one, keeps that **side** whenever it isn't the side the line would take
+anyway: out of the bottom dot toward a box on the right means the bottom. A dot that agrees
+stays floating, so the line still follows the boxes as they move.
+
+**Labels keep clear of the line.** Where the line runs across, its label sits above it,
+wrapped to the room between the line's ends, so a long label on a short arrow between
+neighbouring boxes stacks up in the gap instead of running over both boxes. Where the line runs
+up and down, the label sits beside it (the step badge stays on the line). The canvas and every
+image export wrap at the same words.
 
 In the editor, shaping a line is direct manipulation: **drag anywhere on it** to bend it there —
 a waypoint is born under the pointer and follows it until release, snapping softly to the
@@ -1358,6 +1382,11 @@ for a topic or a mesh, `grid` for a replica set, `branch` for a pipeline, `key`,
 `cart`, `activity`, `eye`, `warning`, `check`, `link`, `image`, `video`, `pin`, `robot` and
 `flask`. All one stroke-only 24×24 idiom, so the same path data drives the canvas, the SVG
 export and the Canvas2D raster export. `"none"` opts a node out.
+
+The picker shows each glyph beside its name and searches by what an icon stands for —
+"postgres" finds `database`, "stripe" finds `card` — and under it the inspector **suggests** up to
+four icons from the box's own name and description (*Orders DB* offers `database` and `cart`),
+one click each. A registry's own icon is suggested when its name is one of the words.
 
 
 A registered kind shows up in the inspector dropdown **and** in the generated system prompt, so
@@ -2246,10 +2275,12 @@ Four places the conventions could not be copied verbatim, and why:
 
 - **`⌘K` is search, not link.** It predates this, is advertised in the search field, and works
   from inside any input. Links take `⌘⇧K`.
-- **Renaming is `F2`, not double-click.** Double-click is the DRILL gesture and worth keeping:
-  it opens a component's next C4 level, including the empty one you start a decomposition from.
-  `F2` (or `Enter` on a single selection) opens the name in place instead; a text note and an
-  edge label still edit on double-click, since neither has a level to drill into.
+- **Double-click names an empty box, and opens a full one.** On a box with something inside
+  (its `⊞ n` badge) double-click is the drill gesture; on an empty one it opens the name in
+  place, as in any editor. It used to drill into every box, and an empty level ringed with ghost
+  stand-ins for the neighbours read as a zoomed-in copy of the diagram, not the start of a
+  breakdown — that level is now *Open its level* on the right-click menu. `F2` (or `Enter` on a
+  single selection) renames any box; a text note and an edge label edit on double-click.
 - **Arrow keys move the selection, not the focused node.** React Flow's built-in nudge only
   moves the one node with DOM focus and can't move a multi-selection, so `disableKeyboardA11y`
   turns it off and the editor owns all four arrows. With nothing selected they fall through to

@@ -95,6 +95,7 @@ import {
   type ZoneBox,
   type ZoneNodeData,
 } from "../contract/schema";
+import { pinnedSides, type Box as EdgeBox } from "../contract/geometry";
 import { pathColor, type DiagramPath } from "../contract/paths";
 import { applyOutsideView, applyPathView, buildPathGlowIndex, canvasStandIns, documentNodeId, keptOnCanvas, representatives, transientPathColors } from "./path-view";
 import { FieldPathPanel } from "./FieldPathPanel";
@@ -3405,8 +3406,33 @@ function StudioInner({
     [readOnly, applyTemplate, registry, showToast],
   );
 
+  /**
+   * The sides a new connection keeps: the dot it was drawn out of and the
+   * dot it was dropped on, where either differs from the side the line would
+   * float to (see `pinnedSides`). Drawing out of a box's bottom dot toward a
+   * box on its right means the bottom, and the line used to leave the right
+   * side regardless. `targetBox` stands in for a target that isn't on the
+   * canvas yet — a dangling arrow's dot.
+   */
+  const pinnedEnds = useCallback(
+    (connection: Connection, targetBox?: EdgeBox): Pick<DiagramEdgeData, "start" | "end"> => {
+      if (connection.source === connection.target) return {};
+      const boxOf = (id: string): EdgeBox | undefined => {
+        const node = flow.getInternalNode(id);
+        if (!node?.measured?.width || !node.measured.height) return undefined;
+        const { x, y } = node.internals.positionAbsolute;
+        return { x, y, width: node.measured.width, height: node.measured.height };
+      };
+      const s = boxOf(connection.source);
+      const t = targetBox ?? boxOf(connection.target);
+      if (!s || !t) return {};
+      return pinnedSides(s, t, { start: connection.sourceHandle, end: connection.targetHandle });
+    },
+    [flow],
+  );
+
   const onConnect = useCallback(
-    (connection: Connection) => {
+    (connection: Connection, targetBox?: EdgeBox) => {
       if (readOnly) return;
       // source === target is a SELF-LOOP — a retry arrow, drawn out one face
       // and back into an adjacent one. Legal since validation learned it.
@@ -3429,6 +3455,7 @@ function StudioInner({
           ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
           // New edges inherit the diagram default (no own `routing`).
           routingResolved: resolveRouting(meta.current?.routing),
+          ...pinnedEnds(connection, targetBox),
         } satisfies DiagramEdgeData,
         style: { stroke: EDGE_COLOR_HEX.slate, strokeWidth: 1.8 },
       };
@@ -3442,7 +3469,7 @@ function StudioInner({
       if (twin) showToast("Second connection added — drag it clear of the first");
       commitLater();
     },
-    [readOnly, setEdges, commitLater, flow, showToast],
+    [readOnly, setEdges, commitLater, flow, showToast, pinnedEnds],
   );
 
   /**
@@ -3507,10 +3534,12 @@ function StudioInner({
       const at = flow.screenToFlowPosition({ x: clientX, y: clientY });
 
       const over = topDropTarget(flow, at);
+      // The dot the drag left from: a body drop keeps that end's side too.
+      const sourceHandle = connectionState.fromHandle?.id ?? null;
       // Released back on its own node included: that's a SELF-LOOP, the
       // flow-chart retry arrow.
       if (over) {
-        onConnect({ source: from.id, target: over, sourceHandle: null, targetHandle: null });
+        onConnect({ source: from.id, target: over, sourceHandle, targetHandle: null });
         return;
       }
 
@@ -3534,8 +3563,12 @@ function StudioInner({
       };
       setNodes((current) => [...current, pointNode]);
       // Through onConnect, so a dangling edge is styled, defaulted, and
-      // committed exactly like a completed one.
-      onConnect({ source: from.id, target: pointNode.id, sourceHandle: null, targetHandle: null });
+      // committed exactly like a completed one. The dot isn't measured yet,
+      // so its box goes along.
+      onConnect(
+        { source: from.id, target: pointNode.id, sourceHandle, targetHandle: null },
+        { x: pointNode.position.x, y: pointNode.position.y, width: size.w, height: size.h },
+      );
     },
     [readOnly, flow, onConnect, setNodes],
   );
@@ -9981,6 +10014,20 @@ function StudioInner({
                       onPick={() => setRenamingId(selectedDocNodeIds[0] ?? null)}
                       close={closeContext}
                     />
+                    {/* The way into an EMPTY box's level, where a breakdown
+                        starts: double-click names an empty box (see nodes.tsx). */}
+                    {contextMenu.kind === "node" && selectedDocNodeIds.length === 1 ? (
+                      <ContextItem
+                        label="Open its level"
+                        hint={
+                          childCounts.get(selectedDocNodeIds[0]!)
+                            ? `${childCounts.get(selectedDocNodeIds[0]!)} inside`
+                            : "Break it down"
+                        }
+                        onPick={() => drillInto(selectedDocNodeIds[0]!)}
+                        close={closeContext}
+                      />
+                    ) : null}
                     <ContextItem
                       label="Group selection"
                       hint={`${modKey}G`}

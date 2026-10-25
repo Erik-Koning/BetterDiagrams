@@ -12,7 +12,7 @@
  * row, the keys) so `KindSelect` can keep its own sectioned rendering and
  * still filter the same way.
  */
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 /** Does `text` contain every word of `query`, ignoring case? */
 export function matchesQuery(query: string, ...text: Array<string | undefined>): boolean {
@@ -215,6 +215,8 @@ export interface SearchOption {
   keywords?: string;
   /** A tooltip for the row: what a relationship kind means, say. */
   title?: string;
+  /** A picture before the label — an icon's own glyph, in the icon picker. */
+  icon?: ReactNode;
 }
 
 export interface SearchSelectProps {
@@ -304,6 +306,7 @@ export function SearchSelect({
       >
         {/* A value no row offers (a 12px note, a registry's own icon) shows
             as itself: "Mixed" would claim a disagreement there isn't. */}
+        {!mixed && current?.icon ? current.icon : null}
         <span className="as-searchselect__value">{mixed ? placeholder : (current?.label ?? value)}</span>
       </button>
       {menu.open ? (
@@ -328,6 +331,7 @@ export function SearchSelect({
                 onMouseEnter={() => (o.disabled ? undefined : menu.setActiveValue(o.value))}
                 onClick={() => (o.disabled ? undefined : pick(o.value))}
               >
+                {o.icon}
                 {o.label}
               </button>
             ))}

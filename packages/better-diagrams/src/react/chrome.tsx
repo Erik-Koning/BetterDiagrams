@@ -948,6 +948,7 @@ export const SHORTCUT_GROUPS: Record<"architecture" | "sequence", ReadonlyArray<
         ["⇧+mod+S", "Save as… (when the host offers it)"],
         ["mod+A", "Select all"],
         ["F2 / Enter", "Rename the selection"],
+        ["Double-click", "Name a box · open one with ⊞ inside"],
         ["Delete", "Delete selection (cascades into groups)"],
         ["Esc", "Close a panel · drop the selection · leave a level"],
         ["?", "This sheet"],

@@ -54,6 +54,14 @@ const CONTROL_RATIO = 0.35;
 const clampLabelT = (labelT: number) =>
   Math.min(0.85, Math.max(0.15, Number.isFinite(labelT) ? labelT : 0.5));
 
+/** Whether the line runs more up-and-down than across where its label sits. */
+export function runsVerticallyAt(geo: EdgeGeometry, labelT: number): boolean {
+  const t = clampLabelT(labelT);
+  const a = geo.at(t - 0.02);
+  const b = geo.at(t + 0.02);
+  return Math.abs(b.y - a.y) > Math.abs(b.x - a.x);
+}
+
 /**
  * Route a curve between two boxes.
  *
@@ -61,30 +69,18 @@ const clampLabelT = (labelT: number) =>
  * node it is attached to.
  */
 export function floatingEdgeGeometry(source: Box, target: Box, labelT = 0.5): EdgeGeometry {
-  const scx = source.x + source.width / 2;
-  const scy = source.y + source.height / 2;
-  const tcx = target.x + target.width / 2;
-  const tcy = target.y + target.height / 2;
+  const { p1, p2, across, dx, dy } = floatingEnds(source, target);
 
-  const dx = tcx - scx;
-  const dy = tcy - scy;
-
-  let p1: { x: number; y: number };
-  let p2: { x: number; y: number };
   let c1: { x: number; y: number };
   let c2: { x: number; y: number };
 
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    // Predominantly horizontal: leave/enter through the left or right edge.
-    p1 = { x: dx > 0 ? source.x + source.width : source.x, y: scy };
-    p2 = { x: dx > 0 ? target.x : target.x + target.width, y: tcy };
+  if (across) {
+    // Leave/enter through the left or right edge.
     const off = Math.max(MIN_CONTROL_OFFSET, Math.abs(dx) * CONTROL_RATIO);
     c1 = { x: p1.x + (dx > 0 ? off : -off), y: p1.y };
     c2 = { x: p2.x + (dx > 0 ? -off : off), y: p2.y };
   } else {
-    // Predominantly vertical: leave/enter through the top or bottom edge.
-    p1 = { x: scx, y: dy > 0 ? source.y + source.height : source.y };
-    p2 = { x: tcx, y: dy > 0 ? target.y : target.y + target.height };
+    // Leave/enter through the top or bottom edge.
     const off = Math.max(MIN_CONTROL_OFFSET, Math.abs(dy) * CONTROL_RATIO);
     c1 = { x: p1.x, y: p1.y + (dy > 0 ? off : -off) };
     c2 = { x: p2.x, y: p2.y + (dy > 0 ? -off : off) };
@@ -143,6 +139,121 @@ function arcLengthAt(points: readonly Pt[]): (t: number) => Pt {
 
 const isHorizontal = (side: EdgeAnchorSpec["side"]) => side === "left" || side === "right";
 
+/**
+ * How far in from a corner a lined-up floating end may attach — clear of the
+ * card's rounded corner. A quarter of the side on a small box, and nothing on
+ * a zero-size one (a dragged endpoint is its own point).
+ */
+const CORNER_INSET = 12;
+
+/** The stretch of one side a lined-up end may use: the side minus its corners. */
+function usableSpan(start: number, size: number): [number, number] {
+  const inset = Math.min(CORNER_INSET, size / 4);
+  return [start + inset, start + size - inset];
+}
+
+/** The middle of where two spans overlap, or nothing when they don't. */
+function sharedMiddle(a: [number, number], b: [number, number]): number | undefined {
+  const lo = Math.max(a[0], b[0]);
+  const hi = Math.min(a[1], b[1]);
+  return lo <= hi ? (lo + hi) / 2 : undefined;
+}
+
+/**
+ * Where an unpinned edge leaves its source and enters its target — the one
+ * decision every floating router shares, so switching an edge between
+ * routings never flips which side it attaches to.
+ *
+ * The axis comes from the GAP between the boxes, not the angle between their
+ * centres. Two wide boxes, the second below and a little to the right of the
+ * first, sit one above the other: the centre-to-centre angle read them as
+ * side by side and sent the line out of a side face and back across both
+ * boxes. Boxes apart on one axis only run along it; apart on both, along the
+ * wider gap. Only boxes that overlap each other fall back to the centres.
+ *
+ * The ends line up when the boxes allow it. Each used to leave the middle of
+ * its side, so the line was straight only when both middles matched to the
+ * pixel, and boxes of different heights never could: every pair drew a jog
+ * or an S. Where the two facing sides overlap, both ends now sit in the
+ * middle of the overlap — the straightest line the two boxes have — and two
+ * boxes whose centres already match land exactly where they always did.
+ */
+function floatingEnds(
+  source: Box,
+  target: Box,
+): { p1: Pt; p2: Pt; across: boolean; dx: number; dy: number } {
+  const scx = source.x + source.width / 2;
+  const scy = source.y + source.height / 2;
+  const tcx = target.x + target.width / 2;
+  const tcy = target.y + target.height / 2;
+  const dx = tcx - scx;
+  const dy = tcy - scy;
+  const across = runsAcross(source, target);
+
+  if (across) {
+    const y = sharedMiddle(usableSpan(source.y, source.height), usableSpan(target.y, target.height));
+    return {
+      p1: { x: dx > 0 ? source.x + source.width : source.x, y: y ?? scy },
+      p2: { x: dx > 0 ? target.x : target.x + target.width, y: y ?? tcy },
+      across,
+      dx,
+      dy,
+    };
+  }
+  const x = sharedMiddle(usableSpan(source.x, source.width), usableSpan(target.x, target.width));
+  return {
+    p1: { x: x ?? scx, y: dy > 0 ? source.y + source.height : source.y },
+    p2: { x: x ?? tcx, y: dy > 0 ? target.y : target.y + target.height },
+    across,
+    dx,
+    dy,
+  };
+}
+
+/** Whether a floating edge runs across (left/right faces) rather than down. See `floatingEnds`. */
+function runsAcross(source: Box, target: Box): boolean {
+  const gapX = Math.max(target.x - (source.x + source.width), source.x - (target.x + target.width));
+  const gapY = Math.max(target.y - (source.y + source.height), source.y - (target.y + target.height));
+  if (gapX > 0 || gapY > 0) return gapX >= gapY;
+  const dx = target.x + target.width / 2 - (source.x + source.width / 2);
+  const dy = target.y + target.height / 2 - (source.y + source.height / 2);
+  return Math.abs(dx) >= Math.abs(dy);
+}
+
+/**
+ * The anchors a newly drawn connection keeps, from the dots it was drawn out
+ * of and dropped on (handle ids, which are side names). A dot that is NOT the
+ * side the line would float to is a choice, and is pinned — side only, so
+ * the fraction stays the default. One that agrees stays floating, so the
+ * line still follows the boxes as they move.
+ */
+export function pinnedSides(
+  source: Box,
+  target: Box,
+  handles: { start?: string | null; end?: string | null },
+): { start?: EdgeAnchorSpec; end?: EdgeAnchorSpec } {
+  const floating = floatingSides(source, target);
+  const side = (handle: string | null | undefined) =>
+    handle === "top" || handle === "right" || handle === "bottom" || handle === "left" ? handle : undefined;
+  const start = side(handles.start);
+  const end = side(handles.end);
+  return {
+    ...(start && start !== floating.start ? { start: { side: start } } : {}),
+    ...(end && end !== floating.end ? { end: { side: end } } : {}),
+  };
+}
+
+/** The sides an unpinned edge between these two boxes attaches to. */
+export function floatingSides(
+  source: Box,
+  target: Box,
+): { start: EdgeAnchorSpec["side"]; end: EdgeAnchorSpec["side"] } {
+  const { across, dx, dy } = floatingEnds(source, target);
+  return across
+    ? { start: dx > 0 ? "right" : "left", end: dx > 0 ? "left" : "right" }
+    : { start: dy > 0 ? "bottom" : "top", end: dy > 0 ? "top" : "bottom" };
+}
+
 /** The point on a box's `side` at fraction `t` along it. */
 function anchorPoint(box: Box, side: EdgeAnchorSpec["side"], t = 0.5): Pt {
   const f = Math.min(1, Math.max(0, Number.isFinite(t) ? t : 0.5));
@@ -156,6 +267,16 @@ function anchorPoint(box: Box, side: EdgeAnchorSpec["side"], t = 0.5): Pt {
     case "right":
       return { x: box.x + box.width, y: box.y + box.height * f };
   }
+}
+
+/** The point on `side` level with `point`, or nothing when the side doesn't reach it. */
+function lineUp(box: Box, side: EdgeAnchorSpec["side"], point: Pt): Pt | undefined {
+  const horizontal = isHorizontal(side);
+  const [lo, hi] = horizontal ? usableSpan(box.y, box.height) : usableSpan(box.x, box.width);
+  const along = horizontal ? point.y : point.x;
+  if (along < lo || along > hi) return undefined;
+  const edge = anchorPoint(box, side);
+  return horizontal ? { x: edge.x, y: along } : { x: along, y: edge.y };
 }
 
 /** Unit vector pointing OUT of the box through `side`. */
@@ -424,67 +545,40 @@ function polylineGeometry(pts: readonly Pt[], labelT: number, cornerRadius = 0):
 
 /**
  * Route a straight line between two boxes: the classic flow-chart connector.
- * Attachment sides are chosen by the dominant axis, exactly like the other
+ * Attachment points come from `floatingEnds`, exactly like the other
  * routers, so switching an edge between routings never flips which side it
  * leaves through.
  */
 export function straightEdgeGeometry(source: Box, target: Box, labelT = 0.5): EdgeGeometry {
-  const scx = source.x + source.width / 2;
-  const scy = source.y + source.height / 2;
-  const tcx = target.x + target.width / 2;
-  const tcy = target.y + target.height / 2;
-
-  const dx = tcx - scx;
-  const dy = tcy - scy;
-
-  const [p1, p2]: [Pt, Pt] =
-    Math.abs(dx) >= Math.abs(dy)
-      ? [
-          { x: dx > 0 ? source.x + source.width : source.x, y: scy },
-          { x: dx > 0 ? target.x : target.x + target.width, y: tcy },
-        ]
-      : [
-          { x: scx, y: dy > 0 ? source.y + source.height : source.y },
-          { x: tcx, y: dy > 0 ? target.y : target.y + target.height },
-        ];
-
+  const { p1, p2 } = floatingEnds(source, target);
   return polylineGeometry([p1, p2], labelT);
 }
 
 /**
  * Route a right-angle (Manhattan) connector between two boxes.
  *
- * Exit sides are chosen by the dominant axis, exactly like the curved router,
- * so switching an edge between routings never flips which side it attaches
- * to. The path is 2–3 segments with the elbow at the midpoint. `at(t)` is
+ * Exit points come from `floatingEnds`, exactly like the curved router, so
+ * switching an edge between routings never flips which side it attaches to.
+ * The path is 2–3 segments with the elbow at the midpoint — one straight
+ * segment whenever the ends line up. `at(t)` is
  * parameterised by ARC LENGTH along the polyline — uniform t-spacing, which is
  * what lets `nearestTOnCurve` (a pure sampler over `at`) drive label dragging
  * for this geometry unchanged.
  */
 export function orthogonalEdgeGeometry(source: Box, target: Box, labelT = 0.5): EdgeGeometry {
-  const scx = source.x + source.width / 2;
-  const scy = source.y + source.height / 2;
-  const tcx = target.x + target.width / 2;
-  const tcy = target.y + target.height / 2;
-
-  const dx = tcx - scx;
-  const dy = tcy - scy;
+  const { p1, p2, across } = floatingEnds(source, target);
 
   let points: Pt[];
 
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    // Horizontal-dominant: out the left/right side, elbow at mid-x.
-    const p1 = { x: dx > 0 ? source.x + source.width : source.x, y: scy };
-    const p2 = { x: dx > 0 ? target.x : target.x + target.width, y: tcy };
+  if (across) {
+    // Out the left/right side, elbow at mid-x.
     const midX = (p1.x + p2.x) / 2;
     points =
       p1.y === p2.y
         ? [p1, p2]
         : [p1, { x: midX, y: p1.y }, { x: midX, y: p2.y }, p2];
   } else {
-    // Vertical-dominant: out the top/bottom side, elbow at mid-y.
-    const p1 = { x: scx, y: dy > 0 ? source.y + source.height : source.y };
-    const p2 = { x: tcx, y: dy > 0 ? target.y : target.y + target.height };
+    // Out the top/bottom side, elbow at mid-y.
     const midY = (p1.y + p2.y) / 2;
     points =
       p1.x === p2.x
@@ -549,12 +643,19 @@ export function edgeGeometryFor(
         : floatingEdgeGeometry(source, target, labelT);
   }
 
-  const centerOf = (b: Box): Pt => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
-  const startSide = spec?.start?.side ?? autoSide(source, waypoints[0] ?? centerOf(target));
-  const endSide =
-    spec?.end?.side ?? autoSide(target, waypoints[waypoints.length - 1] ?? centerOf(source));
-  const p1 = anchorPoint(source, startSide, spec?.start?.t);
-  const p2 = anchorPoint(target, endSide, spec?.end?.t);
+  // With no waypoints an unpinned end takes the side it would take floating;
+  // with waypoints, the side facing the nearest one.
+  const free = waypoints.length ? undefined : floatingSides(source, target);
+  const startSide = spec?.start?.side ?? free?.start ?? autoSide(source, waypoints[0]);
+  const endSide = spec?.end?.side ?? free?.end ?? autoSide(target, waypoints[waypoints.length - 1]);
+  let p1 = anchorPoint(source, startSide, spec?.start?.t);
+  let p2 = anchorPoint(target, endSide, spec?.end?.t);
+  // An unpinned end facing a pinned one lines up with it where its side
+  // reaches, so pinning one end of a straight line keeps it straight.
+  if (free && isHorizontal(startSide) === isHorizontal(endSide) && startSide !== endSide) {
+    if (!spec?.end) p2 = lineUp(target, endSide, p1) ?? p2;
+    else if (!spec?.start) p1 = lineUp(source, startSide, p2) ?? p1;
+  }
 
   return routing === "orthogonal"
     ? orthogonalSpecGeometry(p1, startSide, waypoints, p2, endSide, labelT)

@@ -42,6 +42,7 @@ import { LIGHT_THEME, paletteFromTheme } from "./theme";
 import { copyFragment } from "../contract/clipboard";
 import { PRESENTATION_FORMAT, splitTemplate } from "../contract/presentation";
 import {
+  EDGE_COLOR_HEX,
   EMPTY_TEMPLATE,
   EXAMPLE_TEMPLATE,
   EXAMPLE_ZONED_TEMPLATE,
@@ -1365,6 +1366,44 @@ describe("ArchitectureStudio", () => {
     });
   });
 
+  it("keeps the side of the dot a connection was drawn out of", async () => {
+    const onChange = vi.fn();
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        { id: "a", label: "A", kind: "service", icon: "box", description: "", parentId: null, x: 0, y: 0, w: 100, h: 50 },
+      ],
+      edges: [],
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={doc} onChange={onChange} />);
+    const top = () => container.querySelector('.react-flow__handle[data-nodeid="a"][data-handlepos="top"]');
+    await waitFor(() => expect(top()).toBeTruthy());
+    let prev = "";
+    await waitFor(() => {
+      const t = (container.querySelector(".react-flow__viewport") as HTMLElement).style.transform;
+      expect(t).toMatch(/scale/);
+      if (t !== prev) {
+        prev = t;
+        throw new Error("viewport still animating");
+      }
+    });
+    const client = flowToClient(container);
+
+    // Out of the TOP dot, released down and to the right: the line would
+    // float out of the right or the bottom, so the top is a choice.
+    fireEvent.mouseDown(top()!, { button: 0, ...client(50, 0) });
+    fireEvent.mouseMove(document, { ...client(600, 400) });
+    fireEvent.mouseUp(document, { ...client(600, 400) });
+
+    await waitFor(() => {
+      const t = onChange.mock.calls.at(-1)?.[0] as DiagramTemplate | undefined;
+      const edge = t?.edges.find((e) => e.source === "a");
+      expect(edge?.start).toEqual({ side: "top" });
+      // Dropped in space, on no dot: that end floats.
+      expect(edge?.end).toBeUndefined();
+    });
+  });
+
   it("changing a dot's kind materializes a full-size node the arrow already points at", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -1615,6 +1654,39 @@ describe("ArchitectureStudio", () => {
     const frame = container.querySelector('[data-id="vpc"] .as-group') as HTMLElement;
     expect(frame.style.getPropertyValue("--as-group-fill")).toBe("transparent");
     expect(frame.style.getPropertyValue("--as-group-border-width")).toBe("0");
+  });
+
+  it("colours a plain box from the inspector, and Auto gives it back its kind's", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />,
+    );
+
+    fireEvent.click(screen.getByText("Postgres"));
+    await user.click(screen.getByRole("button", { name: "Node colour rose" }));
+    const coloured = (onChange.mock.calls.at(-1)![0] as DiagramTemplate).nodes.find((n) => n.id === "db")!;
+    expect(coloured.color).toBe(EDGE_COLOR_HEX.rose);
+    const card = container.querySelector('[data-id="db"] .as-node') as HTMLElement;
+    expect(card.style.getPropertyValue("--as-node-accent")).toBe(EDGE_COLOR_HEX.rose);
+
+    await user.click(screen.getByRole("button", { name: "Auto" }));
+    const reset = (onChange.mock.calls.at(-1)![0] as DiagramTemplate).nodes.find((n) => n.id === "db")!;
+    expect(reset.color).toBeUndefined();
+  });
+
+  it("suggests icons from a box's name, one click to use", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("API Gateway"));
+    const picks = screen.getByRole("group", { name: "Suggested icons" });
+    // "Gateway" is the shield it already wears; "API" is code.
+    expect(within(picks).getByRole("button", { name: "Icon shield" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(within(picks).getByRole("button", { name: "Icon code" }));
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "gw")?.icon).toBe("code");
   });
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
@@ -3717,9 +3789,34 @@ describe("drill-down (C4 levels)", () => {
     expect(screen.getByText("Storefront")).toBeInTheDocument();
   });
 
+  it("double-click names an empty box instead of opening an empty level", async () => {
+    const onChange = vi.fn();
+    const { container } = mount(<ArchitectureStudio defaultValue={DRILL_DOC} onChange={onChange} />);
+    fireEvent.doubleClick(await screen.findByText("Storefront"));
+    const field = await waitFor(() => {
+      const input = container.querySelector<HTMLInputElement>('[data-id="web"] input[aria-label="Name"]');
+      expect(input).toBeTruthy();
+      return input!;
+    });
+    fireEvent.change(field, { target: { value: "Shop front" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => {
+      const latest = onChange.mock.calls.at(-1)?.[0] as DiagramTemplate | undefined;
+      expect(latest?.nodes.find((n) => n.id === "web")?.label).toBe("Shop front");
+    });
+    expect(screen.queryByRole("navigation", { name: "Diagram level" })).not.toBeInTheDocument();
+  });
+
   it("a leaf drill lands in the empty-boundary state", async () => {
-    mount(<ArchitectureStudio defaultValue={DRILL_DOC} />);
-    await drillIntoLabel("Storefront");
+    const { container } = mount(<ArchitectureStudio defaultValue={DRILL_DOC} />);
+    // An empty box's level is on its context menu: double-click names it.
+    fireEvent.contextMenu(container.querySelector('.react-flow__node[data-id="web"]')!);
+    const menu = await screen.findByRole("menu", { name: "Actions" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /Open its level/ }));
+    await waitFor(
+      () => expect(screen.getByRole("navigation", { name: "Diagram level" })).toBeInTheDocument(),
+      { timeout: 2000 },
+    );
     expect(await screen.findByText(/has no internals yet/)).toBeInTheDocument();
     // It names the level it is, as the breadcrumb bar does — one drill deep.
     expect(screen.getByText(/sits inside it, at/)).toHaveTextContent(

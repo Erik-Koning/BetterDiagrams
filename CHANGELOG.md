@@ -100,6 +100,23 @@ This changelog starts with the editing API (October 2026). For what changed betw
   for smaller diamonds may need **Arrange → Tidy** afterwards.
 - A pipe's rounded ends stop at a 40px radius (and half its width), so a pipe grown tall keeps
   straight sides rather than becoming a capsule whose ends eat its text.
+- An unpinned line runs straight wherever its two boxes' facing sides overlap: both ends sit in
+  the middle of the overlap, where they used to sit at the middle of each side, so boxes that
+  were only roughly level, or of different heights, drew a jog or an S. Its sides come from the
+  gap between the boxes rather than the angle between their centres, so a line between two wide,
+  slightly offset boxes no longer leaves one's side and doubles back across both. An unpinned end
+  opposite a pinned one lines up with it. Lines between boxes whose middles already match are
+  unchanged; other documents redraw, on screen and in exports.
+- A connection drawn out of a box's dot, or dropped on one, keeps that side (`start`/`end`,
+  side only) when it isn't the side the line would take anyway.
+- Edge labels wrap to the room between the line's ends and stack upward above it, so a long
+  label on a short arrow no longer runs over both boxes; on an up-and-down line the label,
+  `[tech]` and date sit beside the line, the step badge on it. The same in every image export.
+- Double-click on an empty box names it in place; a box with something inside still opens on
+  double-click. An empty box's level is **Open its level** on its right-click menu.
+- The node inspector has a **Colour** row for any box (the six line colours, a picker, *Auto*),
+  where only groups had one. The icon picker shows each glyph, searches by what an icon stands
+  for, and suggests icons from the box's name and description.
 
 ### Fixed
 
