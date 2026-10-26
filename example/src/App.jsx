@@ -636,8 +636,10 @@ export default function App() {
    * linked folder, `folder/file` for one link. The server re-points the link
    * before the app has compared what it points at now with the open copy,
    * and a save landing in between would write this copy over the file just
-   * found, without asking (see `syncOrAsk`). Counted: a second Re-link click
-   * while the dialog is up must not lift the first one's hold.
+   * found, without asking (see `syncOrAsk`); nor may a watcher's report of
+   * the re-pointed link let the copy go as moved (see `reconcile`). Counted:
+   * a second Re-link click while the dialog is up must not lift the first
+   * one's hold.
    */
   const holdsRef = useRef(new Map());
   /** Bumped when a hold lifts, so a save pass picks up the edits it held back. */
@@ -845,7 +847,9 @@ export default function App() {
       for (const { file, path } of targets) {
         const result = await readTemplate(path);
         if (result?.moved) {
-          detachMoved(file.id, path, result.moved.target);
+          // Mid re-link, the link is re-pointed before its answer lands: the
+          // re-link compares this copy with the file it points at now.
+          if (!isHeld(path)) detachMoved(file.id, path, result.moved.target);
           continue;
         }
         const raw = result?.doc;

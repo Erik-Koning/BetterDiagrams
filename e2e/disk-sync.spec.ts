@@ -6,7 +6,7 @@
  * so nothing here touches the repo's templates/ — and links a second
  * temporary folder the way `BD_LINKED_DIRS` links one outside the repo.
  */
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { BrowserContext, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
@@ -739,6 +739,9 @@ test.describe("linked files", () => {
     await page.getByRole("menu", { name: "Settings" }).getByRole("menuitem", { name: `Re-link ${basename(E2E_PICK_FILE)}` }).click();
     await expect.poll(() => repointed).toBe(true);
     expect(realpathSync(link)).toBe(realpathSync(moved));
+    // The watcher reports the file under the link in that window. Linux's sees
+    // the link re-pointed; a touch makes every platform's say so.
+    utimesSync(moved, new Date(), new Date());
 
     // An edit in that window, and past the save debounce: nothing is written through the link.
     await page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox").click();
