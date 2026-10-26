@@ -898,7 +898,7 @@ describe("settings.groupContents — the document-wide fold", () => {
     expect("settings" in validateTemplate({ nodes: [], settings: "hide" })).toBe(false);
     // Strict, so the JSON editor can lint it.
     expect(TEMPLATE_KEYS).toContain("settings");
-    expect(SETTINGS_KEYS).toEqual(["groupContents", "arrange", "roadmap", "notation", "capacity"]);
+    expect(SETTINGS_KEYS).toEqual(["groupContents", "arrange", "roadmap", "notation", "htmlLines", "capacity"]);
   });
 
   it("keeps a roadmap's axis whole and in range, or not at all", () => {

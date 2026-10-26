@@ -704,6 +704,16 @@ export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export const NOTATIONS = ["both", "uml", "crowsfoot"] as const;
 export type Notation = (typeof NOTATIONS)[number];
 
+/**
+ * How the interactive HTML page shows lines. "hover" is the default and never
+ * needs storing: every line hides but the hovered box's (the structure stays
+ * drawn), and the page's **Show all lines** check brings them back. "all"
+ * opens the page with that check on. Pictures always draw every line. See
+ * `DiagramSettings`.
+ */
+export const HTML_LINES = ["hover", "all"] as const;
+export type HtmlLines = (typeof HTML_LINES)[number];
+
 /** Horizontal placement of a node's text. The default (`defaultTextAlign`) is never stored. */
 export const NODE_TEXT_ALIGNS = ["left", "center", "right"] as const;
 export type NodeTextAlign = (typeof NODE_TEXT_ALIGNS)[number];
@@ -1064,6 +1074,11 @@ export interface DiagramSettings {
   /** How cardinality is drawn — see `NOTATIONS`. Absent means "both". */
   notation?: Notation;
   /**
+   * How the interactive HTML export shows lines — see `HTML_LINES`. Absent
+   * means "hover"; "all" opens every export with Show all lines on.
+   */
+  htmlLines?: HtmlLines;
+  /**
    * Story points each person can take on, by name — what the People legend
    * and the plan checks weigh their open work against. A person without an
    * entry has no limit.
@@ -1164,6 +1179,7 @@ const SETTINGS_KEY_MAP: Record<keyof DiagramSettings, true> = {
   arrange: true,
   roadmap: true,
   notation: true,
+  htmlLines: true,
   capacity: true,
 };
 export const SETTINGS_KEYS: readonly string[] = Object.keys(SETTINGS_KEY_MAP);
@@ -1819,6 +1835,9 @@ function validateSettings(raw: unknown): DiagramSettings | undefined {
   }
   if (NOTATIONS.includes(r.notation as Notation)) {
     out.notation = r.notation as Notation;
+  }
+  if (HTML_LINES.includes(r.htmlLines as HtmlLines)) {
+    out.htmlLines = r.htmlLines as HtmlLines;
   }
   if (r.capacity && typeof r.capacity === "object" && !Array.isArray(r.capacity)) {
     const capacity: Record<string, number> = {};

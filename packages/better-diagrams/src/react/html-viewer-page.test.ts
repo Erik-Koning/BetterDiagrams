@@ -130,4 +130,20 @@ describe("lines on hover", () => {
     p.check("bd-alllines", false);
     expect(p.doc.body.classList.contains("bd-lines-hover")).toBe(true);
   });
+
+  it("opens with them all shown when the document says settings.htmlLines: all, and the check still hides them", async () => {
+    const p = await openPage({ ...PLAN, settings: { htmlLines: "all" } });
+    expect(p.$<HTMLInputElement>("#bd-alllines")!.checked).toBe(true);
+    expect(p.doc.body.classList.contains("bd-lines-hover")).toBe(false);
+    p.check("bd-alllines", false);
+    expect(p.doc.body.classList.contains("bd-lines-hover")).toBe(true);
+  });
+
+  it("opens that way on a drill-down page too", async () => {
+    const bakery = validateTemplate(bakeryJson);
+    const p = await openPage({ ...bakery, settings: { ...bakery.settings, htmlLines: "all" } });
+    expect(p.$("section[data-view]")).not.toBeNull();
+    expect(p.$<HTMLInputElement>("#bd-alllines")!.checked).toBe(true);
+    expect(p.doc.body.classList.contains("bd-lines-hover")).toBe(false);
+  });
 });

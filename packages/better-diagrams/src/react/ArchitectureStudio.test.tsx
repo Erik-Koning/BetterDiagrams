@@ -229,6 +229,48 @@ describe("ArchitectureStudio", () => {
     expect(ctx.registry.nodeKinds.service.label).toBe("Service");
   });
 
+  it("Show all lines in the page, under Interactive HTML, is a document setting, and one undo forgets it", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+    await user.click(screen.getByRole("button", { name: "Export" }));
+    const check = () => within(screen.getByRole("menu")).getByRole("checkbox", { name: "Show all lines in the page" });
+    expect(check()).not.toBeChecked();
+    await user.click(check());
+    await screen.findByText("Interactive HTML opens with every line shown");
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toEqual({ htmlLines: "all" });
+    expect(check()).toBeChecked();
+    // Off again stores nothing: lines on hover is the default.
+    await user.click(check());
+    await screen.findByText("Interactive HTML shows a box's lines while it is hovered");
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toBeUndefined();
+    // On, then undone: one undo takes the setting back.
+    await user.click(check());
+    await user.keyboard("{Escape}");
+    const before = onChange.mock.calls.length;
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(onChange.mock.calls.length).toBeGreaterThan(before));
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toBeUndefined();
+  });
+
+  it("offers no Show all lines check on a read-only document, or under a host's own Interactive HTML", async () => {
+    const user = userEvent.setup();
+    const { unmount } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} readOnly />);
+    await user.click(screen.getByRole("button", { name: "Export" }));
+    expect(within(screen.getByRole("menu")).getByText("Interactive HTML")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Show all lines in the page" })).toBeNull();
+    unmount();
+    mount(
+      <ArchitectureStudio
+        defaultValue={EXAMPLE_TEMPLATE}
+        registry={{ exporters: { html: { label: "Our page", run: () => undefined } } }}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Export" }));
+    expect(within(screen.getByRole("menu")).getByText("Our page")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Show all lines in the page" })).toBeNull();
+  });
+
   it("renders a registry-contributed node kind with its own colours", () => {
     mount(
       <ArchitectureStudio

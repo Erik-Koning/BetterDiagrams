@@ -10,6 +10,7 @@
  *   - No network calls unless the host supplies `generate`.
  */
 import {
+  Fragment,
   forwardRef,
   useCallback,
   useEffect,
@@ -89,6 +90,7 @@ import {
   type EdgeRouting,
   type ArrangeMode,
   type Notation,
+  type HtmlLines,
   type GroupContents,
   type NodeField,
   type VersionTagPosition,
@@ -3171,6 +3173,33 @@ function StudioInner({
           : next === "crowsfoot"
             ? "Crow's-foot notation: symbols at the boxes"
             : "Symbols at the boxes, numbers beside them",
+      );
+    },
+    [readOnly, applyTemplate, showToast],
+  );
+
+  /** The document's `settings.htmlLines`, "hover" when it says nothing. */
+  const htmlLines: HtmlLines = template.settings?.htmlLines ?? "hover";
+
+  /**
+   * Another document setting, set from the Export menu: how the interactive
+   * HTML export shows lines. Stored in the document, so every later export
+   * — from any host, or an agent's — opens the same way; "hover", the
+   * default, is never stored.
+   */
+  const setHtmlLines = useCallback(
+    (next: HtmlLines) => {
+      if (readOnly) return;
+      const { htmlLines: _was, ...rest } = templateRef.current.settings ?? {};
+      const settings = next === "all" ? { ...rest, htmlLines: next } : rest;
+      applyTemplate(
+        { ...templateRef.current, ...(Object.keys(settings).length ? { settings } : { settings: undefined }) },
+        { fit: false },
+      );
+      showToast(
+        next === "all"
+          ? "Interactive HTML opens with every line shown"
+          : "Interactive HTML shows a box's lines while it is hovered",
       );
     },
     [readOnly, applyTemplate, showToast],
@@ -8594,16 +8623,33 @@ function StudioInner({
                 // dictionary needs tables, a change report a baseline).
                 if (exporter.available && !exporter.available({ template, ...(activeDiffBase ? { diffBase: activeDiffBase } : {}) })) return null;
                 return (
-                  <button
-                    key={key}
-                    type="button"
-                    role="menuitem"
-                    className="as-menu__item"
-                    onClick={() => void runExport(key)}
-                  >
-                    <div className="as-menu__label">{exporter.label}</div>
-                    {exporter.hint ? <div className="as-menu__hint">{exporter.hint}</div> : null}
-                  </button>
+                  <Fragment key={key}>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="as-menu__item"
+                      onClick={() => void runExport(key)}
+                    >
+                      <div className="as-menu__label">{exporter.label}</div>
+                      {exporter.hint ? <div className="as-menu__hint">{exporter.hint}</div> : null}
+                    </button>
+                    {/* The built-in page's one setting, under it: a document
+                        setting, so it holds for every later export. A host's
+                        own exporter under this key decides for itself. */}
+                    {key === "html" && exporter === BUILTIN_EXPORTERS.html && !readOnly ? (
+                      <label
+                        className="as-menu__check"
+                        title="Saved in the diagram: every Interactive HTML export opens with Show all lines on, instead of showing a box's lines on hover"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={htmlLines === "all"}
+                          onChange={() => setHtmlLines(htmlLines === "all" ? "hover" : "all")}
+                        />
+                        Show all lines in the page
+                      </label>
+                    ) : null}
+                  </Fragment>
                 );
               })}
             </ToolbarMenu>

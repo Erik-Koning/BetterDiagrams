@@ -85,6 +85,12 @@ export interface TimelineHtmlOptions {
    * two boxes outside every group), and so do a lit path's or route's lines.
    */
   hoverLines?: boolean;
+  /**
+   * With `hoverLines`, open the page with **Show all lines** on: every line
+   * drawn until the reader turns it off. What a document's
+   * `settings.htmlLines: "all"` asks for.
+   */
+  allLines?: boolean;
 }
 
 /** Rough perceptual luminance test — enough to pick between two accents. */
@@ -350,7 +356,7 @@ ${hasPaths ? `
       : ""
   }`;
   const viewerMenu = `${hoverLines ? `
-        <label><input type="checkbox" id="bd-alllines" /> Show all lines</label>` : ""}${dock ? `
+        <label><input type="checkbox" id="bd-alllines"${opts.allLines ? " checked" : ""} /> Show all lines</label>` : ""}${dock ? `
         <label><input type="checkbox" id="bd-showkey" checked /> Legend</label>` : ""}`;
 
   const pathsSection = hasPaths
@@ -712,6 +718,8 @@ export interface MultiViewHtmlOptions {
   dockLegend?: boolean;
   /** See `TimelineHtmlOptions.hoverLines`. */
   hoverLines?: boolean;
+  /** See `TimelineHtmlOptions.allLines`. */
+  allLines?: boolean;
 }
 
 /**
@@ -874,6 +882,7 @@ export function buildMultiViewHtml(opts: MultiViewHtmlOptions): string {
     tasks: opts.tasks,
     dockLegend: opts.dockLegend,
     hoverLines: opts.hoverLines,
+    allLines: opts.allLines,
   });
 
   return page

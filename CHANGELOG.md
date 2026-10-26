@@ -56,6 +56,10 @@ This changelog starts with the editing API (October 2026). For what changed betw
 - `hostHistory` (`HostHistory`) on both editors: a host that keeps the document's undo history
   itself (the VS Code extension: its text's) gets the toolbar's Undo and Redo and `⌘Z`, `⇧⌘Z`
   and `⌘Y`, so there is one history rather than two. The handle's `undo` and `redo` are unchanged.
+- `settings.htmlLines` (`HTML_LINES`, `HtmlLines`): `"all"` opens the interactive HTML page with
+  **Show all lines** on, for every export of that document; `"hover"`, the default, is never
+  stored. The Export menu's **Show all lines in the page**, under Interactive HTML, sets it, and
+  one undo takes it back. `buildTimelineHtml` and `buildMultiViewHtml` take it as `allLines`.
 
 ### Changed
 

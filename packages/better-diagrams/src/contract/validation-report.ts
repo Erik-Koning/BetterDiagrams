@@ -36,6 +36,7 @@ import {
   NODE_TEXT_ALIGNS,
   NODE_TEXT_VALIGNS,
   NOTATIONS,
+  HTML_LINES,
   SETTINGS_KEYS,
   TASK_PRIORITIES,
   TASK_STAGES,
@@ -310,6 +311,7 @@ export function validateTemplateReport(raw: unknown, opts: ValidateOptions = {})
       add("unknown-value", "/settings/roadmap", `The roadmap axis needs a "from" date and a numeric "dayWidth", so it was dropped and is fitted to the plan.`);
     }
     vocab(doc.settings, "notation", NOTATIONS, "/settings", `both notations are drawn`);
+    vocab(doc.settings, "htmlLines", HTML_LINES, "/settings", `the HTML page shows a box's lines on hover`);
   }
   if (isObj(doc.meta)) {
     vocab(doc.meta, "versionTagPosition", VERSION_TAG_POSITIONS, "/meta", `the tag sits top-left`);

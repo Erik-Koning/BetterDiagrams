@@ -624,6 +624,7 @@ export interface DiagramSettings {
     arrange?: ArrangeMode;
     capacity?: Record<string, number>;
     groupContents?: GroupContents;
+    htmlLines?: HtmlLines;
     notation?: Notation;
     roadmap?: RoadmapAxis;
 }
@@ -1611,6 +1612,12 @@ export function hasOverlaps(template: DiagramTemplate, opts?: {
 
 // @public
 export type HopMultiplicity = "one" | "many" | "unknown";
+
+// @public
+export const HTML_LINES: readonly ["hover", "all"];
+
+// @public (undocumented)
+export type HtmlLines = (typeof HTML_LINES)[number];
 
 // @public (undocumented)
 export const ICON_NAMES: readonly ["none", "user", "users", "database", "server", "layers", "globe", "cloud", "window", "mobile", "lock", "gear", "bolt", "doc", "code", "mail", "box", "shield", "sparkle", "key", "chart", "search", "filter", "folder", "sync", "cpu", "terminal", "balance", "share", "grid", "branch", "clock", "calendar", "bell", "card", "cart", "activity", "eye", "warning", "check", "link", "image", "video", "pin", "robot", "flask"];

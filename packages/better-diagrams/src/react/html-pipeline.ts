@@ -213,6 +213,8 @@ export function exportHtmlPage({ template, registry, filename, palette, mode, gr
   // each line names its ends and the legend its box, so the page can show a
   // node's lines on hover and keep the legend in view.
   const dress = { mode, gradients, fieldHits: true, viewerHooks: true, ...(tasks ? { taskHits: true } : {}) };
+  // Lines on hover unless the document says to open with them all shown.
+  const allLines = template.settings?.htmlLines === "all";
   // Any nesting makes the page multi-view: one pre-rendered SVG per
   // drillable level, clickable in place. A flat document keeps the
   // single-view page.
@@ -227,6 +229,7 @@ export function exportHtmlPage({ template, registry, filename, palette, mode, gr
         tasks,
         dockLegend: true,
         hoverLines: true,
+        allLines,
       })
     : buildTimelineHtml({
         svg: renderTemplateToSvg(template, registry, palette, dress),
@@ -238,6 +241,7 @@ export function exportHtmlPage({ template, registry, filename, palette, mode, gr
         tasks,
         dockLegend: true,
         hoverLines: true,
+        allLines,
       });
   return { blob: new Blob([page], { type: "text/html" }), filename: `${filename}.html` };
 }

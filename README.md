@@ -1435,14 +1435,16 @@ The interactive HTML page carries its own runtime, so its builder loads when tha
 rather than with the editor; its `run` resolves asynchronously (as any exporter's may).
 
 In that page the legend leaves the picture for the window's top-right corner, so it stays in view
-however far the picture scrolls; a drill-down page shows the legend of the level on show. Lines
-stay hidden except the hovered box's, and except the structure: a line that touches a group, or
-joins two boxes outside every group, is always drawn. The ⋯ menu's **Show all lines** brings every
-line back, and **Legend** hides the legend. A lit path or route keeps its lines either way. Where a
-viewer strips the page's scripts, the picture keeps its legend in place and draws every line. The
-page builders take these as `dockLegend` and `hoverLines`, over an SVG drawn with `viewerHooks`,
-which names each line's two boxes (`data-from`, `data-to`), marks the structure (`data-keep`), and
-groups the legend under `legend:`.
+however far the picture scrolls; a drill-down page shows the legend of the level on show. Lines stay
+hidden except the hovered box's, and except the structure: a line that touches a group, or joins two
+boxes outside every group, is always drawn. The ⋯ menu's **Show all lines** brings every line back,
+and **Legend** hides the legend. A lit path or route keeps its lines either way. A document whose
+lines should all show from the start says `settings.htmlLines: "all"` — the Export menu's **Show all
+lines in the page**, under Interactive HTML, sets it — and every export of it then opens with **Show
+all lines** on. Where a viewer strips the page's scripts, the picture keeps its legend in place and
+draws every line. The page builders take these as `dockLegend`, `hoverLines` and `allLines`, over an
+SVG drawn with `viewerHooks`, which names each line's two boxes (`data-from`, `data-to`), marks the
+structure (`data-keep`), and groups the legend under `legend:`.
 
 A custom exporter receives the mode and its gradient setting alongside the palette
 (`{ template, registry, filename, palette, mode, gradients }`), and returns — or resolves to — a
@@ -1537,6 +1539,7 @@ The schema and editor cover C4's notational essentials:
 | **Snap & align** | Arrange: snap-to-grid, align left/centre/right/top/middle/bottom (2+ selected), distribute (3+), clear routes |
 | **Arrange modes** | Arrange: *Left to right* (default, proximity-based), *Untangle lines* (fewest crossings, lanes for long lines) or, for a dated plan, *By date* (a roadmap); stored as `settings.arrange`, applied on pick, one `⌘Z` undoes both |
 | **Notation** — symbols and numbers / crow's foot / UML | View: how a line's ends draw cardinality; `settings.notation`. UML shows the end glyphs a crow's-foot symbol would replace |
+| **HTML lines** — on hover / all | Export ▸ Show all lines in the page: whether the interactive HTML page opens with every line shown; `settings.htmlLines` |
 | **Enumerations** | Kind `enum`: a record whose rows are the allowed values, «enumeration» style; Insert ▸ Enumeration |
 | **Tasks** | Kind `task`: a ticket with `storyPoints`, `assignees` and a `done` check; prerequisite and dependency lines; a People legend. See [Task graphs](#task-graphs) |
 | **Field flags** — unique, derived | `field.unique` wears a UQ badge and exports as Mermaid `UK`; `field.derived` takes UML's leading slash. The folder importer sets both from `unique` and `formula`/`calculated` |
