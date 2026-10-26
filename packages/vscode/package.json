@@ -1,0 +1,251 @@
+{
+  "name": "better-diagrams-vscode",
+  "displayName": "Better Diagrams",
+  "description": "Open Better Diagrams architecture and sequence diagrams in VS Code, in the same editor as the web app, and give agents the format to write them in.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "publisher": "mosphere",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "author": "Erik Koning",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Erik-Koning/BetterDiagrams.git",
+    "directory": "packages/vscode"
+  },
+  "homepage": "https://github.com/Erik-Koning/BetterDiagrams#readme",
+  "bugs": {
+    "url": "https://github.com/Erik-Koning/BetterDiagrams/issues"
+  },
+  "keywords": [
+    "diagram",
+    "architecture",
+    "sequence-diagram",
+    "c4",
+    "json"
+  ],
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "onLanguage:json",
+    "onLanguageModelTool:get_better_diagrams_schema",
+    "onLanguageModelTool:validate_better_diagram"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In an untrusted workspace, diagrams are saved as plain JSON: the repo's own Prettier and its config, which can run code, are left alone."
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "Diagrams on a virtual file system open and save as plain JSON."
+    }
+  },
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "betterDiagrams.editor",
+        "displayName": "Better Diagrams",
+        "selector": [
+          {
+            "filenamePattern": "*.json"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "get_better_diagrams_schema",
+        "displayName": "Better Diagrams Format",
+        "toolReferenceName": "betterDiagramsSchema",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(type-hierarchy-sub)",
+        "tags": [
+          "better-diagrams",
+          "diagrams"
+        ],
+        "userDescription": "The format a Better Diagrams diagram is written in: the prompt the editor gives its own AI.",
+        "modelDescription": "Returns the Better Diagrams document format: the system prompt the Better Diagrams editor gives its own AI, naming every key, node kind, icon and rule a diagram's JSON may use. Call it before writing or editing a Better Diagrams diagram: a .json file with a \"nodes\" array (an architecture diagram or a task flow) or a \"participants\" array (a sequence diagram). To edit an existing diagram, pass its path as file: the format is then tailored to its kind and the clouds it already uses.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "architecture",
+                "tasks",
+                "sequence"
+              ],
+              "description": "architecture (components and connections), tasks (a plan of tasks and their prerequisites) or sequence (messages between participants over time). Default: the file's kind, else architecture."
+            },
+            "clouds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "aws",
+                  "azure",
+                  "gcp"
+                ]
+              },
+              "description": "Clouds whose component kinds (aws-lambda, azure-functions…) the diagram may use. Default: the ones the file already uses, else none."
+            },
+            "geometry": {
+              "type": "boolean",
+              "description": "false to leave out positions and sizes, letting the editor lay the diagram out. Default true."
+            },
+            "file": {
+              "type": "string",
+              "description": "An existing diagram to tailor the format to: a path in the workspace, or an absolute one."
+            }
+          }
+        }
+      },
+      {
+        "name": "validate_better_diagram",
+        "displayName": "Validate Better Diagram",
+        "toolReferenceName": "betterDiagramsValidate",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(check)",
+        "tags": [
+          "better-diagrams",
+          "diagrams"
+        ],
+        "userDescription": "Check a Better Diagrams file the way the editor reads it.",
+        "modelDescription": "Checks a Better Diagrams diagram the way the Better Diagrams editor reads it: whether it parses and is a diagram, what the editor would repair or drop when it opens it (unknown keys, values outside the vocabulary, edges to nothing), and the diagram's checks (unconnected components, cycles, …). Call it after writing or editing a diagram file, and fix what it reports. Reads the file as VS Code has it, unsaved edits included.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "The diagram's path: in the workspace, or absolute."
+            },
+            "json": {
+              "type": "string",
+              "description": "The diagram's JSON text, to check it before writing it anywhere."
+            }
+          }
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "betterDiagrams.open",
+        "title": "Open Diagram",
+        "category": "Better Diagrams",
+        "icon": "$(type-hierarchy-sub)"
+      },
+      {
+        "command": "betterDiagrams.openToSide",
+        "title": "Open Diagram to the Side",
+        "category": "Better Diagrams",
+        "icon": "$(type-hierarchy-sub)"
+      },
+      {
+        "command": "betterDiagrams.showJson",
+        "title": "Show JSON",
+        "category": "Better Diagrams",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "betterDiagrams.new",
+        "title": "New Diagram File…",
+        "category": "Better Diagrams"
+      },
+      {
+        "command": "betterDiagrams.addAgentInstructions",
+        "title": "Add Agent Instructions…",
+        "category": "Better Diagrams"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "betterDiagrams.openToSide",
+          "when": "betterDiagrams.activeIsDiagram && !activeCustomEditorId",
+          "group": "navigation"
+        },
+        {
+          "command": "betterDiagrams.showJson",
+          "when": "activeCustomEditorId == betterDiagrams.editor",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "betterDiagrams.open",
+          "when": "resourceExtname == .json",
+          "group": "navigation@20"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "betterDiagrams.open",
+          "when": "betterDiagrams.activeIsDiagram || activeCustomEditorId == betterDiagrams.editor"
+        },
+        {
+          "command": "betterDiagrams.openToSide",
+          "when": "betterDiagrams.activeIsDiagram"
+        },
+        {
+          "command": "betterDiagrams.showJson",
+          "when": "activeCustomEditorId == betterDiagrams.editor"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Better Diagrams",
+      "properties": {
+        "betterDiagrams.theme": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "light",
+            "dark"
+          ],
+          "enumDescriptions": [
+            "Light or dark, following VS Code's colour theme.",
+            "Always the light theme.",
+            "Always the dark theme."
+          ],
+          "default": "auto",
+          "description": "The diagram editor's theme."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "vite build --config vite.extension.config.ts && vite build --config vite.webview.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:webview": "npm run build && playwright test",
+    "test:vscode": "npm run build && node test/vscode/run.mjs",
+    "package": "npm run build && cp ../../LICENSE LICENSE && vsce package --no-dependencies --out better-diagrams.vsix; status=$?; rm -f LICENSE; exit $status"
+  },
+  "devDependencies": {
+    "@mosphere/better-diagrams": "*",
+    "@types/node": "^26.6.5",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/vscode": "~1.95.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "@vscode/vsce": "4.0.0",
+    "ovsx": "1.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.3"
+  }
+}

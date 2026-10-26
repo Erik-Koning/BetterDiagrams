@@ -62,6 +62,32 @@ test.describe("import and export", () => {
     expect(text).toContain("REST API");
   });
 
+  test("Show all lines in the page is saved with the diagram, and every export after opens with them shown", async ({ page, studio }) => {
+    await studio.goto();
+    const shown = (menu: Awaited<ReturnType<typeof studio.openMenu>>) =>
+      menu.getByRole("checkbox", { name: "Show all lines in the page" });
+    await shown(await studio.openMenu("Export")).check();
+    await expect(studio.toast).toHaveText("Interactive HTML opens with every line shown");
+    await page.keyboard.press("Escape");
+    // A document setting: it comes back with the diagram.
+    await studio.save();
+    await studio.goto();
+    await expect(shown(await studio.openMenu("Export"))).toBeChecked();
+    await page.keyboard.press("Escape");
+
+    const download = await studio.download(() => studio.fromMenu("Export", /^Interactive HTML/));
+    // Saved under its own name: a file without an extension opens as text.
+    const file = test.info().outputPath("export.html");
+    await download.saveAs(file);
+    await page.goto(`file://${file}`);
+    await expect(page.locator("#bd-alllines")).toBeChecked();
+    await expect(page.locator("body")).not.toHaveClass(/bd-lines-hover/);
+    // The page's own check still turns lines on hover back on.
+    await page.locator("#bd-menu").click();
+    await page.locator("#bd-alllines").uncheck();
+    await expect(page.locator("body")).toHaveClass(/bd-lines-hover/);
+  });
+
   test.describe("a registry exporter", () => {
     test.use({ permissions: ["clipboard-read", "clipboard-write"] });
 

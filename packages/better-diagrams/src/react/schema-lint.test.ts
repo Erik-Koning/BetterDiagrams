@@ -351,4 +351,14 @@ describe("docDiagnostics — settings", () => {
   it("lints a legal fold clean", () => {
     expect(warnings(`{${base}, "settings": {"groupContents": "hide"}}`)).toEqual([]);
   });
+
+  it("checks htmlLines against its vocabulary, and lints a legal one clean", () => {
+    const doc = `{${base}, "settings": {"htmlLines": "none"}}`;
+    const found = warnings(doc);
+    expect(found).toHaveLength(1);
+    expect(found[0].message).toContain('Unknown HTML lines setting "none"');
+    expect(found[0].message).toContain("lines on hover");
+    expect(doc.slice(found[0].from, found[0].to)).toBe('"none"');
+    expect(warnings(`{${base}, "settings": {"htmlLines": "all"}}`)).toEqual([]);
+  });
 });

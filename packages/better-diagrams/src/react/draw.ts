@@ -66,9 +66,9 @@ import {
   assigneeChipWidth,
   assigneeSwatch,
   assigneeSwatches,
+  edgeLabelLayout,
   fitChips,
   formatPoints,
-  seqBadgeOffset,
   silhouettePath,
   teamColor,
 } from "./shapes";
@@ -1499,38 +1499,46 @@ export function emitTemplate(
     // .as-edge__labellayer). The commands stay contiguous so the whole run
     // can be moved in one splice below.
     const labelStart = cmds.length;
+    // Wrapped and placed as the canvas does it (see edgeLabelLayout).
+    const words = edgeLabelLayout(
+      geo,
+      edge.labelT ?? 0.5,
+      { label: edge.label, tech: !!edge.tech && skin.edgeTech, date: !!edge.date, seq: !!edge.seq },
+      skin.labelSize,
+      skin.labelFont,
+    );
     if (edge.seq) {
-      const cx = geo.label.x - seqBadgeOffset(edge.label);
-      cmds.push({ op: "circle", cx, cy: geo.label.y - 9, r: 8, fill: color, stroke: palette.bg, strokeWidth: 1.5 });
-      cmds.push({ op: "text", x: cx, y: geo.label.y - 5.6, text: String(edge.seq), size: 9, font: "mono", weight: 700, color: palette.accentInk, anchor: "middle" });
+      const { cx, cy } = words.seq;
+      cmds.push({ op: "circle", cx, cy, r: 8, fill: color, stroke: palette.bg, strokeWidth: 1.5 });
+      cmds.push({ op: "text", x: cx, y: cy + 3.4, text: String(edge.seq), size: 9, font: "mono", weight: 700, color: palette.accentInk, anchor: "middle" });
     }
-    if (edge.label) {
+    words.lines.forEach((line, i) => {
       cmds.push({
         op: "text",
-        x: geo.label.x + (edge.seq ? 6 : 0),
-        y: geo.label.y - 4,
-        text: edge.label,
+        x: words.x,
+        y: words.baselines[i],
+        text: line,
         size: skin.labelSize,
         font: skin.labelFont,
         ...(skin.marketing ? { weight: 500 } : {}),
         color: skin.labelColor,
-        anchor: "middle",
+        anchor: words.anchor,
         halo: { color: palette.bg, width: 4 },
       });
-    }
+    });
     // The technology sub-label is what marketing tucks away — the reader of a
     // slide does not need "[AMQP]" under "enqueue".
     if (edge.tech && skin.edgeTech) {
       cmds.push({
         op: "text",
-        x: geo.label.x,
-        y: geo.label.y + (edge.label ? 8 : -4),
+        x: words.subX,
+        y: words.techY,
         text: `[${edge.tech}]`,
         size: 9,
         font: "mono",
         color: palette.textDim,
         alpha: 0.8,
-        anchor: "middle",
+        anchor: words.anchor,
         halo: { color: palette.bg, width: 3 },
       });
     }
@@ -1558,14 +1566,14 @@ export function emitTemplate(
     if (edge.date) {
       cmds.push({
         op: "text",
-        x: geo.label.x,
-        y: geo.label.y + (edge.label ? 8 : -4) + (edge.tech && skin.edgeTech ? 11 : 0),
+        x: words.subX,
+        y: words.dateY,
         text: exportDate(edge.date),
         size: 9,
         font: skin.chipFont,
         color: palette.textDim,
         alpha: 0.7,
-        anchor: "middle",
+        anchor: words.anchor,
         halo: { color: palette.bg, width: 3 },
       });
     }

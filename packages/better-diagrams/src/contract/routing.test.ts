@@ -16,6 +16,8 @@ import {
   edgeGeometryFor,
   edgeHeadPath,
   floatingEdgeGeometry,
+  floatingSides,
+  pinnedSides,
   type Box,
 } from "./geometry";
 import { copyFragment, pasteFragment } from "./clipboard";
@@ -255,6 +257,85 @@ describe("straight routing", () => {
 
   it("is advertised to the model alongside the other routings", () => {
     expect(DIAGRAM_SYSTEM_PROMPT).toContain("curved|orthogonal|straight");
+  });
+});
+
+describe("floating ends line up and face the gap", () => {
+  const source: Box = { x: 0, y: 0, width: 170, height: 76 };
+
+  it("runs straight between boxes that are offset but overlap", () => {
+    const target: Box = { x: 260, y: 22, width: 170, height: 76 };
+    // The overlap of the two sides, corners left out, is 34..64: its middle.
+    expect(edgeGeometryFor("orthogonal", source, target, 0.5).path).toBe("M 170 49 L 260 49");
+    expect(edgeGeometryFor("straight", source, target, 0.5).path).toBe("M 170 49 L 260 49");
+    const curve = edgeGeometryFor("curved", source, target, 0.5);
+    expect(curve.at(0).y).toBe(49);
+    expect(curve.tip).toEqual({ x: 260, y: 49 });
+  });
+
+  it("runs straight into a taller box whose middle is elsewhere", () => {
+    const target: Box = { x: 260, y: -10, width: 170, height: 200 };
+    // The short box's whole side fits the tall one's: the short box's middle.
+    expect(edgeGeometryFor("orthogonal", source, target, 0.5).path).toBe("M 170 38 L 260 38");
+  });
+
+  it("lines up vertically too", () => {
+    const target: Box = { x: 30, y: 180, width: 170, height: 76 };
+    expect(edgeGeometryFor("straight", source, target, 0.5).path).toBe("M 100 76 L 100 180");
+  });
+
+  it("is unchanged for boxes whose middles already match", () => {
+    const target: Box = { x: 300, y: -12, width: 100, height: 100 };
+    expect(edgeGeometryFor("straight", source, target, 0.5).path).toBe("M 170 38 L 300 38");
+  });
+
+  it("keeps the corners out of it: barely overlapping boxes still jog", () => {
+    const target: Box = { x: 260, y: 70, width: 170, height: 76 };
+    // 6px of shared side is all corner, so both ends keep their middles.
+    expect(edgeGeometryFor("orthogonal", source, target, 0.5).path).toContain("M 170 38");
+  });
+
+  it("goes down between wide boxes stacked with a small sideways shift", () => {
+    const wide: Box = { x: 0, y: 0, width: 300, height: 76 };
+    const below: Box = { x: 250, y: 100, width: 300, height: 76 };
+    // Centre to centre reads as across (dx 250, dy 100) and sent the line out
+    // of the right face and back left into the other box. The gap is below.
+    const geo = edgeGeometryFor("straight", wide, below, 0.5);
+    expect(geo.path).toBe("M 275 76 L 275 100");
+  });
+
+  it("follows the wider gap when the boxes are apart on both axes", () => {
+    const target: Box = { x: 200, y: 200, width: 170, height: 76 };
+    const geo = edgeGeometryFor("straight", source, target, 0.5);
+    expect(geo.at(0)).toEqual({ x: 85, y: 76 }); // out the bottom, not the right
+  });
+
+  it("lines an unpinned end up with a pinned one it faces", () => {
+    const target: Box = { x: 260, y: 22, width: 170, height: 76 };
+    const geo = edgeGeometryFor("orthogonal", source, target, 0.5, { start: { side: "right", t: 0.75 } });
+    expect(geo.path).toBe("M 170 57 L 260 57");
+    // Out of reach of the target's side: back to its middle.
+    const high = edgeGeometryFor("orthogonal", source, target, 0.5, { start: { side: "right", t: 0.1 } });
+    expect(high.tip).toEqual({ x: 260, y: 60 });
+  });
+
+  it("pins a drawn connection's dot only where it differs from the floating side", () => {
+    const right: Box = { x: 260, y: 22, width: 170, height: 76 };
+    // Out of the bottom dot toward a box on the right: the bottom is a choice.
+    expect(pinnedSides(source, right, { start: "bottom", end: "left" })).toEqual({ start: { side: "bottom" } });
+    // The dots the line would use anyway stay floating.
+    expect(pinnedSides(source, right, { start: "right", end: "left" })).toEqual({});
+    expect(pinnedSides(source, right, { start: "right", end: "top" })).toEqual({ end: { side: "top" } });
+    // A body drop has no dot; anything that isn't a side is ignored.
+    expect(pinnedSides(source, right, { start: null, end: undefined })).toEqual({});
+    expect(pinnedSides(source, right, { start: "middle" })).toEqual({});
+  });
+
+  it("reports the sides a floating edge takes", () => {
+    expect(floatingSides(source, { x: 260, y: 22, width: 170, height: 76 })).toEqual({ start: "right", end: "left" });
+    expect(floatingSides(source, { x: -300, y: 0, width: 170, height: 76 })).toEqual({ start: "left", end: "right" });
+    expect(floatingSides(source, { x: 0, y: 200, width: 170, height: 76 })).toEqual({ start: "bottom", end: "top" });
+    expect(floatingSides(source, { x: 0, y: -200, width: 170, height: 76 })).toEqual({ start: "top", end: "bottom" });
   });
 });
 

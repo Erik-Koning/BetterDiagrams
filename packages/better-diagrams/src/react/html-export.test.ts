@@ -189,6 +189,10 @@ describe("buildTimelineHtml", () => {
     // Lines start hidden: "Show all lines" is off, the legend on.
     expect(viewer).toContain('<input type="checkbox" id="bd-alllines" /> Show all lines');
     expect(viewer).toContain('<input type="checkbox" id="bd-showkey" checked /> Legend');
+    // allLines opens it with "Show all lines" on; without hoverLines it has nothing to start.
+    const all = buildTimelineHtml({ svg, title: "Plain", stops: [], hoverLines: true, allLines: true });
+    expect(all).toContain('<input type="checkbox" id="bd-alllines" checked /> Show all lines');
+    expect(buildTimelineHtml({ svg, title: "Plain", stops: [], allLines: true })).not.toContain('id="bd-alllines"');
   });
 });
 

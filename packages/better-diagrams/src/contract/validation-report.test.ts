@@ -149,6 +149,16 @@ describe("validateTemplateReport", () => {
     ).toEqual(["invalid-date /nodes/1/startDate", "not-applicable /nodes/2/startDate", "unknown-value /settings/roadmap"]);
   });
 
+  it("keeps the HTML lines setting it knows, and says what an unknown one falls back to", () => {
+    const doc = (htmlLines: unknown) => ({ nodes: [], edges: [], settings: { htmlLines } });
+    expect(validateTemplate(doc("all")).settings).toEqual({ htmlLines: "all" });
+    expect(validateTemplate(doc("hover")).settings).toEqual({ htmlLines: "hover" });
+    expect(validateTemplate(doc("none")).settings).toBeUndefined();
+    const [issue] = validateTemplateReport(doc("none")).issues;
+    expect(`${issue!.code} ${issue!.path}`).toBe("unknown-value /settings/htmlLines");
+    expect(issue!.message).toBe(`"none" isn't a htmlLines value (hover, all), so the HTML page shows a box's lines on hover.`);
+  });
+
   it("escapes JSON Pointer segments", () => {
     expect(codes({ nodes: [{ id: "a", "x/y~z": 1 }], edges: [] })).toEqual(["unknown-key /nodes/0/x~1y~0z"]);
   });

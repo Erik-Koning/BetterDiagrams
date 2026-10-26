@@ -239,6 +239,16 @@ export const LIGHT_THEME: Theme = {
   },
 };
 
+/**
+ * The root's `data-color-scheme`, from its style (`themeToStyle` and the
+ * host's own `style`): the scheme they set, else the stylesheet's dark. The
+ * stylesheet turns it into a literal `color-scheme`, the one `light-dark()`
+ * still works under once compiled.
+ */
+export function colorSchemeOf(rootStyle: CSSProperties): "light" | "dark" {
+  return (rootStyle as Record<string, unknown>)["--as-color-scheme"] === "light" ? "light" : "dark";
+}
+
 /** Turn a Theme into inline CSS custom properties for the root element. */
 export function themeToStyle(theme: Theme | undefined): CSSProperties {
   if (!theme) return {};

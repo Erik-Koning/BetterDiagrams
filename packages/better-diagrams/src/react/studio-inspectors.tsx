@@ -73,7 +73,9 @@ import { assigneeSwatch, swatchColor } from "./shapes";
 import { KindSelect } from "./KindSelect";
 import { SearchSelect } from "./SearchSelect";
 import type { ResolvedRegistry } from "./registry-types";
-import { kindDef, providerDef, relationDef, zoneInk } from "./registry-types";
+import { iconPaths, kindDef, providerDef, relationDef, zoneInk } from "./registry-types";
+import { SvgIcon } from "./icons";
+import { iconKeywords, suggestIcons } from "./icon-suggest";
 import { relationDressing } from "../contract/relations";
 import { useStudio } from "./context";
 import { isNodeLocked, type AlignMode, type EdgePatch, type NodePatch } from "./studio-shared";
@@ -939,6 +941,9 @@ export function NodeInspector({
   const stage = read((d) => (d.done ? "done" : (d.stage ?? "todo")));
   const priority = read((d) => d.priority ?? "");
   const capacity = read((d) => d.capacity);
+  // Icons the box's own words point at — one box's, so a multi-selection of
+  // different things isn't offered one guess for all.
+  const iconPicks = single ? suggestIcons(`${data.label} ${data.description ?? ""}`, registry.iconNames) : [];
 
   return (
     <>
@@ -979,13 +984,40 @@ export function NodeInspector({
 
       {allPlainBoxes ? (
         <InspectorSection caption="Style">
+          {/* Each icon shows its glyph, and the search knows what it stands
+              for: "postgres" finds the database. */}
           <SearchSelect
             value={icon.value}
             mixed={icon.mixed}
-            options={registry.iconNames.map((name) => ({ value: name, label: name === "none" ? "no icon" : name }))}
+            options={registry.iconNames.map((name) => ({
+              value: name,
+              label: name === "none" ? "no icon" : name,
+              keywords: iconKeywords(name),
+              icon: <SvgIcon paths={iconPaths(registry, name)} size={14} className="as-searchselect__icon" />,
+            }))}
             onChange={(value) => patch({ icon: value })}
             aria-label="Node icon"
           />
+          {iconPicks.length ? (
+            <div className="as-swatches as-icon-picks" role="group" aria-label="Suggested icons">
+              {iconPicks.map((name) => {
+                const on = !icon.mixed && icon.value === name;
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    className={`as-btn as-btn--icon${on ? " as-btn--on" : ""}`}
+                    aria-pressed={on}
+                    aria-label={`Icon ${name}`}
+                    title={`${name} — suggested by the name`}
+                    onClick={() => patch({ icon: name })}
+                  >
+                    <SvgIcon paths={iconPaths(registry, name)} size={16} />
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
           {single && allTasks ? (
             // A ticket's detail runs to sentences and lines; the card shows
             // the first two.
@@ -1214,6 +1246,50 @@ export function NodeInspector({
               type="button"
               className="as-chip"
               onClick={() => patch({ color: undefined, opacity: undefined })}
+              title="Back to the kind's own colour"
+            >
+              Auto
+            </button>
+          ) : null}
+        </InspectorSection>
+      ) : null}
+
+      {/* A box's own colour, for grouping by hue: the six inks a line can
+          take, so a cluster's boxes and lines can match, or any colour.
+          Groups set theirs in the Frame section above. */}
+      {!allContainers ? (
+        <InspectorSection caption="Colour">
+          <div className="as-swatches">
+            {EDGE_COLORS.map((name) => {
+              const hex = EDGE_COLOR_HEX[name];
+              const on = !color.mixed && color.value === hex;
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  title={name}
+                  aria-label={`Node colour ${name}`}
+                  aria-pressed={on}
+                  className={`as-swatch${on ? " as-swatch--on" : ""}`}
+                  style={{ background: hex }}
+                  onClick={() => patch({ color: hex })}
+                />
+              );
+            })}
+          </div>
+          <input
+            className="as-swatch as-swatch--custom"
+            type="color"
+            value={color.mixed || !color.value ? def.accent : color.value}
+            onChange={(event) => patch({ color: event.target.value.toLowerCase() })}
+            aria-label="Custom node colour"
+            title={color.mixed ? "Mixed — pick one colour for all" : "Pick any colour"}
+          />
+          {datas.some((d) => d.color) ? (
+            <button
+              type="button"
+              className="as-chip"
+              onClick={() => patch({ color: undefined })}
               title="Back to the kind's own colour"
             >
               Auto

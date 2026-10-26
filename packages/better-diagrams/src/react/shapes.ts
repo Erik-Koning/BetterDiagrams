@@ -16,7 +16,8 @@
  *   parallelogram — flow-chart input/output
  */
 import type { NodeShape } from "./registry-types";
-import { approxTextWidth } from "../contract/text";
+import { approxTextWidth, wrapText, type TextFont } from "../contract/text";
+import { runsVerticallyAt, type EdgeGeometry } from "../contract/geometry";
 import {
   cylinderLidRadius,
   parallelogramSkew,
@@ -130,6 +131,108 @@ export function silhouettePath(
  */
 export function seqBadgeOffset(label: string | undefined): number {
   return label ? (label.length * 6.4) / 2 + 14 : 0;
+}
+
+/** The narrowest an edge label wraps to, however short its line. */
+const EDGE_LABEL_MIN_WRAP = 72;
+/** How wide a label beside an up-and-down line runs before it wraps. */
+const EDGE_LABEL_SIDE_WRAP = 160;
+const EDGE_LABEL_MAX_LINES = 4;
+/** Gap between an up-and-down line and the label beside it. */
+const EDGE_LABEL_SIDE_GAP = 8;
+/** Line pitch of the small text under a label: `[tech]`, then the date. */
+const EDGE_SUBLABEL_PITCH = 11;
+
+/** Where an edge's words go — see `edgeLabelLayout`. */
+export interface EdgeLabelLayout {
+  /** The label, wrapped. Empty when the edge has none. */
+  lines: string[];
+  /** x of every line: the centre above a line, the left edge beside one. */
+  x: number;
+  /** Baseline of each of `lines`, top to bottom. */
+  baselines: number[];
+  anchor: "middle" | "start";
+  /** Beside an up-and-down line rather than above an across one. */
+  beside: boolean;
+  /** x and baseline of `[tech]`, then of the date, under the label. */
+  subX: number;
+  techY: number;
+  dateY: number;
+  /** The step badge's centre. */
+  seq: { cx: number; cy: number };
+  /** How far the top line sits above where a one-line label's would. */
+  rise: number;
+}
+
+/**
+ * Where an edge's label, `[tech]`, date and step badge go. One function for
+ * the canvas and the exporters, so a wrapped label breaks at the same words
+ * on screen and in every image.
+ *
+ * A label used to be one line centred on the line's midpoint: on a short
+ * arrow between neighbouring boxes it ran over both boxes, and on an
+ * up-and-down line it sat across the stroke. Now, where the line runs
+ * across, the label sits above it, wrapped to the room between the line's
+ * ends (never narrower than EDGE_LABEL_MIN_WRAP); where it runs up and down,
+ * the label moves beside it, the step badge sitting on the line itself.
+ * A one-line label on an across line is exactly where it always was.
+ */
+export function edgeLabelLayout(
+  geo: EdgeGeometry,
+  labelT: number,
+  text: { label?: string; tech?: boolean; date?: boolean; seq?: boolean },
+  size: number,
+  font: TextFont,
+): EdgeLabelLayout {
+  const { x, y } = geo.label;
+  const pitch = Math.round(size * 1.25);
+  const beside = runsVerticallyAt(geo, labelT);
+  const origin = geo.at(0);
+  const room = beside
+    ? EDGE_LABEL_SIDE_WRAP
+    : Math.max(EDGE_LABEL_MIN_WRAP, Math.abs(geo.tip.x - origin.x) - 12);
+  const lines = text.label ? wrapText(text.label, size, font, room, EDGE_LABEL_MAX_LINES) : [];
+
+  if (!beside) {
+    const rise = Math.max(0, lines.length - 1) * pitch;
+    const widest = lines.reduce((a, b) => (b.length > a.length ? b : a), "");
+    return {
+      lines,
+      x: x + (text.seq ? 6 : 0),
+      baselines: lines.map((_, i) => y - 5 - rise + i * pitch),
+      anchor: "middle",
+      beside,
+      subX: x,
+      techY: y + (lines.length ? 8 : -5),
+      dateY: y + (lines.length ? 8 : -5) + (text.tech ? EDGE_SUBLABEL_PITCH : 0),
+      seq: { cx: x - seqBadgeOffset(widest), cy: y - 9 },
+      rise,
+    };
+  }
+
+  // Beside: the whole stack — label lines, then [tech], then the date —
+  // centred on the label point, starting clear of the line (and of the
+  // step badge, which sits on it).
+  const left = x + EDGE_LABEL_SIDE_GAP + (text.seq ? 10 : 0);
+  const stack =
+    lines.length * pitch + (text.tech ? EDGE_SUBLABEL_PITCH : 0) + (text.date ? EDGE_SUBLABEL_PITCH : 0);
+  const top = y - stack / 2;
+  const baselines = lines.map((_, i) => top + (i + 1) * pitch - Math.round(pitch * 0.25));
+  // The small text keeps the label's spacing under it, or starts the stack.
+  const afterLabel = baselines.length ? baselines[baselines.length - 1] : top - 2;
+  const techY = afterLabel + EDGE_SUBLABEL_PITCH;
+  return {
+    lines,
+    x: left,
+    baselines,
+    anchor: "start",
+    beside,
+    subX: left,
+    techY,
+    dateY: text.tech ? techY + EDGE_SUBLABEL_PITCH : techY,
+    seq: { cx: x, cy: y },
+    rise: 0,
+  };
 }
 
 /**

@@ -100,7 +100,9 @@ for (const file of files) {
 const url = open ? `${running.url}/?open=${encodeURIComponent(`${open.folder}/${open.file}`)}` : `${running.url}/`;
 
 const shown = (path) => (path.startsWith(homedir()) ? `~${path.slice(homedir().length)}` : path);
-console.error(`Better Diagrams on ${running.url}`);
+// The link the browser is sent to, so --no-open (or a browser that never
+// came up) leaves the one that opens the first file, not the front page.
+console.error(`Better Diagrams on ${url}`);
 for (const folder of folders) console.error(`  linked  ${shown(folder)}`);
 for (const file of files) console.error(`  file    ${shown(file)}`);
 console.error("  Ctrl+C to stop");
@@ -108,10 +110,11 @@ console.error("  Ctrl+C to stop");
 if (!flags["no-open"]) {
   const [command, args] =
     platform() === "darwin" ? ["open", [url]] : platform() === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
+  const unopened = () => console.error("  No browser opened — open the link above.");
   try {
-    spawn(command, args, { stdio: "ignore", detached: true }).on("error", () => console.error(`  open ${url}`)).unref();
+    spawn(command, args, { stdio: "ignore", detached: true }).on("error", unopened).unref();
   } catch {
-    console.error(`  open ${url}`);
+    unopened();
   }
 }
 

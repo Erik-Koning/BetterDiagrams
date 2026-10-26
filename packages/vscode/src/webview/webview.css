@@ -1,0 +1,65 @@
+/* The page around the studio, set up as the web app sets up its own
+   (example/src/app.css): the studio's styles are self-contained, so this is
+   only the box it fills and the odd line of our own above it. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  padding: 0;
+  overflow: hidden;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.bd-vscode {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  font-size: 0.875rem;
+}
+
+.bd-vscode__editor {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The text isn't a diagram right now (half-typed JSON, say): the last good
+   picture stays up, read-only, under this. */
+.bd-vscode__problem {
+  padding: 8px 14px;
+  font-family: var(--as-font);
+  border-bottom: 1px solid var(--as-border);
+  background: var(--as-surface);
+  color: var(--as-text);
+  line-height: 1.4;
+}
+
+.bd-vscode__problem strong {
+  font-weight: 600;
+}
+
+.bd-vscode__problem span {
+  color: var(--as-text-dim);
+}
+
+/* Nothing to show yet, and nothing good to fall back on. */
+.bd-vscode__nothing {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  padding: 24px;
+  background: var(--as-bg);
+  color: var(--as-text-dim);
+  font-family: var(--as-font);
+  line-height: 1.5;
+  text-align: center;
+}

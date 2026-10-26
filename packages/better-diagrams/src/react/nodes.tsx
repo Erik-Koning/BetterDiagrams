@@ -342,7 +342,7 @@ export const ShapeNode = memo(function ShapeNode({
   width,
   height,
 }: NodeProps<ShapeNodeType>) {
-  const { registry, readOnly, mode, tagFilter, showTeams, showLinks, requestCommit, navigateFile, drillInto, navigateToNode, childCounts, dimmedIds, pinnedFields, highlightFields, domainTint, blockedIds, taskLabelOf, personPreview, personFocus, overdueIds, reachedIds, taskFilterIds, today } = useStudio();
+  const { registry, readOnly, mode, tagFilter, showTeams, showLinks, requestCommit, navigateFile, drillInto, navigateToNode, setRenamingId, childCounts, dimmedIds, pinnedFields, highlightFields, domainTint, blockedIds, taskLabelOf, personPreview, personFocus, overdueIds, reachedIds, taskFilterIds, today } = useStudio();
   const { updateNodeData, updateNode } = useReactFlow();
   const def = kindDef(registry, data.kind);
   const paths = iconPaths(registry, data.icon);
@@ -361,13 +361,22 @@ export const ShapeNode = memo(function ShapeNode({
 
   // A scoped view's ghost stands in for an element on another level: it
   // renders dimmed-and-dashed, and its double-click visits the real thing.
+  //
+  // Otherwise double-click opens a box that has something inside (its ⊞
+  // badge says so) and names one that doesn't, as in any editor. It used to
+  // open every box: an empty one became an empty level ringed with ghosts of
+  // its neighbours, which read as a zoomed-in copy of the diagram rather
+  // than the start of a breakdown. That level is now "Open its level" on
+  // the context menu.
   const scopeGhost = isGhostNodeId(id);
   const childCount = scopeGhost ? 0 : (childCounts.get(id) ?? 0);
   const onDoubleClick = scopeGhost
     ? () => navigateToNode(ghostSourceId(id))
-    : childCount > 0 || !readOnly
+    : childCount > 0
       ? () => drillInto(id)
-      : undefined;
+      : !readOnly
+        ? () => setRenamingId(id)
+        : undefined;
   const handles = useResizeHandles(!readOnly && !data.locked && !scopeGhost, selected);
   // Stable, like `requestCommit` alone was: React Flow rebuilds a resizer
   // whenever its callbacks change identity, and this renders every frame of

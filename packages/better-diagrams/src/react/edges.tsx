@@ -64,7 +64,7 @@ import {
 import { topDropTarget } from "./dangling";
 import { formatDiagramDate } from "../contract/timeline";
 import { useStudio } from "./context";
-import { seqBadgeOffset } from "./shapes";
+import { edgeLabelLayout } from "./shapes";
 import { glowInk } from "./path-view";
 
 /** The bright route colour's fallback hex — the class re-resolves it per theme. */
@@ -207,7 +207,7 @@ export const LabeledEdge = memo(function LabeledEdge({
   data,
   selected,
 }: EdgeProps<LabeledEdgeType>) {
-  const { readOnly, requestCommit, registry, showToast, notation } = useStudio();
+  const { readOnly, requestCommit, registry, showToast, notation, mode } = useStudio();
   const { screenToFlowPosition, setEdges, setNodes, getEdges, getNodes, getInternalNode } =
     useReactFlow();
   const sourceNode = useInternalNode(source);
@@ -603,10 +603,18 @@ export const LabeledEdge = memo(function LabeledEdge({
   const routeKey = data?.routeKey;
   const routeKeyWidth = routeKey ? routeKey.length * 5.6 + 12 : 0;
   // Clear of the seq badge (a circle of r=8 at label.y - 9) when both show.
-  const routeKeyTop = (data?.seq ? -36 : -24) as number;
-  // Stacked under whatever else the label group is showing, so a connection
-  // that lands later says so without displacing its own name.
-  const dateY = (data?.label ? 8 : -5) + (data?.tech ? 11 : 0);
+  // The words' places, shared with the exporters (see edgeLabelLayout). The
+  // font is the stylesheet's: mono 11px, or sans 13px in marketing, which
+  // also hides [tech].
+  const marketing = mode === "marketing";
+  const words = edgeLabelLayout(
+    geo,
+    data?.labelT ?? 0.5,
+    { label: data?.label, tech: !!data?.tech && !marketing, date: !!data?.date, seq: !!data?.seq },
+    marketing ? 13 : 11,
+    marketing ? "sans" : "mono",
+  );
+  const routeKeyTop = (data?.seq ? -36 : -24) - words.rise;
   const origin = geo.at(0);
   // A recognisable cardinality draws its crow's-foot symbol at the box and
   // the text further in — or one of the two, as the document's notation
@@ -1115,43 +1123,48 @@ export const LabeledEdge = memo(function LabeledEdge({
                 <>
                   <circle
                     className={`as-edge__seq as-edge--c-${data?.color ?? "slate"}`}
-                    cx={geo.label.x - seqBadgeOffset(data.label)}
-                    cy={geo.label.y - 9}
+                    cx={words.seq.cx}
+                    cy={words.seq.cy}
                     r={8}
                     fill={EDGE_COLOR_HEX[data?.color ?? "slate"]}
                   />
                   <text
                     className="as-edge__seqnum"
-                    x={geo.label.x - seqBadgeOffset(data.label)}
-                    y={geo.label.y - 5.6}
+                    x={words.seq.cx}
+                    y={words.seq.cy + 3.4}
                     textAnchor="middle"
                   >
                     {data.seq}
                   </text>
                 </>
               ) : null}
-              {data?.label ? (
+              {words.lines.length ? (
                 <text
                   className={`as-edge__label${selected ? " as-edge__label--selected" : ""}`}
-                  x={geo.label.x + (data?.seq ? 6 : 0)}
-                  y={geo.label.y - 5}
-                  textAnchor="middle"
+                  textAnchor={words.anchor}
+                  {...(words.lines.length === 1 ? { x: words.x, y: words.baselines[0] } : {})}
                 >
-                  {data.label}
+                  {words.lines.length === 1
+                    ? words.lines[0]
+                    : words.lines.map((line, i) => (
+                        <tspan key={i} x={words.x} y={words.baselines[i]}>
+                          {line}
+                        </tspan>
+                      ))}
                 </text>
               ) : null}
               {data?.tech ? (
                 <text
                   className="as-edge__tech"
-                  x={geo.label.x + (data?.seq && !data?.label ? 6 : 0)}
-                  y={geo.label.y + (data?.label ? 8 : -5)}
-                  textAnchor="middle"
+                  x={words.subX}
+                  y={words.techY}
+                  textAnchor={words.anchor}
                 >
                   [{data.tech}]
                 </text>
               ) : null}
               {data?.date ? (
-                <text className="as-edge__date" x={geo.label.x} y={geo.label.y + dateY} textAnchor="middle">
+                <text className="as-edge__date" x={words.subX} y={words.dateY} textAnchor={words.anchor}>
                   {formatDiagramDate(data.date)}
                 </text>
               ) : null}

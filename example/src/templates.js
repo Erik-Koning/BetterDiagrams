@@ -256,17 +256,3 @@ export async function removeTemplate(file) {
     return false;
   }
 }
-
-/**
- * `Payments flow` → `payments-flow.json`. The client owns naming: the server
- * only checks that what arrives is a plain slug (see `safePath`), so this is
- * the one place the rule lives.
- */
-export function templateFile(name, fallback) {
-  const slug = String(name)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64);
-  return `${slug || fallback}.json`;
-}

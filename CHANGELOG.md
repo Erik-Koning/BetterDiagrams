@@ -53,6 +53,13 @@ This changelog starts with the editing API (October 2026). For what changed betw
   `registryValidateOptions` now fills from the registry, so validation measures a wrapped card in
   its kind's shape. `wrappedNodeHeight` takes the `shape`; `wrapText` and `wrappedLineCount` take
   `breakWords`, which cuts a word too wide for the line as `overflow-wrap: anywhere` does.
+- `hostHistory` (`HostHistory`) on both editors: a host that keeps the document's undo history
+  itself (the VS Code extension: its text's) gets the toolbar's Undo and Redo and `⌘Z`, `⇧⌘Z`
+  and `⌘Y`, so there is one history rather than two. The handle's `undo` and `redo` are unchanged.
+- `settings.htmlLines` (`HTML_LINES`, `HtmlLines`): `"all"` opens the interactive HTML page with
+  **Show all lines** on, for every export of that document; `"hover"`, the default, is never
+  stored. The Export menu's **Show all lines in the page**, under Interactive HTML, sets it, and
+  one undo takes it back. `buildTimelineHtml` and `buildMultiViewHtml` take it as `allLines`.
 
 ### Changed
 
@@ -97,9 +104,32 @@ This changelog starts with the editing API (October 2026). For what changed betw
   for smaller diamonds may need **Arrange → Tidy** afterwards.
 - A pipe's rounded ends stop at a 40px radius (and half its width), so a pipe grown tall keeps
   straight sides rather than becoming a capsule whose ends eat its text.
+- An unpinned line runs straight wherever its two boxes' facing sides overlap: both ends sit in
+  the middle of the overlap, where they used to sit at the middle of each side, so boxes that
+  were only roughly level, or of different heights, drew a jog or an S. Its sides come from the
+  gap between the boxes rather than the angle between their centres, so a line between two wide,
+  slightly offset boxes no longer leaves one's side and doubles back across both. An unpinned end
+  opposite a pinned one lines up with it. Lines between boxes whose middles already match are
+  unchanged; other documents redraw, on screen and in exports.
+- A connection drawn out of a box's dot, or dropped on one, keeps that side (`start`/`end`,
+  side only) when it isn't the side the line would take anyway.
+- Edge labels wrap to the room between the line's ends and stack upward above it, so a long
+  label on a short arrow no longer runs over both boxes; on an up-and-down line the label,
+  `[tech]` and date sit beside the line, the step badge on it. The same in every image export.
+- Double-click on an empty box names it in place; a box with something inside still opens on
+  double-click. An empty box's level is **Open its level** on its right-click menu.
+- The node inspector has a **Colour** row for any box (the six line colours, a picker, *Auto*),
+  where only groups had one. The icon picker shows each glyph, searches by what an icon stands
+  for, and suggests icons from the box's name and description.
 
 ### Fixed
 
+- Marketing cards keep their fills and icon strokes on a page that declares no `color-scheme` of
+  its own. Built for browsers without `light-dark()` (Vite's lightningcss does this, for this
+  package's stylesheet and most hosts'), those paints only switch under a literal `color-scheme`,
+  which the root now declares from the theme, as `data-color-scheme`.
+- `better-diagrams file.json --no-open` printed the editor's bare address, which opens on its
+  starter diagram; it prints the link that opens the file, the one a browser would be sent to.
 - The types compile under `@types/react` 19, and the suite passes on React 19; CI now runs both.
 - Deleting a node also drops the per-view layout (`meta.views`) recorded for it.
 - Exports that split a document into content and layout now keep custom annotation kinds' options.

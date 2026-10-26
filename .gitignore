@@ -10,9 +10,12 @@ packages/better-diagrams/app/
 packages/*/temp/
 
 # Copied into the package by `prepack`, removed by `postpack`
-packages/*/README.md
-packages/*/LICENSE
-packages/*/CHANGELOG.md
+packages/better-diagrams/README.md
+packages/better-diagrams/LICENSE
+packages/better-diagrams/CHANGELOG.md
+# Copied in by the VS Code extension's `npm run package`, which also writes the .vsix
+packages/vscode/LICENSE
+*.vsix
 
 # Folder-format trees the example app imports (drop an export in to try it)
 templates/folders/*

@@ -119,4 +119,4 @@ export { SchemaCopyModal } from "./SchemaCopyModal";
 export type { SchemaCopyModalProps, SchemaFocus, SchemaForm } from "./SchemaCopyModal";
 export { CloudScopePicker, scopeFor, EMPTY_SCOPE } from "./CloudScopePicker";
 export type { CloudScope, CloudScopePickerProps } from "./CloudScopePicker";
-export type { StudioFile, StudioFileInit } from "./chrome";
+export type { HostHistory, StudioFile, StudioFileInit } from "./chrome";

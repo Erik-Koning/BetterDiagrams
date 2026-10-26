@@ -770,6 +770,23 @@ export interface StudioFileInit {
   doc?: unknown;
 }
 
+/**
+ * The document's undo history, kept by the host rather than the editor: for
+ * a host whose file already has an undo of its own (a code editor's text,
+ * say), where the editor's history would be a second one over the same edits.
+ * The host steps it and hands the editor the result as a new `value`.
+ */
+export interface HostHistory {
+  /** Step the host's history back. The editor shows the result when `value` changes. */
+  undo: () => void;
+  /** Step it forward again. */
+  redo: () => void;
+  /** `false` disables the Undo button. Absent, it stays enabled: only the host knows. */
+  canUndo?: boolean;
+  /** `false` disables the Redo button. Absent, it stays enabled. */
+  canRedo?: boolean;
+}
+
 /** The Import menu's word on Link a file on disk…, in both editors. */
 export const LINK_FILE_HINT = "Edit a diagram .json where it lives: edits save to it, and its changes reload here";
 
@@ -931,6 +948,7 @@ export const SHORTCUT_GROUPS: Record<"architecture" | "sequence", ReadonlyArray<
         ["⇧+mod+S", "Save as… (when the host offers it)"],
         ["mod+A", "Select all"],
         ["F2 / Enter", "Rename the selection"],
+        ["Double-click", "Name a box · open one with ⊞ inside"],
         ["Delete", "Delete selection (cascades into groups)"],
         ["Esc", "Close a panel · drop the selection · leave a level"],
         ["?", "This sheet"],

@@ -115,6 +115,7 @@ import {
   LINK_FILE_HINT,
   NEW_FILE_HINT,
   copyNote,
+  type HostHistory,
   type StudioFile,
   type StudioFileInit,
 } from "../chrome";
@@ -142,6 +143,7 @@ import {
   modeLayoutOptions,
   paletteFromTheme,
   resolveStudioMode,
+  colorSchemeOf,
   themeToStyle,
   type StudioMode,
   type Theme,
@@ -262,6 +264,8 @@ export interface SequenceStudioProps {
   onNewFileOnDisk?: () => void;
   /** Save the open file somewhere the person picks — same contract as the architecture editor. */
   onSaveFileAs?: () => void;
+  /** The host keeps the undo history — same contract as the architecture editor. */
+  hostHistory?: HostHistory;
   /**
    * Fires with the {@link SequenceSelection} on mount (empty) and whenever it
    * changes — so a host that remounts the editor per file never holds a
@@ -353,6 +357,7 @@ function SequenceInner({
   onOpenFile,
   onNewFileOnDisk,
   onSaveFileAs,
+  hostHistory,
   onSelectionChange: onHostSelectionChange,
   toolbarExtras,
   inspectorExtras,
@@ -1142,6 +1147,13 @@ function SequenceInner({
     return !!snapshot;
   }, [applySnapshot, redoHistory]);
 
+  // What the toolbar's Undo and Redo and the history keys do: the host's
+  // history when it keeps one, else this editor's.
+  const undoStep = useCallback(() => (hostHistory ? hostHistory.undo() : void doUndo()), [hostHistory, doUndo]);
+  const redoStep = useCallback(() => (hostHistory ? hostHistory.redo() : void doRedo()), [hostHistory, doRedo]);
+  const undoDisabled = hostHistory ? hostHistory.canUndo === false : !history.canUndo;
+  const redoDisabled = hostHistory ? hostHistory.canRedo === false : !history.canRedo;
+
   useImperativeHandle(
     handleRef,
     () => ({
@@ -1187,13 +1199,13 @@ function SequenceInner({
       }
       if (mod && event.key.toLowerCase() === "z") {
         event.preventDefault();
-        if (event.shiftKey) doRedo();
-        else doUndo();
+        if (event.shiftKey) redoStep();
+        else undoStep();
         return;
       }
       if (mod && event.key.toLowerCase() === "y") {
         event.preventDefault();
-        doRedo();
+        redoStep();
         return;
       }
       if (mod && event.shiftKey && event.key.toLowerCase() === "s" && onSaveFileAs) {
@@ -1278,7 +1290,7 @@ function SequenceInner({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [doUndo, doRedo, deleteSelection, duplicateSelection, handleSave, onSave, onSaveFileAs, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, readOnly, flow, setNodes, setEdges, addParticipant, addMessage, addNote]);
+  }, [undoStep, redoStep, deleteSelection, duplicateSelection, handleSave, onSave, onSaveFileAs, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, readOnly, flow, setNodes, setEdges, addParticipant, addMessage, addNote]);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -1584,6 +1596,7 @@ function SequenceInner({
       <div
         className={`as-root${modeClass ? ` ${modeClass}` : ""}${className ? ` ${className}` : ""}`}
         data-mode={studioMode}
+        data-color-scheme={colorSchemeOf(rootStyle)}
         style={rootStyle}
       >
         <div className="as-toolbar">
@@ -1683,10 +1696,10 @@ function SequenceInner({
 
           {!readOnly ? (
             <div className="as-toolbar__group">
-              <button type="button" className="as-btn as-btn--icon" onClick={doUndo} disabled={!history.canUndo} title="Undo (⌘Z)" aria-label="Undo">
+              <button type="button" className="as-btn as-btn--icon" onClick={undoStep} disabled={undoDisabled} title="Undo (⌘Z)" aria-label="Undo">
                 <UiIcon name="undo" />
               </button>
-              <button type="button" className="as-btn as-btn--icon" onClick={doRedo} disabled={!history.canRedo} title="Redo (⇧⌘Z)" aria-label="Redo">
+              <button type="button" className="as-btn as-btn--icon" onClick={redoStep} disabled={redoDisabled} title="Redo (⇧⌘Z)" aria-label="Redo">
                 <UiIcon name="redo" />
               </button>
             </div>

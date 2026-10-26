@@ -73,6 +73,7 @@ export interface ArchitectureStudioProps {
     files?: StudioFile[];
     generate?: DiagramGenerator;
     gradients?: boolean;
+    hostHistory?: HostHistory;
     inspectorExtras?: ReactNode | ((ctx: StudioSlotContext) => ReactNode);
     legend?: boolean;
     minimap?: boolean;
@@ -781,6 +782,7 @@ export interface DiagramSettings {
     arrange?: ArrangeMode;
     capacity?: Record<string, number>;
     groupContents?: GroupContents;
+    htmlLines?: HtmlLines;
     notation?: Notation;
     roadmap?: RoadmapAxis;
 }
@@ -1909,6 +1911,17 @@ export function hasOverlaps(template: DiagramTemplate, opts?: {
 // @public
 export type HopMultiplicity = "one" | "many" | "unknown";
 
+// @public
+export interface HostHistory {
+    canRedo?: boolean;
+    canUndo?: boolean;
+    redo: () => void;
+    undo: () => void;
+}
+
+// @public
+export const HTML_LINES: readonly ["hover", "all"];
+
 // @public (undocumented)
 export interface HtmlExplorerData {
     analyses?: SavedAnalysis[];
@@ -1933,6 +1946,9 @@ export interface HtmlExplorerData {
 
 // @public
 export function htmlExplorerData(template: DiagramTemplate, registry: ResolvedRegistry, palette?: Partial<ExportPalette>): HtmlExplorerData;
+
+// @public (undocumented)
+export type HtmlLines = (typeof HTML_LINES)[number];
 
 // @public (undocumented)
 export const ICON_NAMES: readonly ["none", "user", "users", "database", "server", "layers", "globe", "cloud", "window", "mobile", "lock", "gear", "bolt", "doc", "code", "mail", "box", "shield", "sparkle", "key", "chart", "search", "filter", "folder", "sync", "cpu", "terminal", "balance", "share", "grid", "branch", "clock", "calendar", "bell", "card", "cart", "activity", "eye", "warning", "check", "link", "image", "video", "pin", "robot", "flask"];
@@ -2403,6 +2419,7 @@ export function moveParticipant(t: SequenceTemplate, id: string, toIndex: number
 export interface MultiViewHtmlOptions {
     // (undocumented)
     accent?: string;
+    allLines?: boolean;
     dockLegend?: boolean;
     // (undocumented)
     explorer?: HtmlExplorerData;
@@ -3507,6 +3524,7 @@ export interface SequenceStudioProps {
     files?: StudioFile[];
     generate?: DiagramGenerator;
     gradients?: boolean;
+    hostHistory?: HostHistory;
     // (undocumented)
     inspectorExtras?: ReactNode;
     mode?: StudioMode;
@@ -4101,6 +4119,7 @@ export type TimelineFutureMode = (typeof TIMELINE_FUTURE_MODES)[number];
 // @public (undocumented)
 export interface TimelineHtmlOptions {
     accent?: string;
+    allLines?: boolean;
     dockLegend?: boolean;
     explorer?: HtmlExplorerData;
     hoverLines?: boolean;

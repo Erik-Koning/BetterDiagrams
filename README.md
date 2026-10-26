@@ -13,7 +13,8 @@ npm install @mosphere/better-diagrams
 packages/better-diagrams/
   src/contract/    zero-dependency: the document, validation, prompt, layout, clipboard
   src/react/       the editor component, registry, exporters
-example/           a small React JS app that integrates it
+example/           a small React JS app that integrates it (the `better-diagrams` command serves it)
+packages/vscode/   the VS Code extension: the same editor, for a diagram's .json in VS Code
 legacy/            the original single-file prototype, superseded
 ```
 
@@ -39,7 +40,8 @@ npm run build      # builds the library to packages/better-diagrams/dist
 
 A repo that keeps its diagrams beside its code opens them without a checkout of this one:
 `npx @mosphere/better-diagrams docs/BetterDiagram.json` serves the editor with that file live — see
-**Diagrams in another repo, without this one** below, beside **Live files on disk**.
+**Diagrams in another repo, without this one** below, beside **Live files on disk**. In VS Code,
+the extension opens the same file in the same editor, in a tab — see **VS Code** below.
 
 The end-to-end suite starts its own dev server on :5174 and drives the example in
 Chromium — first run `npx playwright install chromium`. It never writes to
@@ -108,6 +110,7 @@ shadow.
 | `onOpenFile` | `() => Promise<File \| null>` | Run **Open file…** through the host instead of the browser's picker, which never says where a file lives. The host shows its own dialog: a diagram JSON picked there it links and opens, as `onLinkFile` does, and resolves `null` (as it does on a cancel); any other file it resolves as a `File`, which the editor reads in as a copy, as Open file… always has. The example app has its dev server show the system's dialog for it. Both editors take it. |
 | `onNewFileOnDisk` | `() => void` | Offer **New file on disk…** right after **Link a file on disk…**, in the Import menu and on the welcome modal: the same thing for a file that isn't there yet. The host does the picking, making and linking (the example app has its dev server show the system's save dialog, makes a blank diagram of the open file's kind there, titled after its name, and opens it live; a name picked that is there already is linked as it is, never written over); the editor only calls back. Both editors take it. |
 | `onSaveFileAs` | `() => void` | Offer **Save as…** in the file menu, and on `⇧⌘S`. The host does the picking and writing (the example app has its dev server show the system's save dialog, writes the file there and keeps editing it there, as if it had been opened from there); the editor only calls back. Both editors take it. |
+| `hostHistory` | `HostHistory` | Leave the undo history to the host: the toolbar's Undo and Redo, and `⌘Z`, `⇧⌘Z` and `⌘Y`, call its `undo` and `redo` instead of stepping the editor's own, and the host's next `value` shows the result. For a host whose file already has an undo (the VS Code extension: the text's), so there is one history, not two. The buttons stay enabled unless `canUndo` / `canRedo` is `false`; the handle's `undo` and `redo` still step the editor's own. Both editors take it. |
 | `onNavigateFile` | `(ref) => void` | Fired when a node url with the `file:` prefix (e.g. `file:Order flow`) has its ↗ clicked — resolve by id, then name, and switch documents. |
 | `onSelectionChange` | `(sel) => void` | The canvas selection in **document terms** — ids bucketed by template section (`{ nodes, edges, zones }` here; `{ participants, messages, activations, fragments, notes }` on the sequence editor), so a host can mirror it, e.g. highlight the matching entries of a live JSON view (the example app does exactly this). Fires on mount too, so a host that remounts per file never keeps a stale selection. |
 | `onPinsChange` | `(pins: Pin[]) => void` | The **pins** — a field (`{ nodeId, fieldId }`) or a whole table (`{ nodeId }`) — mirrored like the two above: fires on mount (empty) and on every change. View state — never in the document; a pin is dropped when its node leaves the document. See **Fields beyond the rows** below. |
@@ -150,11 +153,13 @@ border, a shadow you can actually see, and an icon chip that **inverts**: a pale
 near-saturated glyph, rather than a pool of the kind's colour that would only wash an
 already-tinted card twice. The stylesheet does this with `light-dark()`, which reads the
 `colorScheme` token — `LIGHT_THEME` sets it; a partial theme that omits it is read as dark, exactly
-as the browser already reads it for its own widgets.
+as the browser already reads it for its own widgets. The root declares it as a literal
+`color-scheme` too (from `data-color-scheme`), which is what `light-dark()` reads once a build has
+compiled it for older browsers, as Vite's does; a host page needn't declare one of its own.
 
-The root element carries `as-root--marketing` and `data-mode`, so a host stylesheet can reach in;
-technical adds no class at all, so existing host CSS keeps matching exactly what it matched before.
-Cards that are set to wrap keep their technical font sizes and chip width, because the stored
+The root element carries `as-root--marketing`, `data-mode` and `data-color-scheme`, so a host
+stylesheet can reach in; technical adds no class at all, so existing host CSS keeps matching
+exactly what it matched before. Cards that are set to wrap keep their technical font sizes and chip width, because the stored
 height was measured with those, and a sequence participant's name stops one step short of a card
 title's for the same reason — its header is a fixed lane box.
 
@@ -606,7 +611,10 @@ zone has:
 ```
 
 `color` is **not** container-only: on any other kind it overrides that kind's registry accent,
-which is what `"color": "#ff0000"` on a service can only mean. `fill`, `outline` and `opacity`
+which is what `"color": "#ff0000"` on a service can only mean. The inspector's **Colour** row
+sets it on any box — the six colours a line can take, so a cluster's boxes and lines can match,
+or any colour from the picker, and *Auto* gives back the kind's own. It colours a whole
+selection at once, which is the quick way to group boxes by hue. `fill`, `outline` and `opacity`
 stay frame concepts — a leaf draws its own silhouette — and the JSON editor's lint says so
 rather than letting them vanish on save.
 
@@ -626,7 +634,9 @@ resolve overlap by `z`, not by containment. If you want boxes inside boxes, they
 A node's children (`parentId`) are its next C4 level — any kind can have them, not just
 groups. A `group` still renders its children inline inside its frame; a **card of any other
 kind keeps its normal look** and its children live behind it, visible only by drilling in.
-Double-click a node (or its `⊞ n` badge) to slide into its level: the focused node becomes an
+Double-click a node that has something inside (it wears a `⊞ n` badge), or click the badge, to
+slide into its level; an empty box's level — where a breakdown starts — is *Open its level* on
+its right-click menu, because double-clicking an empty box names it. The focused node becomes an
 open boundary frame, its direct children render at their stored coordinates, and everything
 they talk to outside appears as dashed **ghost** stand-ins — double-click a ghost to visit the
 real thing. Breadcrumbs, a `C2 · Containers`-style level pill, and `Esc` step you back out.
@@ -833,6 +843,25 @@ All three routings honour them: curved threads a smooth spline through every way
 orthogonal keeps every segment axis-aligned and always leaves/arrives square to a pinned side;
 straight runs direct point-to-point strokes, the classic flow-chart line. The same geometry
 function drives the screen and every image export, so a routed edge exports exactly as drawn.
+
+**An unpinned line is as straight as its boxes allow.** It runs between the two faces that look
+at each other across the **gap** between the boxes — apart sideways, it leaves a side; apart
+vertically, the top or bottom; apart both ways, along the wider gap. Where those two faces
+overlap, both ends sit in the middle of the overlap, so two boxes that are merely *roughly*
+level, or of different heights, get one straight line instead of a jog or an S. (The ends used
+to sit at the middles of their sides, so a line was straight only when both middles matched to
+the pixel, and the side came from the angle between the centres — which sent the line between
+two wide, slightly offset boxes out of one's side and back across both.) An unpinned end
+opposite a pinned one lines up with it the same way. Drawing a connection out of a box's dot,
+or dropping it on one, keeps that **side** whenever it isn't the side the line would take
+anyway: out of the bottom dot toward a box on the right means the bottom. A dot that agrees
+stays floating, so the line still follows the boxes as they move.
+
+**Labels keep clear of the line.** Where the line runs across, its label sits above it,
+wrapped to the room between the line's ends, so a long label on a short arrow between
+neighbouring boxes stacks up in the gap instead of running over both boxes. Where the line runs
+up and down, the label sits beside it (the step badge stays on the line). The canvas and every
+image export wrap at the same words.
 
 In the editor, shaping a line is direct manipulation: **drag anywhere on it** to bend it there —
 a waypoint is born under the pointer and follows it until release, snapping softly to the
@@ -1354,6 +1383,11 @@ for a topic or a mesh, `grid` for a replica set, `branch` for a pipeline, `key`,
 `flask`. All one stroke-only 24×24 idiom, so the same path data drives the canvas, the SVG
 export and the Canvas2D raster export. `"none"` opts a node out.
 
+The picker shows each glyph beside its name and searches by what an icon stands for —
+"postgres" finds `database`, "stripe" finds `card` — and under it the inspector **suggests** up to
+four icons from the box's own name and description (*Orders DB* offers `database` and `cart`),
+one click each. A registry's own icon is suggested when its name is one of the words.
+
 
 A registered kind shows up in the inspector dropdown **and** in the generated system prompt, so
 the model can emit it too. `example/src/extensions.js` demonstrates all of it.
@@ -1401,14 +1435,16 @@ The interactive HTML page carries its own runtime, so its builder loads when tha
 rather than with the editor; its `run` resolves asynchronously (as any exporter's may).
 
 In that page the legend leaves the picture for the window's top-right corner, so it stays in view
-however far the picture scrolls; a drill-down page shows the legend of the level on show. Lines
-stay hidden except the hovered box's, and except the structure: a line that touches a group, or
-joins two boxes outside every group, is always drawn. The ⋯ menu's **Show all lines** brings every
-line back, and **Legend** hides the legend. A lit path or route keeps its lines either way. Where a
-viewer strips the page's scripts, the picture keeps its legend in place and draws every line. The
-page builders take these as `dockLegend` and `hoverLines`, over an SVG drawn with `viewerHooks`,
-which names each line's two boxes (`data-from`, `data-to`), marks the structure (`data-keep`), and
-groups the legend under `legend:`.
+however far the picture scrolls; a drill-down page shows the legend of the level on show. Lines stay
+hidden except the hovered box's, and except the structure: a line that touches a group, or joins two
+boxes outside every group, is always drawn. The ⋯ menu's **Show all lines** brings every line back,
+and **Legend** hides the legend. A lit path or route keeps its lines either way. A document whose
+lines should all show from the start says `settings.htmlLines: "all"` — the Export menu's **Show all
+lines in the page**, under Interactive HTML, sets it — and every export of it then opens with **Show
+all lines** on. Where a viewer strips the page's scripts, the picture keeps its legend in place and
+draws every line. The page builders take these as `dockLegend`, `hoverLines` and `allLines`, over an
+SVG drawn with `viewerHooks`, which names each line's two boxes (`data-from`, `data-to`), marks the
+structure (`data-keep`), and groups the legend under `legend:`.
 
 A custom exporter receives the mode and its gradient setting alongside the palette
 (`{ template, registry, filename, palette, mode, gradients }`), and returns — or resolves to — a
@@ -1503,6 +1539,7 @@ The schema and editor cover C4's notational essentials:
 | **Snap & align** | Arrange: snap-to-grid, align left/centre/right/top/middle/bottom (2+ selected), distribute (3+), clear routes |
 | **Arrange modes** | Arrange: *Left to right* (default, proximity-based), *Untangle lines* (fewest crossings, lanes for long lines) or, for a dated plan, *By date* (a roadmap); stored as `settings.arrange`, applied on pick, one `⌘Z` undoes both |
 | **Notation** — symbols and numbers / crow's foot / UML | View: how a line's ends draw cardinality; `settings.notation`. UML shows the end glyphs a crow's-foot symbol would replace |
+| **HTML lines** — on hover / all | Export ▸ Show all lines in the page: whether the interactive HTML page opens with every line shown; `settings.htmlLines` |
 | **Enumerations** | Kind `enum`: a record whose rows are the allowed values, «enumeration» style; Insert ▸ Enumeration |
 | **Tasks** | Kind `task`: a ticket with `storyPoints`, `assignees` and a `done` check; prerequisite and dependency lines; a People legend. See [Task graphs](#task-graphs) |
 | **Field flags** — unique, derived | `field.unique` wears a UQ badge and exports as Mermaid `UK`; `field.derived` takes UML's leading slash. The folder importer sets both from `unique` and `formula`/`calculated` |
@@ -1900,6 +1937,9 @@ npx @mosphere/better-diagrams                                # link this folder:
 npx @mosphere/better-diagrams docs/arch/Context.json --new   # start one that isn't there yet
 ```
 
+Installed once (`npm install -g @mosphere/better-diagrams`), it's `better-diagrams
+docs/BetterDiagram.json` from any folder.
+
 It links the folders it's given (this one by default) and opens the browser at the first file;
 everything above works the same — live files, Save as…, the question before a lossy save,
 Prettier formatting — with outside edits reaching the page as Server-Sent Events rather than
@@ -2238,10 +2278,12 @@ Four places the conventions could not be copied verbatim, and why:
 
 - **`⌘K` is search, not link.** It predates this, is advertised in the search field, and works
   from inside any input. Links take `⌘⇧K`.
-- **Renaming is `F2`, not double-click.** Double-click is the DRILL gesture and worth keeping:
-  it opens a component's next C4 level, including the empty one you start a decomposition from.
-  `F2` (or `Enter` on a single selection) opens the name in place instead; a text note and an
-  edge label still edit on double-click, since neither has a level to drill into.
+- **Double-click names an empty box, and opens a full one.** On a box with something inside
+  (its `⊞ n` badge) double-click is the drill gesture; on an empty one it opens the name in
+  place, as in any editor. It used to drill into every box, and an empty level ringed with ghost
+  stand-ins for the neighbours read as a zoomed-in copy of the diagram, not the start of a
+  breakdown — that level is now *Open its level* on the right-click menu. `F2` (or `Enter` on a
+  single selection) renames any box; a text note and an edge label edit on double-click.
 - **Arrow keys move the selection, not the focused node.** React Flow's built-in nudge only
   moves the one node with DOM focus and can't move a multi-selection, so `disableKeyboardA11y`
   turns it off and the editor owns all four arrows. With nothing selected they fall through to
@@ -2286,6 +2328,44 @@ is dragged by its label bar, so the space between its children is free for a rub
 canvas to load it — as a new file beside a diagram with more than one top-level node, when the host
 manages files; otherwise in place, asking first when that replaces something.
 
+## VS Code
+
+`packages/vscode` is a VS Code extension that opens a diagram's `.json` in the same editor:
+**Open With… → Better Diagrams** on any `.json`, or the **Open Diagram to the Side** button a
+diagram's JSON gets in its title bar. Its webview renders the library's `ArchitectureStudio` and
+`SequenceStudio` with the web app's own document handling — `example/src/documents.js`, which
+`App.jsx` imports too: the registry, the registry-aware validation, the report of what an edit
+would drop, and the default view (marketing cards, no minimap) — so a file looks the same in
+VS Code, in the browser the `better-diagrams` command opens, and in `npm run dev`. Light or dark
+follows VS Code's colour theme (`betterDiagrams.theme` pins one).
+
+The file's text in VS Code is the only copy: an edit in the diagram is one edit of the text,
+formatted as the `better-diagrams` command formats a save (the repo's own Prettier and config,
+by `formatDiagram`), so ⌘Z, the dirty dot, ⌘S and source control are VS Code's own, and typing
+in the JSON beside it moves the picture. The first edit that would drop something asks first;
+JSON that isn't a diagram (by the disk store's `isDiagram`) is never written over; opening a file
+never changes it. Exports ask where to save, and a `file:Name` link opens the diagram it names
+beside it.
+
+**Agents.** The extension hands an agent the format and a check of what it wrote. For agents in
+VS Code's chat there are two language model tools: `#betterDiagramsSchema` (the prompt the
+copy-schema button copies, with the app's registry, tailored to a kind, clouds or an existing
+file) and `#betterDiagramsValidate` (what the editor would repair or drop in a file, and its
+Checks). For agents that read files instead, **Better Diagrams: Add Agent Instructions…** writes
+the same format into the repo and points `AGENTS.md`, `CLAUDE.md` or
+`.github/copilot-instructions.md` at it.
+
+```bash
+npm run build:vscode     # packages/vscode/dist
+npm run package:vscode   # packages/vscode/better-diagrams.vsix
+code --install-extension packages/vscode/better-diagrams.vsix
+```
+
+Its tests: `npm test -w better-diagrams-vscode` (the sync rules and the agent text), `npm run test:webview -w
+better-diagrams-vscode` (the built webview in Chromium, under its own content security policy),
+and `npm run test:vscode -w better-diagrams-vscode` (the extension in a real VS Code window).
+See `packages/vscode/README.md`.
+
 ## Packaging
 
 | Entry | What | Runs on |
@@ -2312,14 +2392,48 @@ shape — every signature, prop and type — in the API reports under `packages/
 (`npm run api:update` after a build rewrites them; CI fails while they differ from the build). A
 change to the public API therefore arrives as a diff someone reviews. Releases are listed in
 `CHANGELOG.md`. CI (`.github/workflows/ci.yml`) typechecks and tests the library on React 18 and
-19, checks the API reports, lints the packed tarball with publint and arethetypeswrong, and runs
-the end-to-end suite.
+19, checks the API reports, lints the packed tarball with publint and arethetypeswrong, runs the
+`better-diagrams` command from it (`scripts/smoke-cli.mjs`), and runs the end-to-end suite.
 
 **Documents.** Documents carry a `version`, and `migrateTemplate` runs them up to `CURRENT_VERSION` through a
 registered migration chain. A document from a **newer** build throws rather than being coerced —
 silently dropping fields a future release added would turn "open an old client" into irreversible
 data loss on the next save. `MIGRATIONS` is empty today; the hook exists so v2 has somewhere to
 go.
+
+## Releasing
+
+Releases publish from CI, never from a working tree: a tag runs the CI that guards `main` on the
+tagged commit, then waits for you to approve before anything is published.
+
+- **The library**: tag `v<version>`, the version in `packages/better-diagrams/package.json`.
+  `.github/workflows/release-npm.yml` publishes it to npm by trusted publishing (OIDC — there is
+  no npm token anywhere), with provenance. A prerelease (`0.2.0-beta.1`) goes out under `beta`,
+  never `latest`.
+- **The VS Code extension**: tag `vscode-v<version>`, the version in
+  `packages/vscode/package.json`. `.github/workflows/release-vscode.yml` packages the `.vsix` once,
+  publishes that file to Open VSX and the VS Code Marketplace, and attaches it to a GitHub Release.
+
+```bash
+# bump the version and its CHANGELOG heading, merge to main, then:
+git tag v0.1.0 && git push origin v0.1.0                 # the library
+git tag vscode-v0.1.0 && git push origin vscode-v0.1.0   # the extension
+```
+
+Either workflow run by hand (Actions → Run workflow, on `main`) rehearses — the same checks and
+build, then `npm publish --dry-run` or each store's sign-in check — and never publishes.
+`npm run release:dry` rehearses the npm side locally.
+
+Once, before the first release:
+
+1. **npm.** On npmjs.com, `@mosphere/better-diagrams` → Settings → Trusted Publisher → GitHub
+   Actions: `Erik-Koning` / `BetterDiagrams`, workflow `release-npm.yml`, environment `npm`. A
+   trusted publisher that hasn't published within two days lapses, so add it just before the
+   first tag. After that publish, Publishing access → *Require two-factor authentication and
+   disallow tokens*.
+2. **GitHub.** An environment `npm` with you as its required reviewer, deployments allowed from
+   `main` and `v*` tags.
+3. **The extension's stores**: `packages/vscode/README.md` → Publishing.
 
 ## Known issue
 

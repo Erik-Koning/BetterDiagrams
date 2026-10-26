@@ -10,6 +10,7 @@
  *   - No network calls unless the host supplies `generate`.
  */
 import {
+  Fragment,
   forwardRef,
   useCallback,
   useEffect,
@@ -89,12 +90,14 @@ import {
   type EdgeRouting,
   type ArrangeMode,
   type Notation,
+  type HtmlLines,
   type GroupContents,
   type NodeField,
   type VersionTagPosition,
   type ZoneBox,
   type ZoneNodeData,
 } from "../contract/schema";
+import { pinnedSides, type Box as EdgeBox } from "../contract/geometry";
 import { pathColor, type DiagramPath } from "../contract/paths";
 import { applyOutsideView, applyPathView, buildPathGlowIndex, canvasStandIns, documentNodeId, keptOnCanvas, representatives, transientPathColors } from "./path-view";
 import { FieldPathPanel } from "./FieldPathPanel";
@@ -142,6 +145,7 @@ import {
   NEW_FILE_HINT,
   copyNote,
   type CanvasTool,
+  type HostHistory,
   type ImportReport,
   type StudioFile,
   type StudioFileInit,
@@ -249,6 +253,7 @@ import {
   modeLayoutOptions,
   paletteFromTheme,
   resolveStudioMode,
+  colorSchemeOf,
   themeToStyle,
   type StudioMode,
   type Theme,
@@ -593,6 +598,14 @@ export interface ArchitectureStudioProps {
    * menu and on ⇧⌘S. Absent, neither offers it.
    */
   onSaveFileAs?: () => void;
+  /**
+   * Leave the document's undo history to the host: the toolbar's Undo and
+   * Redo, ⌘Z, ⇧⌘Z and ⌘Y call these instead of stepping the editor's own,
+   * and the host's next `value` shows the result. For a host whose file has
+   * an undo of its own (the VS Code extension: the text's), so there is one
+   * history, not two. The handle's `undo` and `redo` still step the editor's.
+   */
+  hostHistory?: HostHistory;
   onNavigateFile?: (ref: string) => void;
   /**
    * Fires with the {@link StudioSelection} on mount (empty) and whenever it
@@ -930,6 +943,7 @@ function StudioInner({
   onOpenFile,
   onNewFileOnDisk,
   onSaveFileAs,
+  hostHistory,
   onNavigateFile,
   onSelectionChange: onHostSelectionChange,
   onFocusChange,
@@ -3164,6 +3178,33 @@ function StudioInner({
     [readOnly, applyTemplate, showToast],
   );
 
+  /** The document's `settings.htmlLines`, "hover" when it says nothing. */
+  const htmlLines: HtmlLines = template.settings?.htmlLines ?? "hover";
+
+  /**
+   * Another document setting, set from the Export menu: how the interactive
+   * HTML export shows lines. Stored in the document, so every later export
+   * — from any host, or an agent's — opens the same way; "hover", the
+   * default, is never stored.
+   */
+  const setHtmlLines = useCallback(
+    (next: HtmlLines) => {
+      if (readOnly) return;
+      const { htmlLines: _was, ...rest } = templateRef.current.settings ?? {};
+      const settings = next === "all" ? { ...rest, htmlLines: next } : rest;
+      applyTemplate(
+        { ...templateRef.current, ...(Object.keys(settings).length ? { settings } : { settings: undefined }) },
+        { fit: false },
+      );
+      showToast(
+        next === "all"
+          ? "Interactive HTML opens with every line shown"
+          : "Interactive HTML shows a box's lines while it is hovered",
+      );
+    },
+    [readOnly, applyTemplate, showToast],
+  );
+
   /**
    * Fold every junction table into the many-to-many line it stands for —
    * one document edit, so one ⌘Z brings the tables back.
@@ -3394,8 +3435,33 @@ function StudioInner({
     [readOnly, applyTemplate, registry, showToast],
   );
 
+  /**
+   * The sides a new connection keeps: the dot it was drawn out of and the
+   * dot it was dropped on, where either differs from the side the line would
+   * float to (see `pinnedSides`). Drawing out of a box's bottom dot toward a
+   * box on its right means the bottom, and the line used to leave the right
+   * side regardless. `targetBox` stands in for a target that isn't on the
+   * canvas yet — a dangling arrow's dot.
+   */
+  const pinnedEnds = useCallback(
+    (connection: Connection, targetBox?: EdgeBox): Pick<DiagramEdgeData, "start" | "end"> => {
+      if (connection.source === connection.target) return {};
+      const boxOf = (id: string): EdgeBox | undefined => {
+        const node = flow.getInternalNode(id);
+        if (!node?.measured?.width || !node.measured.height) return undefined;
+        const { x, y } = node.internals.positionAbsolute;
+        return { x, y, width: node.measured.width, height: node.measured.height };
+      };
+      const s = boxOf(connection.source);
+      const t = targetBox ?? boxOf(connection.target);
+      if (!s || !t) return {};
+      return pinnedSides(s, t, { start: connection.sourceHandle, end: connection.targetHandle });
+    },
+    [flow],
+  );
+
   const onConnect = useCallback(
-    (connection: Connection) => {
+    (connection: Connection, targetBox?: EdgeBox) => {
       if (readOnly) return;
       // source === target is a SELF-LOOP — a retry arrow, drawn out one face
       // and back into an adjacent one. Legal since validation learned it.
@@ -3418,6 +3484,7 @@ function StudioInner({
           ...(timelineAtRef.current ? { date: timelineAtRef.current } : {}),
           // New edges inherit the diagram default (no own `routing`).
           routingResolved: resolveRouting(meta.current?.routing),
+          ...pinnedEnds(connection, targetBox),
         } satisfies DiagramEdgeData,
         style: { stroke: EDGE_COLOR_HEX.slate, strokeWidth: 1.8 },
       };
@@ -3431,7 +3498,7 @@ function StudioInner({
       if (twin) showToast("Second connection added — drag it clear of the first");
       commitLater();
     },
-    [readOnly, setEdges, commitLater, flow, showToast],
+    [readOnly, setEdges, commitLater, flow, showToast, pinnedEnds],
   );
 
   /**
@@ -3496,10 +3563,12 @@ function StudioInner({
       const at = flow.screenToFlowPosition({ x: clientX, y: clientY });
 
       const over = topDropTarget(flow, at);
+      // The dot the drag left from: a body drop keeps that end's side too.
+      const sourceHandle = connectionState.fromHandle?.id ?? null;
       // Released back on its own node included: that's a SELF-LOOP, the
       // flow-chart retry arrow.
       if (over) {
-        onConnect({ source: from.id, target: over, sourceHandle: null, targetHandle: null });
+        onConnect({ source: from.id, target: over, sourceHandle, targetHandle: null });
         return;
       }
 
@@ -3523,8 +3592,12 @@ function StudioInner({
       };
       setNodes((current) => [...current, pointNode]);
       // Through onConnect, so a dangling edge is styled, defaulted, and
-      // committed exactly like a completed one.
-      onConnect({ source: from.id, target: pointNode.id, sourceHandle: null, targetHandle: null });
+      // committed exactly like a completed one. The dot isn't measured yet,
+      // so its box goes along.
+      onConnect(
+        { source: from.id, target: pointNode.id, sourceHandle, targetHandle: null },
+        { x: pointNode.position.x, y: pointNode.position.y, width: size.w, height: size.h },
+      );
     },
     [readOnly, flow, onConnect, setNodes],
   );
@@ -4320,6 +4393,13 @@ function StudioInner({
     if (snapshot) applySnapshot(snapshot);
     return !!snapshot;
   }, [redoHistory, applySnapshot]);
+
+  // What the toolbar's Undo and Redo and the history keys do: the host's
+  // history when it keeps one, else this editor's.
+  const undoStep = useCallback(() => (hostHistory ? hostHistory.undo() : void doUndo()), [hostHistory, doUndo]);
+  const redoStep = useCallback(() => (hostHistory ? hostHistory.redo() : void doRedo()), [hostHistory, doRedo]);
+  const undoDisabled = hostHistory ? hostHistory.canUndo === false : !history.canUndo;
+  const redoDisabled = hostHistory ? hostHistory.canRedo === false : !history.canRedo;
 
   // ── Drill navigation (C4 levels) ──────────────────────────────────────────
 
@@ -6967,13 +7047,13 @@ function StudioInner({
       // ── History ──
       if (mod && key === "z") {
         event.preventDefault();
-        if (event.shiftKey) doRedo();
-        else doUndo();
+        if (event.shiftKey) redoStep();
+        else undoStep();
         return;
       }
       if (mod && key === "y") {
         event.preventDefault();
-        doRedo();
+        redoStep();
         return;
       }
 
@@ -7238,7 +7318,7 @@ function StudioInner({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doUndo, doRedo, deleteSelection, onSave, onSaveFileAs, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, pathPanelOpen, refPanel, closeRefPanel, coverageOpen, usageOpen, analysis.state, closeAnalysis, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
+  }, [undoStep, redoStep, deleteSelection, onSave, onSaveFileAs, template, copySelection, pasteClipboard, duplicateSelection, cutSelection, selectAll, clearSelection, nudgeSelection, alignSelection, groupSelection, ungroupSelection, toggleLockSelection, restackZones, runExport, addNode, addZone, flow, readOnly, shortcutsOpen, activeDiffBase, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, openMenu, panelOpen, pathPanelOpen, refPanel, closeRefPanel, coverageOpen, usageOpen, analysis.state, closeAnalysis, timelineCursor, drillOut, modalOpen, ownsKeyboard, handleSave, tool, toolsOpen]);
 
   // ── Zone resize gesture ───────────────────────────────────────────────────
   //
@@ -7474,6 +7554,7 @@ function StudioInner({
         ref={rootRef}
         className={`as-root${modeClass ? ` ${modeClass}` : ""}${className ? ` ${className}` : ""}`}
         data-mode={studioMode}
+        data-color-scheme={colorSchemeOf(rootStyle)}
         style={rootStyle}
         onPointerDownCapture={() => {
           activeStudio = studioId;
@@ -8371,8 +8452,8 @@ function StudioInner({
               <button
                 type="button"
                 className="as-btn as-btn--icon"
-                onClick={doUndo}
-                disabled={!history.canUndo}
+                onClick={undoStep}
+                disabled={undoDisabled}
                 title={`Undo (${modKey}Z)`}
                 aria-label="Undo"
               >
@@ -8381,8 +8462,8 @@ function StudioInner({
               <button
                 type="button"
                 className="as-btn as-btn--icon"
-                onClick={doRedo}
-                disabled={!history.canRedo}
+                onClick={redoStep}
+                disabled={redoDisabled}
                 title={`Redo (⇧${modKey}Z)`}
                 aria-label="Redo"
               >
@@ -8542,16 +8623,33 @@ function StudioInner({
                 // dictionary needs tables, a change report a baseline).
                 if (exporter.available && !exporter.available({ template, ...(activeDiffBase ? { diffBase: activeDiffBase } : {}) })) return null;
                 return (
-                  <button
-                    key={key}
-                    type="button"
-                    role="menuitem"
-                    className="as-menu__item"
-                    onClick={() => void runExport(key)}
-                  >
-                    <div className="as-menu__label">{exporter.label}</div>
-                    {exporter.hint ? <div className="as-menu__hint">{exporter.hint}</div> : null}
-                  </button>
+                  <Fragment key={key}>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="as-menu__item"
+                      onClick={() => void runExport(key)}
+                    >
+                      <div className="as-menu__label">{exporter.label}</div>
+                      {exporter.hint ? <div className="as-menu__hint">{exporter.hint}</div> : null}
+                    </button>
+                    {/* The built-in page's one setting, under it: a document
+                        setting, so it holds for every later export. A host's
+                        own exporter under this key decides for itself. */}
+                    {key === "html" && exporter === BUILTIN_EXPORTERS.html && !readOnly ? (
+                      <label
+                        className="as-menu__check"
+                        title="Saved in the diagram: every Interactive HTML export opens with Show all lines on, instead of showing a box's lines on hover"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={htmlLines === "all"}
+                          onChange={() => setHtmlLines(htmlLines === "all" ? "hover" : "all")}
+                        />
+                        Show all lines in the page
+                      </label>
+                    ) : null}
+                  </Fragment>
                 );
               })}
             </ToolbarMenu>
@@ -9962,6 +10060,20 @@ function StudioInner({
                       onPick={() => setRenamingId(selectedDocNodeIds[0] ?? null)}
                       close={closeContext}
                     />
+                    {/* The way into an EMPTY box's level, where a breakdown
+                        starts: double-click names an empty box (see nodes.tsx). */}
+                    {contextMenu.kind === "node" && selectedDocNodeIds.length === 1 ? (
+                      <ContextItem
+                        label="Open its level"
+                        hint={
+                          childCounts.get(selectedDocNodeIds[0]!)
+                            ? `${childCounts.get(selectedDocNodeIds[0]!)} inside`
+                            : "Break it down"
+                        }
+                        onPick={() => drillInto(selectedDocNodeIds[0]!)}
+                        close={closeContext}
+                      />
+                    ) : null}
                     <ContextItem
                       label="Group selection"
                       hint={`${modKey}G`}
