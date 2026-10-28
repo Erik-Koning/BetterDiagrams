@@ -28,7 +28,7 @@ import {
   type ViewMode,
 } from "@app/documents.js";
 import type { HostMessage, TextRead, ThemeSetting, WebviewMessage } from "../protocol";
-import { leaveHistoryToVsCode, removeVsCodeDefaultStyles, sendDownloadsToHost, watchForInput } from "./shims";
+import { leaveHistoryToVsCode, removeVsCodeDefaultStyles, sendDownloadsToHost, sendLinksToHost, watchForInput } from "./shims";
 import "./webview.css";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
@@ -39,6 +39,7 @@ const send = (message: WebviewMessage) => vscode.postMessage(message);
 removeVsCodeDefaultStyles();
 leaveHistoryToVsCode();
 sendDownloadsToHost((filename, data) => send({ type: "export", filename, data }));
+sendLinksToHost((url) => send({ type: "open", url }));
 const touched = watchForInput();
 
 /**

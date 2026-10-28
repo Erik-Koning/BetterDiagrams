@@ -681,3 +681,37 @@ describe("rendering a diagram too big for one canvas", () => {
     expect(() => emittedToCanvas(wide(20000))).toThrow(/SVG/);
   });
 });
+
+// ─── A card's top row, laid out as the canvas's flex row ─────────────────────
+
+describe("a card's top row keeps the canvas's order and alignment", () => {
+  const card = (extra: Record<string, unknown>) =>
+    doc({ nodes: [{ id: "n", label: "Card", kind: "task", x: 0, y: 0, w: 260, h: 90, ...extra }] });
+  /** The row's words, left to right as drawn. */
+  const row = (t: DiagramTemplate, mode = "technical") => {
+    const top = texts(emitTemplate(t, registry, {}, { mode: mode as "technical" }).cmds).filter((c) => c.size === 9 && c.tag?.id === "node:n");
+    return top.sort((a, b) => a.x - b.x).map((c) => c.text);
+  };
+
+  it("a right-aligned task reads kind, then its pills — not the pills first", () => {
+    expect(row(card({ textAlign: "right", priority: "p2", stage: "in-review" }))).toEqual(["TASK", "P2", "IN REVIEW"]);
+  });
+
+  it("a centred or right-aligned deprecated card keeps the word", () => {
+    for (const textAlign of ["center", "right"]) {
+      expect(row(doc({ nodes: [{ id: "n", label: "Old", kind: "service", status: "deprecated", textAlign, x: 0, y: 0, w: 260, h: 80 }] }))).toEqual([
+        "SERVICE",
+        " · DEPRECATED",
+      ]);
+    }
+  });
+
+  it("a marketing task's pills clear its estimate", () => {
+    const { cmds } = emitTemplate(card({ storyPoints: 3, priority: "p1" }), registry, {}, { mode: "marketing" });
+    const run = texts(cmds).find((c) => c.text === "3 PTS")!;
+    const pill = texts(cmds).find((c) => c.text === "P1")!;
+    // Bold capitals: at least the pill formula's width per glyph before the
+    // pill's own edge, 5px left of its label.
+    expect(pill.x - 5).toBeGreaterThanOrEqual(run.x + "3 PTS".length * 9 * 0.72);
+  });
+});

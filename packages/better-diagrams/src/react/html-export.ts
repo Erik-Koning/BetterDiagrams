@@ -249,6 +249,28 @@ export function buildTimelineHtml(opts: TimelineHtmlOptions): string {
   // its legend in place and every line drawn.
   const dock = opts.dockLegend === true;
   const hoverLines = opts.hoverLines === true;
+  // A card's ↗, drawn as a link by the SVG backend (`EmitOptions.links`).
+  // Styled and guarded only when the picture has one, so a page without
+  // stays the page it was.
+  const hasLinks = opts.svg.includes('<a class="bd-link"');
+  const linkCss = hasLinks
+    ? `
+  /* ── A card's ↗: the canvas's hover wash on the badge, a ring for the keyboard. ── */
+  a.bd-link { cursor: pointer; outline: none; }
+  a.bd-link:hover rect, a.bd-link:focus-visible rect { fill: ${accent}; fill-opacity: 0.16; }
+  a.bd-link:focus-visible rect { stroke: ${accent}; stroke-width: 1.5; }`
+    : "";
+  const linkJs = hasLinks
+    ? `
+  // ── A card's ↗ opens its link in a new tab, and that is all the click does:
+  //    not a selection, not a drill into the card's level. Capture, on the
+  //    document, so it is settled before the explorer or the navigator. ──
+  document.addEventListener("click", function (e) {
+    if (!(e.target && e.target.closest && e.target.closest("a.bd-link"))) return;
+    e.stopPropagation();
+    dropdown.hidden = true;
+  }, true);`
+    : "";
   const viewerCss = `${
     dock
       ? `
@@ -481,7 +503,7 @@ ${hasPaths ? `
   .bd-el { transition: opacity 160ms; }
   .bd-dim { opacity: 0.22; filter: grayscale(1); }
   .bd-hidden { display: none; }
-  ${pathCss}${explorer ? explorerCss(palette, accent, explorer.routeColor, light) : ""}${opts.tasks ? htmlTaskCss(palette, accent) : ""}${viewerCss}`;
+  ${pathCss}${explorer ? explorerCss(palette, accent, explorer.routeColor, light) : ""}${opts.tasks ? htmlTaskCss(palette, accent) : ""}${viewerCss}${linkCss}`;
 
   // The player. Plain script, no modules, nothing external; every hook is
   // looked up by id so the markup above stays the single source of structure.
@@ -516,7 +538,7 @@ ${hasPaths ? `
   var full2 = $("bd-full2"); if (full2) full2.addEventListener("click", function () { dropdown.hidden = true; fullscreen(); });
   var fit = $("bd-fit");
   fit.addEventListener("change", function () { $("bd-stage").classList.toggle("fit", fit.checked); });
-${pathJs}${viewerJs}
+${pathJs}${viewerJs}${linkJs}
   if (!STOPS.length) return; // undated document: a plain viewer, and that is all
 
   // ── The scrubber. Cursor is a DAY; stops are where ticks and snapping live. ──

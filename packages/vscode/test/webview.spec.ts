@@ -154,6 +154,29 @@ test.describe("the VS Code webview", () => {
     expect(png).toEqual({ filename: "shop.png", signature: "PNG" });
   });
 
+  test("a node's ↗ goes to the extension to open, as a file: one goes to navigate", async ({ webview, page }) => {
+    await webview.open();
+    const linked = {
+      ...ARCHITECTURE,
+      nodes: ARCHITECTURE.nodes.map((n) =>
+        n.id === "api" ? { ...n, url: "https://example.com/orders-api" } : n.id === "db" ? { ...n, url: "file:Schema" } : n,
+      ),
+    };
+    await webview.init(json(linked));
+    await expect(webview.nodeTitled("Orders API")).toBeVisible();
+    // The page itself opens nothing: no tab, no navigation away from the studio.
+    const popups: string[] = [];
+    page.on("popup", (p) => popups.push(p.url()));
+    await page.getByRole("link", { name: "Open https://example.com/orders-api" }).click();
+    await expect.poll(() => webview.posted("open")).toEqual([{ type: "open", url: "https://example.com/orders-api" }]);
+    // As in the browser, following it leaves the card it sits on unselected.
+    await expect(page.locator(".react-flow__node.selected")).toHaveCount(0);
+    await page.getByRole("button", { name: "Open linked file Schema" }).click();
+    await expect.poll(() => webview.posted("navigate")).toEqual([{ type: "navigate", ref: "Schema" }]);
+    expect(popups).toEqual([]);
+    expect(page.url()).toMatch(/\/index\.html$/);
+  });
+
   for (const bodyClass of ["vscode-light", "vscode-dark"]) {
     test(`cards keep their fills and icons (${bodyClass})`, async ({ webview, page }) => {
       // The studio's light-dark() colours are compiled to read a literal

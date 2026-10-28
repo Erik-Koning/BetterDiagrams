@@ -44,6 +44,8 @@ export type WebviewMessage =
   | { type: "export"; filename: string; data: Uint8Array }
   /** A node's `file:` link was followed. */
   | { type: "navigate"; ref: string }
+  /** A link out of the diagram was followed: a node's ↗, or the inspector's. */
+  | { type: "open"; url: string }
   /** The studio's Undo and Redo buttons: VS Code's own, on the text. */
   | { type: "undo" }
   | { type: "redo" };

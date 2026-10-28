@@ -52,6 +52,28 @@ export function sendDownloadsToHost(save: (filename: string, data: Uint8Array) =
 }
 
 /**
+ * A link out of the diagram — a node's ↗, the inspector's open-link button —
+ * opens in a browser tab on the web. Here VS Code would open it, but only
+ * from a click that reaches the window, and the ↗ stops its click at the
+ * studio so the node underneath isn't selected; a new tab is refused by the
+ * webview's sandbox either way. So a click on one is taken first, on the way
+ * down, and handed to the extension to open as VS Code opens any link.
+ */
+export function sendLinksToHost(open: (url: string) => void): void {
+  document.addEventListener(
+    "click",
+    (event) => {
+      const anchor = event.target instanceof Element ? event.target.closest("a[href]:not([download])") : null;
+      if (!(anchor instanceof HTMLAnchorElement) || !/^(https?|mailto|tel|ftp):/i.test(anchor.href)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      open(anchor.href);
+    },
+    true,
+  );
+}
+
+/**
  * Whether the person has done anything here yet. The studio can report a
  * change on its own as it opens a document (laying out one that has no
  * positions, say); opening a file must not change it, so only changes that

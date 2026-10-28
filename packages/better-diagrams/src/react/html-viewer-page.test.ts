@@ -147,3 +147,66 @@ describe("lines on hover", () => {
     expect(p.doc.body.classList.contains("bd-lines-hover")).toBe(false);
   });
 });
+
+/**
+ * The canvas's ↗ and ⊞ N, in the page: a card's web link is a link the
+ * reader follows, and a node with things inside says how many. An API with
+ * a router inside it (which has a handler of its own), a database whose link
+ * names another diagram, and a group of two with a link of its own.
+ */
+const LINKED = validateTemplate({
+  version: 1,
+  meta: { title: "Linked" },
+  nodes: [
+    { id: "api", label: "API", kind: "service", url: "https://example.com/api", x: 0, y: 0 },
+    { id: "router", label: "Router", kind: "service", parentId: "api", x: 0, y: 0 },
+    { id: "handler", label: "Handler", kind: "service", parentId: "router", x: 0, y: 0 },
+    { id: "db", label: "DB", kind: "database", url: "file:Schema", x: 320, y: 0 },
+    { id: "grp", label: "Payments", kind: "group", url: "https://example.com/payments", x: 0, y: 200, w: 520, h: 180 },
+    { id: "pay", label: "Pay", kind: "service", parentId: "grp", x: 24, y: 60 },
+    { id: "refund", label: "Refund", kind: "service", parentId: "grp", x: 260, y: 60 },
+  ],
+  edges: [{ id: "e1", source: "api", target: "db" }],
+});
+
+describe("links and levels, as the canvas shows them", () => {
+  it("draws a card's web link as one the reader follows into a new tab — not a file: link, not a frame's", async () => {
+    const p = await openPage(LINKED);
+    const links = [...p.doc.querySelectorAll('.bd-view:not([hidden]) a.bd-link')].map((a) => [
+      a.closest("[data-el]")!.getAttribute("data-el"),
+      a.getAttribute("href"),
+      a.getAttribute("target"),
+      a.getAttribute("rel"),
+    ]);
+    expect(links).toEqual([["node:api", "https://example.com/api", "_blank", "noopener noreferrer"]]);
+  });
+
+  it("opens the link and nothing else: the card it sits on still drills on its own click", async () => {
+    const p = await openPage(LINKED);
+    // The browser's own following of the link is not jsdom's to do.
+    p.win.addEventListener("click", (e) => e.preventDefault(), true);
+    const view = () => p.$(".bd-view:not([hidden])")!.getAttribute("data-view");
+    const api = p.groups("node:api").find((g) => g.closest(".bd-view:not([hidden])"))!;
+    api.querySelector("a.bd-link rect")!.dispatchEvent(new p.win.MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(view()).toBe("");
+    api.dispatchEvent(new p.win.MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(view()).toBe("api");
+  });
+
+  it("badges what has things inside, counted on the whole document — on a level too", async () => {
+    const p = await openPage(LINKED);
+    const badge = (view: string, el: string) =>
+      [...p.doc.querySelectorAll(`section[data-view="${view}"] [data-el="${el}"] text`)].map((t) => t.textContent).find((t) => t?.startsWith("⊞")) ?? null;
+    expect(badge("", "node:api")).toBe("⊞ 1");
+    expect(badge("", "node:grp")).toBe("⊞ 2");
+    expect(badge("", "node:db")).toBeNull();
+    // Inside the API, the router still opens a level of its own.
+    expect(badge("api", "node:router")).toBe("⊞ 1");
+  });
+
+  it("leaves both out of a picture, which can't be clicked", async () => {
+    const svg = await (await BUILTIN_EXPORTERS.svg.run({ template: LINKED, registry, filename: "pic" }))!.blob.text();
+    expect(svg).not.toContain("bd-link");
+    expect(svg).not.toContain("⊞");
+  });
+});

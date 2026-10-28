@@ -41,6 +41,18 @@ function bytesOf(data: unknown): Uint8Array {
 }
 
 /**
+ * A link out of a diagram, opened the way VS Code opens any link — its own
+ * trusted-domains prompt included. Only the schemes a document may store a
+ * link in (`safeUrl`): the webview is the diagram's, and the diagram is text
+ * anyone can write, so a `command:` or `file:` URI goes nowhere.
+ */
+async function openLink(url: string): Promise<void> {
+  const uri = vscode.Uri.parse(url, true);
+  if (!["http", "https", "mailto", "tel", "ftp"].includes(uri.scheme)) return;
+  await vscode.env.openExternal(uri);
+}
+
+/**
  * For the extension's own tests, which run in VS Code (ExtensionMode.Test):
  * what each editor's webview has said, and a way to say something for it.
  */
@@ -123,6 +135,9 @@ export class DiagramEditorProvider implements vscode.CustomTextEditorProvider {
           return;
         case "navigate":
           this.navigate(document, message.ref).catch(report(`Couldn't follow file:${message.ref}`));
+          return;
+        case "open":
+          openLink(message.url).catch(report(`Couldn't open ${message.url}`));
           return;
         case "undo":
         case "redo":

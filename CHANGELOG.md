@@ -68,6 +68,11 @@ This changelog starts with the editing API (October 2026). For what changed betw
   touching a group, or joining two boxes outside every group). Its ⋯ menu has **Show all lines**
   (off) and **Legend** (on). `buildTimelineHtml` and `buildMultiViewHtml` take this as
   `dockLegend` and `hoverLines`, over an SVG drawn with the new `viewerHooks` picture option.
+- The interactive HTML page shows a card's ↗ where the canvas does, as a link that opens in a new
+  tab and does nothing else (no selection, no drill); a `file:` link, which names a diagram in the
+  editor's workspace, is left out. A card or group with things inside wears the canvas's `⊞ N`,
+  counted on the whole document, so a level shows what opens a level of its own. The picture
+  options `links` and `drillCounts` draw them; PNG, SVG and PDF exports leave both out.
 - A new `value` from the host is an undo step instead of clearing the undo history; a change of
   `activeFileId` starts a fresh history.
 - The build keeps one file per module, so hosts tree-shake what they don't use, and the HTML page
@@ -133,6 +138,11 @@ This changelog starts with the editing API (October 2026). For what changed betw
 - The types compile under `@types/react` 19, and the suite passes on React 19; CI now runs both.
 - Deleting a node also drops the per-view layout (`meta.views`) recorded for it.
 - Exports that split a document into content and layout now keep custom annotation kinds' options.
+- Exports in marketing mode: a team pill holds its whole name; the bold text ran past the pill's end.
+- Exports lay out a card's top row as the canvas does — kind and status, then the pills, in that
+  order, centred or right-aligned as one row. A right-aligned task listed its pills before its
+  kind, a centred one centred only the kind, a marketing task's pills overlapped its status or
+  estimate, and a centred or right-aligned deprecated card dropped the word "deprecated".
 - A diamond's label (a decision, a milestone) sits in its middle, on the canvas and in exports;
   centred text in one no longer drifts right in exports, and text in a pipe, diamond or
   parallelogram no longer runs into the shape's right side there.

@@ -208,11 +208,25 @@ export function exportHtmlPage({ template, registry, filename, palette, mode, gr
         },
       })
     : undefined;
+  // What a reader of the canvas can press, the page's reader can too: a
+  // card's ↗ follows its link, and a `⊞ N` says a node opens a level —
+  // counted on the whole document, since a level's view drops what is
+  // nested deeper than its own children.
+  const drillCounts: Record<string, number> = Object.create(null);
+  for (const n of template.nodes) if (n.parentId) drillCounts[n.parentId] = (drillCounts[n.parentId] ?? 0) + 1;
   // Rows are drawn as targets too, so the page can pin, mark and open
   // them — and a task's states as parts, so the page can change them; and
   // each line names its ends and the legend its box, so the page can show a
   // node's lines on hover and keep the legend in view.
-  const dress = { mode, gradients, fieldHits: true, viewerHooks: true, ...(tasks ? { taskHits: true } : {}) };
+  const dress = {
+    mode,
+    gradients,
+    fieldHits: true,
+    viewerHooks: true,
+    links: true,
+    drillCounts,
+    ...(tasks ? { taskHits: true } : {}),
+  };
   // Lines on hover unless the document says to open with them all shown.
   const allLines = template.settings?.htmlLines === "all";
   // Any nesting makes the page multi-view: one pre-rendered SVG per

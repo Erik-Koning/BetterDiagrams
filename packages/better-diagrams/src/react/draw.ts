@@ -45,6 +45,8 @@ import {
   wrappedDescWidth,
   wrappedTextBox,
   defaultTextAlign,
+  safeUrl,
+  FILE_LINK_PREFIX,
   type DiagramNode,
   type DiagramTemplate,
 } from "../contract/schema";
@@ -598,7 +600,14 @@ type RawDrawCmd =
    * marks rows by; the canvas backend skips it. Emitted only under
    * `EmitOptions.fieldHits`, so every other export is unchanged.
    */
-  | { op: "hit"; x: number; y: number; w: number; h: number; field: string };
+  | { op: "hit"; x: number; y: number; w: number; h: number; field: string }
+  /**
+   * A followable link's footprint, drawing nothing: the SVG backend writes
+   * an `<a>` over the ↗ already painted beneath it, the canvas backend skips
+   * it. Emitted only under `EmitOptions.links`, so every other export is
+   * unchanged.
+   */
+  | { op: "link"; x: number; y: number; w: number; h: number; r: number; href: string; title: string };
 
 // ─── Shared approximate text metrics ─────────────────────────────────────────
 
@@ -983,6 +992,24 @@ export interface EmitOptions {
    * has no use for either.
    */
   viewerHooks?: boolean;
+  /**
+   * Draw each card's ↗ — the canvas's link affix (`.as-node__link`) — as a
+   * link the reader can follow: the SVG backend wraps it in an `<a>`. Off by
+   * default: a picture can't be clicked, so a ↗ in a PNG is a button that
+   * does nothing. A `file:` link names a diagram in the editor's workspace,
+   * which a page has none of, so it is left out — as the canvas leaves it
+   * out when no host follows it.
+   */
+  links?: boolean;
+  /**
+   * How many nodes sit directly inside each node, by document id: the
+   * `⊞ N` badge the canvas shows on a card or frame that opens a level.
+   * Counted on the WHOLE document, because a drilled level's view has
+   * dropped its grandchildren — and keyed by document id, so a level's
+   * ghosts and boundary frame never match, as on the canvas. Omit for no
+   * badges: only a page that opens those levels has a use for them.
+   */
+  drillCounts?: Readonly<Record<string, number>>;
 }
 
 /**
@@ -1001,6 +1028,10 @@ export interface PictureOptions {
   taskHits?: boolean;
   /** See `EmitOptions.viewerHooks` — the interactive HTML export's line ends and legend. */
   viewerHooks?: boolean;
+  /** See `EmitOptions.links` — the interactive HTML export's ↗ links. */
+  links?: boolean;
+  /** See `EmitOptions.drillCounts` — the interactive HTML export's `⊞ N` badges. */
+  drillCounts?: Readonly<Record<string, number>>;
 }
 
 export function emitOptions(opts: PictureOptions): EmitOptions {
@@ -1010,6 +1041,8 @@ export function emitOptions(opts: PictureOptions): EmitOptions {
     ...(opts.fieldHits ? { fieldHits: true } : {}),
     ...(opts.taskHits ? { taskHits: true } : {}),
     ...(opts.viewerHooks ? { viewerHooks: true } : {}),
+    ...(opts.links ? { links: true } : {}),
+    ...(opts.drillCounts ? { drillCounts: opts.drillCounts } : {}),
   };
 }
 
@@ -1291,13 +1324,76 @@ export function emitTemplate(
 
   // Owning-team tag — the same pill the editor renders (see .as-node__team),
   // so ownership survives into the shared artefact.
-  const teamPillW = (team: string) => approxTextWidth(team, 9, skin.chipFont) + 14;
+  // Chip text is set at weight 600. A monospace glyph keeps its advance in
+  // bold; a proportional one widens past the flat per-glyph estimate, and a
+  // marketing team pill measured with it let its last letters run out of
+  // the pill.
+  const chipBoldW = (text: string, size: number) =>
+    approxTextWidth(text, size, skin.chipFont) * (skin.chipFont === "sans" ? 1.15 : 1);
+  const teamPillW = (team: string) => chipBoldW(team, 9) + 14;
   const pushTeamPill = (team: string, x: number, y: number) => {
     const c = teamColor(team);
     const d = roundedRectPath(x, y, teamPillW(team), 16, 8);
     cmds.push({ op: "path", d, fill: palette.surface });
     cmds.push({ op: "path", d, fill: c, fillAlpha: 0.14, stroke: c, strokeAlpha: 0.55, strokeWidth: 1 });
     cmds.push({ op: "text", x: x + 7, y: y + 11.5, text: team, size: 9, font: skin.chipFont, weight: 600, color: c });
+  };
+
+  // The `⊞ N` a node with things inside wears (`.as-node__drill`): a hairline
+  // pill on the raised surface, in the dim ink — the canvas's button to open
+  // that level, which the page opens on a click anywhere on the node.
+  const drillCountOf = (id: string) => {
+    const n = opts.drillCounts?.[id];
+    return typeof n === "number" && n > 0 ? n : 0;
+  };
+  const drillText = (count: number) => `⊞ ${count}`;
+  const drillBadgeW = (count: number, font: "mono" | "sans") => approxTextWidth(drillText(count), 9, font) + 10;
+  /** `baseline` is the text line the badge rides, as the canvas's inline button does. */
+  const pushDrillBadge = (count: number, x: number, baseline: number, font: "mono" | "sans", alpha = 1) => {
+    const d = roundedRectPath(x, baseline - 9, drillBadgeW(count, font), 12, 6);
+    cmds.push({ op: "path", d, fill: palette.surface2, stroke: palette.border, strokeWidth: 1, ...(alpha < 1 ? { fillAlpha: alpha, strokeAlpha: alpha } : {}) });
+    cmds.push({ op: "text", x: x + 5, y: baseline, text: drillText(count), size: 9, font, color: palette.textDim, ...(alpha < 1 ? { alpha } : {}) });
+  };
+
+  // A card's ↗ (`.as-node__link`), where the canvas pins it: inside the
+  // top-right corner on a technical card, a round badge straddling that
+  // corner in marketing, and on a task a badge riding the top edge left of
+  // the corner check. Painted, then covered by a `link` hit the SVG backend
+  // makes an `<a>` of. Only a web link: a `file:` one has no host to follow it.
+  const linkOf = (node: DiagramNode) => {
+    if (!opts.links) return "";
+    const url = safeUrl(node.url);
+    return url && url.slice(0, FILE_LINK_PREFIX.length).toLowerCase() !== FILE_LINK_PREFIX ? url : "";
+  };
+  const pushLink = (url: string, box: Box, accent: string, onTask: boolean) => {
+    const right = box.x + box.width;
+    const badge = onTask || skin.marketing;
+    const r = onTask ? 11 : 12;
+    const cx = onTask ? right - 47 : skin.marketing ? right - 4 : right - 14;
+    const cy = onTask ? box.y : skin.marketing ? box.y + 4 : box.y + 14;
+    if (badge) {
+      cmds.push({
+        op: "path",
+        d: roundedRectPath(cx - r, cy - r, r * 2, r * 2, r),
+        fill: palette.surface,
+        stroke: mix(accent, palette.border, 0.4),
+        strokeWidth: 1,
+        ...(skin.marketing && !onTask ? { shadow: { color: palette.text, alpha: 0.18, blur: 6, dy: 2 } } : {}),
+      });
+    }
+    // The ↗ glyph as strokes rather than a character, so every reader draws
+    // the same arrow whatever fonts it has. Marketing inks it in the node's
+    // own `--as-node-ink` (its 60% mix); technical in the chrome's dim ink.
+    const s = 3.2;
+    cmds.push({
+      op: "path",
+      d: `M ${cx - s} ${cy + s} L ${cx + s} ${cy - s} M ${cx - s * 0.4} ${cy - s} L ${cx + s} ${cy - s} L ${cx + s} ${cy + s * 0.4}`,
+      stroke: skin.marketing ? mix(accent, palette.text, 0.6) : palette.textDim,
+      strokeWidth: 1.3,
+      round: true,
+    });
+    const half = badge ? r : 12;
+    cmds.push({ op: "link", x: cx - half, y: cy - half, w: half * 2, h: half * 2, r: badge ? r : 4, href: url, title: url });
   };
 
   // A container's task roll-up (`.as-rollup`): a bar and "8/21 pts", warn
@@ -1382,7 +1478,14 @@ export function emitTemplate(
     // reader already looks for the group's name.
     const frameStatusText = node.status ? ` · ${node.status.toUpperCase()}` : "";
     const labelW = approxTextWidth(node.label, 11, skin.chipFont);
-    const chipW = Math.max(60, labelW + approxTextWidth(frameStatusText, 11, skin.chipFont) + 18);
+    const statusW = approxTextWidth(frameStatusText, 11, skin.chipFont);
+    // After the name and its stage, inside the chip — `.as-group__label`'s order.
+    // Marketing sets the name in bold, which the flat per-glyph estimate runs
+    // short of; the badge after it needs the true end, or it lands on the name.
+    const frameDrill = drillCountOf(node.id);
+    const nameW = frameDrill && skin.marketing ? chipBoldW(node.label, 11) : labelW;
+    const frameDrillW = frameDrill ? drillBadgeW(frameDrill, skin.chipFont) + 5 : 0;
+    const chipW = Math.max(60, nameW + statusW + frameDrillW + 18);
     cmds.push({
       op: "path",
       // border-radius: 10px 0 6px 0 — the top-left is the FRAME's radius, so
@@ -1406,6 +1509,7 @@ export function emitTemplate(
         alpha: 0.9 * frameDim,
       });
     }
+    if (frameDrill) pushDrillBadge(frameDrill, box.x + 9 + nameW + statusW + 5, box.y + 14.5, skin.chipFont, frameDim);
     // Beside the boundary's name chip, in the same order the editor's group
     // label renders them: date first, then the owning team.
     let cursor = box.x + chipW + 6;
@@ -1633,16 +1737,24 @@ export function emitTemplate(
         strokeAlpha: skin.marketing ? 1 : 0.45,
         strokeWidth: 1,
       });
+      // The chip's `⊞ N` follows its name, so the name gives up the room.
+      const chipDrill = drillCountOf(node.id);
+      const chipDrillW = chipDrill ? drillBadgeW(chipDrill, skin.chipFont) : 0;
+      const chipLabel = ellipsise(`▸ ${node.label}`, skin.marketing ? 13 : 11, skin.chipFont, box.width - 18 - (chipDrill ? chipDrillW + 5 : 0));
       cmds.push({
         op: "text",
         x: box.x + 10,
         y: box.y + box.height / 2 + 4,
-        text: ellipsise(`▸ ${node.label}`, skin.marketing ? 13 : 11, skin.chipFont, box.width - 18),
+        text: chipLabel,
         size: skin.marketing ? 13 : 11,
         font: skin.chipFont,
         weight: 600,
         color: palette.text,
       });
+      if (chipDrill) {
+        const after = box.x + 10 + approxTextWidth(chipLabel, skin.marketing ? 13 : 11, skin.chipFont) + 5;
+        pushDrillBadge(chipDrill, after, box.y + box.height / 2 + 3.5, skin.chipFont);
+      }
       if (node.date) pushDateChip(node.date, box.x + box.width - dateChipW(node.date) - 8, box.y + (box.height - 15) / 2, isOverdue(node.date, node.status));
       if (node.team) {
         const shift = node.date ? dateChipW(node.date) + 6 : 0;
@@ -1827,7 +1939,10 @@ export function emitTemplate(
     // an empty row in marketing — a small, deliberate difference, so reaching
     // it in the page never lands the pill on the title.)
     const hasPills = isTask ? !!node.priority || !!node.stage : reached;
-    const eyebrow = skin.kindEyebrow || !!eyebrowTail || hasPills || (live && isMilestone);
+    // The row's last item on the canvas is the `⊞ N` of a card with things
+    // inside — which keeps the row in marketing too.
+    const drillCount = drillCountOf(node.id);
+    const eyebrow = skin.kindEyebrow || !!eyebrowTail || hasPills || (live && isMilestone) || drillCount > 0;
     const align = node.textAlign ?? defaultTextAlign(node.kind);
     const anchor = align === "center" ? "middle" : align === "right" ? "end" : "start";
     const anchorX = align === "center" ? textX + textW / 2 : align === "right" ? textX + textW : textX;
@@ -1950,42 +2065,18 @@ export function emitTemplate(
     const tail = eyebrowTail;
     const eyebrowSep = skin.kindEyebrow ? (tail ? ` · ${tail}` : "") : tail;
     const eyebrowFont = skin.marketing ? "sans" : "mono";
-    if (eyebrow && status === "deprecated") {
-      // The status token gets the editor's salmon; the node's own dimming
-      // still applies through the shared alpha, exactly as opacity does on
-      // the canvas. Centred/right-aligned nodes draw the eyebrow as one run so
-      // the two halves can't drift apart under a non-start anchor.
-      const eyebrowX = align === "left" ? textX : anchorX;
-      if (eyebrowKind) {
-        cmds.push({ op: "text", x: eyebrowX, y: ty(16), text: eyebrowKind, size: 9, font: eyebrowFont, color: accent, alpha: 0.8 * dim, ...aligned });
-      }
-      if (align === "left" || !eyebrowKind) {
-        cmds.push({
-          op: "text",
-          x: eyebrowKind ? textX + approxTextWidth(eyebrowKind, 9, eyebrowFont) : eyebrowX,
-          y: ty(16),
-          text: eyebrowSep,
-          size: 9,
-          font: eyebrowFont,
-          weight: skin.marketing ? 600 : undefined,
-          color: palette.warn ?? "#fa8072",
-          alpha: 0.8 * dim,
-          ...(eyebrowKind ? {} : aligned),
-        });
-      }
-    } else if (eyebrow && (eyebrowKind || eyebrowSep)) {
-      cmds.push({ op: "text", x: anchorX, y: ty(16), text: eyebrowKind + eyebrowSep, size: 9, font: eyebrowFont, weight: skin.marketing ? 600 : undefined, color: accent, alpha: 0.8 * dim, ...aligned });
-    }
     // After the run, the canvas's pills in its order: a milestone's Reached,
     // or a task's priority then its stage, each a faint tint of its own ink.
     // Reached flips in a live page, but a milestone has nothing after it to
     // move. Whether a task can move is its corner check's to say.
     const pillRun = eyebrowKind + eyebrowSep;
-    const pillRunW = pillRun ? approxTextWidth(pillRun, 9, eyebrowFont) : 0;
     const pillY = ty(16);
-    // Pill labels are bold capitals: a sans run of them is far wider than the
-    // mean glyph approxTextWidth assumes (mono keeps its advance at any weight).
-    const pillW = (label: string) => (eyebrowFont === "sans" ? label.length * 9 * 0.72 : approxTextWidth(label, 9, "mono")) + 10;
+    // The run and the pill labels are bold capitals: a sans run of them is far
+    // wider than the mean glyph approxTextWidth assumes (mono keeps its
+    // advance at any weight).
+    const capsW = (text: string) => (eyebrowFont === "sans" ? text.length * 9 * 0.72 : approxTextWidth(text, 9, "mono"));
+    const pillRunW = pillRun ? capsW(pillRun) : 0;
+    const pillW = (label: string) => capsW(label) + 10;
     const PRIORITY_INK: Record<string, string> = { p0: "#ef4444", p1: palette.overdue ?? "#f59e0b", p2: edgeHex.sky ?? "#38bdf8", p3: palette.textDim };
     const STAGE_TEXT: Record<string, string> = { "in-progress": "IN PROGRESS", "in-review": "IN REVIEW" };
     const STAGE_INK: Record<string, string> = { "in-progress": edgeHex.sky ?? "#38bdf8", "in-review": "#8b5cf6" };
@@ -2005,12 +2096,41 @@ export function emitTemplate(
     const slotW = slotShown.reduce((w, p) => Math.max(w, pillW(p.label)), 0);
     const pillWidths = [...fixedPills.map((p) => pillW(p.label)), ...(slotShown.length ? [slotW] : [])];
     const pillsW = pillWidths.reduce((w, x) => w + x, 0) + 4 * Math.max(0, pillWidths.length - 1);
-    let pillX =
-      align === "center"
-        ? pillRun ? anchorX + pillRunW / 2 + 6 : anchorX - pillsW / 2
-        : align === "right"
-          ? anchorX - (pillRun ? pillRunW + 6 : 0) - pillsW
-          : textX + (pillRun ? pillRunW + 6 : 0);
+    // The row is one block, as the canvas's flex row is — the run, the pills,
+    // then the `⊞ N` — placed whole by the node's alignment: a centred row
+    // centres all of it, a right-aligned one ends with its last item.
+    const drillW = drillCount ? drillBadgeW(drillCount, eyebrowFont) : 0;
+    const rowW =
+      pillRunW +
+      (pillWidths.length ? (pillRun ? 6 : 0) + pillsW : 0) +
+      (drillW ? (pillRun || pillWidths.length ? 5 : 0) + drillW : 0);
+    const rowLeft = align === "center" ? anchorX - rowW / 2 : align === "right" ? anchorX - rowW : textX;
+    // Alone on its row, the run keeps the exact anchor it has always had.
+    const runPlace = !pillWidths.length && !drillW ? { x: anchorX, ...aligned } : { x: rowLeft };
+    if (eyebrow && status === "deprecated") {
+      // The status token gets the editor's salmon; the node's own dimming
+      // still applies through the shared alpha, exactly as opacity does on
+      // the canvas. Two halves, each from the row's left edge: anchored on
+      // their own, a centred card's halves would land on top of each other.
+      const sepX = eyebrowKind ? rowLeft + capsW(eyebrowKind) : rowLeft;
+      if (eyebrowKind) {
+        cmds.push({ op: "text", x: rowLeft, y: pillY, text: eyebrowKind, size: 9, font: eyebrowFont, color: accent, alpha: 0.8 * dim });
+      }
+      cmds.push({
+        op: "text",
+        ...(eyebrowKind ? { x: sepX } : runPlace),
+        y: pillY,
+        text: eyebrowSep,
+        size: 9,
+        font: eyebrowFont,
+        weight: skin.marketing ? 600 : undefined,
+        color: palette.warn ?? "#fa8072",
+        alpha: 0.8 * dim,
+      });
+    } else if (eyebrow && pillRun) {
+      cmds.push({ op: "text", ...runPlace, y: pillY, text: pillRun, size: 9, font: eyebrowFont, weight: skin.marketing ? 600 : undefined, color: accent, alpha: 0.8 * dim });
+    }
+    let pillX = rowLeft + (pillRun ? pillRunW + 6 : 0);
     const pillAt = (label: string, ink: string, x: number) => () => {
       cmds.push({ op: "path", d: roundedRectPath(x, pillY - 9, pillW(label), 12, 3), fill: ink, fillAlpha: 0.16 });
       cmds.push({ op: "text", x: x + 5, y: pillY, text: label, size: 9, font: eyebrowFont, weight: 700, color: ink });
@@ -2029,6 +2149,10 @@ export function emitTemplate(
       if (p.part) liveParts.push({ ...p.part, draw });
       else draw();
       pillX += pillW(p.label) + 4;
+    }
+    if (drillCount) {
+      const x = pillWidths.length ? pillX + 1 : rowLeft + (pillRun ? pillRunW + 5 : 0);
+      pushDrillBadge(drillCount, x, pillY, eyebrowFont, dim);
     }
     titleLines.forEach((line, i) =>
       cmds.push({ op: "text", x: anchorX, y: ty(TITLE_DY + i * lineH), text: line, size: fontSize, font: "sans", weight: 600, color: palette.text, ...aligned, ...(dim < 1 ? { alpha: dim } : {}) }),
@@ -2216,6 +2340,8 @@ export function emitTemplate(
         Math.max(box.y + box.height - 8, dateBottom + 2),
       );
     }
+    const link = linkOf(node);
+    if (link) pushLink(link, box, accent, isTask);
     // The corner check (`.as-task__check`), riding the top edge 8px in from
     // the corner. Never dimmed: done is the news, not the noise.
     const cx = box.x + box.width - 19;
@@ -2597,6 +2723,7 @@ export function drawToCanvas(ctx: CanvasRenderingContext2D, cmds: DrawCmd[]): vo
         break;
       }
       case "hit":
+      case "link":
         break; // a pointer target for the HTML page — nothing to paint
     }
   }
@@ -2744,6 +2871,14 @@ export function drawToSvg(cmds: DrawCmd[], opts: { gridId?: string } = {}): stri
         // Transparent, not `none`: an unpainted fill takes no pointer events.
         out.push(
           `<rect class="bd-row" data-field="${esc(cmd.field)}" x="${cmd.x}" y="${cmd.y}" width="${cmd.w}" height="${cmd.h}" fill="transparent"/>`,
+        );
+        break;
+      }
+      case "link": {
+        // A new tab, as the canvas's ↗ opens one — the reader keeps the page.
+        out.push(
+          `<a class="bd-link" href="${esc(cmd.href)}" target="_blank" rel="noopener noreferrer"><title>${esc(cmd.title)}</title>` +
+            `<rect x="${cmd.x}" y="${cmd.y}" width="${cmd.w}" height="${cmd.h}" rx="${cmd.r}" fill="transparent"/></a>`,
         );
         break;
       }
