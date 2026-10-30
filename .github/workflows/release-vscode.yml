@@ -1,17 +1,15 @@
 # A tag vscode-v<version> publishes the VS Code extension. The CI that guards
 # main runs on the tagged commit, the .vsix is packaged once, and that same
-# file goes, as you approve each store's environment, to Open VSX (where
-# Cursor, Windsurf and VSCodium install from) and to the VS Code Marketplace.
-# It is attached to a GitHub Release for the tag too: for installing by hand,
-# and for uploading to the Marketplace by hand if its sign-in won't take.
+# file goes, as you approve the `openvsx` environment, to Open VSX (where
+# Cursor, Windsurf and VSCodium install from), with its access token, the
+# environment's OVSX_PAT secret. It is attached to a GitHub Release for the
+# tag too: for installing by hand, and for uploading to the VS Code
+# Marketplace, which is done by hand on its manage page. Publishing there from
+# CI would need an Azure DevOps token for every organization (they end on
+# 1 December 2026) or an identity in Azure; an upload needs neither.
 #
-# The Marketplace signs in with Microsoft Entra ID — a managed identity,
-# through OIDC — rather than a token: global Azure DevOps PATs end on
-# 1 December 2026. Open VSX takes its access token, the `openvsx`
-# environment's OVSX_PAT secret.
-#
-# Run it by hand (on main) to rehearse: the same checks and package, then each
-# store's verify-pat in place of publish. A run by hand never publishes.
+# Run it by hand (on main) to rehearse: the same checks and package, then Open
+# VSX's verify-pat in place of publish. A run by hand never publishes.
 #
 # One-time setup: packages/vscode/README.md → Publishing.
 name: Release VS Code extension
@@ -80,40 +78,6 @@ jobs:
             npx ovsx verify-pat mosphere
           else
             npx ovsx publish --packagePath better-diagrams.vsix
-          fi
-
-  marketplace:
-    needs: package
-    runs-on: ubuntu-latest
-    environment: vscode-marketplace
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-      # vsce as the lockfile pins it.
-      - run: npm ci --no-audit --no-fund
-      - uses: actions/download-artifact@v8
-        with:
-          name: vsix
-          path: packages/vscode
-      # The managed identity the publisher lists as a member: its IDs, no secret.
-      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          allow-no-subscriptions: true
-      - name: Publish to the VS Code Marketplace
-        working-directory: packages/vscode
-        run: |
-          if [ "$DRY_RUN" = true ]; then
-            npx vsce verify-pat --azure-credential mosphere
-          else
-            npx vsce publish --azure-credential --packagePath better-diagrams.vsix
           fi
 
   github-release:

@@ -2412,7 +2412,8 @@ tagged commit, then waits for you to approve before anything is published.
   never `latest`.
 - **The VS Code extension**: tag `vscode-v<version>`, the version in
   `packages/vscode/package.json`. `.github/workflows/release-vscode.yml` packages the `.vsix` once,
-  publishes that file to Open VSX and the VS Code Marketplace, and attaches it to a GitHub Release.
+  publishes that file to Open VSX, and attaches it to a GitHub Release, from which it is uploaded
+  to the VS Code Marketplace by hand.
 
 ```bash
 # bump the version and its CHANGELOG heading, merge to main, then:
@@ -2421,7 +2422,7 @@ git tag vscode-v0.1.0 && git push origin vscode-v0.1.0   # the extension
 ```
 
 Either workflow run by hand (Actions → Run workflow, on `main`) rehearses — the same checks and
-build, then `npm publish --dry-run` or each store's sign-in check — and never publishes.
+build, then `npm publish --dry-run` or Open VSX's sign-in check — and never publishes.
 `npm run release:dry` rehearses the npm side locally.
 
 Once, before the first release:
