@@ -3,7 +3,7 @@
 All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 `packages/better-diagrams/etc/*.api.md`; a change there is listed here.
 
-## Unreleased
+## 0.1.0 — 2026-11-01
 
 This changelog starts with the editing API (October 2026). For what changed between
 0.1.0-beta.0 and then, see the git history.
