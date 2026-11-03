@@ -1107,13 +1107,14 @@ export function NodeInspector({
             // Boxed is the default, so only the opt-OUT is stored.
             onChange={(checked) => patch({ plain: checked ? undefined : true })}
           />
-          {/* A note's sentence is its label (double-click the note to edit);
-              the description is the dim sub-line under it, and this is the
-              only place to type one. */}
+          {/* A note's sentence is its label; the description is the dim
+              sub-line under it, and runs to lines as the note does. Both are
+              typed on the canvas too — double-click the note. */}
           {single ? (
-            <input
-              className="as-input as-inspector__desc"
+            <textarea
+              className="as-input as-inspector__desc as-inspector__desc--multi"
               value={data.description}
+              rows={2}
               placeholder="Description…"
               onChange={(event) => patch({ description: event.target.value })}
               aria-label="Node description"

@@ -361,4 +361,17 @@ describe("docDiagnostics — settings", () => {
     expect(doc.slice(found[0].from, found[0].to)).toBe('"none"');
     expect(warnings(`{${base}, "settings": {"htmlLines": "all"}}`)).toEqual([]);
   });
+
+  it("checks the HTML page's other settings against theirs", () => {
+    const found = warnings(`{${base}, "settings": {"htmlTimeline": "off", "htmlTimelineDate": "tomorrow", "htmlLater": "fade", "htmlLegend": "maybe"}}`);
+    expect(found.map((w) => w.message.split(" — ")[0])).toEqual([
+      'Unknown HTML timeline setting "off"',
+      'Unknown HTML timeline date "tomorrow"',
+      'Unknown HTML later setting "fade"',
+      'Unknown HTML legend setting "maybe"',
+    ]);
+    expect(
+      warnings(`{${base}, "settings": {"htmlTimeline": "hide", "htmlTimelineDate": "first", "htmlLater": "hide", "htmlLegend": "hide"}}`),
+    ).toEqual([]);
+  });
 });

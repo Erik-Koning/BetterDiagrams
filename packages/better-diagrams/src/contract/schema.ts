@@ -714,6 +714,43 @@ export type Notation = (typeof NOTATIONS)[number];
 export const HTML_LINES = ["hover", "all"] as const;
 export type HtmlLines = (typeof HTML_LINES)[number];
 
+/**
+ * Whether the interactive HTML page opens with its timeline bar. "show" is
+ * the default and never needs storing. "hide" opens the page without it,
+ * every element shown as at the last date; the page's **Timeline bar** check
+ * brings it back. A document without dates has no bar either way. See
+ * `DiagramSettings`.
+ */
+export const HTML_TIMELINES = ["show", "hide"] as const;
+export type HtmlTimeline = (typeof HTML_TIMELINES)[number];
+
+/**
+ * The date the interactive HTML page's timeline opens on. "today" is the
+ * default and never needs storing (held to the document's first and last
+ * dates); "first" and "last" open on those, so a page made to walk through a
+ * plan, or to show it finished, opens the same whenever it is read. See
+ * `DiagramSettings`.
+ */
+export const HTML_TIMELINE_DATES = ["today", "first", "last"] as const;
+export type HtmlTimelineDate = (typeof HTML_TIMELINE_DATES)[number];
+
+/**
+ * What the interactive HTML page does with what is dated after its
+ * timeline's date. "ghost" is the default and never needs storing: it stays,
+ * faint. "hide" opens the page with **Hide later** picked, so it is not drawn
+ * until the timeline reaches it. See `DiagramSettings`.
+ */
+export const HTML_LATER = ["ghost", "hide"] as const;
+export type HtmlLater = (typeof HTML_LATER)[number];
+
+/**
+ * Whether the interactive HTML page opens with its legend in the window's
+ * corner. "show" is the default and never needs storing; "hide" opens it
+ * with the page's **Legend** check off. See `DiagramSettings`.
+ */
+export const HTML_LEGENDS = ["show", "hide"] as const;
+export type HtmlLegend = (typeof HTML_LEGENDS)[number];
+
 /** Horizontal placement of a node's text. The default (`defaultTextAlign`) is never stored. */
 export const NODE_TEXT_ALIGNS = ["left", "center", "right"] as const;
 export type NodeTextAlign = (typeof NODE_TEXT_ALIGNS)[number];
@@ -1078,6 +1115,14 @@ export interface DiagramSettings {
    * means "hover"; "all" opens every export with Show all lines on.
    */
   htmlLines?: HtmlLines;
+  /** Whether the interactive HTML export opens with its timeline bar — see `HTML_TIMELINES`. Absent means "show". */
+  htmlTimeline?: HtmlTimeline;
+  /** The date the interactive HTML export's timeline opens on — see `HTML_TIMELINE_DATES`. Absent means "today". */
+  htmlTimelineDate?: HtmlTimelineDate;
+  /** What the interactive HTML export does with what is dated later — see `HTML_LATER`. Absent means "ghost". */
+  htmlLater?: HtmlLater;
+  /** Whether the interactive HTML export opens with its legend — see `HTML_LEGENDS`. Absent means "show". */
+  htmlLegend?: HtmlLegend;
   /**
    * Story points each person can take on, by name — what the People legend
    * and the plan checks weigh their open work against. A person without an
@@ -1180,6 +1225,10 @@ const SETTINGS_KEY_MAP: Record<keyof DiagramSettings, true> = {
   roadmap: true,
   notation: true,
   htmlLines: true,
+  htmlTimeline: true,
+  htmlTimelineDate: true,
+  htmlLater: true,
+  htmlLegend: true,
   capacity: true,
 };
 export const SETTINGS_KEYS: readonly string[] = Object.keys(SETTINGS_KEY_MAP);
@@ -1838,6 +1887,18 @@ function validateSettings(raw: unknown): DiagramSettings | undefined {
   }
   if (HTML_LINES.includes(r.htmlLines as HtmlLines)) {
     out.htmlLines = r.htmlLines as HtmlLines;
+  }
+  if (HTML_TIMELINES.includes(r.htmlTimeline as HtmlTimeline)) {
+    out.htmlTimeline = r.htmlTimeline as HtmlTimeline;
+  }
+  if (HTML_TIMELINE_DATES.includes(r.htmlTimelineDate as HtmlTimelineDate)) {
+    out.htmlTimelineDate = r.htmlTimelineDate as HtmlTimelineDate;
+  }
+  if (HTML_LATER.includes(r.htmlLater as HtmlLater)) {
+    out.htmlLater = r.htmlLater as HtmlLater;
+  }
+  if (HTML_LEGENDS.includes(r.htmlLegend as HtmlLegend)) {
+    out.htmlLegend = r.htmlLegend as HtmlLegend;
   }
   if (r.capacity && typeof r.capacity === "object" && !Array.isArray(r.capacity)) {
     const capacity: Record<string, number> = {};

@@ -391,8 +391,11 @@ Text notes render **boxed by default** — a subtle outline and background, on s
 exports. Set `plain: true` (or untick **Outline** in the inspector) for bare text. Like every
 default, it is stored only when it differs, so pre-existing documents round-trip byte-identical.
 A note's `description` renders as a dim sub-line under its sentence (canvas and image exports
-alike), sized against the note's own `fontSize`; the sentence itself is the `label`, edited by
-double-clicking the note.
+alike, every line of it), sized against the note's own `fontSize`; the sentence itself is the
+`label`. Double-clicking the note edits both — the sentence, and under it the description (the
+caret goes to whichever you double-clicked; Tab moves between them, Escape puts both back) — as
+one undo step, and a box the text then runs past grows to hold it. The inspector edits the
+description too.
 
 Every node and edge may carry a **`data` bag** — `data?: Record<string, unknown>` — for whatever
 the host knows that the diagram doesn't: the record a node was generated from, an external id,
@@ -1439,12 +1442,31 @@ however far the picture scrolls; a drill-down page shows the legend of the level
 hidden except the hovered box's, and except the structure: a line that touches a group, or joins two
 boxes outside every group, is always drawn. The ⋯ menu's **Show all lines** brings every line back,
 and **Legend** hides the legend. A lit path or route keeps its lines either way. A document whose
-lines should all show from the start says `settings.htmlLines: "all"` — the Export menu's **Show all
-lines in the page**, under Interactive HTML, sets it — and every export of it then opens with **Show
-all lines** on. Where a viewer strips the page's scripts, the picture keeps its legend in place and
-draws every line. The page builders take these as `dockLegend`, `hoverLines` and `allLines`, over an
-SVG drawn with `viewerHooks`, which names each line's two boxes (`data-from`, `data-to`), marks the
-structure (`data-keep`), and groups the legend under `legend:`.
+lines should all show from the start says `settings.htmlLines: "all"`, and every export of it then
+opens with **Show all lines** on. Where a viewer strips the page's scripts, the picture keeps its
+legend in place and draws every line. The page builders take these as `dockLegend`, `hoverLines` and
+`allLines`, over an SVG drawn with `viewerHooks`, which names each line's two boxes (`data-from`,
+`data-to`), marks the structure (`data-keep`), and groups the legend under `legend:`.
+
+How the page opens is the document's to say, so every export of it — from any host, or an agent's —
+opens the same way, and the reader can still change each from the page's ⋯ menu:
+
+| Setting | Values (default first) | The page opens |
+| --- | --- | --- |
+| `htmlLines` | `hover`, `all` | with a box's lines on hover, or **Show all lines** on |
+| `htmlLegend` | `show`, `hide` | with the legend, or with its **Legend** check off |
+| `htmlTimeline` | `show`, `hide` | with the timeline bar, or without it and everything shown, as at the last date |
+| `htmlTimelineDate` | `today`, `first`, `last` | on today (held to the document's dates), or on its first or last date |
+| `htmlLater` | `ghost`, `hide` | with what is dated later ghosted, or with **Hide later** picked |
+
+A default is never stored. Export → Interactive HTML → **Page settings…** sets them all in one
+dialog, one undo step; a document without dates has no timeline, and the dialog says so. The page
+builders take the last four as `hideLegend`, `hideTimeline`, `timelineDate` and `hideLater`.
+
+A node's ↗ is a link in the page as on the canvas. A web link opens in a new tab. A `file:` link
+names another diagram, which a page can't open, so it opens that diagram's own page where exporting
+the two side by side puts it — `file:payments.json` → `payments.html`, a workspace's
+`file:Order flow` → `Order flow.html` — in the same tab.
 
 A custom exporter receives the mode and its gradient setting alongside the palette
 (`{ template, registry, filename, palette, mode, gradients }`), and returns — or resolves to — a
@@ -1539,7 +1561,7 @@ The schema and editor cover C4's notational essentials:
 | **Snap & align** | Arrange: snap-to-grid, align left/centre/right/top/middle/bottom (2+ selected), distribute (3+), clear routes |
 | **Arrange modes** | Arrange: *Left to right* (default, proximity-based), *Untangle lines* (fewest crossings, lanes for long lines) or, for a dated plan, *By date* (a roadmap); stored as `settings.arrange`, applied on pick, one `⌘Z` undoes both |
 | **Notation** — symbols and numbers / crow's foot / UML | View: how a line's ends draw cardinality; `settings.notation`. UML shows the end glyphs a crow's-foot symbol would replace |
-| **HTML lines** — on hover / all | Export ▸ Show all lines in the page: whether the interactive HTML page opens with every line shown; `settings.htmlLines` |
+| **HTML page** — how it opens | Export ▸ Interactive HTML ▸ Page settings…: lines on hover or all shown, the legend, and for a dated diagram the timeline bar, the date it opens on, and later elements ghosted or hidden; `settings.htmlLines`, `htmlLegend`, `htmlTimeline`, `htmlTimelineDate`, `htmlLater` |
 | **Enumerations** | Kind `enum`: a record whose rows are the allowed values, «enumeration» style; Insert ▸ Enumeration |
 | **Tasks** | Kind `task`: a ticket with `storyPoints`, `assignees` and a `done` check; prerequisite and dependency lines; a People legend. See [Task graphs](#task-graphs) |
 | **Field flags** — unique, derived | `field.unique` wears a UQ badge and exports as Mermaid `UK`; `field.derived` takes UML's leading slash. The folder importer sets both from `unique` and `formula`/`calculated` |

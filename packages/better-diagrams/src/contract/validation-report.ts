@@ -37,6 +37,10 @@ import {
   NODE_TEXT_VALIGNS,
   NOTATIONS,
   HTML_LINES,
+  HTML_TIMELINES,
+  HTML_TIMELINE_DATES,
+  HTML_LATER,
+  HTML_LEGENDS,
   SETTINGS_KEYS,
   TASK_PRIORITIES,
   TASK_STAGES,
@@ -312,6 +316,10 @@ export function validateTemplateReport(raw: unknown, opts: ValidateOptions = {})
     }
     vocab(doc.settings, "notation", NOTATIONS, "/settings", `both notations are drawn`);
     vocab(doc.settings, "htmlLines", HTML_LINES, "/settings", `the HTML page shows a box's lines on hover`);
+    vocab(doc.settings, "htmlTimeline", HTML_TIMELINES, "/settings", `the HTML page opens with its timeline bar`);
+    vocab(doc.settings, "htmlTimelineDate", HTML_TIMELINE_DATES, "/settings", `the HTML page's timeline opens on today`);
+    vocab(doc.settings, "htmlLater", HTML_LATER, "/settings", `the HTML page ghosts what is dated later`);
+    vocab(doc.settings, "htmlLegend", HTML_LEGENDS, "/settings", `the HTML page opens with its legend`);
   }
   if (isObj(doc.meta)) {
     vocab(doc.meta, "versionTagPosition", VERSION_TAG_POSITIONS, "/meta", `the tag sits top-left`);

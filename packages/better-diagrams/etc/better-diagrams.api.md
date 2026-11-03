@@ -782,7 +782,11 @@ export interface DiagramSettings {
     arrange?: ArrangeMode;
     capacity?: Record<string, number>;
     groupContents?: GroupContents;
+    htmlLater?: HtmlLater;
+    htmlLegend?: HtmlLegend;
     htmlLines?: HtmlLines;
+    htmlTimeline?: HtmlTimeline;
+    htmlTimelineDate?: HtmlTimelineDate;
     notation?: Notation;
     roadmap?: RoadmapAxis;
 }
@@ -1920,7 +1924,19 @@ export interface HostHistory {
 }
 
 // @public
+export const HTML_LATER: readonly ["ghost", "hide"];
+
+// @public
+export const HTML_LEGENDS: readonly ["show", "hide"];
+
+// @public
 export const HTML_LINES: readonly ["hover", "all"];
+
+// @public
+export const HTML_TIMELINE_DATES: readonly ["today", "first", "last"];
+
+// @public
+export const HTML_TIMELINES: readonly ["show", "hide"];
 
 // @public (undocumented)
 export interface HtmlExplorerData {
@@ -1948,7 +1964,19 @@ export interface HtmlExplorerData {
 export function htmlExplorerData(template: DiagramTemplate, registry: ResolvedRegistry, palette?: Partial<ExportPalette>): HtmlExplorerData;
 
 // @public (undocumented)
+export type HtmlLater = (typeof HTML_LATER)[number];
+
+// @public (undocumented)
+export type HtmlLegend = (typeof HTML_LEGENDS)[number];
+
+// @public (undocumented)
 export type HtmlLines = (typeof HTML_LINES)[number];
+
+// @public (undocumented)
+export type HtmlTimeline = (typeof HTML_TIMELINES)[number];
+
+// @public (undocumented)
+export type HtmlTimelineDate = (typeof HTML_TIMELINE_DATES)[number];
 
 // @public (undocumented)
 export const ICON_NAMES: readonly ["none", "user", "users", "database", "server", "layers", "globe", "cloud", "window", "mobile", "lock", "gear", "bolt", "doc", "code", "mail", "box", "shield", "sparkle", "key", "chart", "search", "filter", "folder", "sync", "cpu", "terminal", "balance", "share", "grid", "branch", "clock", "calendar", "bell", "card", "cart", "activity", "eye", "warning", "check", "link", "image", "video", "pin", "robot", "flask"];
@@ -2423,6 +2451,9 @@ export interface MultiViewHtmlOptions {
     dockLegend?: boolean;
     // (undocumented)
     explorer?: HtmlExplorerData;
+    hideLater?: boolean;
+    hideLegend?: boolean;
+    hideTimeline?: boolean;
     hoverLines?: boolean;
     // (undocumented)
     palette?: Partial<ExportPalette>;
@@ -2431,6 +2462,7 @@ export interface MultiViewHtmlOptions {
     // (undocumented)
     stops: string[];
     tasks?: HtmlTaskData;
+    timelineDate?: HtmlTimelineDate;
     // (undocumented)
     title: string;
     views: ViewEntry[];
@@ -4122,12 +4154,16 @@ export interface TimelineHtmlOptions {
     allLines?: boolean;
     dockLegend?: boolean;
     explorer?: HtmlExplorerData;
+    hideLater?: boolean;
+    hideLegend?: boolean;
+    hideTimeline?: boolean;
     hoverLines?: boolean;
     palette?: Partial<ExportPalette>;
     paths?: HtmlPathEntry[];
     stops: string[];
     svg: string;
     tasks?: HtmlTaskData;
+    timelineDate?: HtmlTimelineDate;
     title: string;
 }
 

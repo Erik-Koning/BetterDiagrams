@@ -227,8 +227,18 @@ export function exportHtmlPage({ template, registry, filename, palette, mode, gr
     drillCounts,
     ...(tasks ? { taskHits: true } : {}),
   };
-  // Lines on hover unless the document says to open with them all shown.
-  const allLines = template.settings?.htmlLines === "all";
+  // How the page opens is the document's to say (its `settings.html*`); the
+  // reader can change each from the page's ⋯ menu.
+  const settings = template.settings ?? {};
+  const opening = {
+    dockLegend: true,
+    hoverLines: true,
+    allLines: settings.htmlLines === "all",
+    hideTimeline: settings.htmlTimeline === "hide",
+    timelineDate: settings.htmlTimelineDate,
+    hideLater: settings.htmlLater === "hide",
+    hideLegend: settings.htmlLegend === "hide",
+  };
   // Any nesting makes the page multi-view: one pre-rendered SVG per
   // drillable level, clickable in place. A flat document keeps the
   // single-view page.
@@ -241,9 +251,7 @@ export function exportHtmlPage({ template, registry, filename, palette, mode, gr
         paths,
         explorer,
         tasks,
-        dockLegend: true,
-        hoverLines: true,
-        allLines,
+        ...opening,
       })
     : buildTimelineHtml({
         svg: renderTemplateToSvg(template, registry, palette, dress),
@@ -253,9 +261,7 @@ export function exportHtmlPage({ template, registry, filename, palette, mode, gr
         paths,
         explorer,
         tasks,
-        dockLegend: true,
-        hoverLines: true,
-        allLines,
+        ...opening,
       });
   return { blob: new Blob([page], { type: "text/html" }), filename: `${filename}.html` };
 }

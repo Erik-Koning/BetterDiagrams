@@ -3,6 +3,31 @@
 All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 `packages/better-diagrams/etc/*.api.md`; a change there is listed here.
 
+## Unreleased
+
+### Added
+
+- How the interactive HTML page opens is the document's to say, like `settings.htmlLines`:
+  `settings.htmlTimeline` (`HTML_TIMELINES`: the timeline bar shown or put away),
+  `settings.htmlTimelineDate` (`HTML_TIMELINE_DATES`: open on today, the first date or the last),
+  `settings.htmlLater` (`HTML_LATER`: what is dated later ghosted or hidden) and
+  `settings.htmlLegend` (`HTML_LEGENDS`). The page builders take them as `hideTimeline`,
+  `timelineDate`, `hideLater` and `hideLegend`. The reader can still change each from the page's
+  ⋯ menu.
+- Export → Interactive HTML → **Page settings…** sets all five in one dialog, one undo step. It
+  replaces the menu's **Show all lines in the page** check.
+
+### Changed
+
+- A text note's description is edited on the canvas too: double-clicking the note opens its
+  sentence and, under it, its description, as one edit (Tab moves between them, Escape puts both
+  back), with the caret at the end of the text. A note the text then runs past grows to hold it.
+  The inspector's description field takes lines, and image exports draw every line of it rather
+  than three.
+- A node's `file:` link draws its ↗ in the interactive HTML page too, as the canvas does: it opens
+  that diagram's own page, where exporting the two side by side puts it (`payments.json` →
+  `payments.html`, a workspace's `Order flow` → `Order flow.html`), in the same tab.
+
 ## 0.1.0 — 2026-11-01
 
 This changelog starts with the editing API (October 2026). For what changed between

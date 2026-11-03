@@ -11,6 +11,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { validateTemplate, type DiagramTemplate } from "../contract/schema";
 import { BUILTIN_EXPORTERS } from "./exporters";
 import { createRegistry } from "./create-registry";
+import { fileLinkPage } from "./draw";
+import { buildTimelineHtml } from "./html-export";
 import bakeryJson from "../../../../templates/examples/bakery-data-model.json";
 
 const registry = createRegistry();
@@ -170,7 +172,7 @@ const LINKED = validateTemplate({
 });
 
 describe("links and levels, as the canvas shows them", () => {
-  it("draws a card's web link as one the reader follows into a new tab — not a file: link, not a frame's", async () => {
+  it("draws a card's web link as one the reader follows into a new tab, and a file: link to that diagram's page beside this one — not a frame's", async () => {
     const p = await openPage(LINKED);
     const links = [...p.doc.querySelectorAll('.bd-view:not([hidden]) a.bd-link')].map((a) => [
       a.closest("[data-el]")!.getAttribute("data-el"),
@@ -178,7 +180,32 @@ describe("links and levels, as the canvas shows them", () => {
       a.getAttribute("target"),
       a.getAttribute("rel"),
     ]);
-    expect(links).toEqual([["node:api", "https://example.com/api", "_blank", "noopener noreferrer"]]);
+    expect(links).toEqual([
+      ["node:api", "https://example.com/api", "_blank", "noopener noreferrer"],
+      // In place, as the canvas's file link swaps the diagram on show.
+      ["node:db", "Schema.html", null, null],
+    ]);
+    expect(p.$('[data-el="node:db"] a.bd-link title')!.textContent).toBe("Schema — its page, exported beside this one");
+  });
+
+  it("names a file: link's page as its own export names it, and only ever as a relative path", () => {
+    expect(fileLinkPage("payments.json")).toBe("payments.html");
+    expect(fileLinkPage("Order flow")).toBe("Order%20flow.html");
+    expect(fileLinkPage("../docs/Pay.JSON")).toBe("../docs/Pay.html");
+    expect(fileLinkPage("docs\\pay.json")).toBe("docs/pay.html");
+    // A scheme is just a name here: its colon is escaped, so it can't run.
+    expect(fileLinkPage("javascript:alert(1)")).toBe("javascript%3Aalert(1).html");
+    expect(fileLinkPage("http://evil.example/x")).toBe("http%3A/evil.example/x.html");
+    // Nor can it reach another host: no leading // (scheme-relative, or a
+    // Windows network share from a page opened off disk) and no absolute path.
+    expect(fileLinkPage("//evil.example/x")).toBe("evil.example/x.html");
+    expect(fileLinkPage("\\\\evil.example\\share\\x.json")).toBe("evil.example/share/x.html");
+    expect(fileLinkPage("/etc/hosts")).toBe("etc/hosts.html");
+    expect(fileLinkPage("docs//pay.json")).toBe("docs/pay.html");
+    // Names nothing: no link.
+    expect(fileLinkPage("docs/")).toBe("");
+    expect(fileLinkPage("..")).toBe("");
+    expect(fileLinkPage("   ")).toBe("");
   });
 
   it("opens the link and nothing else: the card it sits on still drills on its own click", async () => {
@@ -208,5 +235,97 @@ describe("links and levels, as the canvas shows them", () => {
     const svg = await (await BUILTIN_EXPORTERS.svg.run({ template: LINKED, registry, filename: "pic" }))!.blob.text();
     expect(svg).not.toContain("bd-link");
     expect(svg).not.toContain("⊞");
+  });
+});
+
+/**
+ * How the page opens is the document's to say: its `settings.html*` set the
+ * menu's checks, and the reader can still change each. A web, an API and a
+ * queue that land on Mar 1, Apr 1 and Jun 1 2020, and a database that is
+ * always there.
+ */
+const DATED = validateTemplate({
+  version: 1,
+  meta: { title: "Dated" },
+  nodes: [
+    { id: "web", label: "Web", kind: "service", date: "2020-03-01", x: 0, y: 0 },
+    { id: "api", label: "API", kind: "gateway", date: "2020-04-01", x: 300, y: 0 },
+    { id: "jobs", label: "Jobs", kind: "queue", date: "2020-06-01", x: 600, y: 0 },
+    { id: "db", label: "DB", kind: "database", x: 300, y: 200 },
+  ],
+  edges: [
+    { id: "e1", source: "web", target: "api" },
+    { id: "e2", source: "api", target: "jobs" },
+    { id: "e3", source: "api", target: "db" },
+  ],
+});
+
+describe("how the page opens, as the document says", () => {
+  type Page = Awaited<ReturnType<typeof openPage>>;
+  const ghosted = (p: Page, id: string) => p.groups(`node:${id}`).some((g) => g.classList.contains("bd-dim"));
+  const hidden = (p: Page, id: string) => p.groups(`node:${id}`).some((g) => g.classList.contains("bd-hidden"));
+
+  it("opens on today, held to the document's dates, with the timeline bar and later things ghosted", async () => {
+    const p = await openPage(DATED);
+    expect(p.$("#bd-timeline")!.hidden).toBe(false);
+    expect(p.$<HTMLInputElement>("#bd-showtl")!.checked).toBe(true);
+    expect(p.$<HTMLInputElement>('input[name="bd-mode"][value="dim"]')!.checked).toBe(true);
+    // Today is long past 2020, so it opens on the last date: nothing later.
+    expect(p.$("#bd-ahead")!.textContent).toBe("all here");
+  });
+
+  it("opens on the first date, and ghosts what comes after it", async () => {
+    const p = await openPage({ ...DATED, settings: { htmlTimelineDate: "first" } });
+    expect(p.$("#bd-date")!.textContent).toContain("Mar 1");
+    expect([ghosted(p, "web"), ghosted(p, "api"), ghosted(p, "jobs"), ghosted(p, "db")]).toEqual([false, true, true, false]);
+  });
+
+  it("opens on the last date when asked, whatever today is", async () => {
+    const p = await openPage({ ...DATED, settings: { htmlTimelineDate: "last" } });
+    expect(p.$("#bd-date")!.textContent).toContain("Jun 1");
+    expect(p.$("#bd-ahead")!.textContent).toBe("all here");
+  });
+
+  it("leaves out what comes later instead, under htmlLater: hide, and the menu's Ghost later brings it back", async () => {
+    const p = await openPage({ ...DATED, settings: { htmlTimelineDate: "first", htmlLater: "hide" } });
+    expect(p.$<HTMLInputElement>('input[name="bd-mode"][value="hide"]')!.checked).toBe(true);
+    expect([hidden(p, "api"), ghosted(p, "api")]).toEqual([true, false]);
+    const ghost = p.$<HTMLInputElement>('input[name="bd-mode"][value="dim"]')!;
+    ghost.checked = true;
+    ghost.dispatchEvent(new p.win.Event("change", { bubbles: true }));
+    expect([hidden(p, "api"), ghosted(p, "api")]).toEqual([false, true]);
+  });
+
+  it("opens without the timeline bar, everything shown, until the menu's Timeline bar brings it back", async () => {
+    const p = await openPage({ ...DATED, settings: { htmlTimeline: "hide", htmlTimelineDate: "first", htmlLater: "hide" } });
+    expect(p.$("#bd-timeline")!.hidden).toBe(true);
+    expect(p.$<HTMLInputElement>("#bd-showtl")!.checked).toBe(false);
+    expect([hidden(p, "jobs"), ghosted(p, "jobs")]).toEqual([false, false]);
+    p.check("bd-showtl", true);
+    expect(p.$("#bd-timeline")!.hidden).toBe(false);
+  });
+
+  it("opens without the legend under htmlLegend: hide, and the menu's Legend check shows it", async () => {
+    expect((await openPage(PLAN)).shownKeys()).toHaveLength(1);
+    const p = await openPage({ ...PLAN, settings: { htmlLegend: "hide" } });
+    expect(p.$<HTMLInputElement>("#bd-showkey")!.checked).toBe(false);
+    expect(p.shownKeys()).toHaveLength(0);
+    p.check("bd-showkey", true);
+    expect(p.shownKeys()).toHaveLength(1);
+  });
+
+  it("opens that way on a drill-down page too", async () => {
+    const bakery = validateTemplate(bakeryJson);
+    const p = await openPage({ ...bakery, settings: { ...bakery.settings, htmlLegend: "hide" } });
+    expect(p.$("section[data-view]")).not.toBeNull();
+    expect(p.$<HTMLInputElement>("#bd-showkey")!.checked).toBe(false);
+    expect(p.shownKeys()).toHaveLength(0);
+  });
+
+  it("is the page it always was when nothing is asked for", () => {
+    const base = { svg: "<svg></svg>", title: "T", stops: ["2020-03-01", "2020-06-01"], dockLegend: true, hoverLines: true };
+    expect(buildTimelineHtml({ ...base, hideTimeline: false, timelineDate: "today", hideLater: false, hideLegend: false })).toBe(
+      buildTimelineHtml(base),
+    );
   });
 });

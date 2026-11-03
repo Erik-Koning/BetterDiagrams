@@ -17,7 +17,7 @@ import {
   type Node,
   type NodeProps,
 } from "@xyflow/react";
-import type { CSSProperties, SyntheticEvent } from "react";
+import type { CSSProperties, KeyboardEvent, SyntheticEvent } from "react";
 import { fieldKey } from "../contract/fields";
 import { SvgIcon } from "./icons";
 import { useStudio } from "./context";
@@ -1155,23 +1155,44 @@ export const AnnotationNode = memo(function AnnotationNode({
   selected,
 }: NodeProps<AnnotationNodeType>) {
   const { readOnly, requestCommit } = useStudio();
-  const { updateNodeData } = useReactFlow();
-  const [editing, setEditing] = useState(false);
-  const areaRef = useRef<HTMLTextAreaElement>(null);
+  const { updateNodeData, updateNode } = useReactFlow();
+  /** Which of the note's two texts the caret went to, or null when not editing. */
+  const [editing, setEditing] = useState<"label" | "description" | null>(null);
+  const labelRef = useRef<HTMLTextAreaElement>(null);
+  const descRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (editing) areaRef.current?.focus();
+    const area = editing ? (editing === "description" ? descRef : labelRef).current : null;
+    if (!area) return;
+    area.focus();
+    // At the end of what is there, so typing adds to the note rather than
+    // landing in front of its first word.
+    area.setSelectionRange(area.value.length, area.value.length);
   }, [editing]);
 
-  /** What the text was when editing began, so Escape can put it back. */
-  const beforeEdit = useRef(data.label);
+  // The description field grows with what is typed in it, as the sub-line
+  // it stands in for does — the note's box never clipped it.
+  useLayoutEffect(() => {
+    const area = descRef.current;
+    if (!area) return;
+    area.style.height = "auto";
+    if (area.scrollHeight) area.style.height = `${area.scrollHeight}px`;
+  }, [editing, data.description]);
 
+  /** What the texts were when editing began, so Escape can put them back. */
+  const beforeEdit = useRef({ label: data.label, description: data.description });
+
+  const startEditing = (which: "label" | "description") => {
+    beforeEdit.current = { label: data.label, description: data.description };
+    setEditing(which);
+  };
+
+  /** Set as an edit finishes, so the render after it can fit the box and commit. */
+  const finishing = useRef(false);
   const stopEditing = useCallback(() => {
-    setEditing(false);
-    // Inline edits go through updateNodeData, which bypasses the editor's
-    // commit path — record the finished edit so it's undoable and emitted.
-    requestCommit();
-  }, [requestCommit]);
+    finishing.current = true;
+    setEditing(null);
+  }, []);
 
   /**
    * Escape ABANDONS the edit, because that is what Escape means in a text
@@ -1180,9 +1201,19 @@ export const AnnotationNode = memo(function AnnotationNode({
    * looks first.
    */
   const cancelEditing = useCallback(() => {
-    updateNodeData(id, { label: beforeEdit.current });
-    setEditing(false);
+    updateNodeData(id, { label: beforeEdit.current.label, description: beforeEdit.current.description });
+    setEditing(null);
   }, [id, updateNodeData]);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Escape reverts and exits; the editor's global Delete/Backspace
+    // handler must not fire while a caret is in this field.
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      cancelEditing();
+    }
+    e.stopPropagation();
+  };
 
   const style = {
     fontSize: data.fontSize ?? 13,
@@ -1192,7 +1223,26 @@ export const AnnotationNode = memo(function AnnotationNode({
   // A note reached by an edge from inside a focused level is derived as a
   // ghost too, and a ghost's size is not the document's to keep — the same
   // exclusion a card and a frame make.
-  const handles = useResizeHandles(!readOnly && !data.locked && !isGhostNodeId(id), selected);
+  const sizable = !readOnly && !data.locked && !isGhostNodeId(id);
+  const handles = useResizeHandles(sizable, selected);
+
+  // Once the fields are gone and the note shows its text again: a box the
+  // text now runs past grows to hold it — a description added on the canvas
+  // used to spill over the bottom edge — and never shrinks, so a note sized
+  // by hand keeps its room. Then the finished edit is recorded: inline edits
+  // go through updateNodeData, which bypasses the editor's commit path, so
+  // this is what makes them undoable and emitted.
+  useLayoutEffect(() => {
+    if (editing || !finishing.current) return;
+    finishing.current = false;
+    const host = handles.host();
+    const over = host ? host.scrollHeight - host.clientHeight : 0;
+    if (sizable && host && over > 1) {
+      const height = Math.ceil(host.offsetHeight + over);
+      updateNode(id, (n) => ({ height, style: { ...n.style, height } }));
+    }
+    requestCommit();
+  }, [editing, sizable, id, updateNode, requestCommit, handles.host]);
   const onResizeEnd = useCallback(() => {
     handles.onResizeEnd();
     requestCommit();
@@ -1210,42 +1260,52 @@ export const AnnotationNode = memo(function AnnotationNode({
       <ConnectHandles hidden={readOnly} />
       <div
         ref={handles.hostRef}
-        className={`as-annotation${data.plain ? "" : " as-annotation--boxed"}${selected ? " as-annotation--selected" : ""}`}
+        className={`as-annotation${data.plain ? "" : " as-annotation--boxed"}${selected ? " as-annotation--selected" : ""}${editing ? " as-annotation--editing" : ""}`}
         style={style}
         onDoubleClick={
-          readOnly
+          readOnly || editing
             ? undefined
-            : () => {
-                beforeEdit.current = data.label;
-                setEditing(true);
-              }
+            : (event) =>
+                // On the sub-line, the caret goes to the description.
+                startEditing((event.target as Element).closest(".as-annotation__desc") ? "description" : "label")
         }
         title={readOnly ? undefined : "Double-click to edit · Escape to cancel"}
       >
         {editing ? (
-          <textarea
-            ref={areaRef}
-            className="as-annotation__input nodrag nowheel"
-            value={data.label}
-            onChange={(e) => updateNodeData(id, { label: e.target.value })}
-            onBlur={stopEditing}
-            onKeyDown={(e) => {
-              // Escape reverts and exits; the editor's global Delete/Backspace
-              // handler must not fire while a caret is in this field.
-              if (e.key === "Escape") {
-                e.stopPropagation();
-                cancelEditing();
-              }
-              e.stopPropagation();
+          // One edit across both fields: moving from the sentence to its
+          // description (Tab, or a click) keeps editing; leaving them both
+          // finishes it.
+          <div
+            className="as-annotation__edit"
+            onBlur={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as HTMLElement | null)) stopEditing();
             }}
-          />
+          >
+            <textarea
+              ref={labelRef}
+              className="as-annotation__input nodrag nowheel"
+              value={data.label}
+              aria-label="Note text"
+              onChange={(e) => updateNodeData(id, { label: e.target.value })}
+              onKeyDown={onKeyDown}
+            />
+            <textarea
+              ref={descRef}
+              className="as-annotation__input as-annotation__input--desc nodrag nowheel"
+              value={data.description ?? ""}
+              rows={1}
+              placeholder="Description…"
+              aria-label="Note description"
+              onChange={(e) => updateNodeData(id, { description: e.target.value })}
+              onKeyDown={onKeyDown}
+            />
+          </div>
         ) : (
           <>
             {data.label}
             {/* A note's description is a sub-line under its sentence — the
                 same dim gray a component card gives its own description, so
-                the two read as the same kind of remark. Editing targets the
-                label only, so it hides while the textarea is up. */}
+                the two read as the same kind of remark. */}
             {data.description ? (
               <div className="as-annotation__desc">{data.description}</div>
             ) : null}

@@ -3189,6 +3189,40 @@ button.as-task__check--blocked {
   resize: none;
 }
 
+/* Editing: the sentence over its description, as they read on the canvas.
+   The sentence takes what the box has left; the description grows with its
+   text (sized by the node) and, like the sub-line, may run past the box. */
+.as-annotation__edit {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+
+.as-annotation__edit .as-annotation__input {
+  flex: 1 1 auto;
+  min-height: 1.35em;
+}
+
+.as-annotation__input--desc {
+  flex: 0 0 auto;
+  height: auto;
+  margin-top: 3px;
+  font-size: 0.85em;
+  line-height: 1.3;
+  color: var(--as-text-dim);
+}
+
+.as-annotation__edit .as-annotation__input--desc {
+  flex: 0 0 auto;
+  min-height: 1.3em;
+}
+
+.as-annotation__input--desc::placeholder {
+  color: var(--as-text-faint, var(--as-text-dim));
+  opacity: 0.7;
+}
+
 /* Pointer focus only: typing in a note is its own affordance. A keyboard
    focus still gets the editor's ring (see "Keyboard focus"), which is the
    only sign a Tab landed here. */
@@ -5219,6 +5253,64 @@ button.as-task__check--blocked {
 
 .as-export-states__count--warn {
   color: var(--as-danger);
+}
+
+/* ── Interactive HTML settings modal ─────────────────────────────────────── */
+
+.as-html-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.as-html-settings__group,
+.as-html-settings__sub {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* A choice under the timeline bar's check, indented to read as its own. */
+.as-html-settings__sub {
+  margin: 2px 0 0 22px;
+}
+
+.as-html-settings__title {
+  padding: 0;
+  margin-bottom: 4px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--as-text-dim);
+}
+
+.as-html-settings__label {
+  padding: 0;
+  margin-bottom: 2px;
+  font-size: 0.6875rem;
+  color: var(--as-text-dim);
+}
+
+.as-html-settings__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.as-html-settings__note {
+  margin: 0;
+  font-size: 0.6875rem;
+  color: var(--as-text-dim);
+}
+
+/* Disabled through its fieldset; shown faint so the dialog keeps its shape. */
+.as-html-settings__group--off {
+  opacity: 0.45;
 }
 
 .as-welcome {

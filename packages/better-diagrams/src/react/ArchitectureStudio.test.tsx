@@ -229,36 +229,95 @@ describe("ArchitectureStudio", () => {
     expect(ctx.registry.nodeKinds.service.label).toBe("Service");
   });
 
-  it("Show all lines in the page, under Interactive HTML, is a document setting, and one undo forgets it", async () => {
+  it("Page settings…, under Interactive HTML, saves how the page opens as document settings, and one undo forgets them", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+    const dated = { ...EXAMPLE_TEMPLATE, nodes: EXAMPLE_TEMPLATE.nodes.map((n, i) => (i === 0 ? { ...n, date: "2026-03-01" } : n)) };
+    mount(<ArchitectureStudio defaultValue={dated} onChange={onChange} />);
+    const openSettings = async () => {
+      await user.click(screen.getByRole("button", { name: "Export" }));
+      const item = within(screen.getByRole("menu")).getByRole("menuitem", { name: /^Page settings/ });
+      await user.click(item);
+      return screen.getByRole("dialog", { name: "Interactive HTML page settings" });
+    };
     await user.click(screen.getByRole("button", { name: "Export" }));
-    const check = () => within(screen.getByRole("menu")).getByRole("checkbox", { name: "Show all lines in the page" });
-    expect(check()).not.toBeChecked();
-    await user.click(check());
-    await screen.findByText("Interactive HTML opens with every line shown");
-    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toEqual({ htmlLines: "all" });
-    expect(check()).toBeChecked();
-    // Off again stores nothing: lines on hover is the default.
-    await user.click(check());
-    await screen.findByText("Interactive HTML shows a box's lines while it is hovered");
-    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toBeUndefined();
-    // On, then undone: one undo takes the setting back.
-    await user.click(check());
+    // The menu says how the page opens now.
+    expect(within(screen.getByRole("menu")).getByText("Lines on hover · timeline on today · later ghosted · legend shown")).toBeInTheDocument();
     await user.keyboard("{Escape}");
+
+    let dialog = await openSettings();
+    await user.click(within(dialog).getByRole("radio", { name: "Every line shown" }));
+    await user.click(within(dialog).getByRole("radio", { name: /First date/ }));
+    await user.click(within(dialog).getByRole("radio", { name: "Hidden" }));
+    await user.click(within(dialog).getByRole("checkbox", { name: "Show the legend" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await screen.findByText("Interactive HTML page settings saved — every export opens this way");
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toEqual({
+      htmlLines: "all",
+      htmlTimelineDate: "first",
+      htmlLater: "hide",
+      htmlLegend: "hide",
+    });
+
+    // Without the bar there is no date to open on, so that choice is put away.
+    dialog = await openSettings();
+    await user.click(within(dialog).getByRole("checkbox", { name: "Show the timeline bar" }));
+    expect(within(dialog).getByRole("radio", { name: /First date/ })).toBeDisabled();
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toMatchObject({ htmlTimeline: "hide" });
+
+    // One save is one edit: one undo takes it back, and the one before.
     const before = onChange.mock.calls.length;
     await user.click(screen.getByRole("button", { name: "Undo" }));
     await waitFor(() => expect(onChange.mock.calls.length).toBeGreaterThan(before));
-    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toBeUndefined();
+    expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).not.toHaveProperty("htmlTimeline");
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect((onChange.mock.calls.at(-1)![0] as DiagramTemplate).settings).toBeUndefined());
+
+    // Cancel changes nothing, and nor does Save with nothing changed.
+    const settled = onChange.mock.calls.length;
+    dialog = await openSettings();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Interactive HTML page settings" })).toBeNull();
+    dialog = await openSettings();
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(screen.queryByRole("dialog", { name: "Interactive HTML page settings" })).toBeNull();
+    expect(onChange.mock.calls.length).toBe(settled);
   });
 
-  it("offers no Show all lines check on a read-only document, or under a host's own Interactive HTML", async () => {
+  it("makes no edit for a Save that changes nothing, whatever order the file keeps its settings in", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    // Capacity before the HTML settings, and a default spelled out.
+    const doc = { ...EXAMPLE_TEMPLATE, settings: { capacity: { Ana: 5 }, htmlLines: "all" as const, htmlLegend: "show" as const } };
+    mount(<ArchitectureStudio defaultValue={doc} onChange={onChange} />);
+    await user.click(screen.getByRole("button", { name: "Export" }));
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /^Page settings/ }));
+    const before = onChange.mock.calls.length;
+    await user.click(within(screen.getByRole("dialog", { name: "Interactive HTML page settings" })).getByRole("button", { name: "Save" }));
+    expect(onChange.mock.calls.length).toBe(before);
+    expect(screen.queryByText("Interactive HTML page settings saved — every export opens this way")).toBeNull();
+  });
+
+  it("puts the timeline choices away on a diagram without dates, and says why", async () => {
+    const user = userEvent.setup();
+    mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} />);
+    await user.click(screen.getByRole("button", { name: "Export" }));
+    expect(within(screen.getByRole("menu")).getByText("Lines on hover · legend shown")).toBeInTheDocument();
+    await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: /^Page settings/ }));
+    const dialog = screen.getByRole("dialog", { name: "Interactive HTML page settings" });
+    expect(within(dialog).getByText("This diagram has no dates, so its page has no timeline.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("checkbox", { name: "Show the timeline bar" })).toBeDisabled();
+    expect(within(dialog).getByRole("radio", { name: "Hidden" })).toBeDisabled();
+    expect(within(dialog).getByRole("checkbox", { name: "Show the legend" })).toBeEnabled();
+  });
+
+  it("offers no Page settings on a read-only document, or under a host's own Interactive HTML", async () => {
     const user = userEvent.setup();
     const { unmount } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} readOnly />);
     await user.click(screen.getByRole("button", { name: "Export" }));
     expect(within(screen.getByRole("menu")).getByText("Interactive HTML")).toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: "Show all lines in the page" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /^Page settings/ })).toBeNull();
     unmount();
     mount(
       <ArchitectureStudio
@@ -268,7 +327,7 @@ describe("ArchitectureStudio", () => {
     );
     await user.click(screen.getByRole("button", { name: "Export" }));
     expect(within(screen.getByRole("menu")).getByText("Our page")).toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: "Show all lines in the page" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /^Page settings/ })).toBeNull();
   });
 
   it("renders a registry-contributed node kind with its own colours", () => {
@@ -2252,17 +2311,64 @@ describe("ArchitectureStudio", () => {
     expect(desc).toHaveTextContent("Reviewed 2026-Q1");
 
     // The note's own sentence stays the label; the description is editable
-    // from the inspector, which is the only place to type one.
+    // from the inspector too, as lines.
     fireEvent.click(screen.getByText(/Tenant isolation enforced/));
     const input = await screen.findByLabelText("Node description");
     expect(input).toHaveValue("Reviewed 2026-Q1");
+    expect(input.tagName).toBe("TEXTAREA");
     await user.clear(input);
-    await user.type(input, "Owner: Platform");
+    await user.type(input, "Owner: Platform{Enter}Since Q1");
 
     await waitFor(() => {
       const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
-      expect(latest.nodes.find((n) => n.id === "note")!.description).toBe("Owner: Platform");
+      expect(latest.nodes.find((n) => n.id === "note")!.description).toBe("Owner: Platform\nSince Q1");
     });
+  });
+
+  it("edits a note's description on the canvas too: double-click opens both texts, one edit across them", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { container } = mount(<ArchitectureStudio defaultValue={EXAMPLE_TEMPLATE} onChange={onChange} />);
+    fireEvent.doubleClick(screen.getByText(/Tenant isolation enforced/));
+    const label = screen.getByRole("textbox", { name: "Note text" });
+    const desc = screen.getByRole("textbox", { name: "Note description" });
+    expect(label).toHaveFocus();
+    expect(desc).toHaveValue("");
+    // Moving to the description keeps editing: nothing is committed yet.
+    await user.tab();
+    expect(desc).toHaveFocus();
+    await user.type(desc, "Owner: Platform{Enter}Since Q1");
+    expect(container.querySelector(".as-annotation__edit")).not.toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    // Leaving both finishes it, as one undoable edit.
+    fireEvent.blur(desc);
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const latest = onChange.mock.calls.at(-1)![0] as DiagramTemplate;
+    expect(latest.nodes.find((n) => n.id === "note")!.description).toBe("Owner: Platform\nSince Q1");
+    expect(container.querySelector('[data-id="note"] .as-annotation__desc')).toHaveTextContent("Owner: Platform");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+  });
+
+  it("puts the caret in the description when its sub-line is double-clicked, and Escape puts both texts back", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const withDesc = validateTemplate({
+      ...EXAMPLE_TEMPLATE,
+      nodes: EXAMPLE_TEMPLATE.nodes.map((n) => (n.id === "note" ? { ...n, description: "Reviewed 2026-Q1" } : n)),
+    });
+    const { container } = mount(<ArchitectureStudio defaultValue={withDesc} onChange={onChange} />);
+    fireEvent.doubleClick(container.querySelector('[data-id="note"] .as-annotation__desc')!);
+    const desc = screen.getByRole("textbox", { name: "Note description" });
+    expect(desc).toHaveFocus();
+    await user.type(desc, " — stale");
+    const label = screen.getByRole("textbox", { name: "Note text" });
+    await user.click(label);
+    await user.type(label, " (draft)");
+    await user.keyboard("{Escape}");
+    expect(container.querySelector(".as-annotation__edit")).toBeNull();
+    expect(container.querySelector('[data-id="note"] .as-annotation__desc')).toHaveTextContent(/^Reviewed 2026-Q1$/);
+    expect(screen.getByText(/Tenant isolation enforced/).textContent).not.toContain("(draft)");
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("commits inline annotation edits on blur", async () => {

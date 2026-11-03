@@ -20,6 +20,7 @@
  * DOM-free string building, so the same function serves tests, a server, and
  * the browser exporters.
  */
+import type { HtmlTimelineDate } from "../contract/schema";
 import type { ExportPalette } from "./draw";
 import { DARK_EXPORT_PALETTE } from "./draw";
 import {
@@ -91,6 +92,30 @@ export interface TimelineHtmlOptions {
    * `settings.htmlLines: "all"` asks for.
    */
   allLines?: boolean;
+  /**
+   * Open with the timeline bar put away, as unticking the menu's **Timeline
+   * bar** leaves it: everything shown as at the last date, until the reader
+   * ticks it again. What a document's `settings.htmlTimeline: "hide"` asks
+   * for. Nothing to put away on an undated page.
+   */
+  hideTimeline?: boolean;
+  /**
+   * The date the timeline opens on: today, held to the first and last stops
+   * (the default), or the first or last stop itself. A document's
+   * `settings.htmlTimelineDate`.
+   */
+  timelineDate?: HtmlTimelineDate;
+  /**
+   * Open with the menu's **Hide later** picked: what is dated after the
+   * timeline's date is left out, not ghosted. A document's
+   * `settings.htmlLater: "hide"`.
+   */
+  hideLater?: boolean;
+  /**
+   * With `dockLegend`, open with the menu's **Legend** check off. A
+   * document's `settings.htmlLegend: "hide"`.
+   */
+  hideLegend?: boolean;
 }
 
 /** Rough perceptual luminance test — enough to pick between two accents. */
@@ -379,7 +404,7 @@ ${hasPaths ? `
   }`;
   const viewerMenu = `${hoverLines ? `
         <label><input type="checkbox" id="bd-alllines"${opts.allLines ? " checked" : ""} /> Show all lines</label>` : ""}${dock ? `
-        <label><input type="checkbox" id="bd-showkey" checked /> Legend</label>` : ""}`;
+        <label><input type="checkbox" id="bd-showkey"${opts.hideLegend ? "" : " checked"} /> Legend</label>` : ""}`;
 
   const pathsSection = hasPaths
     ? `
@@ -544,9 +569,13 @@ ${pathJs}${viewerJs}${linkJs}
   // ── The scrubber. Cursor is a DAY; stops are where ticks and snapping live. ──
   var stopDays = STOPS.map(toDay);
   var min = stopDays[0], max = stopDays[stopDays.length - 1], span = Math.max(1, max - min);
-  var now = new Date();
-  var cursor = Math.min(max, Math.max(min, Math.round(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / DAY_MS)));
-  var mode = "dim";
+${
+    opts.timelineDate === "first" || opts.timelineDate === "last"
+      ? `  var cursor = ${opts.timelineDate === "first" ? "min" : "max"};`
+      : `  var now = new Date();
+  var cursor = Math.min(max, Math.max(min, Math.round(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / DAY_MS)));`
+  }
+  var mode = "${opts.hideLater ? "hide" : "dim"}";
   var track = $("bd-track"), range = $("bd-range"), buffer = $("bd-buffer"), ghost = $("bd-ghostdot");
   var dateBtn = $("bd-date"), datePick = $("bd-datepick"), ahead = $("bd-ahead");
   var prev = $("bd-prev"), next = $("bd-next"), bar = $("bd-timeline");
@@ -637,7 +666,13 @@ ${pathJs}${viewerJs}${linkJs}
     // With the bar gone there is no cursor to read, so everything shows.
     if (!showTl.checked) { cursor = max; }
     apply();
-  });
+  });${
+    opts.hideTimeline
+      ? `
+  // Opened with the bar put away, as unticking it leaves it.
+  bar.hidden = true; cursor = max;`
+      : ""
+  }
   apply();
   `;
 
@@ -645,7 +680,7 @@ ${pathJs}${viewerJs}${linkJs}
   // an undated document exports as a plain viewer with fit + fullscreen.
   const timelineBar = hasTimeline
     ? `
-  <div class="bd-timeline" id="bd-timeline" role="group" aria-label="Timeline scrubber">
+  <div class="bd-timeline" id="bd-timeline" role="group" aria-label="Timeline scrubber"${opts.hideTimeline ? " hidden" : ""}>
     <span class="bd-sub">TIMELINE</span>
     <button class="bd-btn bd-btn--icon" id="bd-prev" title="Previous dated point" aria-label="Previous dated point">&#9664;</button>
     <div class="bd-track" id="bd-track">
@@ -664,10 +699,10 @@ ${pathJs}${viewerJs}${linkJs}
   const modeSection = hasTimeline
     ? `
         <div class="bd-caption">Later elements</div>
-        <label><input type="radio" name="bd-mode" value="dim" checked /> Ghost later</label>
-        <label><input type="radio" name="bd-mode" value="hide" /> Hide later</label>
+        <label><input type="radio" name="bd-mode" value="dim"${opts.hideLater ? "" : " checked"} /> Ghost later</label>
+        <label><input type="radio" name="bd-mode" value="hide"${opts.hideLater ? " checked" : ""} /> Hide later</label>
         <div class="bd-caption">View</div>
-        <label><input type="checkbox" id="bd-showtl" checked /> Timeline bar</label>`
+        <label><input type="checkbox" id="bd-showtl"${opts.hideTimeline ? "" : " checked"} /> Timeline bar</label>`
     : `
         <div class="bd-caption">View</div>`;
 
@@ -742,6 +777,14 @@ export interface MultiViewHtmlOptions {
   hoverLines?: boolean;
   /** See `TimelineHtmlOptions.allLines`. */
   allLines?: boolean;
+  /** See `TimelineHtmlOptions.hideTimeline`. */
+  hideTimeline?: boolean;
+  /** See `TimelineHtmlOptions.timelineDate`. */
+  timelineDate?: HtmlTimelineDate;
+  /** See `TimelineHtmlOptions.hideLater`. */
+  hideLater?: boolean;
+  /** See `TimelineHtmlOptions.hideLegend`. */
+  hideLegend?: boolean;
 }
 
 /**
@@ -905,6 +948,10 @@ export function buildMultiViewHtml(opts: MultiViewHtmlOptions): string {
     dockLegend: opts.dockLegend,
     hoverLines: opts.hoverLines,
     allLines: opts.allLines,
+    hideTimeline: opts.hideTimeline,
+    timelineDate: opts.timelineDate,
+    hideLater: opts.hideLater,
+    hideLegend: opts.hideLegend,
   });
 
   return page

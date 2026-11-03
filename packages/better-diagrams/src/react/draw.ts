@@ -607,7 +607,7 @@ type RawDrawCmd =
    * it. Emitted only under `EmitOptions.links`, so every other export is
    * unchanged.
    */
-  | { op: "link"; x: number; y: number; w: number; h: number; r: number; href: string; title: string };
+  | { op: "link"; x: number; y: number; w: number; h: number; r: number; href: string; title: string; sameTab?: true };
 
 // ─── Shared approximate text metrics ─────────────────────────────────────────
 
@@ -689,6 +689,28 @@ function roundedRectCorners(
 
 function ellipsePath(cx: number, cy: number, rx: number, ry: number): string {
   return `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`;
+}
+
+/**
+ * Where a `file:` link's diagram is when its page is exported beside this
+ * one: the same relative place, named as its own export names it —
+ * `payments.json` → `payments.html`, a workspace's `Order flow` →
+ * `Order flow.html`. "" when the link names nothing.
+ *
+ * The href only ever leads somewhere relative to this page. Each name is
+ * percent-encoded, so none reads as a scheme, and empty segments are
+ * dropped: a leading `//` would make it scheme-relative — another site, and
+ * from a page opened off disk on Windows, a network share that is handed
+ * the reader's credentials.
+ */
+export function fileLinkPage(ref: string): string {
+  const path = ref.trim().replace(/\\/g, "/");
+  // A trailing slash names a folder, not a diagram.
+  if (path.endsWith("/")) return "";
+  const parts = path.split("/").filter((part) => part !== "");
+  const name = (parts.pop() ?? "").replace(/\.json$/i, "");
+  if (!name || name === "." || name === "..") return "";
+  return [...parts, `${name}.html`].map((part) => (part === "." || part === ".." ? part : encodeURIComponent(part))).join("/");
 }
 
 // ─── Lifecycle stage vocabulary ──────────────────────────────────────────────
@@ -1359,13 +1381,21 @@ export function emitTemplate(
   // top-right corner on a technical card, a round badge straddling that
   // corner in marketing, and on a task a badge riding the top edge left of
   // the corner check. Painted, then covered by a `link` hit the SVG backend
-  // makes an `<a>` of. Only a web link: a `file:` one has no host to follow it.
-  const linkOf = (node: DiagramNode) => {
-    if (!opts.links) return "";
+  // makes an `<a>` of. A web link opens in a new tab, as the canvas's does; a
+  // `file:` one has no editor to open it, so it goes to that diagram's own
+  // page, where exporting both side by side puts it (`fileLinkPage`).
+  const linkOf = (node: DiagramNode): Extract<DrawCmd, { op: "link" }> | null => {
+    if (!opts.links) return null;
     const url = safeUrl(node.url);
-    return url && url.slice(0, FILE_LINK_PREFIX.length).toLowerCase() !== FILE_LINK_PREFIX ? url : "";
+    if (!url) return null;
+    if (url.slice(0, FILE_LINK_PREFIX.length).toLowerCase() !== FILE_LINK_PREFIX) {
+      return { op: "link", x: 0, y: 0, w: 0, h: 0, r: 0, href: url, title: url };
+    }
+    const ref = url.slice(FILE_LINK_PREFIX.length).trim();
+    const href = fileLinkPage(ref);
+    return href ? { op: "link", x: 0, y: 0, w: 0, h: 0, r: 0, href, title: `${ref} — its page, exported beside this one`, sameTab: true } : null;
   };
-  const pushLink = (url: string, box: Box, accent: string, onTask: boolean) => {
+  const pushLink = (link: Extract<DrawCmd, { op: "link" }>, box: Box, accent: string, onTask: boolean) => {
     const right = box.x + box.width;
     const badge = onTask || skin.marketing;
     const r = onTask ? 11 : 12;
@@ -1393,7 +1423,7 @@ export function emitTemplate(
       round: true,
     });
     const half = badge ? r : 12;
-    cmds.push({ op: "link", x: cx - half, y: cy - half, w: half * 2, h: half * 2, r: badge ? r : 4, href: url, title: url });
+    cmds.push({ ...link, x: cx - half, y: cy - half, w: half * 2, h: half * 2, r: badge ? r : 4 });
   };
 
   // A container's task roll-up (`.as-rollup`): a bar and "8/21 pts", warn
@@ -1799,11 +1829,12 @@ export function emitTemplate(
       );
       // The note's description, as a dim sub-line under its sentence —
       // .as-annotation__desc on the canvas, 0.85em of the note's own size at
-      // its own tighter 1.3 line-height.
+      // its own tighter 1.3 line-height. Uncapped for the same reason as the
+      // sentence: the canvas shows every line of it.
       const descSize = Math.max(9, Math.round(size * 0.85));
       const descLineH = Math.round(descSize * ANNOTATION_DESC_LINE_HEIGHT);
       const descLines = node.description
-        ? wrapText(node.description, descSize, "sans", box.width - pad * 2, 3)
+        ? wrapText(node.description, descSize, "sans", box.width - pad * 2, Number.MAX_SAFE_INTEGER)
         : [];
       const descTop = top + lines.length * lineH + 3;
       descLines.forEach((line, i) =>
@@ -2876,8 +2907,10 @@ export function drawToSvg(cmds: DrawCmd[], opts: { gridId?: string } = {}): stri
       }
       case "link": {
         // A new tab, as the canvas's ↗ opens one — the reader keeps the page.
+        // A sibling diagram's page opens in place, as the canvas's file link
+        // swaps the diagram on show.
         out.push(
-          `<a class="bd-link" href="${esc(cmd.href)}" target="_blank" rel="noopener noreferrer"><title>${esc(cmd.title)}</title>` +
+          `<a class="bd-link" href="${esc(cmd.href)}"${cmd.sameTab ? "" : ' target="_blank" rel="noopener noreferrer"'}><title>${esc(cmd.title)}</title>` +
             `<rect x="${cmd.x}" y="${cmd.y}" width="${cmd.w}" height="${cmd.h}" rx="${cmd.r}" fill="transparent"/></a>`,
         );
         break;

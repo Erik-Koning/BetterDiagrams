@@ -62,18 +62,24 @@ test.describe("import and export", () => {
     expect(text).toContain("REST API");
   });
 
-  test("Show all lines in the page is saved with the diagram, and every export after opens with them shown", async ({ page, studio }) => {
+  test("Interactive HTML page settings are saved with the diagram, and every export after opens that way", async ({ page, studio }) => {
     await studio.goto();
-    const shown = (menu: Awaited<ReturnType<typeof studio.openMenu>>) =>
-      menu.getByRole("checkbox", { name: "Show all lines in the page" });
-    await shown(await studio.openMenu("Export")).check();
-    await expect(studio.toast).toHaveText("Interactive HTML opens with every line shown");
-    await page.keyboard.press("Escape");
-    // A document setting: it comes back with the diagram.
+    const settings = async () => {
+      await studio.fromMenu("Export", /^Page settings/);
+      return page.getByRole("dialog", { name: "Interactive HTML page settings" });
+    };
+    let dialog = await settings();
+    await dialog.getByRole("radio", { name: "Every line shown" }).check();
+    await dialog.getByRole("checkbox", { name: "Show the legend" }).uncheck();
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(studio.toast).toHaveText("Interactive HTML page settings saved — every export opens this way");
+    // Document settings: they come back with the diagram.
     await studio.save();
     await studio.goto();
-    await expect(shown(await studio.openMenu("Export"))).toBeChecked();
-    await page.keyboard.press("Escape");
+    dialog = await settings();
+    await expect(dialog.getByRole("radio", { name: "Every line shown" })).toBeChecked();
+    await expect(dialog.getByRole("checkbox", { name: "Show the legend" })).not.toBeChecked();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
 
     const download = await studio.download(() => studio.fromMenu("Export", /^Interactive HTML/));
     // Saved under its own name: a file without an extension opens as text.
@@ -82,7 +88,8 @@ test.describe("import and export", () => {
     await page.goto(`file://${file}`);
     await expect(page.locator("#bd-alllines")).toBeChecked();
     await expect(page.locator("body")).not.toHaveClass(/bd-lines-hover/);
-    // The page's own check still turns lines on hover back on.
+    await expect(page.locator("#bd-showkey")).not.toBeChecked();
+    // The page's own checks still change both.
     await page.locator("#bd-menu").click();
     await page.locator("#bd-alllines").uncheck();
     await expect(page.locator("body")).toHaveClass(/bd-lines-hover/);

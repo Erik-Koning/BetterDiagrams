@@ -159,6 +159,23 @@ describe("validateTemplateReport", () => {
     expect(issue!.message).toBe(`"none" isn't a htmlLines value (hover, all), so the HTML page shows a box's lines on hover.`);
   });
 
+  it("keeps the HTML page's other settings it knows, and says what each unknown one falls back to", () => {
+    const settings = { htmlTimeline: "hide", htmlTimelineDate: "last", htmlLater: "hide", htmlLegend: "hide" };
+    expect(validateTemplate({ nodes: [], edges: [], settings }).settings).toEqual(settings);
+    const report = validateTemplateReport({
+      nodes: [],
+      edges: [],
+      settings: { htmlTimeline: "off", htmlTimelineDate: "tomorrow", htmlLater: "fade", htmlLegend: "maybe" },
+    });
+    expect(report.template.settings).toBeUndefined();
+    expect(report.issues.map((i) => `${i.code} ${i.path}: ${i.message}`)).toEqual([
+      `unknown-value /settings/htmlTimeline: "off" isn't a htmlTimeline value (show, hide), so the HTML page opens with its timeline bar.`,
+      `unknown-value /settings/htmlTimelineDate: "tomorrow" isn't a htmlTimelineDate value (today, first, last), so the HTML page's timeline opens on today.`,
+      `unknown-value /settings/htmlLater: "fade" isn't a htmlLater value (ghost, hide), so the HTML page ghosts what is dated later.`,
+      `unknown-value /settings/htmlLegend: "maybe" isn't a htmlLegend value (show, hide), so the HTML page opens with its legend.`,
+    ]);
+  });
+
   it("escapes JSON Pointer segments", () => {
     expect(codes({ nodes: [{ id: "a", "x/y~z": 1 }], edges: [] })).toEqual(["unknown-key /nodes/0/x~1y~0z"]);
   });

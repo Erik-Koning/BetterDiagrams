@@ -90,7 +90,6 @@ import {
   type EdgeRouting,
   type ArrangeMode,
   type Notation,
-  type HtmlLines,
   type GroupContents,
   type NodeField,
   type VersionTagPosition,
@@ -204,6 +203,7 @@ import {
 } from "../contract/tasks";
 import { assigneeSwatch, assigneeSwatches, swatchColor } from "./shapes";
 import { CapacityModal } from "./CapacityModal";
+import { HtmlSettingsModal, htmlSettingsSummary, sameHtmlSettings, withHtmlSettings, type HtmlSettings } from "./HtmlSettingsModal";
 import { FieldGridModal } from "./FieldGridModal";
 import { copyText } from "./copy-text";
 import { PinStrip } from "./FieldPins";
@@ -2403,6 +2403,7 @@ function StudioInner({
   const [showCritical, setShowCritical] = useState(false);
   /** Whether View → Team capacity… is open. */
   const [capacityOpen, setCapacityOpen] = useState(false);
+  const [htmlSettingsOpen, setHtmlSettingsOpen] = useState(false);
   const criticalWalk = useMemo(
     () => (showCritical && !(diffBase || compareTemplate) ? criticalPath(template) : null),
     [showCritical, template, diffBase, compareTemplate],
@@ -3178,29 +3179,23 @@ function StudioInner({
     [readOnly, applyTemplate, showToast],
   );
 
-  /** The document's `settings.htmlLines`, "hover" when it says nothing. */
-  const htmlLines: HtmlLines = template.settings?.htmlLines ?? "hover";
-
   /**
-   * Another document setting, set from the Export menu: how the interactive
-   * HTML export shows lines. Stored in the document, so every later export
-   * — from any host, or an agent's — opens the same way; "hover", the
-   * default, is never stored.
+   * More document settings, set from Export → Interactive HTML → Page settings…:
+   * how the exported page opens — its lines, legend and timeline. Stored in
+   * the document, so every later export — from any host, or an agent's —
+   * opens the same way; a default is never stored. One save is one edit, so
+   * one ⌘Z takes all of it back.
    */
-  const setHtmlLines = useCallback(
-    (next: HtmlLines) => {
+  const saveHtmlSettings = useCallback(
+    (next: HtmlSettings) => {
+      setHtmlSettingsOpen(false);
       if (readOnly) return;
-      const { htmlLines: _was, ...rest } = templateRef.current.settings ?? {};
-      const settings = next === "all" ? { ...rest, htmlLines: next } : rest;
-      applyTemplate(
-        { ...templateRef.current, ...(Object.keys(settings).length ? { settings } : { settings: undefined }) },
-        { fit: false },
-      );
-      showToast(
-        next === "all"
-          ? "Interactive HTML opens with every line shown"
-          : "Interactive HTML shows a box's lines while it is hovered",
-      );
+      // Unchanged is no edit — judged by what each setting does, so a
+      // default the file happens to spell out isn't a change either.
+      const before = templateRef.current.settings;
+      if (sameHtmlSettings(before, next)) return;
+      applyTemplate({ ...templateRef.current, settings: withHtmlSettings(before, next) }, { fit: false });
+      showToast("Interactive HTML page settings saved — every export opens this way");
     },
     [readOnly, applyTemplate, showToast],
   );
@@ -6957,7 +6952,7 @@ function StudioInner({
   // they could not, and why, are commented at the point of divergence.
 
   /** Any dialog is up, so the canvas is not what the keyboard is aimed at. */
-  const modalOpen = welcomeOpen || !!pendingExport || !!pendingNest || !!fieldGrid || capacityOpen;
+  const modalOpen = welcomeOpen || !!pendingExport || !!pendingNest || !!fieldGrid || capacityOpen || htmlSettingsOpen;
 
   /**
    * Whether a keystroke on `window` was meant for THIS editor.
@@ -8633,21 +8628,22 @@ function StudioInner({
                       <div className="as-menu__label">{exporter.label}</div>
                       {exporter.hint ? <div className="as-menu__hint">{exporter.hint}</div> : null}
                     </button>
-                    {/* The built-in page's one setting, under it: a document
-                        setting, so it holds for every later export. A host's
-                        own exporter under this key decides for itself. */}
+                    {/* The built-in page's settings, under it: document
+                        settings, so they hold for every later export. A
+                        host's own exporter under this key decides for itself. */}
                     {key === "html" && exporter === BUILTIN_EXPORTERS.html && !readOnly ? (
-                      <label
-                        className="as-menu__check"
-                        title="Saved in the diagram: every Interactive HTML export opens with Show all lines on, instead of showing a box's lines on hover"
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="as-menu__item"
+                        onClick={() => {
+                          setOpenMenu(null);
+                          setHtmlSettingsOpen(true);
+                        }}
                       >
-                        <input
-                          type="checkbox"
-                          checked={htmlLines === "all"}
-                          onChange={() => setHtmlLines(htmlLines === "all" ? "hover" : "all")}
-                        />
-                        Show all lines in the page
-                      </label>
+                        <div className="as-menu__label">Page settings…</div>
+                        <div className="as-menu__hint">{htmlSettingsSummary(template.settings, timeline.stops.length > 0)}</div>
+                      </button>
                     ) : null}
                   </Fragment>
                 );
@@ -10124,6 +10120,14 @@ function StudioInner({
               );
               showToast("Team capacity saved");
             }}
+          />
+        ) : null}
+        {htmlSettingsOpen ? (
+          <HtmlSettingsModal
+            settings={template.settings}
+            stops={timeline.stops}
+            onSave={saveHtmlSettings}
+            onClose={() => setHtmlSettingsOpen(false)}
           />
         ) : null}
         {pendingReplace ? (

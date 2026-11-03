@@ -26,6 +26,8 @@ export interface ResizeHandles {
   visible: boolean;
   /** Put on the node's own element — any element inside React Flow's wrapper. */
   hostRef: Ref<HTMLDivElement>;
+  /** That element, for a node that measures itself; null before it mounts. */
+  host: () => HTMLDivElement | null;
   /** Call from the resizer's `onResizeStart`. */
   onResizeStart: () => void;
   /** Call from the resizer's `onResizeEnd`. */
@@ -59,10 +61,12 @@ export function useResizeHandles(enabled: boolean, selected: boolean | undefined
 
   const onResizeStart = useCallback(() => setResizing(true), []);
   const onResizeEnd = useCallback(() => setResizing(false), []);
+  const host = useCallback(() => hostRef.current, []);
 
   return {
     visible: enabled && (!!selected || hovered || resizing),
     hostRef,
+    host,
     onResizeStart,
     onResizeEnd,
   };
