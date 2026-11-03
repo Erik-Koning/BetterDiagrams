@@ -40,3 +40,14 @@ templates/scratch/
 templates/linked.json
 # Files linked from the example app's menu: symlinks to paths on this machine only.
 templates/symlinks/
+
+# Environment files hold secrets: never commit them. Examples stay tracked.
+.env
+.env*
+!.env.example
+!.env.sample
+!.env.template
+!.env.dist
+!.env.*.example
+!.env.*.sample
+!.env.*.template
