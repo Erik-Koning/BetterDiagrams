@@ -137,6 +137,40 @@ describe("explorerDocument — the slice the page carries", () => {
     expect(node.data).toEqual({ model: { shape: "entity", name: "t", fields: [{ name: "id", primaryKey: true }] } });
     expect(JSON.stringify(node)).not.toContain("token");
   });
+
+  it("carries a profile's counts, never values out of the data itself", () => {
+    const doc = validateTemplate({
+      version: 1,
+      nodes: [
+        {
+          id: "t", label: "T", kind: "table", icon: "none", description: "", parentId: null, x: 0, y: 0, w: 170, h: 76,
+          data: {
+            model: {
+              shape: "entity",
+              fields: [{ name: "email" }, { name: "id", primaryKey: true }],
+              profile: {
+                rowCount: 1200,
+                profiledAt: "2026-10-01",
+                topValues: ["ana@example.com"],
+                columns: {
+                  email: { nullRate: 0.1, distinct: 1100, min: "aaron@example.com", max: "zoe@example.com", sample: ["bo@example.com"] },
+                  id: { min: 1, max: 1200 },
+                },
+              },
+            },
+          },
+        },
+      ],
+      edges: [],
+    });
+    const node = explorerDocument(doc).nodes[0]!;
+    expect((node.data as { model: { profile: unknown } }).model.profile).toEqual({
+      rowCount: 1200,
+      profiledAt: "2026-10-01",
+      columns: { email: { nullRate: 0.1, distinct: 1100 } },
+    });
+    expect(JSON.stringify(node)).not.toMatch(/example\.com/);
+  });
 });
 
 describe("htmlExplorerData", () => {

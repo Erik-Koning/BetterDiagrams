@@ -19,6 +19,7 @@ import type { GovernanceReport } from "../contract/dictionary";
 import type { StructureSummary } from "../contract/structure";
 import type { SavedAnalysis } from "../contract/analyses";
 import type { LineageLink } from "../contract/lineage-links";
+import { tableProfile, type TableProfile } from "../contract/fields";
 import type { ExportPalette } from "./draw";
 import { EXPLORER_RUNTIME } from "./html-explorer-runtime.generated";
 
@@ -121,14 +122,35 @@ function dataSlice(data: Record<string, unknown> | undefined, modelKeys: readonl
   return Object.keys(out).length ? out : undefined;
 }
 
+/**
+ * A table's profile as the page needs it: row count, when it was taken and
+ * the data last changed, and each column's null rate, distinct count and
+ * orphan rate. Not a column's `min` and `max`, nor anything else a profiler
+ * wrote: those are values out of the data itself — the first and last email
+ * in a table — and the page is a file that gets mailed and posted where the
+ * data may not go.
+ */
+function pageProfile(data: Record<string, unknown> | undefined): TableProfile | undefined {
+  const profile = tableProfile({ data });
+  if (!profile?.columns) return profile;
+  const columns: NonNullable<TableProfile["columns"]> = {};
+  for (const [name, { min: _min, max: _max, ...counts }] of Object.entries(profile.columns)) {
+    if (Object.keys(counts).length) columns[name] = counts;
+  }
+  const { columns: _all, ...rest } = profile;
+  return Object.keys(columns).length ? { ...rest, columns } : Object.keys(rest).length ? rest : undefined;
+}
+
 export function explorerDocument(template: Pick<DiagramTemplate, "nodes" | "edges" | "lineage">): ExplorerDocument {
   return {
     nodes: template.nodes.map((n) => {
-      const data = dataSlice(
+      const sliced = dataSlice(
         n.data,
-        ["fields", "fieldMeta", "shape", "name", "label", "namespace", "recordCount", "fieldsTruncated", "profile"],
+        ["fields", "fieldMeta", "shape", "name", "label", "namespace", "recordCount", "fieldsTruncated"],
         ["fields"],
       );
+      const profile = pageProfile(n.data);
+      const data = profile ? { ...sliced, model: { ...(sliced?.model as Record<string, unknown> | undefined), profile } } : sliced;
       return {
         id: n.id,
         ...(n.label !== undefined ? { label: n.label } : {}),

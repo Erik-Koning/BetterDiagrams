@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 — 2026-11-03
 
 - The Better Diagrams custom editor for `.json` diagrams: architecture and sequence, in the web
   app's studio, styling and default view, with VS Code's text as the only copy.

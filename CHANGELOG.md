@@ -28,6 +28,12 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   that diagram's own page, where exporting the two side by side puts it (`payments.json` →
   `payments.html`, a workspace's `Order flow` → `Order flow.html`), in the same tab.
 
+### Fixed
+
+- The interactive HTML page no longer carries a data profile's column `min` and `max`, or anything
+  else a profiler wrote beyond the counts it shows (row count, null rate, distinct, orphan rate):
+  those are values out of the data, and the page is a file that gets shared.
+
 ## 0.1.0 — 2026-11-01
 
 This changelog starts with the editing API (October 2026). For what changed between
