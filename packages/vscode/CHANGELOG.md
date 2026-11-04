@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 — 2026-11-04
+
+- Found by its name written as one word, BetterDiagrams, in the Marketplace, Open VSX and VS
+  Code's Extensions view, and by better-diagrams, diagrams, data-model and erd.
+
 ## 0.1.0 — 2026-11-03
 
 - The Better Diagrams custom editor for `.json` diagrams: architecture and sequence, in the web

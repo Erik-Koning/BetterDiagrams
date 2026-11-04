@@ -2,7 +2,7 @@
   "name": "better-diagrams-vscode",
   "displayName": "Better Diagrams",
   "description": "Open Better Diagrams architecture and sequence diagrams in VS Code, in the same editor as the web app, and give agents the format to write them in.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "publisher": "mosphere",
@@ -19,9 +19,14 @@
     "url": "https://github.com/Erik-Koning/BetterDiagrams/issues"
   },
   "keywords": [
+    "betterdiagrams",
+    "better-diagrams",
     "diagram",
+    "diagrams",
     "architecture",
     "sequence-diagram",
+    "data-model",
+    "erd",
     "c4",
     "json"
   ],
