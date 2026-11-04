@@ -14,8 +14,10 @@ on:
 permissions:
   contents: read
 
+# Per workflow as well as per ref: called by a release, github.workflow is the
+# release's, so two releases of one tag never cancel each other's checks.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

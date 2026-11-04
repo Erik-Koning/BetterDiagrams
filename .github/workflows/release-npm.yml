@@ -14,7 +14,8 @@ name: Release npm
 
 on:
   push:
-    tags: ["v*"]
+    # A digit after the v, so the extension's vscode-v… tags don't match.
+    tags: ["v[0-9]*"]
   workflow_dispatch:
 
 permissions:
