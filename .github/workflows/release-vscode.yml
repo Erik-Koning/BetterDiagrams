@@ -1,12 +1,16 @@
-# A tag vscode-v<version> publishes the VS Code extension. The CI that guards
-# main runs on the tagged commit, the .vsix is packaged once, and that same
-# file goes, as you approve the `openvsx` environment, to Open VSX (where
-# Cursor, Windsurf and VSCodium install from), with its access token, the
-# environment's OVSX_PAT secret. It is attached to a GitHub Release for the
-# tag too: for installing by hand, and for uploading to the VS Code
-# Marketplace, which is done by hand on its manage page. Publishing there from
-# CI would need an Azure DevOps token for every organization (they end on
-# 1 December 2026) or an identity in Azure; an upload needs neither.
+# A version of the VS Code extension that isn't released yet publishes itself:
+# bump the version in packages/vscode/package.json (and its CHANGELOG
+# heading), push it to main, and this workflow runs the CI that guards main on
+# that commit, packages the .vsix once, and publishes that same file to the
+# VS Code Marketplace and to Open VSX (where Cursor, Windsurf and VSCodium
+# install from). The Marketplace takes it by OIDC trusted publishing — no token
+# — under the publisher's policy for this file and the `marketplace`
+# environment; Open VSX takes it with the `openvsx` environment's OVSX_PAT
+# secret. Once both have it, the commit is tagged vscode-v<version> with a
+# GitHub Release that carries the .vsix, for installing by hand. The tag is
+# what marks a version released: a push whose version is already tagged
+# publishes nothing, and a release that failed part way is finished by the
+# next run, which skips a store that already has the version.
 #
 # Run it by hand (on main) to rehearse: the same checks and package, then Open
 # VSX's verify-pat in place of publish. A run by hand never publishes.
@@ -16,17 +20,46 @@ name: Release VS Code extension
 
 on:
   push:
-    tags: ["vscode-v*"]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# One release at a time; a push that lands mid-release waits its turn.
+concurrency:
+  group: release-vscode
+  cancel-in-progress: false
+
 env:
   DRY_RUN: ${{ github.event_name != 'push' }}
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+      run: ${{ steps.version.outputs.run }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Is this version released yet?
+        id: version
+        run: |
+          version=$(node -p "require('./packages/vscode/package.json').version")
+          release=false
+          if [ "$DRY_RUN" != true ] && ! git ls-remote --exit-code --tags origin "refs/tags/vscode-v$version" > /dev/null; then
+            release=true
+          fi
+          echo "$version: release=$release dry-run=$DRY_RUN"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          if [ "$release" = true ] || [ "$DRY_RUN" = true ]; then run=true; else run=false; fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   checks:
+    needs: version
+    if: needs.version.outputs.run == 'true'
     uses: ./.github/workflows/ci.yml
 
   package:
@@ -39,19 +72,37 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - name: The tag names the extension's version
-        run: |
-          version=$(node -p "require('./packages/vscode/package.json').version")
-          if [ "$DRY_RUN" != true ] && [ "$GITHUB_REF_NAME" != "vscode-v$version" ]; then
-            echo "::error::$GITHUB_REF_NAME doesn't name the extension's version, $version"
-            exit 1
-          fi
       - run: npm run package -w better-diagrams-vscode
       - uses: actions/upload-artifact@v7
         with:
           name: vsix
           path: packages/vscode/better-diagrams.vsix
           if-no-files-found: error
+
+  marketplace:
+    needs: [version, package]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    # The Marketplace's trusted publishing policy names this file and this environment.
+    environment: marketplace
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      # vsce as the lockfile pins it (--oidc needs 4.1.0 or later).
+      - run: npm ci --no-audit --no-fund
+      - uses: actions/download-artifact@v8
+        with:
+          name: vsix
+          path: packages/vscode
+      - name: Publish to the VS Code Marketplace
+        working-directory: packages/vscode
+        run: npx vsce publish --oidc --packagePath better-diagrams.vsix --skip-duplicate
 
   openvsx:
     needs: package
@@ -77,12 +128,12 @@ jobs:
           if [ "$DRY_RUN" = true ]; then
             npx ovsx verify-pat mosphere
           else
-            npx ovsx publish --packagePath better-diagrams.vsix
+            npx ovsx publish --packagePath better-diagrams.vsix --skip-duplicate
           fi
 
   github-release:
-    needs: package
-    if: github.event_name == 'push'
+    needs: [version, marketplace, openvsx]
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -91,11 +142,12 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: vsix
-      - name: Attach the .vsix to a GitHub Release
+      - name: Tag the commit vscode-v<version>, with a GitHub Release and the .vsix
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          version="${GITHUB_REF_NAME#vscode-v}"
           # This version's section of the extension's changelog.
-          awk -v v="$version" '/^## /{p = index($0, "## " v) == 1; next} p' packages/vscode/CHANGELOG.md > notes.md
-          gh release create "$GITHUB_REF_NAME" better-diagrams.vsix --title "VS Code extension $version" --notes-file notes.md
+          awk -v h="## $VERSION" '/^## /{p = ($0 == h || index($0, h " ") == 1); next} p' packages/vscode/CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Better Diagrams for VS Code $VERSION." > notes.md
+          gh release create "vscode-v$VERSION" better-diagrams.vsix --target "$GITHUB_SHA" --title "VS Code extension $VERSION" --notes-file notes.md

@@ -99,31 +99,25 @@ After a build, **F5** with `packages/vscode` open in VS Code runs it in an Exten
 
 ## Publishing
 
-A tag publishes it, never a working tree: `vscode-v<version>` (the version in this
-`package.json`) runs `.github/workflows/release-vscode.yml`, which runs the repo's CI on the tagged
-commit, packages the `.vsix` once, and — as you approve the `openvsx` environment — publishes that
-file to [Open VSX](https://open-vsx.org) (where Cursor, Windsurf and VSCodium install from), and
-attaches it to a GitHub Release. Run by hand on `main`, the workflow rehearses: the Open VSX
-sign-in is checked, nothing is published.
-
-```bash
-git tag vscode-v0.1.0 && git push origin vscode-v0.1.0
-```
-
-The [VS Code Marketplace](https://marketplace.visualstudio.com) takes that same file by hand: the
-GitHub Release's `.vsix`, uploaded on
-[marketplace.visualstudio.com/manage](https://marketplace.visualstudio.com/manage). Publishing there
-from CI would need an Azure DevOps token for every organization (they end on 1 December 2026) or an
-identity in Azure; an upload needs neither.
+A version that isn't released yet publishes itself, never from a working tree: bump the version
+in this `package.json` (and its CHANGELOG heading) and push it to `main`.
+`.github/workflows/release-vscode.yml` runs the repo's CI on that commit, packages the `.vsix`
+once, and publishes that file to the [VS Code Marketplace](https://marketplace.visualstudio.com)
+and to [Open VSX](https://open-vsx.org) (where Cursor, Windsurf and VSCodium install from). Once
+both have it, the commit is tagged `vscode-v<version>` with a GitHub Release carrying the `.vsix`.
+A push whose version is already tagged publishes nothing; a release that failed part way is
+finished by the next push, which skips a store that already has the version. Run by hand on
+`main`, the workflow rehearses: the Open VSX sign-in is checked, nothing is published.
 
 It publishes as `mosphere`. Once, before the first release:
 
-1. **GitHub.** An environment `openvsx` with you as a required reviewer and deployments allowed
-   from `main` and `vscode-v*` tags.
-2. **Open VSX.** An eclipse.org account with the Publisher Agreement signed; an access token
+1. **GitHub.** Environments `marketplace` and `openvsx`, deployments allowed from `main` only.
+2. **Marketplace.** The `mosphere` publisher at
+   [marketplace.visualstudio.com/manage](https://marketplace.visualstudio.com/manage), signed in
+   with a Microsoft account, and on its **Trusted Publishing** tab a policy for GitHub Actions:
+   `Erik-Koning` / `BetterDiagrams`, workflow `release-vscode.yml`, environment `marketplace`. The
+   workflow publishes with `vsce publish --oidc` (vsce 4.1.0 or later), no token.
+3. **Open VSX.** An eclipse.org account with the Publisher Agreement signed; an access token
    from open-vsx.org → Settings → Access Tokens, saved as the `openvsx` environment's secret
    `OVSX_PAT`; then `OVSX_PAT=… npx ovsx create-namespace mosphere`, and claim the namespace
    (until it's claimed, anyone can publish into it).
-3. **Marketplace.** The `mosphere` publisher at
-   [marketplace.visualstudio.com/manage](https://marketplace.visualstudio.com/manage), signed in
-   with a Microsoft account.

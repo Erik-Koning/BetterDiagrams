@@ -1,9 +1,13 @@
-# A tag v<version> publishes @mosphere/better-diagrams to npm. The CI that
-# guards main runs on the tagged commit; then, once you approve the `npm`
-# environment, npm publishes it by OIDC trusted publishing — no token
-# anywhere — with a provenance attestation. A prerelease version (x.y.z-…)
-# goes out under `beta`, never `latest`. Only committed code can ship: the
-# package is built from the tag, not from anyone's working tree.
+# A version of @mosphere/better-diagrams that isn't released yet publishes
+# itself: bump the version in packages/better-diagrams/package.json (and its
+# CHANGELOG heading), push it to main, and this workflow runs the CI that
+# guards main on that commit, publishes the package to npm by OIDC trusted
+# publishing — no token anywhere — with a provenance attestation, then tags the
+# commit v<version> with a GitHub Release. The tag is what marks a version
+# released: a push whose version is already tagged publishes nothing. A
+# prerelease version (x.y.z-…) goes out under `beta`, never `latest`. Only
+# committed code can ship: the package is built from main, not from anyone's
+# working tree.
 #
 # Run it by hand (Actions → Release npm → Run workflow, on main) to rehearse:
 # the same checks and build, then `npm publish --dry-run`. A run by hand
@@ -14,19 +18,50 @@ name: Release npm
 
 on:
   push:
-    # A digit after the v, so the extension's vscode-v… tags don't match.
-    tags: ["v[0-9]*"]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# One release at a time; a push that lands mid-release waits its turn.
+concurrency:
+  group: release-npm
+  cancel-in-progress: false
+
+env:
+  DRY_RUN: ${{ github.event_name != 'push' }}
+
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+      run: ${{ steps.version.outputs.run }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Is this version released yet?
+        id: version
+        run: |
+          version=$(node -p "require('./packages/better-diagrams/package.json').version")
+          release=false
+          if [ "$DRY_RUN" != true ] && ! git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then
+            release=true
+          fi
+          echo "$version: release=$release dry-run=$DRY_RUN"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          if [ "$release" = true ] || [ "$DRY_RUN" = true ]; then run=true; else run=false; fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
   checks:
+    needs: version
+    if: needs.version.outputs.run == 'true'
     uses: ./.github/workflows/ci.yml
 
   publish:
-    needs: checks
+    needs: [version, checks]
     runs-on: ubuntu-latest
     # npm's trusted publisher names this file and this environment.
     environment: npm
@@ -34,7 +69,7 @@ jobs:
       contents: read
       id-token: write
     env:
-      DRY_RUN: ${{ github.event_name != 'push' }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
       # Node 24's npm (11) is new enough for trusted publishing (11.5.1+).
@@ -44,28 +79,39 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
 
-      - name: The tag names the package's version
-        id: version
-        working-directory: packages/better-diagrams
-        run: |
-          version=$(node -p "require('./package.json').version")
-          if [ "$DRY_RUN" != true ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "::error::$GITHUB_REF_NAME doesn't name the package's version, $version"
-            exit 1
-          fi
-          case "$version" in *-*) tag=beta ;; *) tag=latest ;; esac
-          echo "$version under $tag"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
       # The editor the better-diagrams command serves (app/).
       - run: npm run build:app
 
       # prepublishOnly checks it all again first: types, tests, build, API reports, app/.
+      # A version npm already has (a run whose tagging failed, run again) isn't published twice.
       - name: Publish
         working-directory: packages/better-diagrams
         run: |
+          case "$VERSION" in *-*) tag=beta ;; *) tag=latest ;; esac
+          echo "$VERSION under $tag"
           if [ "$DRY_RUN" = true ]; then
-            npm publish --tag "${{ steps.version.outputs.tag }}" --dry-run
+            npm publish --tag "$tag" --dry-run
+          elif [ "$(npm view "@mosphere/better-diagrams@$VERSION" version 2> /dev/null)" = "$VERSION" ]; then
+            echo "npm already has $VERSION"
           else
-            npm publish --tag "${{ steps.version.outputs.tag }}"
+            npm publish --tag "$tag"
           fi
+
+  tag:
+    needs: [version, publish]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tag the commit v<version>, with a GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          # This version's section of the changelog, if it has one.
+          awk -v h="## $VERSION" '/^## /{p = ($0 == h || index($0, h " ") == 1); next} p' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "@mosphere/better-diagrams $VERSION on npm." > notes.md
+          case "$VERSION" in *-*) pre=--prerelease ;; *) pre= ;; esac
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "@mosphere/better-diagrams $VERSION" --notes-file notes.md $pre

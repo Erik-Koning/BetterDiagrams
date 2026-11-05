@@ -2425,22 +2425,23 @@ go.
 
 ## Releasing
 
-Releases publish from CI, never from a working tree: a tag runs the CI that guards `main` on the
-tagged commit, then waits for you to approve before anything is published.
+Releases publish from CI, never from a working tree: bump a version, push it to `main`, and the
+release workflow runs the CI that guards `main` on that commit, publishes, then tags the commit
+with a GitHub Release. The tag is what marks a version released; a push whose version is already
+tagged publishes nothing, so every other push to `main` leaves the stores alone.
 
-- **The library**: tag `v<version>`, the version in `packages/better-diagrams/package.json`.
+- **The library**: the version in `packages/better-diagrams/package.json`.
   `.github/workflows/release-npm.yml` publishes it to npm by trusted publishing (OIDC — there is
-  no npm token anywhere), with provenance. A prerelease (`0.2.0-beta.1`) goes out under `beta`,
-  never `latest`.
-- **The VS Code extension**: tag `vscode-v<version>`, the version in
-  `packages/vscode/package.json`. `.github/workflows/release-vscode.yml` packages the `.vsix` once,
-  publishes that file to Open VSX, and attaches it to a GitHub Release, from which it is uploaded
-  to the VS Code Marketplace by hand.
+  no npm token anywhere), with provenance, and tags it `v<version>`. A prerelease
+  (`0.2.0-beta.1`) goes out under `beta`, never `latest`.
+- **The VS Code extension**: the version in `packages/vscode/package.json`.
+  `.github/workflows/release-vscode.yml` packages the `.vsix` once and publishes that file to the
+  VS Code Marketplace (trusted publishing, no token) and Open VSX, then tags it `vscode-v<version>`
+  with a GitHub Release that carries the `.vsix`.
 
 ```bash
-# bump the version and its CHANGELOG heading, merge to main, then:
-git tag v0.1.0 && git push origin v0.1.0                 # the library
-git tag vscode-v0.1.0 && git push origin vscode-v0.1.0   # the extension
+# bump the version, turn its CHANGELOG's "Unreleased" into "<version> — <date>", then:
+git commit -am "0.2.0" && git push origin main
 ```
 
 Either workflow run by hand (Actions → Run workflow, on `main`) rehearses — the same checks and
@@ -2452,10 +2453,9 @@ Once, before the first release:
 1. **npm.** On npmjs.com, `@mosphere/better-diagrams` → Settings → Trusted Publisher → GitHub
    Actions: `Erik-Koning` / `BetterDiagrams`, workflow `release-npm.yml`, environment `npm`. A
    trusted publisher that hasn't published within two days lapses, so add it just before the
-   first tag. After that publish, Publishing access → *Require two-factor authentication and
+   first release. After that publish, Publishing access → *Require two-factor authentication and
    disallow tokens*.
-2. **GitHub.** An environment `npm` with you as its required reviewer, deployments allowed from
-   `main` and `v*` tags.
+2. **GitHub.** An environment `npm`, deployments allowed from `main` only.
 3. **The extension's stores**: `packages/vscode/README.md` → Publishing.
 
 ## Known issue
