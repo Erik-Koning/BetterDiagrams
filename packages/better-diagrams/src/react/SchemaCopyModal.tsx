@@ -65,6 +65,12 @@ export interface SchemaCopyModalProps {
   onClose: () => void;
   /** Fired after the text reaches the clipboard — for the host's own toast. */
   onCopied?: (text: string, scope: CloudScope, form: SchemaForm, focus: SchemaFocus) => void;
+  /**
+   * The host's clipboard, for a page whose own is blocked (a code editor's
+   * webview, say): resolves whether the text got there. Absent, the
+   * browser's clipboard.
+   */
+  copy?: (text: string) => Promise<boolean> | boolean;
 }
 
 /** What Task flow is, in one line — the welcome modal's type picker says the same. */
@@ -93,6 +99,7 @@ export function SchemaCopyModal({
   forms = true,
   onClose,
   onCopied,
+  copy = copyText,
 }: SchemaCopyModalProps) {
   const [scope, setScope] = useState<CloudScope>(() => scopeFor(initialClouds ?? [], resources ?? []));
   const [form, setForm] = useState<SchemaForm>("full");
@@ -114,7 +121,7 @@ export function SchemaCopyModal({
   );
 
   const handleCopy = async () => {
-    const ok = await copyText(prompt);
+    const ok = await copy(prompt);
     if (!ok) {
       setError("Clipboard is blocked in this context — copy from the docs instead.");
       return;

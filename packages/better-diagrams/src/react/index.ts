@@ -112,7 +112,7 @@ export {
 } from "./theme";
 export type { Theme, StudioMode } from "./theme";
 
-export { BrandMark, DateChip, TimelineScrubber } from "./chrome";
+export { BrandMark, DateChip, TimelineScrubber, ToolbarMenu } from "./chrome";
 export { WelcomeModal } from "./WelcomeModal";
 export type { WelcomeModalProps } from "./WelcomeModal";
 export { SchemaCopyModal } from "./SchemaCopyModal";

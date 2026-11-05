@@ -82,6 +82,10 @@ export function BrandMark({ className }: { className?: string }) {
  * this component, so they all share the same button styling, aria wiring,
  * and (via the parent's single `openMenu` slot + document listener) the same
  * open-one-close-the-rest and click-outside behaviour.
+ *
+ * A host adding its own menu through `toolbarExtras` gets the same look and
+ * arrow keys; opening and closing it — on a click outside, on Escape — is
+ * the host's, as `open` and `onToggle` are.
  */
 export function ToolbarMenu({
   label,

@@ -16,6 +16,10 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   ⋯ menu.
 - Export → Interactive HTML → **Page settings…** sets all five in one dialog, one undo step. It
   replaces the menu's **Show all lines in the page** check.
+- `ToolbarMenu`, the studio's own toolbar dropdown, for a host's menu in `toolbarExtras`: the
+  same look and arrow keys as Insert, Arrange and Export. The VS Code extension's Settings menu
+  is one.
+- `SchemaCopyModal` takes `copy`, the host's clipboard, for a page whose own is blocked.
 
 ### Changed
 

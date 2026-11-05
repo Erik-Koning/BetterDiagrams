@@ -417,6 +417,7 @@ const REACT_EXPORTS = [
   "modeLayoutOptions",
   // chrome
   "BrandMark",
+  "ToolbarMenu",
   "DateChip",
   "WelcomeModal",
   "SchemaCopyModal",

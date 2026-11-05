@@ -3247,6 +3247,7 @@ export interface SchemaCopyModalProps {
         geometry: boolean;
     }) => string;
     clouds: CloudOption[];
+    copy?: (text: string) => Promise<boolean> | boolean;
     forms?: boolean;
     initialClouds?: readonly string[];
     initialFocus?: SchemaFocus;
@@ -4197,6 +4198,18 @@ export interface TimelineView {
 
 // @public
 export function timelineView(template: DiagramTemplate, at: DiagramDate | null, mode?: TimelineFutureMode): TimelineView;
+
+// @public
+export function ToolbarMenu(input: {
+    label: string;
+    icon?: UiIconName;
+    title?: string;
+    active?: boolean;
+    open: boolean;
+    onToggle: () => void;
+    menuClassName?: string;
+    children: ReactNode;
+}): JSX_2.Element;
 
 // @public
 export function toReactFlow(t: DiagramTemplate, opts?: {
