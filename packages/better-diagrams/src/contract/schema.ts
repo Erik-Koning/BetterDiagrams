@@ -37,7 +37,17 @@ import { MILESTONE_KIND, TASK_KIND } from "./tasks";
 import { validatePaths, type DiagramPath, type PathGlow } from "./paths";
 import { validateAnalyses, type SavedAnalysis } from "./analyses";
 import { validateLineage, type LineageLink } from "./lineage-links";
-import { uncrossSideSlots, type Box, type EndSlots, type SideSlotEdge } from "./geometry";
+import {
+  bundleSideEnds,
+  endGlyphSpan,
+  endNotation,
+  endSides,
+  uncrossSideSlots,
+  type Box,
+  type BundleEnd,
+  type EndSlots,
+  type SideSlotEdge,
+} from "./geometry";
 import { RELATION_KIND_ORDER } from "./relations";
 export type { EndSlots } from "./geometry";
 
@@ -2206,17 +2216,95 @@ export function uncrossFieldAnchors(
   return uncrossSideSlots(items, (id) => nodeOf(id)?.box);
 }
 
-/** `fieldAnchors` with an un-crossing trade laid over it: the moved ends take their new fraction. */
+/**
+ * Where every line's ends sit, document-wide: rows traded so foreign keys
+ * don't cross (`uncrossFieldAnchors`), and the ends that share a side of a
+ * box bundled side by side (`bundleSideEnds`) — arrowheads a pixel apart,
+ * centred on the side, so lines into one box arrive together and stay put
+ * while the boxes at their other ends are dragged.
+ *
+ * Bundled are the ends nothing else places: no row, no fraction the user
+ * dragged in. A side pinned without a fraction joins its side's bundle.
+ * Each end is as wide as the glyph it draws — the same head and crow's foot
+ * resolution the renderers use, so `notation` matters.
+ *
+ * Both the canvas and the exporters lay this over `fieldAnchors` with
+ * `withEndSlots`, so a PNG's lines meet their boxes where the screen's do.
+ */
+export function lineEndSlots(
+  edges: ReadonlyArray<
+    Pick<DiagramEdge, "id" | "source" | "target" | "start" | "end" | "startField" | "endField" | "points"> &
+      Partial<Pick<DiagramEdge, "direction" | "startHead" | "endHead" | "startLabel" | "endLabel">>
+  >,
+  nodeOf: (id: string) => UncrossNode | undefined,
+  notation?: Notation,
+): Map<string, EndSlots> {
+  const slots = uncrossFieldAnchors(edges, nodeOf);
+  const anchorNode = (n: UncrossNode): FieldAnchorNode => ({
+    fields: n.fields,
+    description: n.description,
+    h: n.box.height,
+    centerX: n.box.x + n.box.width / 2,
+  });
+  const ends: BundleEnd[] = [];
+  for (const e of edges) {
+    const s = nodeOf(e.source);
+    const t = nodeOf(e.target);
+    if (!s || !t || e.source === e.target) continue;
+    const start = rowAnchor(e.start, e.startField, anchorNode(s), anchorNode(t));
+    const end = rowAnchor(e.end, e.endField, anchorNode(t), anchorNode(s));
+    const sides = endSides(s.box, t.box, { start: start.anchor, end: end.anchor, points: e.points });
+    const points = e.points ?? [];
+    const direction = e.direction ?? "forward";
+    const add = (
+      which: "start" | "end",
+      placed: { anchor: EdgeAnchor | undefined; onRow: boolean },
+      node: string,
+      other: Box,
+      head: EdgeHead | undefined,
+      label: string | undefined,
+    ) => {
+      if (placed.onRow || placed.anchor?.t !== undefined) return;
+      const side = sides[which];
+      // The first thing the line travels to from this end: its nearest waypoint, else the other box.
+      const [x, y] = points.length
+        ? which === "start"
+          ? points[0]
+          : points[points.length - 1]
+        : [other.x + other.width / 2, other.y + other.height / 2];
+      ends.push({
+        id: e.id,
+        which,
+        node,
+        side,
+        span: endGlyphSpan(head, endNotation(label, notation).marker),
+        far: side === "left" || side === "right" ? y : x,
+      });
+    };
+    add("start", start, e.source, t.box, e.startHead ?? (direction === "both" ? "arrow" : undefined), e.startLabel);
+    add("end", end, e.target, s.box, e.endHead ?? (direction !== "none" ? "arrow" : undefined), e.endLabel);
+  }
+  for (const [id, entry] of bundleSideEnds(ends, (id) => nodeOf(id)?.box)) {
+    slots.set(id, { ...slots.get(id), ...entry });
+  }
+  return slots;
+}
+
+/**
+ * `fieldAnchors` with the document-wide pass laid over it: a traded or
+ * bundled end takes its new fraction, and a bundled end that was floating
+ * takes the side its slot is on.
+ */
 export function withEndSlots(
   anchors: { start?: EdgeAnchor; end?: EdgeAnchor },
   slots: EndSlots | undefined,
 ): { start?: EdgeAnchor; end?: EdgeAnchor } {
   if (!slots) return anchors;
-  return {
-    ...anchors,
-    ...(slots.start !== undefined && anchors.start ? { start: { ...anchors.start, t: slots.start } } : {}),
-    ...(slots.end !== undefined && anchors.end ? { end: { ...anchors.end, t: slots.end } } : {}),
-  };
+  const placed = (anchor: EdgeAnchor | undefined, t: number | undefined, side: EdgeAnchorSide | undefined) =>
+    t === undefined ? anchor : anchor ? { ...anchor, t } : side ? { side, t } : undefined;
+  const start = placed(anchors.start, slots.start, slots.startSide);
+  const end = placed(anchors.end, slots.end, slots.endSide);
+  return { ...(start ? { start } : {}), ...(end ? { end } : {}) };
 }
 
 /**

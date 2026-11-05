@@ -254,6 +254,26 @@ export function floatingSides(
     : { start: dy > 0 ? "bottom" : "top", end: dy > 0 ? "top" : "bottom" };
 }
 
+/**
+ * The sides an edge's two ends attach to: a pinned end's own side; with no
+ * waypoints, a free end takes the side it would take floating; with
+ * waypoints, the side facing the nearest one. `edgeGeometryFor` routes by
+ * this, and the bundling pass groups ends by it, so the two never disagree.
+ */
+export function endSides(
+  source: Box,
+  target: Box,
+  spec?: EdgePathSpec,
+): { start: EdgeAnchorSpec["side"]; end: EdgeAnchorSpec["side"] } {
+  const points = spec?.points ?? [];
+  const free = points.length ? undefined : floatingSides(source, target);
+  const toward = ([x, y]: readonly [number, number]): Pt => ({ x, y });
+  return {
+    start: spec?.start?.side ?? free?.start ?? autoSide(source, toward(points[0])),
+    end: spec?.end?.side ?? free?.end ?? autoSide(target, toward(points[points.length - 1])),
+  };
+}
+
 /** The point on a box's `side` at fraction `t` along it. */
 function anchorPoint(box: Box, side: EdgeAnchorSpec["side"], t = 0.5): Pt {
   const f = Math.min(1, Math.max(0, Number.isFinite(t) ? t : 0.5));
@@ -643,11 +663,8 @@ export function edgeGeometryFor(
         : floatingEdgeGeometry(source, target, labelT);
   }
 
-  // With no waypoints an unpinned end takes the side it would take floating;
-  // with waypoints, the side facing the nearest one.
-  const free = waypoints.length ? undefined : floatingSides(source, target);
-  const startSide = spec?.start?.side ?? free?.start ?? autoSide(source, waypoints[0]);
-  const endSide = spec?.end?.side ?? free?.end ?? autoSide(target, waypoints[waypoints.length - 1]);
+  const free = !waypoints.length;
+  const { start: startSide, end: endSide } = endSides(source, target, spec);
   let p1 = anchorPoint(source, startSide, spec?.start?.t);
   let p2 = anchorPoint(target, endSide, spec?.end?.t);
   // An unpinned end facing a pinned one lines up with it where its side
@@ -670,6 +687,12 @@ export function edgeGeometryFor(
 export interface EndSlots {
   start?: number;
   end?: number;
+  /**
+   * The side a bundled end sits on (`bundleSideEnds`). An end with no anchor
+   * of its own floats, so its slot carries the side the fraction is along.
+   */
+  startSide?: EdgeAnchorSpec["side"];
+  endSide?: EdgeAnchorSpec["side"];
 }
 
 /** One edge as the un-crossing pass sees it: its boxes, its resolved spec, and which ends it may move. */
@@ -790,6 +813,105 @@ export function uncrossSideSlots(
     if (!changed) break;
   }
   return moved;
+}
+
+// ─── Bundling the ends that share a side ─────────────────────────────────────
+
+/** One end of a line as `bundleSideEnds` sees it. */
+export interface BundleEnd {
+  /** The edge's id. */
+  id: string;
+  which: "start" | "end";
+  /** The node this end attaches to, and the side of it. */
+  node: string;
+  side: EdgeAnchorSpec["side"];
+  /** How wide the end is across its line: its glyph, or the bare stroke (`endGlyphSpan`). */
+  span: number;
+  /** Where the line heads first, along the axis the side runs — the bundle's order. */
+  far: number;
+}
+
+/** Clear space between neighbouring ends of a bundle. */
+const BUNDLE_GAP = 1;
+
+/** A bare line's width at its end: the stroke. */
+const LINE_SPAN = 1.8;
+
+/**
+ * Each end glyph's width across its line, stroke included: the filled shapes
+ * are exactly their outline, a stroked one adds the 1.8 stroke. Read off the
+ * paths `edgeHeadPath` and `crowsFootPath` draw.
+ */
+const HEAD_SPAN: Record<EdgeHeadSpec, number> = {
+  arrow: 9,
+  open: 10.8,
+  diamond: 10.2,
+  "diamond-filled": 8.4,
+  triangle: 13.8,
+  circle: 8.8,
+  bar: 11.8,
+};
+const MARKER_SPAN = 13.8;
+
+/** How wide an end is across its line: its crow's foot, else its head, else the stroke. */
+export function endGlyphSpan(head: EdgeHeadSpec | undefined, marker: CardinalityMarker | undefined): number {
+  if (marker) return MARKER_SPAN;
+  return head ? (HEAD_SPAN[head] ?? HEAD_SPAN.arrow) : LINE_SPAN;
+}
+
+/**
+ * Lines that meet one side of a box enter it side by side, as if zip-tied:
+ * per (box, side), every end placed there is laid out along the side with
+ * a pixel between neighbouring glyphs — arrowhead beside arrowhead — the
+ * whole bundle centred on the side, and ordered by where each line heads
+ * (`far`), so lines arriving from the left take the left of the bundle and
+ * none cross on the way in. Ties keep document order.
+ *
+ * Where the ends sit depends only on the box, how many share the side and
+ * their order — not on where the far ends are. Dragging the nodes at the
+ * other ends leaves the bundle where it is until two of them trade places
+ * along the side. A bundle wider than the side is squeezed to fit it.
+ *
+ * Only sides two or more ends share are bundled; a lone end keeps floating.
+ * Returns each bundled end's fraction along its side, and the side.
+ */
+export function bundleSideEnds(
+  ends: readonly BundleEnd[],
+  boxOf: (id: string) => Box | undefined,
+): Map<string, EndSlots> {
+  const groups = new Map<string, Array<{ end: BundleEnd; index: number }>>();
+  ends.forEach((end, index) => {
+    const key = `${end.node}|${end.side}`;
+    const group = groups.get(key);
+    if (group) group.push({ end, index });
+    else groups.set(key, [{ end, index }]);
+  });
+
+  const out = new Map<string, EndSlots>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const { node, side } = group[0].end;
+    const box = boxOf(node);
+    const [start, size] = !box ? [0, 0] : isHorizontal(side) ? [box.y, box.height] : [box.x, box.width];
+    if (!(size > 0)) continue;
+    const order = [...group].sort((a, b) => a.end.far - b.end.far || a.index - b.index);
+    // Centre to centre, each neighbour sits half of each glyph plus the gap apart.
+    const offsets = [0];
+    for (let i = 1; i < order.length; i++) {
+      offsets.push(offsets[i - 1] + (order[i - 1].end.span + order[i].end.span) / 2 + BUNDLE_GAP);
+    }
+    const total = offsets[offsets.length - 1];
+    const [lo, hi] = usableSpan(start, size);
+    const squeeze = total > hi - lo ? (hi - lo) / total : 1;
+    const first = start + size / 2 - (total * squeeze) / 2;
+    order.forEach(({ end }, i) => {
+      const entry = out.get(end.id) ?? {};
+      entry[end.which] = (first + offsets[i] * squeeze - start) / size;
+      entry[end.which === "start" ? "startSide" : "endSide"] = side;
+      out.set(end.id, entry);
+    });
+  }
+  return out;
 }
 
 // ─── Crow's-foot cardinality markers ─────────────────────────────────────────

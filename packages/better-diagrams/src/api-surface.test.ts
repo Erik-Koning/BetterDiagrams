@@ -73,6 +73,7 @@ const CONTRACT_EXPORTS = [
   "fieldRowT",
   "fieldAnchors",
   "uncrossFieldAnchors",
+  "lineEndSlots",
   "withEndSlots",
   // node text layout + container frame styling
   "NODE_TEXT_ALIGNS",

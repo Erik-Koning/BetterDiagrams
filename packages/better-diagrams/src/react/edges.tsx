@@ -55,11 +55,12 @@ import {
   isCollapsedEdgeId,
   isGhostEdgeId,
   MAX_EDGE_POINTS,
-  uncrossFieldAnchors,
+  lineEndSlots,
   withEndSlots,
   type DiagramEdgeData,
   type DiagramNodeData,
   type EndSlots,
+  type Notation,
 } from "../contract/schema";
 import { topDropTarget } from "./dangling";
 import { formatDiagramDate } from "../contract/timeline";
@@ -138,22 +139,26 @@ const LABEL_LAYER_STYLE: CSSProperties = {
 };
 
 /**
- * The un-crossing pass over the whole canvas (`uncrossFieldAnchors`): which
+ * The document-wide pass over the whole canvas (`lineEndSlots`): which
  * row-anchored ends trade rows so lines leaving one side of a table don't
- * cross. An edge knows only its own two boxes, and this needs every edge on
- * every side — so it runs over React Flow's store, once per change of the
- * node or edge arrays (a drag frame, a measure, an edit), and every edge
- * reads its own two numbers from the shared result. Keyed on the arrays'
+ * cross, and where the ends sharing a side of a box sit in its bundle. An
+ * edge knows only its own two boxes, and this needs every edge on every
+ * side — so it runs over React Flow's store, once per change of the node or
+ * edge arrays (a drag frame, a measure, an edit) or the notation, and every
+ * edge reads its own slots from the shared result. Keyed on the arrays'
  * identity: nothing an edge draws with changes without one of them changing.
  *
  * The boxes are the same ones the edge component draws with — the store's
- * absolute positions and measured sizes — so the trade and the line it moves
- * can never disagree about where a row is.
+ * absolute positions and measured sizes — so the pass and the line it moves
+ * can never disagree about where a row or a side is.
  */
-const endSlotsCache = new WeakMap<ReactFlowState["nodes"], { edges: ReactFlowState["edges"]; slots: Map<string, EndSlots> }>();
-function endSlotsOf(state: ReactFlowState): Map<string, EndSlots> {
+const endSlotsCache = new WeakMap<
+  ReactFlowState["nodes"],
+  { edges: ReactFlowState["edges"]; notation: Notation | undefined; slots: Map<string, EndSlots> }
+>();
+function endSlotsOf(state: ReactFlowState, notation: Notation | undefined): Map<string, EndSlots> {
   const hit = endSlotsCache.get(state.nodes);
-  if (hit && hit.edges === state.edges) return hit.slots;
+  if (hit && hit.edges === state.edges && hit.notation === notation) return hit.slots;
   const nodeOf = (id: string) => {
     const node = state.nodeLookup.get(id);
     if (!node || node.hidden) return undefined;
@@ -165,7 +170,7 @@ function endSlotsOf(state: ReactFlowState): Map<string, EndSlots> {
       box: { x, y, width: node.measured?.width ?? 0, height: node.measured?.height ?? 0 },
     };
   };
-  const slots = uncrossFieldAnchors(
+  const slots = lineEndSlots(
     state.edges.flatMap((e) => {
       const data = e.data as DiagramEdgeData | undefined;
       return e.hidden
@@ -180,12 +185,18 @@ function endSlotsOf(state: ReactFlowState): Map<string, EndSlots> {
               startField: data?.startField,
               endField: data?.endField,
               points: data?.points,
+              direction: data?.direction,
+              startHead: data?.startHead,
+              endHead: data?.endHead,
+              startLabel: data?.startLabel,
+              endLabel: data?.endLabel,
             },
           ];
     }),
     nodeOf,
+    notation,
   );
-  endSlotsCache.set(state.nodes, { edges: state.edges, slots });
+  endSlotsCache.set(state.nodes, { edges: state.edges, notation, slots });
   return slots;
 }
 
@@ -212,11 +223,14 @@ export const LabeledEdge = memo(function LabeledEdge({
     useReactFlow();
   const sourceNode = useInternalNode(source);
   const targetNode = useInternalNode(target);
-  // The rows this edge's ends trade to, if the un-crossing pass moved them.
-  // Selected as two numbers rather than the pair: a primitive compares by
-  // value, so an edge the pass left alone never re-renders for it.
-  const startSlot = useStore((state) => endSlotsOf(state).get(id)?.start);
-  const endSlot = useStore((state) => endSlotsOf(state).get(id)?.end);
+  // Where the document-wide pass puts this edge's ends: a traded row, or a
+  // place in the bundle on a side it shares. Selected as primitives rather
+  // than the slots object: a primitive compares by value, so an edge the
+  // pass left alone never re-renders for it.
+  const startSlot = useStore((state) => endSlotsOf(state, notation).get(id)?.start);
+  const endSlot = useStore((state) => endSlotsOf(state, notation).get(id)?.end);
+  const startSide = useStore((state) => endSlotsOf(state, notation).get(id)?.startSide);
+  const endSide = useStore((state) => endSlotsOf(state, notation).get(id)?.endSide);
   const draggingRef = useRef(false);
   /**
    * An endpoint mid-drag: its end of the line follows the pointer instead of
@@ -294,7 +308,7 @@ export const LabeledEdge = memo(function LabeledEdge({
           side(sourceNode, sBox),
           side(targetNode, tBox),
         ),
-        { start: startSlot, end: endSlot },
+        { start: startSlot, end: endSlot, startSide, endSide },
       ),
       points: data?.points,
     };

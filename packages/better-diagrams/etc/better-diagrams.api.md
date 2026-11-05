@@ -1109,7 +1109,10 @@ export interface EndSlots {
     // (undocumented)
     end?: number;
     // (undocumented)
+    endSide?: EdgeAnchorSpec["side"];
+    // (undocumented)
     start?: number;
+    startSide?: EdgeAnchorSpec["side"];
 }
 
 // @public (undocumented)
@@ -2272,6 +2275,9 @@ export interface LineageTrace {
     subject: FieldRef;
     truncated: boolean;
 }
+
+// @public
+export function lineEndSlots(edges: ReadonlyArray<Pick<DiagramEdge, "id" | "source" | "target" | "start" | "end" | "startField" | "endField" | "points"> & Partial<Pick<DiagramEdge, "direction" | "startHead" | "endHead" | "startLabel" | "endLabel">>>, nodeOf: (id: string) => UncrossNode | undefined, notation?: Notation): Map<string, EndSlots>;
 
 // @public
 export const LINT_IGNORE_TAG = "lint-ignore";

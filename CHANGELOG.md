@@ -19,6 +19,12 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 
 ### Changed
 
+- Lines that meet one side of a box enter it side by side: their ends are bundled, arrowhead
+  beside arrowhead a pixel apart, centred on the side and ordered by where each line comes from,
+  on the canvas and in every export. The bundle stays put while the boxes at the lines' other
+  ends are dragged; before, every line into a side landed on its middle, on top of the others,
+  or slid along it as its box moved. `lineEndSlots` is the pass; `EndSlots` gains `startSide` and
+  `endSide` for an end it places, and `withEndSlots` applies them.
 - A text note's description is edited on the canvas too: double-clicking the note opens its
   sentence and, under it, its description, as one edit (Tab moves between them, Escape puts both
   back), with the caret at the end of the text. A note the text then runs past grows to hold it.

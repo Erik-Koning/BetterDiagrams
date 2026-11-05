@@ -860,6 +860,15 @@ or dropping it on one, keeps that **side** whenever it isn't the side the line w
 anyway: out of the bottom dot toward a box on the right means the bottom. A dot that agrees
 stays floating, so the line still follows the boxes as they move.
 
+**Lines that meet one side of a box enter it side by side.** Two or more line ends on the same
+side are bundled, as if zip-tied: arrowhead beside arrowhead a pixel apart (each end as wide as
+the glyph it draws — an arrow, a triangle, a crow's foot, or the bare line), the bundle centred
+on the side, and ordered by where each line comes from, so none cross on the way in. Lines
+leaving a side bundle the same way. The bundle depends only on its box and the order of the
+lines, so dragging the boxes at their other ends — one, or a whole group — leaves the
+arrowheads where they are until two of those boxes pass each other. An end you dragged into
+place, or a foreign key on its row, keeps its own spot; a lone end still lines up as above.
+
 **Labels keep clear of the line.** Where the line runs across, its label sits above it,
 wrapped to the room between the line's ends, so a long label on a short arrow between
 neighbouring boxes stacks up in the gap instead of running over both boxes. Where the line runs

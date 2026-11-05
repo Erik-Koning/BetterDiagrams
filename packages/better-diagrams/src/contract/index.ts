@@ -78,6 +78,7 @@ export {
   fieldRowT,
   fieldAnchors,
   uncrossFieldAnchors,
+  lineEndSlots,
   withEndSlots,
   // Node text layout and container frame styling — the vocabularies a host
   // building its own inspector needs, plus the height a wrapped label demands.
