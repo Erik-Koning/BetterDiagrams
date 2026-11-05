@@ -83,17 +83,20 @@ jobs:
       - run: npm run build:app
 
       # prepublishOnly checks it all again first: types, tests, build, API reports, app/.
-      # A version npm already has (a run whose tagging failed, run again) isn't published twice.
+      # A version npm already has (a run whose tagging failed, run again) isn't published twice,
+      # and npm refuses even a dry run over it: a rehearsal then runs the same checks and packs.
       - name: Publish
         working-directory: packages/better-diagrams
         run: |
           case "$VERSION" in *-*) tag=beta ;; *) tag=latest ;; esac
-          echo "$VERSION under $tag"
-          if [ "$DRY_RUN" = true ]; then
+          published=false
+          [ "$(npm view "@mosphere/better-diagrams@$VERSION" version 2> /dev/null)" = "$VERSION" ] && published=true
+          echo "$VERSION under $tag, already on npm: $published"
+          if [ "$DRY_RUN" = true ] && [ "$published" = true ]; then
+            npm run prepublishOnly && npm pack --dry-run
+          elif [ "$DRY_RUN" = true ]; then
             npm publish --tag "$tag" --dry-run
-          elif [ "$(npm view "@mosphere/better-diagrams@$VERSION" version 2> /dev/null)" = "$VERSION" ]; then
-            echo "npm already has $VERSION"
-          else
+          elif [ "$published" = false ]; then
             npm publish --tag "$tag"
           fi
 
