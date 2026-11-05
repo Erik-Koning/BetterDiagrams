@@ -172,6 +172,33 @@
         "command": "betterDiagrams.addAgentInstructions",
         "title": "Add Agent Instructions…",
         "category": "Better Diagrams"
+      },
+      {
+        "command": "betterDiagrams.newFromExample",
+        "title": "New Diagram from Example…",
+        "category": "Better Diagrams"
+      },
+      {
+        "command": "betterDiagrams.deriveSequence",
+        "title": "Derive Sequence…",
+        "category": "Better Diagrams"
+      },
+      {
+        "command": "betterDiagrams.copySchema",
+        "title": "Copy Schema",
+        "category": "Better Diagrams",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "betterDiagrams.toggleTheme",
+        "title": "Toggle Light/Dark",
+        "category": "Better Diagrams",
+        "icon": "$(color-mode)"
+      },
+      {
+        "command": "betterDiagrams.canvasKey",
+        "title": "Canvas Shortcut",
+        "category": "Better Diagrams"
       }
     ],
     "menus": {
@@ -183,6 +210,11 @@
         },
         {
           "command": "betterDiagrams.showJson",
+          "when": "activeCustomEditorId == betterDiagrams.editor",
+          "group": "navigation"
+        },
+        {
+          "command": "betterDiagrams.toggleTheme",
           "when": "activeCustomEditorId == betterDiagrams.editor",
           "group": "navigation"
         }
@@ -206,6 +238,18 @@
         {
           "command": "betterDiagrams.showJson",
           "when": "activeCustomEditorId == betterDiagrams.editor"
+        },
+        {
+          "command": "betterDiagrams.deriveSequence",
+          "when": "betterDiagrams.activeIsDiagram || activeCustomEditorId == betterDiagrams.editor"
+        },
+        {
+          "command": "betterDiagrams.copySchema",
+          "when": "betterDiagrams.activeIsDiagram || activeCustomEditorId == betterDiagrams.editor"
+        },
+        {
+          "command": "betterDiagrams.canvasKey",
+          "when": "false"
         }
       ]
     },
@@ -225,10 +269,120 @@
             "Always the dark theme."
           ],
           "default": "auto",
-          "description": "The diagram editor's theme."
+          "description": "The diagram editor's theme.",
+          "order": 0
+        },
+        "betterDiagrams.presentation": {
+          "type": "string",
+          "enum": [
+            "marketing",
+            "technical"
+          ],
+          "enumDescriptions": [
+            "The presentation look: bigger type and icons, tucked-away labels.",
+            "Compact, with every label and field shown."
+          ],
+          "default": "marketing",
+          "order": 1,
+          "description": "How diagrams are drawn, on screen and in picture exports."
+        },
+        "betterDiagrams.gradients": {
+          "type": "boolean",
+          "default": false,
+          "order": 2,
+          "description": "Marketing's gradients, or one flat coat per card — on screen and in every picture export."
+        },
+        "betterDiagrams.minimap": {
+          "type": "boolean",
+          "default": false,
+          "order": 3,
+          "description": "Show the overview in the canvas corner."
+        },
+        "betterDiagrams.linesOnHover": {
+          "type": "boolean",
+          "default": false,
+          "order": 4,
+          "description": "Draw a connection only while the pointer is over a node it touches; a selected node keeps its lines."
+        },
+        "betterDiagrams.accent": {
+          "type": "string",
+          "default": "",
+          "format": "color-hex",
+          "pattern": "^(#[0-9a-fA-F]{6})?$",
+          "patternErrorMessage": "A hex colour such as #3b82f6, or empty for the theme's own.",
+          "order": 5,
+          "description": "An accent colour for selection, focus and highlights. Empty: the theme's own."
+        },
+        "betterDiagrams.ai": {
+          "type": "boolean",
+          "default": true,
+          "order": 6,
+          "description": "Offer the AI panel (Generate, Adjust with AI), answered by one of VS Code's language models, such as GitHub Copilot's."
+        },
+        "betterDiagrams.aiModel": {
+          "type": "string",
+          "default": "",
+          "order": 7,
+          "description": "The language model the AI panel asks, by id, family or name (for example gpt-4o or claude-sonnet-4). Empty: the first one VS Code offers."
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "betterDiagrams.showJson",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "activeCustomEditorId == betterDiagrams.editor"
+      },
+      {
+        "command": "betterDiagrams.canvasKey",
+        "key": "ctrl+k",
+        "mac": "cmd+k",
+        "when": "activeCustomEditorId == betterDiagrams.editor && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "betterDiagrams.canvasKey",
+        "key": "ctrl+=",
+        "mac": "cmd+=",
+        "when": "activeCustomEditorId == betterDiagrams.editor && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "betterDiagrams.canvasKey",
+        "key": "ctrl+-",
+        "mac": "cmd+-",
+        "when": "activeCustomEditorId == betterDiagrams.editor && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "betterDiagrams.canvasKey",
+        "key": "ctrl+0",
+        "mac": "cmd+0",
+        "when": "activeCustomEditorId == betterDiagrams.editor && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "betterDiagrams.canvasKey",
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e",
+        "when": "activeCustomEditorId == betterDiagrams.editor && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "betterDiagrams.canvasKey",
+        "key": "ctrl+shift+g",
+        "mac": "cmd+shift+g",
+        "when": "activeCustomEditorId == betterDiagrams.editor && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "betterDiagrams.canvasKey",
+        "key": "ctrl+shift+]",
+        "mac": "cmd+shift+]",
+        "when": "activeCustomEditorId == betterDiagrams.editor && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "betterDiagrams.canvasKey",
+        "key": "ctrl+shift+[",
+        "mac": "cmd+shift+[",
+        "when": "activeCustomEditorId == betterDiagrams.editor && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      }
+    ]
   },
   "scripts": {
     "build": "vite build --config vite.extension.config.ts && vite build --config vite.webview.config.ts",

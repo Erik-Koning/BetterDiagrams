@@ -63,3 +63,21 @@ body {
   line-height: 1.5;
   text-align: center;
 }
+
+/* The extension's Settings menu in the studio's toolbar (host-tools.tsx): the
+   studio's own menu rows; only the accent's colour well is ours. */
+.bd-vscode__accent input[type="color"] {
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-sm);
+  background: none;
+  cursor: pointer;
+}
+
+.bd-vscode__reset {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+}

@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+- A **Settings** menu in the studio's toolbar with what the web app keeps in its header: Copy
+  schema (scoped to the clouds you tick), Edit JSON (paste what an AI agent wrote), Derive
+  sequence, the examples, and View: light or dark or follow VS Code, marketing or technical,
+  gradients, minimap, lines on hover, the AI panel, the accent colour, and read-only for the
+  editor. The view switches are settings (`betterDiagrams.presentation`, `.gradients`,
+  `.minimap`, `.linesOnHover`, `.accent`, `.ai`), so they hold for every diagram.
+- **Toggle Light/Dark** (◐ in the editor's title bar), **Copy Schema**, **Derive Sequence…** and
+  **New Diagram from Example…** commands; **New Diagram File…** asks architecture or sequence.
+- The AI panel (Generate, Adjust with AI), answered by one of VS Code's language models, such as
+  GitHub Copilot's: no key to set. `betterDiagrams.aiModel` picks the model.
+- Where the web app opens a new workspace file, VS Code writes one where you pick and opens it:
+  an import into a diagram with things in it (it used to replace the diagram), a sequence started
+  from the welcome screen, a derived sequence. Import › Open file… is VS Code's open dialog.
+- What's selected on the canvas is lit in the JSON beside it; **⌘L** opens the JSON (Show JSON).
+- Fixed: the canvas's shortcuts that VS Code also binds did both. ⌘K started VS Code's chord, so
+  searching the canvas for a word starting with w closed the editors (⌘K W); ⌘=, ⌘− and ⌘0
+  zoomed the window as well; ⇧⌘E and ⇧⌘G opened the Explorer and Source Control. While the
+  diagram has focus they are the canvas's alone.
+- Lines that meet one side of a box enter it side by side, and stay put while the boxes at their
+  other ends are dragged (the library's change).
+
 ## 0.1.1 — 2026-11-04
 
 - Found by its name written as one word, BetterDiagrams, in the Marketplace, Open VSX and VS

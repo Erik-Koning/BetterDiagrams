@@ -1,5 +1,6 @@
 import { expect, test as base } from "@playwright/test";
 import { ARCHITECTURE, SEQUENCE, Webview, json } from "./webview";
+import { VIEW_DEFAULTS } from "../src/protocol";
 
 const test = base.extend<{ webview: Webview }>({
   webview: async ({ page }, use) => {
@@ -202,8 +203,93 @@ test.describe("the VS Code webview", () => {
     await expect(shell).toHaveAttribute("data-theme", "light");
     await page.evaluate(() => document.body.classList.replace("vscode-light", "vscode-dark"));
     await expect(shell).toHaveAttribute("data-theme", "dark");
-    await webview.send({ type: "theme", theme: "light" });
+    await webview.send({ type: "view", view: { ...VIEW_DEFAULTS, theme: "light" } });
     await expect(shell).toHaveAttribute("data-theme", "light");
+  });
+
+  test("the Settings menu switches light and dark, here at once and in VS Code's settings", async ({ webview, page }) => {
+    await webview.open({ bodyClass: "vscode-light" });
+    await webview.init(json(ARCHITECTURE));
+    const shell = page.locator(".bd-vscode");
+    const menu = await webview.settings();
+    await expect(menu.getByText("Follow VS Code (light)")).toBeVisible();
+    await menu.getByRole("radio", { name: "Dark" }).check();
+    await expect(shell).toHaveAttribute("data-theme", "dark");
+    expect(await webview.posted("setView")).toEqual([{ type: "setView", view: { theme: "dark" } }]);
+  });
+
+  test("the view switches reach the studio: technical, and the minimap", async ({ webview, page }) => {
+    await webview.open();
+    await webview.init(json(ARCHITECTURE));
+    await expect(webview.root).toHaveClass(/as-root--marketing/);
+    const menu = await webview.settings();
+    await menu.getByRole("checkbox", { name: "Marketing" }).uncheck();
+    await expect(webview.root).not.toHaveClass(/as-root--marketing/);
+    await menu.getByRole("checkbox", { name: "Minimap" }).check();
+    await expect(page.locator(".react-flow__minimap")).toBeVisible();
+    expect(await webview.posted("setView")).toEqual([
+      { type: "setView", view: { presentation: "technical" } },
+      { type: "setView", view: { minimap: true } },
+    ]);
+    // A change in VS Code's Settings UI arrives the same way.
+    await webview.send({ type: "view", view: { ...VIEW_DEFAULTS, presentation: "technical", minimap: false } });
+    await expect(page.locator(".react-flow__minimap")).toHaveCount(0);
+  });
+
+  test("read-only from the menu holds for this editor and writes no setting", async ({ webview }) => {
+    await webview.open();
+    await webview.init(json(ARCHITECTURE));
+    const menu = await webview.settings();
+    await menu.getByRole("checkbox", { name: "Read-only" }).check();
+    await expect(webview.root.getByRole("button", { name: "Insert", exact: true })).toHaveCount(0);
+    expect(await webview.posted("setView")).toEqual([]);
+  });
+
+  test("the AI panel is there when VS Code has a model, and its answers come back through the extension", async ({ webview }) => {
+    await webview.open();
+    await webview.init(json(ARCHITECTURE));
+    await expect(webview.root.getByRole("button", { name: "AI", exact: true })).toHaveCount(0);
+    await webview.send({ type: "ai", label: "Test Model" });
+    await webview.root.getByRole("button", { name: "AI", exact: true }).click();
+    await webview.root.getByRole("textbox", { name: "Message" }).fill("add a cache");
+    await webview.root.getByRole("textbox", { name: "Message" }).press("Enter");
+    await expect.poll(() => webview.posted("generate")).toHaveLength(1);
+    const [asked] = await webview.posted("generate");
+    expect((asked.request as { input: string }).input).toContain("add a cache");
+    const answer = {
+      ...ARCHITECTURE,
+      nodes: [...ARCHITECTURE.nodes, { id: "cache", label: "Order cache", kind: "cache", x: 320, y: 200 }],
+    };
+    await webview.send({ type: "generated", id: asked.id, text: `Added a cache.\n${JSON.stringify(answer)}` });
+    await expect(webview.nodeTitled("Order cache")).toBeVisible();
+    await expect.poll(async () => JSON.stringify((await webview.posted("edit")).at(-1)?.doc ?? null)).toContain("Order cache");
+  });
+
+  test("Derive sequence asks the extension for a new file holding the sequence", async ({ webview }) => {
+    await webview.open();
+    await webview.init(json({ ...ARCHITECTURE, edges: ARCHITECTURE.edges.map((e, i) => ({ ...e, seq: i + 1 })) }));
+    const menu = await webview.settings();
+    await menu.getByRole("menuitem", { name: /Derive sequence/ }).click();
+    const [created] = await webview.posted("create");
+    expect(created.name).toBe("Shop — sequence");
+    expect((created.doc as { messages: unknown[] }).messages).toHaveLength(2);
+  });
+
+  test("Copy schema on a sequence copies through VS Code's clipboard", async ({ webview }) => {
+    await webview.open();
+    await webview.init(json(SEQUENCE));
+    const menu = await webview.settings();
+    await menu.getByRole("menuitem", { name: /Copy schema/ }).click();
+    const [copied] = await webview.posted("copy");
+    expect(copied.text).toContain("participants");
+  });
+
+  test("an example replaces the diagram as one edit", async ({ webview }) => {
+    await webview.open();
+    await webview.init(json(ARCHITECTURE));
+    const menu = await webview.settings();
+    await menu.getByRole("menuitem", { name: /Multi-cloud/ }).click();
+    await expect.poll(async () => ((await webview.posted("edit")).at(-1)?.doc as { zones?: unknown[] } | undefined)?.zones?.length ?? 0).toBeGreaterThan(0);
   });
 
   test("a file VS Code can't write is shown, never edited", async ({ webview }) => {

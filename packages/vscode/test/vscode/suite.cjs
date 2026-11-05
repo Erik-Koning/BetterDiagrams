@@ -150,9 +150,45 @@ const tests = {
     assert.equal(await read(notes), "# My notes\n");
   },
 
+  async "the editor's Settings menu writes VS Code's settings, and Toggle Light/Dark flips the theme"(folder) {
+    const shop = vscode.Uri.joinPath(folder, "shop.json");
+    await vscode.commands.executeCommand("vscode.openWith", shop, "betterDiagrams.editor");
+    await until("the webview to start", async () => (await webview(shop)).some((m) => m.type === "ready"));
+    const config = () => vscode.workspace.getConfiguration("betterDiagrams");
+    await webview(shop, { type: "setView", view: { theme: "dark", minimap: true, files: "/etc/passwd" } });
+    await until("the settings to be written", () => config().get("theme") === "dark" && config().get("minimap") === true);
+    assert.equal(config().inspect("theme").globalValue, "dark", "the person's own setting, not the workspace's");
+    await vscode.commands.executeCommand("betterDiagrams.toggleTheme");
+    await until("Toggle Light/Dark to flip it", () => config().get("theme") === "light");
+    // Back to the defaults: gone from settings.json, not written as defaults.
+    await webview(shop, { type: "setView", view: { theme: "auto", minimap: false } });
+    await until("the defaults to be back", () => config().inspect("theme").globalValue === undefined && config().inspect("minimap").globalValue === undefined);
+  },
+
+  async "copies to VS Code's clipboard for the webview"(folder) {
+    const shop = vscode.Uri.joinPath(folder, "shop.json");
+    await vscode.commands.executeCommand("vscode.openWith", shop, "betterDiagrams.editor");
+    await until("the webview to start", async () => (await webview(shop)).some((m) => m.type === "ready"));
+    await webview(shop, { type: "copy", text: "the schema", note: "Copied." });
+    await until("the text on the clipboard", async () => (await vscode.env.clipboard.readText()) === "the schema");
+    await vscode.commands.executeCommand("betterDiagrams.copySchema", shop);
+    await until("Copy Schema to copy the prompt", async () => /You convert software requirements/.test(await vscode.env.clipboard.readText()));
+  },
+
   async "contributes its commands"() {
     const commands = await vscode.commands.getCommands(true);
-    for (const command of ["betterDiagrams.open", "betterDiagrams.openToSide", "betterDiagrams.showJson", "betterDiagrams.new", "betterDiagrams.addAgentInstructions"]) {
+    for (const command of [
+      "betterDiagrams.open",
+      "betterDiagrams.openToSide",
+      "betterDiagrams.showJson",
+      "betterDiagrams.new",
+      "betterDiagrams.newFromExample",
+      "betterDiagrams.deriveSequence",
+      "betterDiagrams.copySchema",
+      "betterDiagrams.toggleTheme",
+      "betterDiagrams.canvasKey",
+      "betterDiagrams.addAgentInstructions",
+    ]) {
       assert.ok(commands.includes(command), `${command} is registered`);
     }
   },
