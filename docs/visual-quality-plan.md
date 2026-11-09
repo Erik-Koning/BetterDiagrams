@@ -1,8 +1,46 @@
 # Visual quality: plan
 
-Status: **proposal** 2026-11-09 · scope: the auto-placer, the layout linter and the router
-(`contract/autoplace.ts`, `arrange.ts`, `layout-lint.ts`, `route-lines.ts`), how lines and boxes are
-drawn (`react/edges.tsx`, `react/draw.ts`, the HTML explorer), the schema and the AI prompt.
+Status: **phase 1 implemented** 2026-11-09 (proposal 2026-11-09) · scope: the auto-placer, the
+layout linter and the router (`contract/autoplace.ts`, `arrange.ts`, `layout-lint.ts`,
+`route-lines.ts`), how lines and boxes are drawn (`react/edges.tsx`, `react/draw.ts`, the HTML
+explorer), the schema and the AI prompt.
+
+## Implementation status
+
+**Phase 1 (measuring)** shipped:
+- `npm run gallery` (`scripts/gallery/`) with `compare`, `variants`, `pairs`, `pick` and `fit`.
+- The gallery itself: 23 documents, which are the 15 fixtures, 4 anonymised real documents
+  (`gallery/real/`) and 4 seeded stress graphs.
+- Recorded picks in `gallery/picks.jsonl`, with the arranged documents they compare in
+  `gallery/docs/`, so any later linter can be re-fitted to them.
+- Seven new rules (`shallow-crossing`, `close-lines`, `line-hook`, `curve-bulge`,
+  `ambiguous-words`, `crowded-ends`, `too-dense`).
+- The bent score curve, the counts beside the score, and `metrics.zoom`.
+
+What the first data says:
+
+| | |
+|---|---|
+| Picks | 216: two rounds of six no-context reviewers over the same 90 pairs of arrangements (136 drawn) |
+| Reviewers agreeing with each other | 92% over 180 shared pairs. Re-judged by fresh reviewers, 102 of 108 picks came out the same |
+| The linter's cost agreeing with them | 72% before this phase. Now 77% on round one, and 82% on round two (pictures at screen size) |
+| The score agreeing with them | 65% before; 71% now |
+| Fitted weights | +1 point overall, and not stable across regularisation, so **not adopted**: `fit` prints them for the next round |
+| Best fit against the other arrangements | won 81% of the comparisons it was in; Grid won 25% |
+| What readers named | size 91 times, crossings 72, tangles 73, direction 51, crowded ends 36, labels 30 |
+
+Departures from the plan:
+- **Legibility moved into the linter's cost.** The placer used to add it on its own; now both, and
+  the gallery, measure one thing. That raised agreement from 72% to 77% on its own.
+- **The score still ignores size.** A score that counts how small the words get (8 points per
+  halving) agrees with readers 79% of the time against 71%, but it marks a long chain down for being
+  long. That runs against "no shape, no size forced", so it is left for a decision. A `too-small`
+  finding was tried and dropped for the same reason.
+- **Pairs are shown one above the other at screen size.** Side by side, each picture was shrunk to
+  two thirds, which made size look worse than it is. Only 6 of 108 picks changed, but the format is
+  the fairer one.
+- **82% is not a clean held-out figure.** Round two judged the same pairs whose first round prompted
+  the legibility change. Phase 2's before-and-after pairs will be new.
 
 ## Contents
 

@@ -56,6 +56,9 @@ jobs:
       # runner; a retry tells a flake from a failure. (Called on the
       # workspace directly: through the root `npm test`, npm keeps the flag.)
       - run: npm run test -w @mosphere/better-diagrams -- --retry=2
+      - name: The gallery's anonymising and fitting hold
+        if: matrix.react == '18'
+        run: npm run test:gallery
       - run: npm run build
 
       - name: The public API matches etc/*.api.md

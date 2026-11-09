@@ -400,7 +400,16 @@ export function boundsOf(points: readonly Pt[]): Rect {
 
 /** How many separate times two lines cross. Consecutive hits are one crossing. */
 export function crossingsBetween(a: readonly Pt[], b: readonly Pt[]): number {
-  let count = 0;
+  return crossingAngles(a, b).length;
+}
+
+/**
+ * Each place two lines cross, as the angle between them there: 90 is square
+ * across, near 0 is two lines that meet almost parallel and are hard to tell
+ * apart. Consecutive hits are one crossing.
+ */
+export function crossingAngles(a: readonly Pt[], b: readonly Pt[]): number[] {
+  const angles: number[] = [];
   let last = -10;
   for (let i = 1; i < a.length; i += 1) {
     const box = boundsOf([a[i - 1]!, a[i]!]);
@@ -410,27 +419,46 @@ export function crossingsBetween(a: readonly Pt[], b: readonly Pt[]): number {
       if (Math.max(p.x, q.x) < box.x || Math.min(p.x, q.x) > box.x + box.w) continue;
       if (Math.max(p.y, q.y) < box.y || Math.min(p.y, q.y) > box.y + box.h) continue;
       if (segmentsIntersect(a[i - 1]!, a[i]!, p, q)) {
-        if (i - last > 2) count += 1;
+        if (i - last > 2) angles.push(angleBetween(a[i - 1]!, a[i]!, p, q));
         last = i;
         break;
       }
     }
   }
-  return count;
+  return angles;
+}
+
+/** The angle between two segments, folded to 0–90 degrees. */
+function angleBetween(a: Pt, b: Pt, c: Pt, d: Pt): number {
+  const ux = b.x - a.x;
+  const uy = b.y - a.y;
+  const vx = d.x - c.x;
+  const vy = d.y - c.y;
+  const lengths = Math.hypot(ux, uy) * Math.hypot(vx, vy);
+  if (!lengths) return 90;
+  const cos = Math.min(1, Math.abs(ux * vx + uy * vy) / lengths);
+  return (Math.acos(cos) * 180) / Math.PI;
 }
 
 /** How finely `sharedRuns` indexes the canvas: about a sampling step or two. */
 const RUN_CELL = 32;
 /** A bundle runs close on purpose for this far from the box it meets. */
 const RUN_BUNDLE = 44;
+/** Within a stroke's width, two lines are on top of each other. */
+const RUN_ON_TOP = 3;
+/**
+ * Within this, they are beside each other but too close for the eye to keep
+ * apart. Lines a router spaces out side by side sit further apart than this.
+ */
+const RUN_CLOSE = 8;
 
 /**
- * How far each pair of lines runs on top of each other, within about a stroke's
- * width. One pass over a spatial index, so a model with hundreds of lines isn't
- * every pair times every sample. Lines sharing a box are forgiven the stretch
- * where they bundle to meet it.
+ * How far each pair of lines runs on top of each other (`length`), and how far
+ * they run close beside each other (`close`). One pass over a spatial index, so
+ * a model with hundreds of lines isn't every pair times every sample. Lines
+ * sharing a box are forgiven the stretch where they bundle to meet it.
  */
-function sharedRuns(lines: readonly SceneLine[]): Map<string, { a: number; b: number; length: number }> {
+function sharedRuns(lines: readonly SceneLine[]): Map<string, { a: number; b: number; length: number; close: number }> {
   const cells = new Map<string, Array<{ line: number; from: Pt; to: Pt }>>();
   const keyOf = (x: number, y: number) => `${Math.floor(x / RUN_CELL)},${Math.floor(y / RUN_CELL)}`;
   lines.forEach((line, index) => {
@@ -450,7 +478,7 @@ function sharedRuns(lines: readonly SceneLine[]): Map<string, { a: number; b: nu
     }
   });
 
-  const runs = new Map<string, { a: number; b: number; length: number }>();
+  const runs = new Map<string, { a: number; b: number; length: number; close: number }>();
   lines.forEach((line, index) => {
     const pts = line.samples;
     const total = line.length;
@@ -459,31 +487,112 @@ function sharedRuns(lines: readonly SceneLine[]): Map<string, { a: number; b: nu
       const p = pts[i]!;
       const step = Math.hypot(p.x - pts[i - 1]!.x, p.y - pts[i - 1]!.y);
       travelled += step;
-      const near = new Set<number>();
+      // The nearest each other line comes to this point.
+      const near = new Map<number, number>();
       const cx = Math.floor(p.x / RUN_CELL);
       const cy = Math.floor(p.y / RUN_CELL);
       for (let dx = -1; dx <= 1; dx += 1) {
         for (let dy = -1; dy <= 1; dy += 1) {
           for (const seg of cells.get(`${cx + dx},${cy + dy}`) ?? []) {
-            if (seg.line <= index || near.has(seg.line)) continue;
+            if (seg.line <= index) continue;
             const q = closestOnSegment(p, seg.from, seg.to);
-            if (Math.hypot(p.x - q.x, p.y - q.y) <= 3) near.add(seg.line);
+            const gap = Math.hypot(p.x - q.x, p.y - q.y);
+            if (gap <= RUN_CLOSE && gap < (near.get(seg.line) ?? Infinity)) near.set(seg.line, gap);
           }
         }
       }
-      for (const other of near) {
+      for (const [other, gap] of near) {
         const o = lines[other]!;
         const atStart = travelled < RUN_BUNDLE && (line.source.id === o.source.id || line.source.id === o.target.id);
         const atEnd = total - travelled < RUN_BUNDLE && (line.target.id === o.source.id || line.target.id === o.target.id);
         if (atStart || atEnd) continue;
         const key = `${index} ${other}`;
-        const run = runs.get(key);
-        if (run) run.length += step;
-        else runs.set(key, { a: index, b: other, length: step });
+        const run = runs.get(key) ?? { a: index, b: other, length: 0, close: 0 };
+        if (gap <= RUN_ON_TOP) run.length += step;
+        else run.close += step;
+        runs.set(key, run);
       }
     }
   });
   return runs;
+}
+
+/** How near a polyline comes to a rectangle: 0 when it touches or crosses it. */
+function polylineToRect(points: readonly Pt[], r: Rect): number {
+  if (polylineHitsRect(points, r)) return 0;
+  const toRect = (p: Pt) => Math.hypot(Math.max(r.x - p.x, 0, p.x - (r.x + r.w)), Math.max(r.y - p.y, 0, p.y - (r.y + r.h)));
+  const corners: Pt[] = [
+    { x: r.x, y: r.y },
+    { x: r.x + r.w, y: r.y },
+    { x: r.x, y: r.y + r.h },
+    { x: r.x + r.w, y: r.y + r.h },
+  ];
+  let best = Infinity;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1]!;
+    const b = points[i]!;
+    // A segment that misses a rectangle comes nearest at one of its own ends or at one of the corners.
+    best = Math.min(best, toRect(a), toRect(b));
+    for (const c of corners) {
+      const q = closestOnSegment(c, a, b);
+      best = Math.min(best, Math.hypot(c.x - q.x, c.y - q.y));
+    }
+  }
+  return best;
+}
+
+/**
+ * Where a line is heading over a stretch of its length, measured from one end:
+ * `from` and `to` are distances along the line from that end, in pixels.
+ */
+function headingNear(geo: EdgeGeometry, length: number, atEnd: boolean, from: number, to: number): Pt | null {
+  if (length < to * 1.5) return null;
+  const steps = 24;
+  const reach = Math.min(0.5, (to * 1.6) / length);
+  const pts: Pt[] = [];
+  for (let i = 0; i <= steps; i += 1) {
+    const t = (reach * i) / steps;
+    pts.push(geo.at(atEnd ? 1 - t : t));
+  }
+  // Positions by distance travelled from the end.
+  const at = (distance: number): Pt => {
+    let travelled = 0;
+    for (let i = 1; i < pts.length; i += 1) {
+      const step = Math.hypot(pts[i]!.x - pts[i - 1]!.x, pts[i]!.y - pts[i - 1]!.y);
+      if (travelled + step >= distance) {
+        const k = step ? (distance - travelled) / step : 0;
+        return { x: pts[i - 1]!.x + (pts[i]!.x - pts[i - 1]!.x) * k, y: pts[i - 1]!.y + (pts[i]!.y - pts[i - 1]!.y) * k };
+      }
+      travelled += step;
+    }
+    return pts[pts.length - 1]!;
+  };
+  const near = at(from);
+  const far = at(to);
+  // Heading toward the end it was measured from.
+  return { x: near.x - far.x, y: near.y - far.y };
+}
+
+/** The size of window a picture is fitted to before anyone zooms. */
+export const TYPICAL_WINDOW = { w: 1500, h: 900 };
+/** Fitted to the window smaller than this, a box's 13px label is under 7px on screen. */
+export const READABLE_ZOOM = 0.5;
+/**
+ * How much it costs for the words to shrink when the picture is fitted to the
+ * window: per halving. Not a preference for any shape, since anything that fits
+ * at full size pays nothing. Readers named size more often than anything else
+ * when choosing between two pictures of one diagram.
+ */
+export const LEGIBILITY_WEIGHT = 16;
+/**
+ * Past `READABLE_ZOOM` it stops being a preference: text nobody can read is as
+ * much a defect as a line through a box, however few crossings it took.
+ */
+export const ILLEGIBLE_WEIGHT = 1500;
+
+/** How far a picture of this size is scaled to fit the window: 1 when it fits as it is. */
+export function fitZoom(width: number, height: number): number {
+  return Math.min(1, TYPICAL_WINDOW.w / Math.max(1, width), TYPICAL_WINDOW.h / Math.max(1, height));
 }
 
 function closestOnSegment(p: Pt, a: Pt, b: Pt): Pt {
@@ -521,6 +630,13 @@ export const LAYOUT_RULE_IDS = [
   "line-detour",
   "loose-container",
   "sparse-canvas",
+  "shallow-crossing",
+  "close-lines",
+  "line-hook",
+  "curve-bulge",
+  "ambiguous-words",
+  "crowded-ends",
+  "too-dense",
 ] as const;
 export type LayoutRuleId = (typeof LAYOUT_RULE_IDS)[number];
 
@@ -564,6 +680,13 @@ export const LAYOUT_RULES: Record<LayoutRuleId, RuleMeta> = {
   "line-detour": { label: "A line takes the long way", description: "A line travels far further than the distance between its ends.", severity: "info", penalty: 0.5, cap: 3, cost: 1 },
   "loose-container": { label: "Container much bigger than its contents", description: "A frame with this much empty room looks unfinished.", severity: "info", penalty: 1, cap: 5, cost: 3 },
   "sparse-canvas": { label: "A lot of empty canvas", description: "The boxes cover very little of the space they are spread over, so they will be small when fitted to a screen.", severity: "info", penalty: 2, cap: 2, cost: 6 },
+  "shallow-crossing": { label: "Lines cross at a shallow angle", description: "Two lines that cross almost parallel are hard to tell apart where they meet. Square across reads at a glance.", severity: "info", penalty: 1, cap: 8, cost: 6 },
+  "close-lines": { label: "Lines run close together", description: "Two lines run alongside each other a few pixels apart, so the eye can't keep them apart.", severity: "warning", penalty: 2, cap: 12, cost: 8 },
+  "line-hook": { label: "A line doubles back", description: "A line turns back on itself near one of its ends, which reads as a mistake.", severity: "warning", penalty: 2, cap: 10, cost: 6 },
+  "curve-bulge": { label: "A curve bulges out", description: "A curve swings far outside the space between its ends, taking room and crossing what's there.", severity: "info", penalty: 1, cap: 6, cost: 4 },
+  "ambiguous-words": { label: "Words could belong to another line", description: "A label sits as near another line as its own, so a reader can't tell which line it names.", severity: "warning", penalty: 2, cap: 10, cost: 6 },
+  "crowded-ends": { label: "Line ends crowd together", description: "Lines meet a box so close together that their arrowheads or crow's feet can't be told apart.", severity: "warning", penalty: 1.5, cap: 9, cost: 5 },
+  "too-dense": { label: "Too much for one view", description: "Fitted to a screen this picture is too small to read, and it has more lines than boxes. Collapsing a group, or splitting the diagram, helps more than any arrangement.", severity: "warning", penalty: 10, cap: 10, cost: 30 },
 };
 
 export interface LayoutFinding extends LintFinding {
@@ -587,10 +710,29 @@ export interface LayoutReport {
     height: number;
     /** Total drawn length of every line. */
     lineLength: number;
+    /** How far the root canvas is scaled to fit a typical window: 1 when it fits as it is. */
+    zoom: number;
   };
 }
 
 type Emit = (rule: LayoutRuleId, issue: LintIssue) => void;
+
+/** Crossing at less than this many degrees, two lines read as one for a moment. */
+const SHALLOW_CROSSING = 25;
+/** How far two lines run close together before they read as one. */
+const CLOSE_RUN = 60;
+/** Arriving more than this far off the way it came, a line has doubled back. */
+const HOOK_TURN = 115;
+/** How far back from an end "the way it came" is measured. */
+const HOOK_REACH = 160;
+/** A curve this far outside the space between its ends has swung out of its way. */
+const BULGE_MIN = 60;
+/** How near another line can be to a label before the label could name it. */
+const AMBIGUOUS_REACH = 24;
+/** Line ends nearer than an arrowhead's width can't be told apart. */
+const CROWDED_GAP = 10;
+/** Below this many lines, a picture isn't dense, however small it is. */
+const DENSE_LINES = 20;
 
 /** Past this many boxes on one canvas the pairwise polish rules are skipped. */
 const PAIRWISE_LIMIT = 400;
@@ -726,23 +868,35 @@ function lintScene(scene: Scene, emit: Emit): void {
         if (!rectsOverlap(bounds[i]!, bounds[j]!)) continue;
         const a = lines[i]!;
         const b = lines[j]!;
-        const hits = crossingsBetween(a.samples, b.samples);
-        for (let h = 0; h < hits; h += 1) {
+        for (const angle of crossingAngles(a.samples, b.samples)) {
           emit("line-crossing", {
             message: `The lines ${describeLine(a)} and ${describeLine(b)} cross`,
             edgeIds: [a.edge.id, b.edge.id],
           });
+          if (angle < SHALLOW_CROSSING) {
+            emit("shallow-crossing", {
+              message: `The lines ${describeLine(a)} and ${describeLine(b)} cross at ${Math.round(angle)}°, almost parallel`,
+              edgeIds: [a.edge.id, b.edge.id],
+            });
+          }
         }
       }
     }
     for (const run of sharedRuns(lines).values()) {
-      if (run.length <= 36) continue;
       const a = lines[run.a]!;
       const b = lines[run.b]!;
-      emit("line-overlap", {
-        message: `The lines ${describeLine(a)} and ${describeLine(b)} run on top of each other`,
-        edgeIds: [a.edge.id, b.edge.id],
-      });
+      if (run.length > 36) {
+        emit("line-overlap", {
+          message: `The lines ${describeLine(a)} and ${describeLine(b)} run on top of each other`,
+          edgeIds: [a.edge.id, b.edge.id],
+        });
+      }
+      if (run.close > CLOSE_RUN) {
+        emit("close-lines", {
+          message: `The lines ${describeLine(a)} and ${describeLine(b)} run a few pixels apart`,
+          edgeIds: [a.edge.id, b.edge.id],
+        });
+      }
     }
   }
 
@@ -799,6 +953,22 @@ function lintScene(scene: Scene, emit: Emit): void {
           message: `The line ${describeLine(other)} runs through the words on ${describeLine(a)}`,
           edgeIds: [a.edge.id, other.edge.id],
         });
+      }
+    }
+    // Words that sit as near another line as their own could name either.
+    const own = polylineToRect(a.samples, a.words!);
+    const reach = { x: a.words!.x - AMBIGUOUS_REACH, y: a.words!.y - AMBIGUOUS_REACH, w: a.words!.w + AMBIGUOUS_REACH * 2, h: a.words!.h + AMBIGUOUS_REACH * 2 };
+    for (let o = 0; o < lines.length; o += 1) {
+      const other = lines[o]!;
+      if (other === a || !rectsOverlap(reach, lineBounds[o]!)) continue;
+      const gap = polylineToRect(other.samples, a.words!);
+      // Touching is `words-on-line`.
+      if (gap > 1 && gap < AMBIGUOUS_REACH && gap <= own + 4) {
+        emit("ambiguous-words", {
+          message: `The words on ${describeLine(a)} sit as near ${describeLine(other)}`,
+          edgeIds: [a.edge.id, other.edge.id],
+        });
+        break;
       }
     }
   }
@@ -950,12 +1120,97 @@ function lintScene(scene: Scene, emit: Emit): void {
     }
   }
 
+  // ── The shape of each line ──────────────────────────────────────────────────
+  for (const l of lines) {
+    if (l.source.id === l.target.id) continue;
+    for (const atEnd of [false, true]) {
+      // Where it arrives from, against the way it was heading before it got
+      // close: a line that overshoots its box and comes back arrives against
+      // that, where an elbow or a curve into a side arrives along it.
+      const reach = Math.min(HOOK_REACH, l.length / 2);
+      const approach = headingNear(l.geo, l.length, atEnd, 0, reach);
+      const arrival = headingNear(l.geo, l.length, atEnd, 0, 16);
+      if (!approach || !arrival || l.length < 60) continue;
+      const turn = Math.acos(
+        Math.max(-1, Math.min(1, (approach.x * arrival.x + approach.y * arrival.y) / (Math.hypot(approach.x, approach.y) * Math.hypot(arrival.x, arrival.y) || 1))),
+      );
+      if ((turn * 180) / Math.PI > HOOK_TURN) {
+        const box = atEnd ? l.target : l.source;
+        emit("line-hook", { message: `The line ${describeLine(l)} doubles back where it meets ${name(box)}`, edgeIds: [l.edge.id] });
+        break;
+      }
+    }
+    if (l.edge.points?.length) continue;
+    const s = l.samples;
+    let level = 0;
+    for (let i = 1; i < s.length; i += 1) {
+      if (Math.abs(s[i]!.x - s[i - 1]!.x) < 0.5 || Math.abs(s[i]!.y - s[i - 1]!.y) < 0.5) level += 1;
+    }
+    // Elbows are a router's detour, which `line-detour` measures; this is a curve's swing.
+    if (level >= (s.length - 1) / 2) continue;
+    const first = s[0]!;
+    const last = s[s.length - 1]!;
+    const lo = { x: Math.min(first.x, last.x) - 24, y: Math.min(first.y, last.y) - 24 };
+    const hi = { x: Math.max(first.x, last.x) + 24, y: Math.max(first.y, last.y) + 24 };
+    let bulge = 0;
+    for (const p of s) bulge = Math.max(bulge, lo.x - p.x, p.x - hi.x, lo.y - p.y, p.y - hi.y);
+    if (bulge > BULGE_MIN) {
+      emit("curve-bulge", { message: `The line ${describeLine(l)} swings ${Math.round(bulge)}px out of its way`, edgeIds: [l.edge.id] });
+    }
+  }
+
+  // ── Where lines meet boxes ──────────────────────────────────────────────────
+  const ends = new Map<string, Array<{ at: number; line: SceneLine; box: SceneBox }>>();
+  for (const l of lines) {
+    if (l.source.id === l.target.id) continue;
+    for (const [box, p] of [[l.source, l.samples[0]!], [l.target, l.samples[l.samples.length - 1]!]] as const) {
+      const sides = [
+        { side: "left", gap: Math.abs(p.x - box.x), at: p.y },
+        { side: "right", gap: Math.abs(p.x - box.x - box.w), at: p.y },
+        { side: "top", gap: Math.abs(p.y - box.y), at: p.x },
+        { side: "bottom", gap: Math.abs(p.y - box.y - box.h), at: p.x },
+      ].sort((a, b) => a.gap - b.gap);
+      const key = `${box.id}|${sides[0]!.side}`;
+      const list = ends.get(key) ?? [];
+      list.push({ at: sides[0]!.at, line: l, box });
+      ends.set(key, list);
+    }
+  }
+  for (const list of ends.values()) {
+    if (list.length < 2) continue;
+    list.sort((a, b) => a.at - b.at);
+    const crowded = new Set<SceneLine>();
+    for (let i = 1; i < list.length; i += 1) {
+      const gap = list[i]!.at - list[i - 1]!.at;
+      // Exactly together is a bundle someone asked for; apart by less than an arrowhead is a pile.
+      if (gap > 0.5 && gap < CROWDED_GAP) {
+        crowded.add(list[i]!.line);
+        crowded.add(list[i - 1]!.line);
+      }
+    }
+    if (crowded.size) {
+      emit("crowded-ends", {
+        message: `${crowded.size} lines meet ${name(list[0]!.box)} too close together to tell apart`,
+        nodeIds: [list[0]!.box.id],
+        edgeIds: [...crowded].map((l) => l.edge.id),
+      });
+    }
+  }
+
   // ── Is the canvas earning its space? ────────────────────────────────────────
   const spread = extentOf(scene);
   if (solids.length >= 4 && spread.w * spread.h > 0) {
     const covered = solids.reduce((sum, b) => sum + b.w * b.h, 0);
     if (covered / (spread.w * spread.h) < 0.07) {
       emit("sparse-canvas", { message: "The boxes cover very little of the canvas they are spread over" });
+    }
+  }
+  if (spread.w > 0 && spread.h > 0) {
+    const fit = fitZoom(spread.w, spread.h);
+    if (fit < READABLE_ZOOM && lines.length >= DENSE_LINES && lines.length >= solids.length * 1.2) {
+      emit("too-dense", {
+        message: `${solids.length} boxes and ${lines.length} lines: fitted to a screen this is ${Math.round(fit * 100)}% size`,
+      });
     }
   }
 }
@@ -1005,7 +1260,7 @@ function canvasesOf(template: DiagramTemplate, opts: LintLayoutOptions): Array<s
 export function lintLayout(template: DiagramTemplate, opts: LintLayoutOptions = {}): LayoutReport {
   const findings: LayoutFinding[] = [];
   const counts: Partial<Record<LayoutRuleId, number>> = {};
-  const metrics = { boxes: 0, lines: 0, width: 0, height: 0, lineLength: 0 };
+  const metrics = { boxes: 0, lines: 0, width: 0, height: 0, lineLength: 0, zoom: 1 };
   let softCost = 0;
 
   for (const frame of canvasesOf(template, opts)) {
@@ -1018,6 +1273,11 @@ export function lintLayout(template: DiagramTemplate, opts: LintLayoutOptions = 
       const spread = extentOf(scene);
       metrics.width = spread.w;
       metrics.height = spread.h;
+      metrics.zoom = fitZoom(spread.w, spread.h);
+      // How small the words end up on screen, which readers weigh above most
+      // else. The cost counts it, so arrangements are chosen by it; the score
+      // doesn't, so a long picture is never marked down for being long.
+      softCost += -Math.log2(metrics.zoom) * LEGIBILITY_WEIGHT + Math.max(0, READABLE_ZOOM - metrics.zoom) * ILLEGIBLE_WEIGHT;
     }
 
     // A box or a line can opt out of a rule with the same tag every other check honours.
@@ -1051,24 +1311,46 @@ export function lintLayout(template: DiagramTemplate, opts: LintLayoutOptions = 
     }
   }
 
-  let score = 100;
+  let penalty = 0;
   let cost = softCost;
   for (const rule of LAYOUT_RULE_IDS) {
     const count = counts[rule] ?? 0;
     if (!count) continue;
     const meta = LAYOUT_RULES[rule];
-    score -= Math.min(meta.cap, count * meta.penalty);
+    // Past a rule's cap, more of the same still counts, a tenth as much, up to
+    // a little more again: so 300 problems read worse than 30, but no one rule
+    // can sink the score on its own.
+    const over = Math.max(0, count * meta.penalty - meta.cap);
+    penalty += Math.min(meta.cap, count * meta.penalty) + Math.min(meta.cap * SCORE_OVERFLOW_CAP, over * SCORE_OVERFLOW);
     cost += count * meta.cost;
   }
   const rank: Record<LintSeverity, number> = { error: 0, warning: 1, info: 2 };
   findings.sort((a, b) => rank[a.severity] - rank[b.severity]);
   return {
-    score: Math.max(0, Math.round(score)),
+    score: scoreOf(penalty),
     cost,
     findings,
     counts,
     metrics,
   };
+}
+
+/** How much of the penalty past a rule's cap still counts, and the most it can add, as a share of the cap. */
+const SCORE_OVERFLOW = 0.1;
+const SCORE_OVERFLOW_CAP = 0.4;
+/** Below this score the scale bends, so it nears 0 without ever pinning there. */
+const SCORE_BEND = 40;
+
+/**
+ * 100 less the penalty, down to 40; past that the score keeps falling but
+ * ever more slowly, meeting the straight part at the same slope. A picture
+ * with 30 problems and one with 300 then read differently, where they used to
+ * both say 0.
+ */
+function scoreOf(penalty: number): number {
+  const straight = 100 - penalty;
+  if (straight >= SCORE_BEND) return Math.round(straight);
+  return Math.round(SCORE_BEND * Math.exp((straight - SCORE_BEND) / SCORE_BEND));
 }
 
 /**

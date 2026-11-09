@@ -2310,8 +2310,28 @@ get to decide what comes after what: for a return path or a monitoring tap.
 canvas and the exporters, so a finding is a defect on the screen. No rule has an opinion about
 shape. It looks for boxes on boxes, lines through boxes, lines over lines, words on top of things,
 containers that don't hold what they should, text cut off, and the near-misses a reader sees as
-mistakes. See `LAYOUT_RULES` for each rule. A box can opt out with the tag `lint-ignore:<rule>`.
-`LAYOUT_LINT_RULES` puts them in the Checks menu, if a host wants that.
+mistakes. It also looks for what readers complained about when the first rules missed it: lines
+crossing at a shallow angle, lines running a few pixels apart, a line that doubles back into its
+box, a curve that swings far out of its way, words as near another line as their own, line ends
+crowded too close to tell apart, and a picture too dense to read on one screen. Its cost (what an
+arrangement is chosen by) counts how small the words come out when the picture is fitted to a
+window, since readers named size more than anything else when choosing between two pictures; the
+score doesn't, so a long or tall picture is never marked down for its shape. See `LAYOUT_RULES`
+for each rule. A box can opt out with the tag `lint-ignore:<rule>`. `LAYOUT_LINT_RULES` puts them
+in the Checks menu, if a host wants that.
+
+The score is 100 less what's found, down to 40; below that it keeps falling ever more slowly, so a
+picture with 30 problems and one with 300 read differently instead of both saying 0. No one rule can
+take it below about 20 on its own. The Layout panel shows the counts beside it.
+
+**The rule costs are fitted to readers.** `npm run gallery` draws the same documents with two
+versions of the code (`compare --base main`), or in every arrangement the engine offers
+(`variants`), in the real studio, and writes a contact sheet. `pairs` turns a run into blind A/B
+pictures; reviewers say which they'd ship, and `pick` records it in `gallery/picks.jsonl` with the
+two documents. `fit` then fits each rule's cost so the cheaper picture is the one readers chose, and
+reports how often the linter agrees with them on diagrams it wasn't fitted to. The gallery's real
+documents (`gallery/real/`) are anonymised: every word replaced by a pseudo-word of the same length,
+ids renumbered, and tags, links and dates dropped (`scripts/gallery/anonymise.mjs`).
 
 **A model that places well keeps what it placed.** After a generation, `arrangeBest` measures both:
 the model's arrangement is polished and kept unless the auto-placer's scores clearly better, so a

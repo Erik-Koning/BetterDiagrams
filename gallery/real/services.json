@@ -1,0 +1,991 @@
+{
+  "version": 1,
+  "nodes": [
+    {
+      "id": "n1",
+      "label": "Obibuko Tatas",
+      "kind": "client",
+      "icon": "user",
+      "description": "Amiga azonoken, olihutar famop & damunupo",
+      "parentId": null,
+      "zoneId": null,
+      "x": 0,
+      "y": 1423,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n2",
+      "label": "Iga Afala",
+      "kind": "client",
+      "icon": "users",
+      "description": "Uro oco itaneba fus",
+      "parentId": null,
+      "zoneId": null,
+      "x": 1872,
+      "y": 2503,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n3",
+      "label": "Bovefi & Utudago",
+      "kind": "group",
+      "icon": "layers",
+      "description": "",
+      "parentId": null,
+      "zoneId": null,
+      "x": 315,
+      "y": 1357,
+      "w": 412,
+      "h": 398,
+      "fontSize": 13
+    },
+    {
+      "id": "n4",
+      "label": "Tudunisikofe",
+      "kind": "service",
+      "icon": "gear",
+      "description": "Osatonu denumefa ehebum (Utafetis) udekugo atu maze",
+      "parentId": null,
+      "zoneId": null,
+      "x": 871,
+      "y": 1639,
+      "w": 182,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n5",
+      "label": "Luda",
+      "kind": "group",
+      "icon": "branch",
+      "description": "",
+      "parentId": null,
+      "zoneId": null,
+      "x": 1198,
+      "y": 1357,
+      "w": 258,
+      "h": 614,
+      "fontSize": 13
+    },
+    {
+      "id": "n6",
+      "label": "Ahado & Mozodi",
+      "kind": "group",
+      "icon": "code",
+      "description": "",
+      "parentId": null,
+      "zoneId": null,
+      "x": 1764,
+      "y": 1789,
+      "w": 386,
+      "h": 614,
+      "fontSize": 13
+    },
+    {
+      "id": "n7",
+      "label": "Radosuzod Bodose",
+      "kind": "region",
+      "icon": "cloud",
+      "description": "Dihed ipatacutu ahu vutosum icub",
+      "parentId": null,
+      "zoneId": null,
+      "x": 2458,
+      "y": 1789,
+      "w": 412,
+      "h": 830,
+      "fontSize": 13
+    },
+    {
+      "id": "n8",
+      "label": "Etafam",
+      "kind": "group",
+      "icon": "shield",
+      "description": "",
+      "parentId": null,
+      "zoneId": null,
+      "x": 3325,
+      "y": 2221,
+      "w": 280,
+      "h": 614,
+      "fontSize": 13
+    },
+    {
+      "id": "n9",
+      "label": "Ipivih",
+      "kind": "group",
+      "icon": "sparkle",
+      "description": "",
+      "parentId": null,
+      "zoneId": null,
+      "x": 3178,
+      "y": 2931,
+      "w": 574,
+      "h": 398,
+      "fontSize": 13
+    },
+    {
+      "id": "n10",
+      "label": "Gefuno & Oducu",
+      "kind": "group",
+      "icon": "database",
+      "description": "",
+      "parentId": null,
+      "zoneId": null,
+      "x": 4060,
+      "y": 2065,
+      "w": 386,
+      "h": 678,
+      "fontSize": 13
+    },
+    {
+      "id": "n11",
+      "label": "Fazifu & Uvapaf",
+      "kind": "lm-small",
+      "icon": "filter",
+      "description": "Apugi 6.4 6R — famopite, idedad, dadap utohi/usesab",
+      "parentId": "n3",
+      "zoneId": null,
+      "x": 117,
+      "y": 66,
+      "w": 178,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n12",
+      "label": "Akudama Uzosuma",
+      "kind": "queue",
+      "icon": "layers",
+      "description": "Orifefasipa kurazoha + zatugutami lipidani",
+      "parentId": "n3",
+      "zoneId": null,
+      "x": 103,
+      "y": 282,
+      "w": 206,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n13",
+      "label": "Badalop Oreza",
+      "kind": "llm",
+      "icon": "sparkle",
+      "description": "Lotela Ogeb — ozanamakud binolohe nete hefum",
+      "parentId": "n5",
+      "zoneId": null,
+      "x": 40,
+      "y": 66,
+      "w": 178,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n14",
+      "label": "Tebonucov Kavev",
+      "kind": "llm",
+      "icon": "layers",
+      "description": "Fumuvo Uhas — danagi goku, MOP poduhezur, utib uzeb",
+      "parentId": "n5",
+      "zoneId": null,
+      "x": 40,
+      "y": 282,
+      "w": 178,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n15",
+      "label": "Ozud Agivu",
+      "kind": "queue",
+      "icon": "share",
+      "description": "ASO in izi-hobef vuzo inidufotusok",
+      "parentId": "n5",
+      "zoneId": null,
+      "x": 42,
+      "y": 498,
+      "w": 174,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n16",
+      "label": "Maluk Igeneh",
+      "kind": "llm",
+      "icon": "robot",
+      "description": "Ogikamet ikasibu — Ifepen Bozimu",
+      "parentId": "n6",
+      "zoneId": null,
+      "x": 84,
+      "y": 66,
+      "w": 218,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n17",
+      "label": "Cemapu / Huhozegi Onika",
+      "kind": "llm",
+      "icon": "eye",
+      "description": "Ocasoti safeg ehasupa ipoc, ovozib, ivaha azahufon",
+      "parentId": "n6",
+      "zoneId": null,
+      "x": 84,
+      "y": 282,
+      "w": 218,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n18",
+      "label": "Huzolile Ibaro",
+      "kind": "lm-medium",
+      "icon": "sync",
+      "description": "Sede5.3-Dezev 65F — uhev, akabete, bapu",
+      "parentId": "n6",
+      "zoneId": null,
+      "x": 108,
+      "y": 498,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n19",
+      "label": "Nanulak Ilal",
+      "kind": "service",
+      "icon": "terminal",
+      "description": "Ecagafede Torofubunun hesipimubu",
+      "parentId": "n7",
+      "zoneId": null,
+      "x": 121,
+      "y": 66,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n20",
+      "label": "Fune Ninire",
+      "kind": "service",
+      "icon": "check",
+      "description": "Otug, kefokadomob, o3m (Ilufibirum)",
+      "parentId": "n7",
+      "zoneId": null,
+      "x": 121,
+      "y": 282,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n21",
+      "label": "Esubate Ozonuv",
+      "kind": "service",
+      "icon": "globe",
+      "description": "Ovo-imiziz ifuhozafagu",
+      "parentId": "n7",
+      "zoneId": null,
+      "x": 121,
+      "y": 498,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n22",
+      "label": "Gevatefabu Omo",
+      "kind": "service",
+      "icon": "server",
+      "description": "Sok pin mepam ehebezifekav gabor",
+      "parentId": "n7",
+      "zoneId": null,
+      "x": 121,
+      "y": 714,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n23",
+      "label": "DA Avimu",
+      "kind": "llm",
+      "icon": "flask",
+      "description": "Ovuleg epufe, umugupoz guz HE zab odesefi",
+      "parentId": "n8",
+      "zoneId": null,
+      "x": 55,
+      "y": 66,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n24",
+      "label": "Dita Agoziki",
+      "kind": "service",
+      "icon": "chart",
+      "description": "Imehalugok-umacahov kidomov + zibakelabo zakuz",
+      "parentId": "n8",
+      "zoneId": null,
+      "x": 51,
+      "y": 282,
+      "w": 178,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n25",
+      "label": "Ahodi Bozetude Piro",
+      "kind": "gateway",
+      "icon": "shield",
+      "description": "Hamun / zifamav subu-ted",
+      "parentId": "n8",
+      "zoneId": null,
+      "x": 47,
+      "y": 503,
+      "w": 194,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n26",
+      "label": "Idabada Hosikomum",
+      "kind": "service",
+      "icon": "activity",
+      "description": "Oruza esitomehu, lenisu, kuba celenesu",
+      "parentId": "n9",
+      "zoneId": null,
+      "x": 51,
+      "y": 66,
+      "w": 178,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n27",
+      "label": "Agimep & Zazezokafe Akudiha",
+      "kind": "external",
+      "icon": "globe",
+      "description": "Azabovu, petatesosu uberonebol, cidibi",
+      "parentId": "n9",
+      "zoneId": null,
+      "x": 277,
+      "y": 66,
+      "w": 246,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n28",
+      "label": "Uvarizas Gocop",
+      "kind": "llm",
+      "icon": "sparkle",
+      "description": "Nariko Cuha — idovimot umi labobuse rebi iholiti",
+      "parentId": "n9",
+      "zoneId": null,
+      "x": 55,
+      "y": 282,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n29",
+      "label": "Bap Upetapefot",
+      "kind": "external",
+      "icon": "code",
+      "description": "GamUva — agomorem & UPi",
+      "parentId": "n10",
+      "zoneId": null,
+      "x": 108,
+      "y": 562,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n30",
+      "label": "Lucolone Ucolac",
+      "kind": "database",
+      "icon": "search",
+      "description": "metefugu ogetu iv gole, afet, bibetevuf",
+      "parentId": "n10",
+      "zoneId": null,
+      "x": 108,
+      "y": 66,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n31",
+      "label": "Oci Vazos",
+      "kind": "cache",
+      "icon": "cache",
+      "description": "Iheku — unapi, sokicuma, lisehiherer",
+      "parentId": "n10",
+      "zoneId": null,
+      "x": 108,
+      "y": 190,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n32",
+      "label": "Apasifem Ule",
+      "kind": "database",
+      "icon": "doc",
+      "description": "EMUk, upo ibufif, hobu eritaku",
+      "parentId": "n10",
+      "zoneId": null,
+      "x": 108,
+      "y": 438,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    },
+    {
+      "id": "n33",
+      "label": "Misocek Ivive",
+      "kind": "vault",
+      "icon": "vault",
+      "description": "RehibOkuz Atabo — ERU zifu, ufakiz muhem",
+      "parentId": "n10",
+      "zoneId": null,
+      "x": 108,
+      "y": 314,
+      "w": 170,
+      "h": 76,
+      "fontSize": 13
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "n1",
+      "target": "n11",
+      "label": "imiveke onudocop",
+      "labelT": 0.3,
+      "style": "solid",
+      "color": "sky",
+      "start": {
+        "side": "right",
+        "auto": true
+      }
+    },
+    {
+      "id": "e2",
+      "source": "n11",
+      "target": "n12",
+      "label": "ebivetu + zigecu",
+      "labelT": 0.8,
+      "style": "dashed",
+      "color": "violet",
+      "start": {
+        "side": "bottom",
+        "auto": true
+      }
+    },
+    {
+      "id": "e3",
+      "source": "n12",
+      "target": "n4",
+      "label": "adeh uhosuhi",
+      "labelT": 0.75,
+      "style": "dashed",
+      "color": "violet"
+    },
+    {
+      "id": "e4",
+      "source": "n4",
+      "target": "n13",
+      "label": "epoz adusepa",
+      "labelT": 0.2,
+      "style": "solid",
+      "color": "slate",
+      "start": {
+        "side": "right",
+        "t": 0.158,
+        "auto": true
+      }
+    },
+    {
+      "id": "e5",
+      "source": "n13",
+      "target": "n14",
+      "label": "elan",
+      "labelT": 0.75,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "e6",
+      "source": "n14",
+      "target": "n15",
+      "label": "uzuza",
+      "labelT": 0.25,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "e7",
+      "source": "n4",
+      "target": "n15",
+      "label": "afilemap & egova",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate",
+      "start": {
+        "side": "right",
+        "t": 0.842,
+        "auto": true
+      }
+    },
+    {
+      "id": "e8",
+      "source": "n15",
+      "target": "n16",
+      "label": "nuhud cudo",
+      "labelT": 0.6,
+      "style": "dashed",
+      "color": "violet",
+      "end": {
+        "side": "left",
+        "auto": true
+      }
+    },
+    {
+      "id": "e9",
+      "source": "n16",
+      "target": "n19",
+      "label": "umu lozo",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate",
+      "tech": "erul",
+      "start": {
+        "side": "right",
+        "auto": true
+      }
+    },
+    {
+      "id": "e10",
+      "source": "n19",
+      "target": "n20",
+      "label": "eva henab",
+      "labelT": 0.45,
+      "style": "solid",
+      "color": "slate",
+      "end": {
+        "side": "top",
+        "auto": true
+      }
+    },
+    {
+      "id": "e11",
+      "source": "n20",
+      "target": "n17",
+      "label": "tamu nenomiv",
+      "labelT": 0.16,
+      "style": "solid",
+      "color": "slate",
+      "start": {
+        "side": "top",
+        "t": 0.382,
+        "auto": true
+      },
+      "end": {
+        "side": "top",
+        "t": 0.592,
+        "auto": true
+      },
+      "points": [
+        [
+          2311,
+          2047
+        ]
+      ]
+    },
+    {
+      "id": "e12",
+      "source": "n16",
+      "target": "n17",
+      "label": "kova",
+      "labelT": 0.45,
+      "style": "solid",
+      "color": "slate",
+      "end": {
+        "side": "top",
+        "auto": true
+      }
+    },
+    {
+      "id": "e13",
+      "source": "n17",
+      "target": "n16",
+      "label": "didepimu / enusira",
+      "labelT": 0.45,
+      "style": "solid",
+      "color": "rose",
+      "start": {
+        "side": "left",
+        "auto": true
+      },
+      "end": {
+        "side": "left",
+        "t": 0.763,
+        "auto": true
+      },
+      "points": [
+        [
+          1872,
+          2004
+        ]
+      ]
+    },
+    {
+      "id": "e14",
+      "source": "n17",
+      "target": "n18",
+      "label": "leguhule → ezigel",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "emerald"
+    },
+    {
+      "id": "e15",
+      "source": "n18",
+      "target": "n29",
+      "label": "rili BA",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate",
+      "tech": "zum",
+      "start": {
+        "side": "right",
+        "auto": true
+      },
+      "end": {
+        "side": "left",
+        "t": 0.632,
+        "auto": true
+      },
+      "points": [
+        [
+          3096,
+          2553
+        ]
+      ]
+    },
+    {
+      "id": "e16",
+      "source": "n29",
+      "target": "n21",
+      "label": "letofa dorani",
+      "labelT": 0.35,
+      "style": "solid",
+      "color": "slate",
+      "start": {
+        "side": "left",
+        "t": 0.368,
+        "auto": true
+      },
+      "end": {
+        "side": "right",
+        "t": 0.763,
+        "auto": true
+      },
+      "points": [
+        [
+          3468,
+          2459
+        ]
+      ]
+    },
+    {
+      "id": "e17",
+      "source": "n21",
+      "target": "n23",
+      "label": "ehezemo & ugac",
+      "labelT": 0.55,
+      "style": "solid",
+      "color": "slate",
+      "start": {
+        "side": "right",
+        "auto": true
+      }
+    },
+    {
+      "id": "e18",
+      "source": "n23",
+      "target": "n24",
+      "label": "ovus rapumek",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "e19",
+      "source": "n24",
+      "target": "n25",
+      "label": "ozuvimove",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate"
+    },
+    {
+      "id": "e20",
+      "source": "n24",
+      "target": "n13",
+      "label": "ulerec marugope → vetipi",
+      "labelT": 0.25,
+      "style": "dashed",
+      "color": "rose",
+      "end": {
+        "side": "right",
+        "t": 0.368,
+        "auto": true
+      },
+      "points": [
+        [
+          2761,
+          2059
+        ]
+      ]
+    },
+    {
+      "id": "e21",
+      "source": "n1",
+      "target": "n25",
+      "label": "pinahuc",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate",
+      "start": {
+        "side": "right",
+        "t": 0.763,
+        "auto": true
+      },
+      "end": {
+        "side": "left",
+        "t": 0.22
+      },
+      "points": [
+        [
+          392,
+          1741
+        ],
+        [
+          2775,
+          2477
+        ]
+      ]
+    },
+    {
+      "id": "e22",
+      "source": "n25",
+      "target": "n22",
+      "label": "ufopiko",
+      "labelT": 0.20833333333333331,
+      "style": "solid",
+      "color": "emerald",
+      "start": {
+        "side": "left",
+        "t": 0.38
+      },
+      "end": {
+        "side": "bottom",
+        "auto": true
+      }
+    },
+    {
+      "id": "e23",
+      "source": "n2",
+      "target": "n22",
+      "label": "uti",
+      "labelT": 0.5,
+      "style": "solid",
+      "color": "slate",
+      "tech": "IHODO"
+    },
+    {
+      "id": "e24",
+      "source": "n22",
+      "target": "n26",
+      "label": "fusade",
+      "labelT": 0.5,
+      "style": "dotted",
+      "color": "slate"
+    },
+    {
+      "id": "e25",
+      "source": "n26",
+      "target": "n28",
+      "label": "kivus emekevu",
+      "labelT": 0.35,
+      "style": "dashed",
+      "color": "amber",
+      "end": {
+        "side": "top",
+        "auto": true
+      }
+    },
+    {
+      "id": "e26",
+      "source": "n27",
+      "target": "n28",
+      "label": "usivam uhotece",
+      "labelT": 0.45,
+      "style": "dashed",
+      "color": "amber",
+      "end": {
+        "side": "top",
+        "t": 0.618,
+        "auto": true
+      }
+    },
+    {
+      "id": "e27",
+      "source": "n28",
+      "target": "n11",
+      "label": "didipefu ricenede",
+      "labelT": 0.5,
+      "style": "dashed",
+      "color": "violet",
+      "start": {
+        "side": "left",
+        "t": 0.36
+      },
+      "end": {
+        "side": "bottom",
+        "t": 0.612,
+        "auto": true
+      }
+    },
+    {
+      "id": "e28",
+      "source": "n4",
+      "target": "n31",
+      "label": "lucagicepe",
+      "labelT": 0.4,
+      "style": "dotted",
+      "color": "amber",
+      "start": {
+        "side": "right",
+        "t": 0.386,
+        "auto": true
+      },
+      "end": {
+        "side": "left",
+        "auto": true
+      },
+      "points": [
+        [
+          1212,
+          1741
+        ],
+        [
+          1822,
+          1957
+        ],
+        [
+          2775,
+          2045
+        ]
+      ]
+    },
+    {
+      "id": "e29",
+      "source": "n16",
+      "target": "n30",
+      "label": "evozaton isupine",
+      "labelT": 0.5,
+      "style": "dotted",
+      "color": "amber",
+      "start": {
+        "side": "right",
+        "t": 0.763,
+        "auto": true
+      },
+      "end": {
+        "side": "left",
+        "t": 0.632,
+        "auto": true
+      }
+    },
+    {
+      "id": "e30",
+      "source": "n13",
+      "target": "n30",
+      "label": "emiluhuf cikosuh",
+      "labelT": 0.5,
+      "style": "dotted",
+      "color": "amber",
+      "start": {
+        "side": "right",
+        "t": 0.632,
+        "auto": true
+      },
+      "end": {
+        "side": "left",
+        "t": 0.368,
+        "auto": true
+      }
+    },
+    {
+      "id": "e31",
+      "source": "n4",
+      "target": "n32",
+      "label": "obolof & ugivipiru",
+      "labelT": 0.5,
+      "style": "dotted",
+      "color": "amber",
+      "start": {
+        "side": "right",
+        "t": 0.614,
+        "auto": true
+      },
+      "end": {
+        "side": "left",
+        "t": 0.38
+      },
+      "points": [
+        [
+          1212,
+          1741
+        ],
+        [
+          1822,
+          1957
+        ]
+      ]
+    },
+    {
+      "id": "e32",
+      "source": "n24",
+      "target": "n32",
+      "label": "ohor uhucene",
+      "labelT": 0.7,
+      "style": "dotted",
+      "color": "amber",
+      "end": {
+        "side": "left",
+        "auto": true
+      }
+    },
+    {
+      "id": "e33",
+      "source": "n19",
+      "target": "n33",
+      "label": "tenehe tonib",
+      "labelT": 0.5,
+      "style": "dotted",
+      "color": "slate"
+    }
+  ]
+}
