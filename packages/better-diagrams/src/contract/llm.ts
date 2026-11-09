@@ -41,12 +41,29 @@ export interface GenerateRequest {
    * memory of what was said.
    */
   history?: GenerateTurn[];
+  /**
+   * The model picked in the AI panel: an `id` from the `aiModels` the host
+   * gave the editor. Absent when the host offers no choice, and the route
+   * answers with its own default. It comes from the browser, so a route must
+   * check it against what it offers before spending a key on it.
+   */
+  model?: string;
 }
 
 /** One earlier turn of an Adjust with AI conversation. */
 export interface GenerateTurn {
   role: "user" | "assistant";
   content: string;
+}
+
+/** A model the AI panel can offer. */
+export interface AiModelOption {
+  /** What a request carries as `model`. */
+  id: string;
+  /** A name for people: "Claude Opus 5.5". */
+  label: string;
+  /** The heading it sits under when the list spans several: "Anthropic". */
+  group?: string;
 }
 
 /**

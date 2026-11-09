@@ -11,6 +11,13 @@ import { ServerResponse } from 'node:http';
 export type AiEnv = Readonly<Record<string, string | undefined>>;
 
 // @public
+export interface AiModelOption {
+    group?: string;
+    id: string;
+    label: string;
+}
+
+// @public
 export interface AiProvider {
     baseURL: string | null;
     keyVar: string | null;
@@ -44,8 +51,8 @@ export interface AiRouteStatus {
     keyVar: string | null;
     // (undocumented)
     label: string;
-    // (undocumented)
     model: string;
+    models: AiModelOption[];
     off: boolean;
     // (undocumented)
     provider: AiProviderName;

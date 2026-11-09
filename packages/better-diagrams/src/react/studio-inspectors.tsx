@@ -1785,6 +1785,7 @@ export function EdgeInspector({
   const tech = read((d) => d.tech ?? "");
   const relation = read((d) => d.relation ?? "");
   const direction = read((d) => d.direction ?? "forward");
+  const secondary = read((d) => !!d.secondary);
   const startHead = read((d) => d.startHead ?? "default");
   const endHead = read((d) => d.endHead ?? "default");
   const startLabel = read((d) => d.startLabel ?? "");
@@ -1893,6 +1894,13 @@ export function EdgeInspector({
       </InspectorSection>
 
       <InspectorSection caption="Flow">
+        <SharedCheck
+          checked={secondary.value}
+          mixed={secondary.mixed}
+          label="Doesn't shape the layout"
+          title="A return path or a monitoring tap: still drawn, but Tidy doesn't let it decide what comes after what"
+          onChange={(checked) => patch({ secondary: checked ? true : undefined })}
+        />
         <SearchSelect
           value={direction.value}
           mixed={direction.mixed}

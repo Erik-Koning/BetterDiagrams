@@ -18,6 +18,11 @@
 import {
   ANNOTATION_KINDS,
   ARRANGE_MODES,
+  LAYOUT_ALGORITHMS,
+  LAYOUT_DIRECTIONS,
+  LAYOUT_ENDS,
+  LAYOUT_SHAPES,
+  LAYOUT_SPACINGS,
   CONTAINER_KINDS,
   EDGE_COLORS,
   EDGE_DIRECTIONS,
@@ -310,7 +315,15 @@ export function validateTemplateReport(raw: unknown, opts: ValidateOptions = {})
   if (isObj(doc.settings)) {
     unknownKeys(doc.settings, SETTINGS_KEYS, "/settings", "settings");
     vocab(doc.settings, "groupContents", GROUP_CONTENTS, "/settings", `groups show their contents`);
-    vocab(doc.settings, "arrange", ARRANGE_MODES, "/settings", `Tidy arranges by flow`);
+    vocab(doc.settings, "arrange", ARRANGE_MODES, "/settings", `Tidy picks the layout that measures best`);
+    if (isObj(doc.settings.layout)) {
+      vocab(doc.settings.layout, "algorithm", LAYOUT_ALGORITHMS, "/settings/layout", `Tidy tries every family that applies`);
+      vocab(doc.settings.layout, "direction", LAYOUT_DIRECTIONS, "/settings/layout", `Tidy tries the directions that apply`);
+      vocab(doc.settings.layout, "inner", LAYOUT_DIRECTIONS, "/settings/layout", `Tidy tries the directions that apply inside containers`);
+      vocab(doc.settings.layout, "shape", LAYOUT_SHAPES, "/settings/layout", `the diagram comes out the shape its structure has`);
+      vocab(doc.settings.layout, "spacing", LAYOUT_SPACINGS, "/settings/layout", `normal spacing is used`);
+      vocab(doc.settings.layout, "ends", LAYOUT_ENDS, "/settings/layout", `each line gets its own place on a box`);
+    }
     if (given(doc.settings.roadmap) && !template.settings?.roadmap) {
       add("unknown-value", "/settings/roadmap", `The roadmap axis needs a "from" date and a numeric "dayWidth", so it was dropped and is fitted to the plan.`);
     }

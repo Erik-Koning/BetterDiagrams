@@ -1,4 +1,4 @@
-import { expect, SMALL_TEMPLATE, test } from "./fixtures";
+import { expect, SEQ_FILE, SMALL_TEMPLATE, test } from "./fixtures";
 import type { Page, Route } from "@playwright/test";
 
 /** What the example's server route receives (see packages/…/contract/llm.ts). */
@@ -8,6 +8,7 @@ interface GenerateRequest {
   systemPrompt: string;
   current?: { nodes: Array<{ id: string; label: string; kind: string }>; edges: unknown[] };
   history?: Array<{ role: "user" | "assistant"; content: string }>;
+  model?: string;
 }
 
 const json = (route: Route, status: number, body: unknown) =>
@@ -16,12 +17,12 @@ const json = (route: Route, status: number, body: unknown) =>
 /** The model's reply to a chat turn: a note for the user, then the document. */
 const chatReply = (note: string, doc: unknown) => `${note}\n\`\`\`json\n${JSON.stringify(doc)}\n\`\`\``;
 
-/** Answer every chat turn by adding one gateway node, in the shape a model replies in. */
+/** Answer every turn by adding one gateway node, in the shape a model replies in; Generate has no diagram to add to yet. */
 async function answerByAdding(page: Page, requests: GenerateRequest[]) {
   await page.route("**/api/diagram", (route) => {
     const request: GenerateRequest = route.request().postDataJSON();
     requests.push(request);
-    const current = request.current!;
+    const current = request.current ?? SMALL_TEMPLATE;
     const n = requests.length;
     return json(route, 200, {
       text: chatReply(`Added gateway ${n}.`, {
@@ -243,5 +244,138 @@ test.describe("AI keys in the server's environment", () => {
     // The suite's dev server runs with BD_AI=off: nothing configured.
     await studio.goto();
     await expect(studio.root.getByRole("button", { name: "AI" })).toBeHidden();
+  });
+});
+
+test.describe("Choosing the model in the AI panel", () => {
+  /** What the dev server answers when it started with both keys set. */
+  const BOTH_KEYS = {
+    provider: "anthropic",
+    model: "claude-opus-5-5",
+    label: "Claude Opus 5.5",
+    configured: true,
+    models: [
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5", group: "Anthropic" },
+      { id: "claude-haiku-5-5", label: "Claude Haiku 5.5", group: "Anthropic" },
+      { id: "gpt-6-astra", label: "GPT-6 Astra", group: "OpenAI" },
+      { id: "gpt-6.1-sol", label: "GPT-6.1 Sol", group: "OpenAI" },
+    ],
+  };
+  const offer = (page: Page, status: unknown) => page.route("**/api/ai", (route) => json(route, 200, status));
+
+  test("sends the model chosen with each request, and keeps it for the next visit", async ({ page, studio }) => {
+    await offer(page, BOTH_KEYS);
+    const requests: GenerateRequest[] = [];
+    await answerByAdding(page, requests);
+    await studio.goto();
+
+    await studio.root.getByRole("button", { name: "AI" }).click();
+    const panel = studio.root.locator(".as-panel");
+    const picker = panel.getByRole("combobox", { name: "Model" });
+    const message = panel.getByRole("textbox", { name: "Message" });
+
+    // It opens on the server's default, under each provider's name, and the
+    // picker says what the footnote would have.
+    await expect(picker).toHaveValue("claude-opus-5-5");
+    await expect(picker.locator("optgroup")).toHaveCount(2);
+    await expect(picker.locator('optgroup[label="OpenAI"] option')).toHaveText(["GPT-6 Astra", "GPT-6.1 Sol"]);
+    await expect(panel.locator(".as-panel__foot")).not.toContainText("Answered by");
+
+    await message.fill("add a gateway");
+    await message.press("Enter");
+    await expect(studio.nodeTitled("Gateway 1")).toBeVisible();
+    expect(requests[0].model).toBe("claude-opus-5-5");
+
+    // A mid-conversation switch: the next turn goes to the new model with the
+    // same history, since turns are plain text whoever answered them.
+    await picker.selectOption("gpt-6.1-sol");
+    await message.fill("and another one");
+    await message.press("Enter");
+    await expect(studio.nodeTitled("Gateway 2")).toBeVisible();
+    expect(requests[1].model).toBe("gpt-6.1-sol");
+    expect(requests[1].history).toHaveLength(2);
+
+    // Generate is in the same panel, and goes to the same model.
+    await panel.getByText("New diagram from a description").click();
+    await panel.getByPlaceholder(/Paste requirements/).fill("a shop");
+    await panel.getByRole("button", { name: "Generate diagram" }).click();
+    await expect.poll(() => requests.length).toBe(3);
+    expect(requests[2].mode).toBe("create");
+    expect(requests[2].model).toBe("gpt-6.1-sol");
+
+    await page.reload();
+    await expect(studio.root).toBeVisible();
+    await studio.root.getByRole("button", { name: "AI" }).click();
+    await expect(studio.root.locator(".as-panel").getByRole("combobox", { name: "Model" })).toHaveValue("gpt-6.1-sol");
+  });
+
+  test("follows the same model into another file", async ({ page, studio }) => {
+    await offer(page, BOTH_KEYS);
+    const requests: GenerateRequest[] = [];
+    await page.route("**/api/diagram", (route) => {
+      requests.push(route.request().postDataJSON());
+      return json(route, 503, { error: "Model unavailable" });
+    });
+    await studio.goto();
+    await studio.root.getByRole("button", { name: "AI" }).click();
+    await studio.root.locator(".as-panel").getByRole("combobox", { name: "Model" }).selectOption("claude-haiku-5-5");
+
+    // The sequence editor has its own panel, with the same choice in it.
+    await studio.openFile(SEQ_FILE);
+    if (!(await studio.root.locator(".as-panel").isVisible())) await studio.root.getByRole("button", { name: "AI" }).click();
+    const panel = studio.root.locator(".as-panel");
+    await expect(panel.getByRole("combobox", { name: "Model" })).toHaveValue("claude-haiku-5-5");
+    await panel.getByPlaceholder(/Describe the sequence/).fill("checkout");
+    await panel.getByRole("button", { name: "Generate sequence" }).click();
+    await expect(panel.locator(".as-error")).toContainText("Model unavailable");
+    expect(requests.at(-1)?.model).toBe("claude-haiku-5-5");
+  });
+
+  test("shows no picker for a single model, and names it instead", async ({ page, studio }) => {
+    const only = BOTH_KEYS.models[0];
+    await offer(page, { ...BOTH_KEYS, models: [only] });
+    await studio.goto();
+
+    await studio.root.getByRole("button", { name: "AI" }).click();
+    const panel = studio.root.locator(".as-panel");
+    await expect(panel.getByRole("combobox", { name: "Model" })).toHaveCount(0);
+    await expect(panel.locator(".as-panel__foot")).toContainText("Answered by Claude Opus 5.5.");
+  });
+
+  test("falls back to the server's default when the saved choice is no longer offered", async ({ page, studio }) => {
+    await page.addInitScript(() => localStorage.setItem("better-diagrams:ai-model", "gpt-6-astra"));
+    await offer(page, { ...BOTH_KEYS, models: BOTH_KEYS.models.filter((model) => model.group === "Anthropic") });
+    const requests: GenerateRequest[] = [];
+    await answerByAdding(page, requests);
+    await studio.goto();
+
+    await studio.root.getByRole("button", { name: "AI" }).click();
+    const panel = studio.root.locator(".as-panel");
+    await expect(panel.getByRole("combobox", { name: "Model" })).toHaveValue("claude-opus-5-5");
+    await panel.getByRole("textbox", { name: "Message" }).fill("add a gateway");
+    await panel.getByRole("textbox", { name: "Message" }).press("Enter");
+    await expect(studio.nodeTitled("Gateway 1")).toBeVisible();
+    expect(requests[0].model).toBe("claude-opus-5-5");
+  });
+
+  test("holds still while a turn is out, then lets go", async ({ page, studio }) => {
+    await offer(page, BOTH_KEYS);
+    let release: () => void = () => {};
+    await page.route("**/api/diagram", async (route) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      await route.abort().catch(() => {});
+    });
+    await studio.goto();
+
+    await studio.root.getByRole("button", { name: "AI" }).click();
+    const panel = studio.root.locator(".as-panel");
+    const picker = panel.getByRole("combobox", { name: "Model" });
+    await expect(picker).toBeEnabled();
+    await panel.getByRole("textbox", { name: "Message" }).fill("add a queue");
+    await panel.getByRole("textbox", { name: "Message" }).press("Enter");
+    await expect(picker).toBeDisabled();
+    await panel.getByRole("button", { name: "Stop" }).click();
+    await expect(picker).toBeEnabled();
+    release();
   });
 });

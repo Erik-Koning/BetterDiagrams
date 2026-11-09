@@ -7,6 +7,26 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 
 ### Added
 
+- An auto-placer and a layout linter. `autoPlace` lays a document out from its graph, choosing per
+  connected piece between ranks, a tidy tree, rings around a hub, an organic mesh and a grid, by
+  what measures best, in whatever shape that is. `polishLayout` keeps an arrangement and fixes what
+  the linter finds; `arrangeBest` keeps an author's arrangement unless the auto-placer's is clearly
+  better; `arrangeSelection` arranges part of a canvas; `straightenLines` runs a line dead straight;
+  `layoutCandidates` gives the different arrangements a document could take. `lintLayout` scores the
+  picture as drawn, with `LAYOUT_RULES` and `LAYOUT_LINT_RULES`. `buildScene` and `settleLines` are
+  the parts underneath.
+- `settings.arrange: "auto"`, and `settings.layout` (`LayoutPreferences`: `algorithm`, `direction`,
+  `inner`, `shape`, `spacing`, `ends`, `rankGap`, `nodeGap`) for how it arranges. `edge.secondary` marks a
+  line that shouldn't shape the layout. `EdgeAnchor.auto` marks a side the placer chose, which the
+  next Tidy may change where a person's pin stays.
+- The Layout panel, from Arrange: a score and what's behind it, Polish, Arrange selection, Straighten,
+  the layout settings, and thumbnails of the other arrangements. Pointing at a finding picks it out on
+  the canvas. Arrange also gains Polish, Arrange selection and Best fit. The edge inspector gains "Doesn't shape the layout".
+- `bd-layout`, a command for the same: `lint`, `fix`, `place` and `best`.
+- A **Model** picker in the AI panel, in both editors. `aiModels`, `aiModel` and `onAiModelChange` on
+  `ArchitectureStudio` and `SequenceStudio` offer the choice, and it travels as `GenerateRequest.model`
+  (`AiModelOption`). On the server, `AiRouteStatus.models` lists every model the environment's keys
+  open up, a request can name one, and the route answers any other with a 400.
 - How the interactive HTML page opens is the document's to say, like `settings.htmlLines`:
   `settings.htmlTimeline` (`HTML_TIMELINES`: the timeline bar shown or put away),
   `settings.htmlTimelineDate` (`HTML_TIMELINE_DATES`: open on today, the first date or the last),
@@ -16,9 +36,33 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   ⋯ menu.
 - Export → Interactive HTML → **Page settings…** sets all five in one dialog, one undo step. It
   replaces the menu's **Show all lines in the page** check.
+- `ToolbarMenu`, the studio's own toolbar dropdown, for a host's menu in `toolbarExtras`: the
+  same look and arrow keys as Insert, Arrange and Export. The VS Code extension's Settings menu
+  is one.
+- `SchemaCopyModal` takes `copy`, the host's clipboard, for a page whose own is blocked.
 
 ### Changed
 
+- Tidy and the auto-tidy after a generation now use the auto-placer unless the document chose
+  otherwise, so `autoLayout` with no mode means `"auto"`, not `"flow"`, and can move zones and grow a
+  box that its words don't fit. A document with `settings.arrange: "flow"` or `"untangle"` arranges
+  as it always did; pass `mode: "flow"` for the old default.
+- The system prompt no longer asks for a left-to-right layout or 6-14 nodes per level. Placement is
+  optional and free-form, and a diagram may be any shape and any size.
+- A line ends on the outline of the shape it meets, not on the box around it: at a diamond's point,
+  on a parallelogram's slanted side, around a pipe's rounded end and a cylinder's lid. On the canvas
+  and in every export. `EdgePathSpec` gains `startShape` and `endShape`.
+- A pinned line that leaves on one axis and arrives on the other draws one clean turn, rather than
+  overshooting the far end's level and coming back to it. One that leaves and arrives on the same side
+  no longer swings out further the longer it is.
+- Lines landing on one table row sit side by side inside the row, rather than on a single point.
+- Fit stops at 125%, so a few boxes aren't blown up to fill the window.
+- Lines that meet one side of a box enter it side by side: their ends are bundled, arrowhead
+  beside arrowhead a pixel apart, centred on the side and ordered by where each line comes from,
+  on the canvas and in every export. The bundle stays put while the boxes at the lines' other
+  ends are dragged; before, every line into a side landed on its middle, on top of the others,
+  or slid along it as its box moved. `lineEndSlots` is the pass; `EndSlots` gains `startSide` and
+  `endSide` for an end it places, and `withEndSlots` applies them.
 - A text note's description is edited on the canvas too: double-clicking the note opens its
   sentence and, under it, its description, as one edit (Tab moves between them, Escape puts both
   back), with the caret at the end of the text. A note the text then runs past grows to hold it.

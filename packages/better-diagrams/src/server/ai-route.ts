@@ -9,13 +9,19 @@
  *     OPENAI_BASE_URL likewise
  *   neither: Claude, which still finds a profile saved by `ant auth login`
  *
- * ANTHROPIC_MODEL or OPENAI_MODEL picks a different model on that side, and
+ * That is who answers by default. Every provider with a key also offers its
+ * other models, which `GET /api/ai` lists for the panel's picker; a request
+ * can name one, and the route refuses any it doesn't offer, so a browser can't
+ * spend the key on whatever model it likes.
+ *
+ * ANTHROPIC_MODEL or OPENAI_MODEL picks a different default on that side, and
  * BD_AI=off answers every request with a 503 and calls no one.
  *
  * The provider SDKs are optional peer dependencies, loaded only when their
  * provider answers: install `@anthropic-ai/sdk`, `openai`, or both. A host
  * with its own model call passes `complete` and needs neither.
  */
+import type { AiModelOption } from "../contract/llm";
 
 /** The environment the route reads — `process.env` on Node. */
 export type AiEnv = Readonly<Record<string, string | undefined>>;
@@ -52,8 +58,14 @@ export type Completer = (request: CompletionRequest) => Promise<string>;
 /** What `GET /api/ai` answers: enough for the app to name the model and decide whether to offer the panel. */
 export interface AiRouteStatus {
   provider: AiProviderName;
+  /** The model that answers a request naming none. */
   model: string;
   label: string;
+  /**
+   * The models a request can name, for the panel's picker. Empty when the
+   * route is off, has no key, or answers through a host's own `complete`.
+   */
+  models: AiModelOption[];
   /** A key is set and the route is on — the panel can be offered. */
   configured: boolean;
   keyVar: string | null;
@@ -88,10 +100,32 @@ export interface DiagramRouteOptions {
   complete?: Completer;
 }
 
-const MODELS: Record<AiProviderName, { id: string; label: string }> = {
-  anthropic: { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
-  openai: { id: "gpt-6-astra", label: "GPT-6 Astra" },
+/**
+ * The models a provider's key opens up, most capable first. Each must take the
+ * requests below as they stand: effort "medium" and 64,000 output tokens.
+ */
+const CATALOG: Record<AiProviderName, Array<{ id: string; label: string }>> = {
+  anthropic: [
+    { id: "claude-fable-5-1", label: "Claude Fable 5.1" },
+    { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+    { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+    { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+  ],
+  openai: [
+    { id: "gpt-6-astra", label: "GPT-6 Astra" },
+    { id: "gpt-6.1-sol", label: "GPT-6.1 Sol" },
+    { id: "gpt-6.1-terra", label: "GPT-6.1 Terra" },
+    { id: "gpt-6-luna", label: "GPT-6 Luna" },
+  ],
 };
+
+/** Who answers when neither the request nor the environment names a model. */
+const DEFAULT_MODEL: Record<AiProviderName, string> = { anthropic: "claude-opus-5-5", openai: "gpt-6-astra" };
+
+const PROVIDER_LABEL: Record<AiProviderName, string> = { anthropic: "Anthropic", openai: "OpenAI" };
+
+/** The Claude models a refusal can fall back from on the server. Haiku has no fallback at all. */
+const SERVER_FALLBACK = new Set(["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"]);
 
 /** How many earlier chat turns go to the model — the editor sends at most this many too. */
 const MAX_TURNS = 16;
@@ -114,22 +148,43 @@ export class RouteError extends Error {
 
 const processEnv = (): AiEnv => (typeof process !== "undefined" ? process.env : {});
 
+/** The variable holding a provider's key — its name, never the key — or null with none set. */
+function keyVarOf(name: AiProviderName, env: AiEnv): string | null {
+  const vars = name === "anthropic" ? ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] : ["OPENAI_API_KEY", "OPENAI_KEY"];
+  return vars.find((key) => env[key]) ?? null;
+}
+
+/** One model of a provider: the one named, else the one the environment makes its default. */
+function providerOf(name: AiProviderName, env: AiEnv, id?: string): AiProvider {
+  const override = name === "anthropic" ? env.ANTHROPIC_MODEL : env.OPENAI_MODEL;
+  const model = id ?? (override || DEFAULT_MODEL[name]);
+  return {
+    name,
+    model,
+    label: CATALOG[name].find((entry) => entry.id === model)?.label ?? model,
+    keyVar: keyVarOf(name, env),
+    baseURL: (name === "anthropic" ? env.ANTHROPIC_BASE_URL : env.OPENAI_BASE_URL) || null,
+  };
+}
+
 /**
  * Which provider and model the environment selects. Reads names only: the
  * result carries which variable the key came from, never the key.
  */
 export function resolveProvider(env: AiEnv = processEnv()): AiProvider {
-  const anthropicVar = env.ANTHROPIC_API_KEY ? "ANTHROPIC_API_KEY" : env.ANTHROPIC_AUTH_TOKEN ? "ANTHROPIC_AUTH_TOKEN" : null;
-  const openaiVar = env.OPENAI_API_KEY ? "OPENAI_API_KEY" : env.OPENAI_KEY ? "OPENAI_KEY" : null;
-  const name: AiProviderName = anthropicVar || !openaiVar ? "anthropic" : "openai";
-  const override = name === "anthropic" ? env.ANTHROPIC_MODEL : env.OPENAI_MODEL;
-  return {
-    name,
-    model: override || MODELS[name].id,
-    label: override || MODELS[name].label,
-    keyVar: name === "anthropic" ? anthropicVar : openaiVar,
-    baseURL: (name === "anthropic" ? env.ANTHROPIC_BASE_URL : env.OPENAI_BASE_URL) || null,
-  };
+  return providerOf(keyVarOf("anthropic", env) || !keyVarOf("openai", env) ? "anthropic" : "openai", env);
+}
+
+/** Every model this environment's keys can answer with: all a request may name. */
+function offeredModels(env: AiEnv): AiProvider[] {
+  return (["anthropic", "openai"] as const).flatMap((name) => {
+    if (!keyVarOf(name, env)) return [];
+    const configured = providerOf(name, env);
+    // A gateway has its own names for models: only the one set for it is known to work.
+    if (configured.baseURL) return [configured];
+    const listed = CATALOG[name].map((entry) => providerOf(name, env, entry.id));
+    return listed.some((entry) => entry.model === configured.model) ? listed : [configured, ...listed];
+  });
 }
 
 /** The provider's model call, sending one request and resolving with the reply's text. */
@@ -193,14 +248,14 @@ function anthropicCompleter(provider: AiProvider, env: AiEnv): Completer {
           // The schema prompt is the same on every turn of a chat: cache it.
           system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
           messages,
-          // Medium is Opus 5.5's own default, set here so the choice is
-          // visible: a diagram edit is structured work someone is waiting on.
+          // Set here so the choice is visible, and the same on every model: a
+          // diagram edit is structured work someone is waiting on.
           output_config: { effort: "medium" },
-          // Opus 5.5's safety classifiers can decline a request; this re-runs
-          // it on Anthropic's recommended fallback instead of returning the
-          // refusal. A gateway on ANTHROPIC_BASE_URL may not pass betas
-          // through, so it is left off there.
-          ...(baseURL ? {} : { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" }),
+          // Safety classifiers can decline a request; this re-runs it on
+          // Anthropic's recommended fallback instead of returning the refusal.
+          // A gateway on ANTHROPIC_BASE_URL may not pass betas through, so it
+          // is left off there, and on models with no fallback to go to.
+          ...(baseURL || !SERVER_FALLBACK.has(model) ? {} : { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" }),
         },
         { signal },
       );
@@ -265,7 +320,18 @@ export function createDiagramRoute(options: DiagramRouteOptions = {}): DiagramRo
   const env = options.env ?? processEnv();
   const off = env.BD_AI === "off";
   const provider = resolveProvider(env);
-  const complete = options.complete ?? createCompleter(provider, env);
+  // A host's own `complete` answers for itself, so there is nothing to choose between.
+  const offered = off || options.complete ? [] : offeredModels(env);
+  const completers = new Map<string, Completer>();
+  const completerFor = (answering: AiProvider): Completer => {
+    if (options.complete) return options.complete;
+    let completer = completers.get(answering.model);
+    if (!completer) {
+      completer = createCompleter(answering, env);
+      completers.set(answering.model, completer);
+    }
+    return completer;
+  };
   return {
     provider,
     status() {
@@ -273,6 +339,7 @@ export function createDiagramRoute(options: DiagramRouteOptions = {}): DiagramRo
         provider: provider.name,
         model: provider.model,
         label: provider.label,
+        models: offered.map(({ name, model, label }) => ({ id: model, label, group: PROVIDER_LABEL[name] })),
         configured: !off && (!!options.complete || !!provider.keyVar),
         keyVar: off ? null : provider.keyVar,
         gateway: !!provider.baseURL,
@@ -281,12 +348,20 @@ export function createDiagramRoute(options: DiagramRouteOptions = {}): DiagramRo
     },
     async handle(body, signal) {
       if (off) return { status: 503, payload: { error: "AI is switched off here (BD_AI=off)." } };
-      const { input, systemPrompt, history } = (body ?? {}) as { input?: unknown; systemPrompt?: unknown; history?: unknown };
+      const { input, systemPrompt, history, model } = (body ?? {}) as {
+        input?: unknown;
+        systemPrompt?: unknown;
+        history?: unknown;
+        model?: unknown;
+      };
       if (typeof input !== "string" || !input || typeof systemPrompt !== "string" || !systemPrompt) {
         return { status: 400, payload: { error: "Expected `input` and `systemPrompt` in the body." } };
       }
+      // Checked, since it comes from the browser and runs on this server's key.
+      const answering = options.complete || model == null ? provider : offered.find((entry) => entry.model === model);
+      if (!answering) return { status: 400, payload: { error: "That model isn't offered here. Pick another one." } };
       try {
-        const text = await complete({
+        const text = await completerFor(answering)({
           system: systemPrompt,
           messages: [...earlierTurns(history), { role: "user", content: input }],
           signal,
@@ -296,7 +371,7 @@ export function createDiagramRoute(options: DiagramRouteOptions = {}): DiagramRo
         // the document against its schema.
         return { status: 200, payload: { text } };
       } catch (err) {
-        return failure(err, provider, !!options.complete);
+        return failure(err, answering, !!options.complete);
       }
     },
   };

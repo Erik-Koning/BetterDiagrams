@@ -92,9 +92,9 @@ const crossings = (t: DiagramTemplate): number => {
 };
 
 describe("arrange modes", () => {
-  it("flow is the default, and naming it changes nothing", () => {
+  it("auto is the default, and naming it changes nothing", () => {
     const t = doc([node("a"), node("b"), node("c")], [edge("a", "b"), edge("a", "c")]);
-    expect(autoLayout(t, { mode: "flow" })).toEqual(autoLayout(t));
+    expect(autoLayout(t, { mode: "auto" })).toEqual(autoLayout(t));
   });
 
   it("untangle removes a crossing that only re-ordering the first rank can fix", () => {
@@ -106,7 +106,7 @@ describe("arrange modes", () => {
       [node("a"), node("b"), node("c"), node("x"), node("y")],
       [edge("a", "y"), edge("b", "x"), edge("c", "y")],
     );
-    expect(crossings(autoLayout(t))).toBeGreaterThan(0);
+    expect(crossings(autoLayout(t, { mode: "flow" }))).toBeGreaterThan(0);
     expect(crossings(autoLayout(t, { mode: "untangle" }))).toBe(0);
   });
 
@@ -114,7 +114,7 @@ describe("arrange modes", () => {
     // a→b→c plus a→c: in flow all three sit on one spine, so the long line
     // runs straight through b.
     const t = doc([node("a"), node("b"), node("c")], [edge("a", "b"), edge("b", "c"), edge("a", "c")]);
-    expect(lineThroughBox(autoLayout(t), "a", "c", "b")).toBe(true);
+    expect(lineThroughBox(autoLayout(t, { mode: "flow" }), "a", "c", "b")).toBe(true);
     const untangled = autoLayout(t, { mode: "untangle" });
     expect(lineThroughBox(untangled, "a", "c", "b")).toBe(false);
     // Still left to right, still no boxes on top of each other.
@@ -151,7 +151,7 @@ describe("arrange modes", () => {
     const at = (id: string) => out.nodes.find((n) => n.id === id)!;
     expect(at("lonely").x).toBeGreaterThan(at("b").x);
     // Flow, by contrast, ranks it as a source next to a.
-    const flow = autoLayout(t);
+    const flow = autoLayout(t, { mode: "flow" });
     expect(flow.nodes.find((n) => n.id === "lonely")!.x).toBe(flow.nodes.find((n) => n.id === "a")!.x);
   });
 
@@ -162,7 +162,7 @@ describe("arrange modes", () => {
     expect(stored.settings).toEqual({ arrange: "untangle" });
     expect(autoLayout(stored).nodes).toEqual(autoLayout(stored, { mode: "untangle" }).nodes);
     // An explicit option still wins over the document.
-    expect(autoLayout(stored, { mode: "flow" }).nodes).toEqual(autoLayout(doc(nodes, edges)).nodes);
+    expect(autoLayout(stored, { mode: "flow" }).nodes).toEqual(autoLayout(doc(nodes, edges), { mode: "flow" }).nodes);
     // Junk is dropped like any other setting.
     expect(doc(nodes, edges, { settings: { arrange: "spiral" } }).settings).toBeUndefined();
   });
@@ -207,7 +207,7 @@ describe("arrange modes", () => {
     expect(first.nodes.every((n) => Number.isFinite(n.x) && Number.isFinite(n.y))).toBe(true);
     expect(autoLayout(t, { mode: "untangle" })).toEqual(first);
     // Fewer crossings than the one-pass flow — the whole point.
-    expect(crossings(first)).toBeLessThanOrEqual(crossings(autoLayout(t)));
+    expect(crossings(first)).toBeLessThanOrEqual(crossings(autoLayout(t, { mode: "flow" })));
   });
 
   it("roadmap places a plan by its dates, on an axis fitted afresh", () => {

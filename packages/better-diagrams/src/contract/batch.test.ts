@@ -901,6 +901,7 @@ describe("settings.groupContents — the document-wide fold", () => {
     expect(SETTINGS_KEYS).toEqual([
       "groupContents",
       "arrange",
+      "layout",
       "roadmap",
       "notation",
       "htmlLines",
@@ -1362,9 +1363,9 @@ describe("prompt", () => {
       expect(prompt).toContain("parentId may reference ANY existing node");
       expect(prompt).toContain("the next C4 level");
       expect(prompt).toContain("Do NOT decompose a component into children unless the user explicitly asks");
-      // The node budget is per level, so depth never fights breadth.
-      expect(prompt).toContain("6-14 nodes per level");
-      expect(prompt).not.toContain("6-14 nodes total");
+      // A diagram is as big as its subject: no budget on the nodes at any level.
+      expect(prompt).toContain("any shape and any size");
+      expect(prompt).not.toMatch(/\d+-\d+ nodes/);
     }
     // Drill-space coordinate rule rides the geometry branch only.
     expect(buildSystemPrompt()).toContain("small local coordinates starting near 0,0");

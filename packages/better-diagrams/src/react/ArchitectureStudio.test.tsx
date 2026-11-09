@@ -4435,7 +4435,7 @@ describe("Arrange modes", () => {
     mount(<ArchitectureStudio defaultValue={DOC} onChange={onChange} />);
 
     await user.click(screen.getByRole("button", { name: "Arrange" }));
-    expect(screen.getByRole("radio", { name: "Left to right" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Best fit" })).toBeChecked();
     await user.click(screen.getByRole("radio", { name: "Untangle lines" }));
     await screen.findByText(/Untangled the lines/);
 

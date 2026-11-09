@@ -487,8 +487,8 @@ describe("autoLayout", () => {
     expect(out.zones![0].w).toBeGreaterThan(200);
   });
 
-  it("does not move a zone's origin", () => {
-    const out = autoLayout(EXAMPLE_ZONED_TEMPLATE);
+  it("does not move a zone's origin in flow mode, which leaves regions where they are", () => {
+    const out = autoLayout(EXAMPLE_ZONED_TEMPLATE, { mode: "flow" });
     for (const original of EXAMPLE_ZONED_TEMPLATE.zones!) {
       const after = out.zones!.find((z) => z.id === original.id)!;
       expect({ x: after.x, y: after.y }).toEqual({ x: original.x, y: original.y });

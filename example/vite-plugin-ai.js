@@ -15,12 +15,12 @@ import { createDiagramRoute, serveAiRequest } from "../packages/better-diagrams/
 export function aiPlugin(env = process.env) {
   const route = createDiagramRoute({ env });
   const mount = (server) => {
-    const { label, keyVar, gateway, off } = route.status();
+    const { label, keyVar, gateway, off, models } = route.status();
     server.config.logger.info(
       off
         ? "  ➜  AI:      off (BD_AI=off)"
         : keyVar
-          ? `  ➜  AI:      ${label} via ${keyVar}${gateway ? " (custom base URL)" : ""}`
+          ? `  ➜  AI:      ${label} via ${keyVar}${gateway ? " (custom base URL)" : ""}, ${models.length} model${models.length === 1 ? "" : "s"} in the panel's picker`
           : "  ➜  AI:      no ANTHROPIC_API_KEY or OPENAI_API_KEY in the environment — the AI panel stays off until one is set",
     );
     server.middlewares.use((req, res, next) => {

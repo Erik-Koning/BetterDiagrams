@@ -89,6 +89,7 @@ import {
   type DiagramTemplate,
   type EdgeRouting,
   type ArrangeMode,
+  type LayoutPreferences,
   type Notation,
   type GroupContents,
   type NodeField,
@@ -178,7 +179,9 @@ import type { SchemaImport } from "../contract/import/table-model";
 import { CoveragePanel } from "./CoveragePanel";
 import { fieldUsage, searchFieldUsage, usageCoverage } from "../contract/key-usage";
 import { KeyUsagePanel } from "./KeyUsagePanel";
+import { AiModelSelect, pickedAiModel } from "./ai-model-select";
 import { useAnalysisSidebar, type AnalysisMask, type AnalysisState } from "./analysis-sidebar";
+import type { LayoutPatch } from "./LayoutPanel";
 import { routeSql } from "../contract/route-sql";
 import {
   DEPENDENCY_RELATION,
@@ -217,6 +220,8 @@ import {
   type PromptScopeOptions,
 } from "./template-prompt";
 import { autoLayout, hasOverlaps, type LayoutOptions } from "../contract/layout";
+import { arrangeBest, arrangeSelection, autoPlace, polishLayout, straightenLines, type LayoutCandidate } from "../contract/arrange";
+import { lintLayout } from "../contract/layout-lint";
 import { besideDates, hasRoadmapWork, isRoadmap, roadmapAxisOf, roadmapDragPatch, settleRoadmap, unscheduledEdge } from "../contract/roadmap";
 import { collapseJunctions, junctionTables } from "../contract/junctions";
 import {
@@ -264,6 +269,7 @@ import {
   CHAT_REPLY_RULE,
   coerceGeneratorResult,
   replyNote,
+  type AiModelOption,
   type DiagramGenerator,
   type GenerateTurn,
 } from "../contract/llm";
@@ -304,6 +310,12 @@ const EMPTY_ANALYSES: readonly SavedAnalysis[] = [];
  * element being worked on.
  */
 const SELECTED_EDGE_ELEVATION = SELECT_ELEVATION * 2;
+
+/**
+ * How far Fit will zoom in. A few boxes blown up to fill the window read as a poster
+ * rather than a diagram, and each one fitted at a different scale from the last.
+ */
+const FIT_MAX_ZOOM = 1.25;
 
 /** How close an edge has to come to a neighbour's before the guide catches. */
 const ALIGN_TOL = 6;
@@ -508,9 +520,20 @@ export interface ArchitectureStudioProps {
   generate?: DiagramGenerator;
   /**
    * Names what answers `generate` — "Claude Opus 5.5" — for the AI panel to
-   * show. Purely informative: the editor never knows or picks the model.
+   * show when it offers no choice of model. Purely informative.
    */
   aiLabel?: string;
+  /**
+   * The models the AI panel can choose between. Two or more show a picker, and
+   * the chosen `id` travels as `model` on each `GenerateRequest` for the
+   * host's route to honour. `GET /api/ai` on `@mosphere/better-diagrams/server`
+   * lists what it offers as `models`.
+   */
+  aiModels?: AiModelOption[];
+  /** The chosen `id` in `aiModels`. With none, or one not listed, the first is used. */
+  aiModel?: string;
+  /** A different model was chosen. Keep it and pass it back as `aiModel`. */
+  onAiModelChange?: (id: string) => void;
   /** Base name for exported files. Defaults to "architecture". */
   filename?: string;
   /** Show the React Flow minimap. Defaults to true. */
@@ -924,6 +947,9 @@ function StudioInner({
   gradients = true,
   generate,
   aiLabel,
+  aiModels,
+  aiModel,
+  onAiModelChange,
   filename = "architecture",
   minimap = true,
   edgesOnHover = false,
@@ -1798,7 +1824,7 @@ function StudioInner({
         lastEmitted.current = json;
         onChange(validated);
       }
-      if (fit) window.setTimeout(() => flow.fitView({ padding: 0.15, duration: 300 }), 50);
+      if (fit) window.setTimeout(() => flow.fitView({ padding: 0.15, maxZoom: FIT_MAX_ZOOM, duration: 300 }), 50);
     },
     [registry, materializeTemplate, commitHistory, onChange, flow],
   );
@@ -2363,6 +2389,24 @@ function StudioInner({
   /** Save an open analysis (declared further down, with the panels it reads). */
   const saveAnalysisRef = useRef<(kind: SavedAnalysisKind) => void>(() => {});
   const analysisStateKindRef = useRef<string | undefined>(undefined);
+  // The Layout panel's actions are defined further down, with the rest of Arrange.
+  const layoutActionsRef = useRef({
+    setLayoutPrefs: (_patch: LayoutPatch) => {},
+    tidy: () => {},
+    polishNow: () => {},
+    arrangeSelected: () => {},
+    straighten: () => {},
+    useLayoutCandidate: (_candidate: LayoutCandidate) => {},
+  });
+  const layoutFocus = focusId ?? null;
+  const layoutPanelOptions = useMemo(
+    () => ({
+      containerKinds: registry.containerKinds,
+      ...modeLayoutOptions(studioMode),
+      ...(layoutFocus ? { frames: { drill: layoutFocus } as const } : {}),
+    }),
+    [registry, studioMode, layoutFocus],
+  );
   /** Select a set of tables (a Model structure domain) — ⌘G then groups them. */
   const analysisSelect = useCallback((ids: readonly string[]) => {
     if (!ids.length) return;
@@ -2385,6 +2429,19 @@ function StudioInner({
     download,
     selectNodes: analysisSelect,
     ...(readOnly ? {} : { onSave: () => saveAnalysisRef.current(analysisStateKindRef.current === "neighbourhood" ? "neighbourhood" : "impact") }),
+    layout: {
+      options: layoutPanelOptions,
+      canEdit: !readOnly,
+      selected: selectedNodeIds.filter((id) => !isZoneNodeId(id)).length,
+      selectedLines: selectedEdgeIds.length,
+      onPrefs: (patch) => layoutActionsRef.current.setLayoutPrefs(patch),
+      onArrange: () => layoutActionsRef.current.tidy(),
+      onPolish: () => layoutActionsRef.current.polishNow(),
+      onArrangeSelection: () => layoutActionsRef.current.arrangeSelected(),
+      onStraighten: () => layoutActionsRef.current.straighten(),
+      onCandidate: (candidate) => layoutActionsRef.current.useLayoutCandidate(candidate),
+      onJump: analysisJump,
+    },
   });
   analysisStateKindRef.current = analysis.state?.kind;
   // Several routes lit at once keep their palette colours so they stay
@@ -3286,8 +3343,8 @@ function StudioInner({
     showToast(rfFocusRef.current ? "Tidied this level" : "Tidied");
   }, [readOnly, applyTemplate, showToast, levelLayoutOptions]);
 
-  /** What Tidy optimises for, read off the live document. Absent means "flow". */
-  const arrangeMode: ArrangeMode = template.settings?.arrange ?? "flow";
+  /** What Tidy optimises for, read off the live document. Absent means "auto". */
+  const arrangeMode: ArrangeMode = template.settings?.arrange ?? "auto";
   /** The time axis the canvas is drawn on, at the top level of a roadmap; null anywhere else. */
   const roadmapAxis = arrangeMode === "roadmap" && !focusId ? roadmapAxisOf(template) : null;
   const roadmapUnscheduled = roadmapAxis ? unscheduledEdge(template, roadmapAxis, registry.containerKinds) : null;
@@ -3323,15 +3380,136 @@ function StudioInner({
       );
       const mod = isMac() ? "⌘" : "Ctrl+";
       showToast(
-        next === "untangle"
-          ? `Untangled the lines · ${mod}Z to undo`
-          : next === "roadmap"
-            ? `Laid out by date · ${mod}Z to undo`
-            : `Arranged left to right · ${mod}Z to undo`,
+        next === "auto"
+          ? `Arranged · ${mod}Z to undo`
+          : next === "untangle"
+            ? `Untangled the lines · ${mod}Z to undo`
+            : next === "roadmap"
+              ? `Laid out by date · ${mod}Z to undo`
+              : `Arranged left to right · ${mod}Z to undo`,
       );
     },
     [readOnly, applyTemplate, showToast, levelLayoutOptions],
   );
+
+  /**
+   * Choose how "auto" arranges this document and arrange it that way, in one
+   * undo step. A choice equal to the default is dropped rather than stored, so a
+   * document only says something here when someone has said something.
+   */
+  const setLayoutPrefs = useCallback(
+    (patch: LayoutPatch) => {
+      if (readOnly) return;
+      const current = templateRef.current;
+      const merged: LayoutPreferences = { ...current.settings?.layout };
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === undefined) delete merged[key as keyof LayoutPreferences];
+        else (merged as Record<string, unknown>)[key] = value;
+      }
+      if (merged.algorithm === "auto") delete merged.algorithm;
+      if (merged.direction === "auto") delete merged.direction;
+      if (merged.inner === "auto") delete merged.inner;
+      if (merged.shape === "any") delete merged.shape;
+      if (merged.spacing === "normal") delete merged.spacing;
+      const leaving = isRoadmap(current);
+      const { roadmap: _axis, layout: _layout, ...settings } = current.settings ?? {};
+      applyTemplate(
+        autoLayout(
+          {
+            ...current,
+            nodes: leaving
+              ? current.nodes.map((n) => (n.kind === TASK_KIND ? { ...n, w: KIND_DEFAULT_SIZE.task!.w } : n))
+              : current.nodes,
+            settings: {
+              ...(leaving ? settings : { ...settings, ...(current.settings?.roadmap ? { roadmap: current.settings.roadmap } : {}) }),
+              arrange: "auto",
+              ...(Object.keys(merged).length ? { layout: merged } : {}),
+            },
+          },
+          { ...levelLayoutOptions(), mode: "auto" },
+        ),
+        { fit: true },
+      );
+    },
+    [readOnly, applyTemplate, levelLayoutOptions],
+  );
+
+  /** Keep the arrangement and fix what lint finds. Never makes it measure worse. */
+  const polishNow = useCallback(() => {
+    if (readOnly) return;
+    const current = templateRef.current;
+    const options = levelLayoutOptions();
+    const next = polishLayout(current, options);
+    const mod = isMac() ? "⌘" : "Ctrl+";
+    if (next === current) {
+      showToast("Nothing a polish could improve");
+      return;
+    }
+    applyTemplate(next, { fit: false });
+    const before = lintLayout(current, options).score;
+    const after = lintLayout(next, options).score;
+    showToast(`Polished · score ${before} → ${after} · ${mod}Z to undo`);
+  }, [readOnly, applyTemplate, showToast, levelLayoutOptions]);
+
+  /** Use an arrangement from the Layout panel's gallery, and remember how it was made. */
+  const useLayoutCandidate = useCallback(
+    (candidate: LayoutCandidate) => {
+      if (readOnly) return;
+      const { algorithm, direction } = candidate;
+      // The card was measured once the document settled, so it can be a moment
+      // older than what's on the canvas: arrange what's there now the same way,
+      // which gives the card's picture when nothing has changed since.
+      const placed = autoPlace(templateRef.current, { ...levelLayoutOptions(), algorithm, direction });
+      const layout: LayoutPreferences = { ...placed.settings?.layout };
+      if (algorithm === "auto") delete layout.algorithm;
+      else layout.algorithm = algorithm;
+      if (direction === "auto") delete layout.direction;
+      else layout.direction = direction;
+      const { layout: _layout, ...settings } = placed.settings ?? {};
+      applyTemplate(
+        {
+          ...placed,
+          settings: { ...settings, arrange: "auto", ...(Object.keys(layout).length ? { layout } : {}) },
+        },
+        { fit: true },
+      );
+    },
+    [readOnly, applyTemplate, levelLayoutOptions],
+  );
+
+  /** Arrange only the selected boxes, around where they are now. */
+  const arrangeSelected = useCallback(() => {
+    if (readOnly) return;
+    const ids = flow
+      .getNodes()
+      .filter((n) => n.selected && !isZoneNodeId(n.id))
+      .map((n) => n.id);
+    if (ids.length < 2) return;
+    applyTemplate(arrangeSelection(templateRef.current, ids, levelLayoutOptions()), { fit: false });
+    const mod = isMac() ? "⌘" : "Ctrl+";
+    showToast(`Arranged ${ids.length} boxes · ${mod}Z to undo`);
+  }, [readOnly, flow, applyTemplate, showToast, levelLayoutOptions]);
+
+  /** Run the selected lines dead straight. */
+  const straighten = useCallback(() => {
+    if (readOnly) return;
+    const ids = flow
+      .getEdges()
+      .filter((e) => e.selected)
+      .map((e) => e.id);
+    if (!ids.length) return;
+    const current = templateRef.current;
+    const next = straightenLines(current, ids);
+    if (next === current) {
+      showToast("Those lines can't be straightened without moving a box onto another");
+      return;
+    }
+    applyTemplate(next, { fit: false });
+    const mod = isMac() ? "⌘" : "Ctrl+";
+    showToast(`Straightened · ${mod}Z to undo`);
+  }, [readOnly, flow, applyTemplate, showToast]);
+
+  layoutActionsRef.current = { setLayoutPrefs, tidy, polishNow, arrangeSelected, straighten, useLayoutCandidate };
 
   const addZone = useCallback(() => {
     if (readOnly) return;
@@ -4427,7 +4605,7 @@ function StudioInner({
         drillTo([...focusStackRef.current, id]);
         canvasRef.current?.classList.remove("as-canvas--refocus");
         window.setTimeout(
-          () => flow.fitView({ padding: 0.15, duration: reduced ? 0 : 250 }),
+          () => flow.fitView({ padding: 0.15, maxZoom: FIT_MAX_ZOOM, duration: reduced ? 0 : 250 }),
           60,
         );
       };
@@ -4458,7 +4636,7 @@ function StudioInner({
     canvasRef.current?.classList.add("as-canvas--refocus");
     window.setTimeout(() => {
       canvasRef.current?.classList.remove("as-canvas--refocus");
-      void flow.fitView({ padding: 0.15, duration: 250 });
+      void flow.fitView({ padding: 0.15, maxZoom: FIT_MAX_ZOOM, duration: 250 });
     }, 60);
   }, [drillTo, flow]);
 
@@ -4515,7 +4693,7 @@ function StudioInner({
             { zoom: Math.max(flow.getViewport().zoom, 0.9), duration: 300 },
           );
         } else {
-          void flow.fitView({ padding: 0.15, duration: 250 });
+          void flow.fitView({ padding: 0.15, maxZoom: FIT_MAX_ZOOM, duration: 250 });
         }
       }, 80);
     },
@@ -4549,7 +4727,7 @@ function StudioInner({
       canvasRef.current?.classList.add("as-canvas--refocus");
       window.setTimeout(() => {
         canvasRef.current?.classList.remove("as-canvas--refocus");
-        void flow.fitView({ padding: 0.15, duration: 250 });
+        void flow.fitView({ padding: 0.15, maxZoom: FIT_MAX_ZOOM, duration: 250 });
       }, 60);
     },
     [activeDiffBase, drillTo, flow],
@@ -5030,7 +5208,7 @@ function StudioInner({
       const frame = () => {
         const boxes = [...new Set(standIns())].flatMap((id) => (id === undefined ? [] : (flow.getInternalNode(id) ?? [])));
         if (!boxes.length) {
-          void flow.fitView({ padding: 0.15, duration: 250 });
+          void flow.fitView({ padding: 0.15, maxZoom: FIT_MAX_ZOOM, duration: 250 });
           return;
         }
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -5235,6 +5413,10 @@ function StudioInner({
 
   /** Where `error` has a home. Anything else has to say so for itself. */
   const aiPanelVisible = panelOpen && !!generate && !readOnly;
+  const pickedModel = pickedAiModel(aiModels, aiModel);
+  const pickedModelId = pickedModel?.id;
+  // A picker names the model itself; with none to show, the footnote does.
+  const answeredBy = aiModels && aiModels.length > 1 ? undefined : (pickedModel?.label ?? aiLabel);
 
   /**
    * A finger or a stylus rather than a mouse.
@@ -6184,6 +6366,7 @@ function StudioInner({
           systemPrompt: chat ? `${prompt}\n\n${CHAT_REPLY_RULE}` : prompt,
           ...(split ? { current: split.content } : {}),
           ...(history?.length ? { history } : {}),
+          ...(pickedModelId ? { model: pickedModelId } : {}),
         },
         signal,
       );
@@ -6211,6 +6394,15 @@ function StudioInner({
           splitTemplate(templateRef.current, rOpts).presentation,
           rOpts,
         );
+      } else if ((next.settings?.arrange ?? "auto") === "auto") {
+        // A generated diagram keeps the arrangement it arrived with unless the
+        // auto-placer's is clearly better, so a model that places boxes well
+        // keeps its choices and one that doesn't is no worse off.
+        next = arrangeBest(next, {
+          containerKinds: registry.containerKinds,
+          ...modeLayoutOptions(studioMode),
+          frames: "all",
+        }).template;
       } else if (hasOverlaps(next, { containerKinds: registry.containerKinds })) {
         // Models are good at topology and bad at coordinates. Tidy only when
         // the output is actually a mess, so a well-placed generated diagram
@@ -6255,7 +6447,7 @@ function StudioInner({
       const focusRemoved = !!focusScope && !next.nodes.some((n) => n.id === focusScope.id);
       return { next, note, outsideChanges, focusRemoved };
     },
-    [generate, systemPrompt, refineSystemPrompt, registry, studioMode],
+    [generate, systemPrompt, refineSystemPrompt, registry, studioMode, pickedModelId],
   );
 
   /** Generate: a new diagram from a description, replacing this one. */
@@ -7138,7 +7330,7 @@ function StudioInner({
       // something else on most others, but the physical key is Digit1 everywhere.
       if (event.shiftKey && !mod && event.code === "Digit1") {
         event.preventDefault();
-        void flow.fitView({ padding: 0.15, duration: 300 });
+        void flow.fitView({ padding: 0.15, maxZoom: FIT_MAX_ZOOM, duration: 300 });
         return;
       }
       if (event.shiftKey && !mod && event.code === "Digit2") {
@@ -7766,9 +7958,66 @@ function StudioInner({
                   <div className="as-menu__hint">
                     {arrangeMode === "roadmap"
                       ? "Fit the time axis to the plan's dates"
-                      : `Arrange nodes within their zones and groups${arrangeMode === "untangle" ? ", untangling the lines" : ", left to right"}`}
+                      : arrangeMode === "auto"
+                        ? "Place everything the way that measures best, whatever shape that is"
+                        : `Arrange nodes within their zones and groups${arrangeMode === "untangle" ? ", untangling the lines" : ", left to right"}`}
                   </div>
                 </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  onClick={() => {
+                    polishNow();
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">Polish</div>
+                  <div className="as-menu__hint">
+                    Keep this arrangement: line up what's nearly in line, clear overlaps, route lines around what's in the way
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  disabled={selectedDiagramIds.length < 2}
+                  title={selectedDiagramIds.length < 2 ? "Select at least two nodes" : undefined}
+                  onClick={() => {
+                    arrangeSelected();
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">Arrange selection</div>
+                  <div className="as-menu__hint">Arrange only the selected boxes, around where they are now</div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="as-menu__item"
+                  onClick={() => {
+                    openAnalysis({ kind: "layout" });
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div className="as-menu__label">Layout panel…</div>
+                  <div className="as-menu__hint">A score for this picture, what's behind it, and other arrangements to compare</div>
+                </button>
+                <div className="as-menu__sep" role="separator" />
+                <label
+                  className="as-menu__check"
+                  title="Try the layouts that suit this diagram and keep the one that measures best. Any shape: a chain comes out long, a tree as wide as it branches, a hub round"
+                >
+                  <input
+                    type="radio"
+                    checked={arrangeMode === "auto"}
+                    onChange={() => {
+                      setArrangeMode("auto");
+                      setOpenMenu(null);
+                    }}
+                  />
+                  Best fit
+                </label>
                 {/* What Tidy optimises for. Unnamed radios, like the connector
                     picker below: checked state comes from the document, and
                     choosing one re-arranges the canvas in the same undoable
@@ -8596,7 +8845,7 @@ function StudioInner({
             <button
               type="button"
               className="as-btn"
-              onClick={() => flow.fitView({ padding: 0.15, duration: 300 })}
+              onClick={() => flow.fitView({ padding: 0.15, maxZoom: FIT_MAX_ZOOM, duration: 300 })}
             >
               Fit
             </button>
@@ -8984,6 +9233,8 @@ function StudioInner({
                 </p>
               ) : null}
 
+              <AiModelSelect models={aiModels} value={aiModel} onChange={onAiModelChange} disabled={busy} />
+
               <div className="as-chat" ref={chatThreadRef} role="log" aria-label="Conversation">
                 {chat.length ? (
                   chat.map((entry) => (
@@ -9082,7 +9333,7 @@ function StudioInner({
               </details>
 
               <p className="as-panel__foot">
-                {aiLabel ? <>Answered by {aiLabel}. </> : null}
+                {answeredBy ? <>Answered by {answeredBy}. </> : null}
                 The model is prompted with the schema generated from this editor&apos;s registry, and
                 sees the diagram as it is when you send.
               </p>
@@ -9234,7 +9485,7 @@ function StudioInner({
             snapGrid={[12, 12]}
             selectNodesOnDrag={false}
             fitView
-            fitViewOptions={{ padding: 0.15 }}
+            fitViewOptions={{ padding: 0.15, maxZoom: FIT_MAX_ZOOM }}
             minZoom={0.15}
             maxZoom={2.5}
             proOptions={{ hideAttribution: false }}

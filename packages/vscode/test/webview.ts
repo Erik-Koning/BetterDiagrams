@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, type Page } from "@playwright/test";
 import { webviewHtml } from "../src/html";
-import type { HostMessage, TextRead, WebviewMessage } from "../src/protocol";
+import { VIEW_DEFAULTS, type HostMessage, type TextRead, type ViewSettings, type WebviewMessage } from "../src/protocol";
 
 const ORIGIN = "https://webview.test";
 const dist = (file: string) => fileURLToPath(new URL(`../dist/${file}`, import.meta.url));
@@ -85,8 +85,14 @@ export class Webview {
     await this.page.evaluate((data) => window.dispatchEvent(new MessageEvent("message", { data })), message);
   }
 
-  async init(text: string, { read = { state: "diagram" } as TextRead, readOnly = false, theme = "auto" as const } = {}) {
-    await this.send({ type: "init", text, read, readOnly, theme, filename: "shop" });
+  async init(text: string, { read = { state: "diagram" } as TextRead, readOnly = false, view = {} as Partial<ViewSettings> } = {}) {
+    await this.send({ type: "init", text, read, readOnly, view: { ...VIEW_DEFAULTS, ...view }, filename: "shop" });
+  }
+
+  /** The extension's Settings menu, opened. */
+  async settings() {
+    await this.root.getByRole("button", { name: "Settings", exact: true }).click();
+    return this.root.getByRole("menu");
   }
 
   /** What the page has posted, of one type. */

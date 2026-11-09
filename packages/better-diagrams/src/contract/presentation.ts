@@ -93,7 +93,8 @@ function cleanAnchor(raw: unknown): EdgeAnchor | undefined {
   if (!(EDGE_ANCHOR_SIDES as readonly string[]).includes(raw.side as string)) return undefined;
   const side = raw.side as EdgeAnchorSide;
   const t = finite(raw.t) ? Math.min(1, Math.max(0, raw.t)) : 0.5;
-  return t === 0.5 ? { side } : { side, t };
+  const auto = raw.auto === true ? { auto: true } : {};
+  return t === 0.5 ? { side, ...auto } : { side, t, ...auto };
 }
 
 function cleanPoints(raw: unknown): Array<[number, number]> | undefined {

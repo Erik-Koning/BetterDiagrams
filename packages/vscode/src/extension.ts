@@ -7,14 +7,26 @@
  *   Open With… → Better Diagrams, on any .json
  *   Better Diagrams: Open Diagram / Open Diagram to the Side   (a diagram's JSON)
  *   Better Diagrams: Show JSON                                  (from the diagram)
- *   Better Diagrams: New Diagram File…
+ *   Better Diagrams: New Diagram File… / New Diagram from Example…
+ *   Better Diagrams: Derive Sequence…                           (a sequence from an architecture's numbered flow)
+ *   Better Diagrams: Copy Schema                                (the format, for an AI agent elsewhere)
+ *   Better Diagrams: Toggle Light/Dark                          (the editor's theme)
  *   Better Diagrams: Add Agent Instructions…                    (for agents that read files)
  *   #betterDiagramsSchema, #betterDiagramsValidate               (tools for agents in VS Code's chat)
  */
 import * as vscode from "vscode";
-import { formatDiagram, plainJson } from "@mosphere/better-diagrams/disk";
+import {
+  EXAMPLE_SEQUENCE,
+  EXAMPLE_TEMPLATE,
+  EXAMPLE_ZONED_TEMPLATE,
+  sequenceFromTemplate,
+  type DiagramTemplate,
+} from "@mosphere/better-diagrams";
+import { kindOf, validateDoc } from "@app/documents.js";
+import { schemaPrompt } from "./agent";
 import { registerAgentTools } from "./agent-tools";
-import { DiagramEditorProvider, EditorProbe, VIEW_TYPE } from "./editor";
+import { DiagramEditorProvider, EditorProbe, VIEW_TYPE, readView, writeView } from "./editor";
+import { createDiagramFile, diagramText, fileName, folderNear } from "./files";
 import type { WebviewMessage } from "./protocol";
 import { SNIFF_LIMIT, readText } from "./sync";
 
@@ -42,13 +54,81 @@ async function showJson(uri: unknown): Promise<void> {
   await vscode.window.showTextDocument(document, vscode.ViewColumn.Beside);
 }
 
+/** The diagram a command is about, parsed: the file it was invoked on, else the active one. */
+async function diagramOf(uri: unknown): Promise<{ target: vscode.Uri; doc: unknown } | undefined> {
+  const target = targetOf(uri);
+  if (!target) {
+    void vscode.window.showInformationMessage("Open a diagram's .json file first.");
+    return undefined;
+  }
+  const text = (await vscode.workspace.openTextDocument(target)).getText();
+  if (readText(text).state !== "diagram") {
+    void vscode.window.showInformationMessage(`${fileName(target)} isn't a diagram.`);
+    return undefined;
+  }
+  return { target, doc: JSON.parse(text) };
+}
+
+/** A new diagram file holding a sequence derived from the architecture's numbered flow, as the web app's Derive sequence makes one. */
+async function deriveSequence(uri: unknown): Promise<void> {
+  const found = await diagramOf(uri);
+  if (!found) return;
+  if (kindOf(found.doc) !== "architecture") {
+    void vscode.window.showInformationMessage("Derive a sequence from an architecture diagram: its numbered connections (seq) become the messages.");
+    return;
+  }
+  const doc = validateDoc("architecture", found.doc) as DiagramTemplate;
+  const title = doc.meta?.title?.trim() || fileName(found.target).replace(/\.json$/i, "");
+  await createDiagramFile(found.target, sequenceFromTemplate(doc), `${title} — sequence`);
+}
+
+/** The diagram's format on the clipboard, tailored to its kind and clouds, for an AI agent elsewhere. */
+async function copySchema(uri: unknown): Promise<void> {
+  const found = await diagramOf(uri);
+  if (!found) return;
+  await vscode.env.clipboard.writeText(schemaPrompt({ existing: found.doc }));
+  void vscode.window.showInformationMessage(
+    `Copied the ${kindOf(found.doc)} schema for ${fileName(found.target)}. Paste it into your AI agent to have it write this diagram.`,
+  );
+}
+
+/** Light ⇄ dark for every diagram editor; from "follow VS Code", the opposite of what's showing. */
+async function toggleTheme(): Promise<void> {
+  const { theme } = readView();
+  const kind = vscode.window.activeColorTheme.kind;
+  const showing =
+    theme !== "auto" ? theme : kind === vscode.ColorThemeKind.Light || kind === vscode.ColorThemeKind.HighContrastLight ? "light" : "dark";
+  await writeView({ theme: showing === "light" ? "dark" : "light" });
+}
+
+const EXAMPLES = [
+  { label: "Multi-cloud", description: "Architecture", detail: "Services across clouds, in zones", doc: EXAMPLE_ZONED_TEMPLATE, name: "Multi-cloud example" },
+  { label: "Plain", description: "Architecture", detail: "The same system without zones", doc: EXAMPLE_TEMPLATE, name: "Example" },
+  { label: "Checkout", description: "Sequence", detail: "Messages between participants over time", doc: EXAMPLE_SEQUENCE, name: "Sequence example" },
+];
+
+/** One of the web app's examples, as a new file to look around in. */
+async function newFromExample(): Promise<void> {
+  const picked = await vscode.window.showQuickPick(EXAMPLES, { title: "New Diagram from Example", placeHolder: "Which example?" });
+  if (!picked) return;
+  await createDiagramFile(targetOf(undefined), picked.doc, picked.name);
+}
+
 /**
  * A new, empty diagram, as `better-diagrams --new` starts one: titled after
  * its file and written the way its repo formats JSON. A name that's there
  * already opens as it is, never written over.
  */
 async function newDiagram(): Promise<void> {
-  const folder = vscode.workspace.workspaceFolders?.[0]?.uri;
+  const picked = await vscode.window.showQuickPick(
+    [
+      { label: "Architecture", detail: "Components and their connections — also data models and task plans", diagram: "architecture" as const },
+      { label: "Sequence", detail: "Messages between participants over time", diagram: "sequence" as const },
+    ],
+    { title: "New Diagram File", placeHolder: "What kind of diagram?" },
+  );
+  if (!picked) return;
+  const folder = folderNear(targetOf(undefined));
   const target = await vscode.window.showSaveDialog({
     defaultUri: folder ? vscode.Uri.joinPath(folder, "diagram.json") : undefined,
     filters: { "Diagram JSON": ["json"] },
@@ -68,9 +148,12 @@ async function newDiagram(): Promise<void> {
       return;
     }
   } else {
-    const title = (target.path.split("/").pop() ?? "diagram").replace(/\.json$/i, "");
-    const doc = { version: 1, meta: { title }, nodes: [], edges: [] };
-    const text = target.scheme === "file" && vscode.workspace.isTrusted ? await formatDiagram(target.fsPath, doc) : plainJson(doc);
+    const title = fileName(target).replace(/\.json$/i, "");
+    const doc =
+      picked.diagram === "sequence"
+        ? { version: 1, meta: { title }, participants: [], messages: [] }
+        : { version: 1, meta: { title }, nodes: [], edges: [] };
+    const text = await diagramText(target, doc);
     await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(text));
   }
   await vscode.commands.executeCommand("vscode.openWith", target, VIEW_TYPE);
@@ -126,6 +209,15 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("betterDiagrams.openToSide", (uri?: vscode.Uri) => openDiagram(uri, vscode.ViewColumn.Beside)),
     vscode.commands.registerCommand("betterDiagrams.showJson", showJson),
     vscode.commands.registerCommand("betterDiagrams.new", newDiagram),
+    vscode.commands.registerCommand("betterDiagrams.newFromExample", newFromExample),
+    vscode.commands.registerCommand("betterDiagrams.deriveSequence", deriveSequence),
+    vscode.commands.registerCommand("betterDiagrams.copySchema", copySchema),
+    vscode.commands.registerCommand("betterDiagrams.toggleTheme", toggleTheme),
+    // VS Code hears every key pressed in a webview. The keys the canvas uses
+    // that VS Code also binds (⌘K's chords, ⌘= zooming the window, ⇧⌘E the
+    // Explorer…) come here while the diagram has focus, and do nothing more
+    // than the canvas already did with them. See package.json's keybindings.
+    vscode.commands.registerCommand("betterDiagrams.canvasKey", () => undefined),
     registerAgentTools(),
     trackActiveDiagram(),
   );

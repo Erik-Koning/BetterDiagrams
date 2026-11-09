@@ -6,9 +6,12 @@
 import { describe, expect, it } from "vitest";
 import {
   DIAGRAM_SYSTEM_PROMPT,
+  fieldAnchors,
   fromReactFlow,
+  lineEndSlots,
   toReactFlow,
   validateTemplate,
+  withEndSlots,
   type DiagramTemplate,
 } from "./schema";
 import {
@@ -501,5 +504,173 @@ describe("route staleness policy", () => {
     expect(scaled.edges[0].points).toEqual([[200, 200]]);
     // One end outside: half a transform would bend it unpredictably — untouched.
     expect(scaled.edges[1].points).toEqual([[500, 40]]);
+  });
+});
+
+describe("lines that share a side enter it side by side (lineEndSlots)", () => {
+  // Two boxes above a wide one: both lines come down into its top.
+  const box = (id: string, x: number, y: number, w = 100, h = 50) => ({
+    id, label: id, kind: "service", icon: "box", description: "", parentId: null, x, y, w, h,
+  });
+  const line = (id: string, source: string, target: string, over: Record<string, unknown> = {}) => ({
+    id, source, target, label: "", style: "solid", color: "slate", ...over,
+  });
+  const model = (nodes: unknown[], edges: unknown[]) =>
+    validateTemplate({ version: 1, nodes, edges } as unknown as DiagramTemplate);
+  const below = box("t", 150, 300, 200, 60);
+  const nodeOf = (d: DiagramTemplate) => (id: string) => {
+    const n = d.nodes.find((node) => node.id === id);
+    return n && { fields: n.fields, description: n.description, box: { x: n.x, y: n.y, width: n.w, height: n.h } };
+  };
+  const boxOf = (d: DiagramTemplate, id: string): Box => {
+    const n = d.nodes.find((node) => node.id === id)!;
+    return { x: n.x, y: n.y, width: n.w, height: n.h };
+  };
+  /** Where each line's arrowhead lands, as the canvas and the exporters route it. */
+  const tips = (d: DiagramTemplate) => {
+    const slots = lineEndSlots(d.edges, nodeOf(d), d.settings?.notation);
+    const anchorNode = (id: string) => {
+      const n = d.nodes.find((node) => node.id === id)!;
+      return { fields: n.fields, description: n.description, h: n.h, centerX: n.x + n.w / 2 };
+    };
+    return Object.fromEntries(
+      d.edges.map((e) => {
+        const geo = edgeGeometryFor(e.routing, boxOf(d, e.source), boxOf(d, e.target), 0.5, {
+          ...withEndSlots(fieldAnchors(e, anchorNode(e.source), anchorNode(e.target)), slots.get(e.id)),
+          points: e.points,
+        });
+        return [e.id, geo.tip];
+      }),
+    );
+  };
+
+  it("puts the arrowheads a pixel apart, centred on the side, in the order the lines come from", () => {
+    const d = model([box("left", 0, 0), box("right", 400, 0), below], [line("l", "left", "t"), line("r", "right", "t")]);
+    const at = tips(d);
+    // Arrowheads are 9 wide: centre to centre 10 is a 1px gap. The top's middle is x 250.
+    expect(at.l).toEqual({ x: 245, y: 300 });
+    expect(at.r).toEqual({ x: 255, y: 300 });
+  });
+
+  it("keeps the bundle where it is while the boxes the lines come from are dragged", () => {
+    const before = tips(model([box("left", 0, 0), box("right", 400, 0), below], [line("l", "left", "t"), line("r", "right", "t")]));
+    const dragged = tips(model([box("left", 40, -60), box("right", 300, 30), below], [line("l", "left", "t"), line("r", "right", "t")]));
+    expect(dragged).toEqual(before);
+  });
+
+  it("trades places when one source passes the other, so the lines never cross on the way in", () => {
+    const at = tips(model([box("left", 0, 0), box("right", -100, 0), below], [line("l", "left", "t"), line("r", "right", "t")]));
+    expect(at.r.x).toBeLessThan(at.l.x);
+    expect(at.l.x - at.r.x).toBe(10);
+  });
+
+  it("spaces each end by its own glyph: a triangle, a crow's foot, a bare line", () => {
+    const d = model(
+      [box("a", 0, 0), box("b", 200, 0), box("c", 400, 0), below],
+      [
+        line("tri", "a", "t", { endHead: "triangle" }),
+        line("arrow", "b", "t"),
+        line("bare", "c", "t", { direction: "none" }),
+      ],
+    );
+    const at = tips(d);
+    expect(at.arrow.x - at.tri.x).toBeCloseTo((13.8 + 9) / 2 + 1);
+    expect(at.bare.x - at.arrow.x).toBeCloseTo((9 + 1.8) / 2 + 1);
+    const crow = tips(model([box("a", 0, 0), box("b", 200, 0), below], [
+      line("x", "a", "t", { endLabel: "0..*" }),
+      line("y", "b", "t", { endLabel: "1" }),
+    ]));
+    expect(crow.y.x - crow.x.x).toBeCloseTo(13.8 + 1);
+  });
+
+  it("squeezes a bundle wider than its side to fit it", () => {
+    const narrow = box("t", 150, 300, 40, 60);
+    const sources = Array.from({ length: 8 }, (_, i) => box(`s${i}`, i * 60 - 100, 0, 40, 40));
+    const at = tips(model([...sources, narrow], sources.map((s) => line(`e${s.id}`, s.id, "t"))));
+    const xs = Object.values(at).map((p) => p.x).sort((a, b) => a - b);
+    // Clear of the rounded corners: never past the side's inset ends.
+    expect(xs[0]).toBeGreaterThanOrEqual(150 + 10);
+    expect(xs[xs.length - 1]).toBeLessThanOrEqual(190 - 10);
+  });
+
+  it("leaves a lone end floating, lined up with its box as it always was", () => {
+    const d = model([box("a", 150, 0), below], [line("e", "a", "t")]);
+    expect(lineEndSlots(d.edges, nodeOf(d)).size).toBe(0);
+  });
+
+  it("never moves an end the user placed, and keeps it out of the bundle", () => {
+    const d = model(
+      [box("left", 0, 0), box("mid", 200, 0), box("right", 400, 0), below],
+      [
+        line("l", "left", "t"),
+        line("placed", "mid", "t", { end: { side: "top", t: 0.9 } }),
+        line("r", "right", "t"),
+      ],
+    );
+    const at = tips(d);
+    expect(at.placed).toEqual({ x: 330, y: 300 });
+    // The other two still bundle, as a pair.
+    expect([at.l.x, at.r.x]).toEqual([245, 255]);
+  });
+
+  it("bundles the ends leaving a box too, lines in and out of one side alike", () => {
+    // One box with two lines out of its bottom and one in: three ends, one bundle.
+    const d = model(
+      [box("hub", 200, 0, 200, 60), box("a", 0, 300), box("b", 500, 300), box("c", 250, -300)],
+      [line("out1", "hub", "a"), line("out2", "hub", "b"), line("in", "c", "hub", { end: { side: "bottom" } })],
+    );
+    const slots = lineEndSlots(d.edges, nodeOf(d));
+    expect(slots.get("out1")).toMatchObject({ startSide: "bottom" });
+    expect(slots.get("out2")).toMatchObject({ startSide: "bottom" });
+    expect(slots.get("in")).toMatchObject({ endSide: "bottom" });
+  });
+});
+
+describe("a line ends on the shape it meets", () => {
+  const box = (x: number, y: number, width = 170, height = 100) => ({ x, y, width, height });
+
+  it("a card is unchanged: no shape, no difference", () => {
+    const plain = edgeGeometryFor(undefined, box(0, 0), box(400, 40));
+    const card = edgeGeometryFor(undefined, box(0, 0), box(400, 40), 0.5, { startShape: "card", endShape: "card" });
+    expect(card.path).toBe(plain.path);
+  });
+
+  it("a diamond is met at its point, wherever the other box is", () => {
+    const below = edgeGeometryFor(undefined, box(40, 0), box(0, 300), 0.5, { endShape: "diamond" });
+    expect(below.tip).toEqual({ x: 85, y: 300 });
+    const pinned = edgeGeometryFor(undefined, box(40, 0), box(0, 300), 0.5, {
+      end: { side: "top", t: 0.9 },
+      endShape: "diamond",
+    });
+    expect(pinned.tip).toEqual({ x: 85, y: 300 });
+  });
+
+  it("a parallelogram is met on its slant, not on the box around it", () => {
+    const fromLeft = edgeGeometryFor(undefined, box(0, 0), box(400, 0), 0.5, { endShape: "parallelogram" });
+    expect(fromLeft.tip.x).toBeGreaterThan(400);
+    expect(fromLeft.tip.x).toBeLessThan(420);
+  });
+
+  it("a pipe's rounded end and a cylinder's lid are followed", () => {
+    const pipe = edgeGeometryFor(undefined, box(0, 0), box(400, 0), 0.5, {
+      end: { side: "left", t: 0.1 },
+      endShape: "pipe",
+    });
+    expect(pipe.tip.x).toBeGreaterThan(400);
+    const lid = edgeGeometryFor(undefined, box(0, 0), box(0, 400), 0.5, {
+      end: { side: "top", t: 0.05 },
+      endShape: "cylinder",
+    });
+    expect(lid.tip.y).toBeGreaterThan(400);
+  });
+});
+
+describe("a line that leaves on one axis and arrives on the other", () => {
+  it("turns once, and never overshoots the far end's level", () => {
+    const geo = edgeGeometryFor(undefined, { x: 0, y: 300, width: 170, height: 76 }, { x: 400, y: 0, width: 170, height: 76 }, 0.5, {
+      start: { side: "top" },
+      end: { side: "left" },
+    });
+    for (let t = 0; t <= 1; t += 0.02) expect(geo.at(t).y).toBeGreaterThanOrEqual(geo.tip.y - 0.5);
   });
 });

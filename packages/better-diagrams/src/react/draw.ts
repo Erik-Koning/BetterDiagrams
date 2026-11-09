@@ -40,7 +40,7 @@ import {
   type DiagramEdge,
   onlyEdgeBetween,
   stackLevels,
-  uncrossFieldAnchors,
+  lineEndSlots,
   withEndSlots,
   wrappedDescWidth,
   wrappedTextBox,
@@ -1560,18 +1560,22 @@ export function emitTemplate(
   const defaultRouting = defaultRoutingOf(template);
   // Field references resolve to row anchors here exactly as they do on the
   // canvas — same functions, so a foreign-key line lands on the same column
-  // in the PNG as it does on screen, and the same pairs of lines trade rows
-  // to keep from crossing.
+  // in the PNG as it does on screen, the same pairs of lines trade rows to
+  // keep from crossing, and the lines sharing a side bundle the same way.
   const anchorNode = ({ node, box }: Placed) => ({
     fields: node.fields,
     description: node.description,
     h: box.height,
     centerX: box.x + box.width / 2,
   });
-  const endSlots = uncrossFieldAnchors(edges, (id) => {
-    const p = byId.get(id);
-    return p && { fields: p.node.fields, description: p.node.description, box: p.box };
-  });
+  const endSlots = lineEndSlots(
+    edges,
+    (id) => {
+      const p = byId.get(id);
+      return p && { fields: p.node.fields, description: p.node.description, box: p.box };
+    },
+    template.settings?.notation,
+  );
   // For the viewer, the lines that are the picture's structure and stay
   // drawn whatever the page's setting: one touching a group, or joining two
   // boxes outside every group. "Inside" is as drawn — within an open frame's
@@ -1590,6 +1594,8 @@ export function emitTemplate(
     const geo = edgeGeometryFor(edge.routing ?? defaultRouting, s.box, t.box, edge.labelT ?? 0.5, {
       ...withEndSlots(fieldAnchors(edge, anchorNode(s), anchorNode(t)), endSlots.get(edge.id)),
       points: edge.points,
+      startShape: kindDef(registry, s.node.kind).shape,
+      endShape: kindDef(registry, t.node.kind).shape,
     });
     const color = edgeHex[edge.color] ?? edgeHex.slate;
     const direction = edge.direction ?? "forward";

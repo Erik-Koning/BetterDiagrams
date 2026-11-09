@@ -14,6 +14,8 @@
  * always was.
  */
 
+import { cylinderLidRadius, parallelogramSkew, pipeEndRadius, type NodeShape } from "./shapes";
+
 export interface Box {
   x: number;
   y: number;
@@ -33,6 +35,13 @@ export interface EdgePathSpec {
   start?: EdgeAnchorSpec;
   end?: EdgeAnchorSpec;
   points?: ReadonlyArray<readonly [number, number]>;
+  /**
+   * The silhouette each end's box draws as, when it isn't a card. A line ends on
+   * the outline a reader sees, not on the box around it: without this, an arrow
+   * into a diamond stops in the empty corner of the diamond's bounding box.
+   */
+  startShape?: NodeShape;
+  endShape?: NodeShape;
 }
 
 export interface EdgeGeometry {
@@ -68,8 +77,13 @@ export function runsVerticallyAt(geo: EdgeGeometry, labelT: number): boolean {
  * `labelT` is clamped to [0.15, 0.85] so a label never sits underneath the
  * node it is attached to.
  */
-export function floatingEdgeGeometry(source: Box, target: Box, labelT = 0.5): EdgeGeometry {
-  const { p1, p2, across, dx, dy } = floatingEnds(source, target);
+export function floatingEdgeGeometry(
+  source: Box,
+  target: Box,
+  labelT = 0.5,
+  spec?: Pick<EdgePathSpec, "startShape" | "endShape">,
+): EdgeGeometry {
+  const { p1, p2, across, dx, dy } = floatingEnds(source, target, spec);
 
   let c1: { x: number; y: number };
   let c2: { x: number; y: number };
@@ -181,6 +195,7 @@ function sharedMiddle(a: [number, number], b: [number, number]): number | undefi
 function floatingEnds(
   source: Box,
   target: Box,
+  spec?: Pick<EdgePathSpec, "startShape" | "endShape">,
 ): { p1: Pt; p2: Pt; across: boolean; dx: number; dy: number } {
   const scx = source.x + source.width / 2;
   const scy = source.y + source.height / 2;
@@ -193,8 +208,8 @@ function floatingEnds(
   if (across) {
     const y = sharedMiddle(usableSpan(source.y, source.height), usableSpan(target.y, target.height));
     return {
-      p1: { x: dx > 0 ? source.x + source.width : source.x, y: y ?? scy },
-      p2: { x: dx > 0 ? target.x : target.x + target.width, y: y ?? tcy },
+      p1: onOutline(source, dx > 0 ? "right" : "left", { x: dx > 0 ? source.x + source.width : source.x, y: y ?? scy }, spec?.startShape),
+      p2: onOutline(target, dx > 0 ? "left" : "right", { x: dx > 0 ? target.x : target.x + target.width, y: y ?? tcy }, spec?.endShape),
       across,
       dx,
       dy,
@@ -202,8 +217,8 @@ function floatingEnds(
   }
   const x = sharedMiddle(usableSpan(source.x, source.width), usableSpan(target.x, target.width));
   return {
-    p1: { x: x ?? scx, y: dy > 0 ? source.y + source.height : source.y },
-    p2: { x: x ?? tcx, y: dy > 0 ? target.y : target.y + target.height },
+    p1: onOutline(source, dy > 0 ? "bottom" : "top", { x: x ?? scx, y: dy > 0 ? source.y + source.height : source.y }, spec?.startShape),
+    p2: onOutline(target, dy > 0 ? "top" : "bottom", { x: x ?? tcx, y: dy > 0 ? target.y : target.y + target.height }, spec?.endShape),
     across,
     dx,
     dy,
@@ -254,6 +269,26 @@ export function floatingSides(
     : { start: dy > 0 ? "bottom" : "top", end: dy > 0 ? "top" : "bottom" };
 }
 
+/**
+ * The sides an edge's two ends attach to: a pinned end's own side; with no
+ * waypoints, a free end takes the side it would take floating; with
+ * waypoints, the side facing the nearest one. `edgeGeometryFor` routes by
+ * this, and the bundling pass groups ends by it, so the two never disagree.
+ */
+export function endSides(
+  source: Box,
+  target: Box,
+  spec?: EdgePathSpec,
+): { start: EdgeAnchorSpec["side"]; end: EdgeAnchorSpec["side"] } {
+  const points = spec?.points ?? [];
+  const free = points.length ? undefined : floatingSides(source, target);
+  const toward = ([x, y]: readonly [number, number]): Pt => ({ x, y });
+  return {
+    start: spec?.start?.side ?? free?.start ?? autoSide(source, toward(points[0])),
+    end: spec?.end?.side ?? free?.end ?? autoSide(target, toward(points[points.length - 1])),
+  };
+}
+
 /** The point on a box's `side` at fraction `t` along it. */
 function anchorPoint(box: Box, side: EdgeAnchorSpec["side"], t = 0.5): Pt {
   const f = Math.min(1, Math.max(0, Number.isFinite(t) ? t : 0.5));
@@ -277,6 +312,49 @@ function lineUp(box: Box, side: EdgeAnchorSpec["side"], point: Pt): Pt | undefin
   if (along < lo || along > hi) return undefined;
   const edge = anchorPoint(box, side);
   return horizontal ? { x: edge.x, y: along } : { x: along, y: edge.y };
+}
+
+/**
+ * The point on a silhouette's outline that a line headed for `at` on `side` of the
+ * box should really end on. A diamond only has its four points to offer: a line
+ * meets one or it visibly misses. The others slide along their own edge.
+ */
+export function onOutline(box: Box, side: EdgeAnchorSpec["side"], at: Pt, shape: NodeShape | undefined): Pt {
+  if (!shape || shape === "card" || shape === "person" || !(box.width > 0) || !(box.height > 0)) return at;
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  switch (shape) {
+    case "diamond":
+      return anchorPoint(box, side);
+    case "parallelogram": {
+      const skew = parallelogramSkew(box.width);
+      if (side === "top") return { x: clamp(at.x, box.x + skew, box.x + box.width), y: at.y };
+      if (side === "bottom") return { x: clamp(at.x, box.x, box.x + box.width - skew), y: at.y };
+      const f = clamp((at.y - box.y) / box.height, 0, 1);
+      return { x: side === "left" ? box.x + skew * (1 - f) : box.x + box.width - skew * f, y: at.y };
+    }
+    case "pipe": {
+      const r = pipeEndRadius(box.width, box.height);
+      if (side === "left" || side === "right") {
+        const dy = Math.abs(at.y - cy) - (box.height / 2 - r);
+        if (dy <= 0) return at;
+        const inset = r - Math.sqrt(Math.max(0, r * r - dy * dy));
+        return { x: side === "left" ? box.x + inset : box.x + box.width - inset, y: at.y };
+      }
+      const dx = Math.abs(at.x - cx) - (box.width / 2 - r);
+      if (dx <= 0) return at;
+      const inset = r - Math.sqrt(Math.max(0, r * r - dx * dx));
+      return { x: at.x, y: side === "top" ? box.y + inset : box.y + box.height - inset };
+    }
+    case "cylinder": {
+      if (side === "left" || side === "right") return at;
+      const ry = cylinderLidRadius(box.height);
+      const along = (at.x - cx) / (box.width / 2);
+      const inset = ry - ry * Math.sqrt(Math.max(0, 1 - along * along));
+      return { x: at.x, y: side === "top" ? box.y + inset : box.y + box.height - inset };
+    }
+  }
 }
 
 /** Unit vector pointing OUT of the box through `side`. */
@@ -324,6 +402,12 @@ export function anchorFromPoint(box: Box, point: Pt): EdgeAnchorSpec {
   // Two decimals: enough for any pointer, and it keeps the JSON readable.
   return { side: best.side, t: Math.round(best.t * 100) / 100 };
 }
+
+/** How far a C-shaped line's controls reach: it swings out about three quarters of this. */
+const MAX_C_REACH = 150;
+
+/** The cubic Bézier control distance that best draws a quarter circle. */
+const ARC_KAPPA = 0.5523;
 
 /** Samples per cubic segment when flattening a spline for arc-length `at`. */
 const SPLINE_SAMPLES = 16;
@@ -387,8 +471,27 @@ function curvedSpecGeometry(
   // back.
   const endMag = (len: number) =>
     Math.min(Math.max(MIN_CONTROL_OFFSET, len * CONTROL_RATIO), len / 2);
-  const outMag = (i: number) => (i === 0 ? endMag(lens[0]) : lens[i] / 3);
-  const inMag = (i: number) => (i === n ? endMag(lens[n - 1]) : lens[i - 1] / 3);
+  // Leaving one axis and arriving on the other, with nothing between, is a single
+  // turn. Each control then reaches about as far as that axis has left to go (the
+  // circular-arc constant), or the line overshoots the far end's level and has to
+  // come back to it.
+  const turn =
+    n === 1 && dir[0].x * dir[n].x + dir[0].y * dir[n].y === 0
+      ? {
+          start: Math.abs((p2.x - p1.x) * dir[0].x + (p2.y - p1.y) * dir[0].y) * ARC_KAPPA,
+          end: Math.abs((p2.x - p1.x) * dir[n].x + (p2.y - p1.y) * dir[n].y) * ARC_KAPPA,
+          ahead: (p2.x - p1.x) * dir[0].x + (p2.y - p1.y) * dir[0].y > 0 && (p2.x - p1.x) * dir[n].x + (p2.y - p1.y) * dir[n].y > 0,
+        }
+      : undefined;
+  // Out of one side and back into the same one is a C, and a C swings out further
+  // the longer it is, right off the canvas on a long one. Past a point it stops
+  // swinging and just runs along, which is what a return path should do.
+  const isC = n === 1 && dir[0].x * dir[n].x + dir[0].y * dir[n].y === -1;
+  const chordMag = isC ? Math.min(endMag(lens[0]), MAX_C_REACH) : 0;
+  const outMag = (i: number) =>
+    i === 0 ? (isC ? chordMag : turn?.ahead ? turn.start : endMag(lens[0])) : lens[i] / 3;
+  const inMag = (i: number) =>
+    i === n ? (isC ? chordMag : turn?.ahead ? turn.end : endMag(lens[n - 1])) : lens[i - 1] / 3;
 
   const segments: Array<{ a: Pt; c1: Pt; c2: Pt; b: Pt }> = [];
   for (let i = 0; i < n; i++) {
@@ -549,8 +652,13 @@ function polylineGeometry(pts: readonly Pt[], labelT: number, cornerRadius = 0):
  * routers, so switching an edge between routings never flips which side it
  * leaves through.
  */
-export function straightEdgeGeometry(source: Box, target: Box, labelT = 0.5): EdgeGeometry {
-  const { p1, p2 } = floatingEnds(source, target);
+export function straightEdgeGeometry(
+  source: Box,
+  target: Box,
+  labelT = 0.5,
+  spec?: Pick<EdgePathSpec, "startShape" | "endShape">,
+): EdgeGeometry {
+  const { p1, p2 } = floatingEnds(source, target, spec);
   return polylineGeometry([p1, p2], labelT);
 }
 
@@ -565,8 +673,13 @@ export function straightEdgeGeometry(source: Box, target: Box, labelT = 0.5): Ed
  * what lets `nearestTOnCurve` (a pure sampler over `at`) drive label dragging
  * for this geometry unchanged.
  */
-export function orthogonalEdgeGeometry(source: Box, target: Box, labelT = 0.5): EdgeGeometry {
-  const { p1, p2, across } = floatingEnds(source, target);
+export function orthogonalEdgeGeometry(
+  source: Box,
+  target: Box,
+  labelT = 0.5,
+  spec?: Pick<EdgePathSpec, "startShape" | "endShape">,
+): EdgeGeometry {
+  const { p1, p2, across } = floatingEnds(source, target, spec);
 
   let points: Pt[];
 
@@ -637,17 +750,14 @@ export function edgeGeometryFor(
 
   if (!spec?.start && !spec?.end && !waypoints.length) {
     return routing === "orthogonal"
-      ? orthogonalEdgeGeometry(source, target, labelT)
+      ? orthogonalEdgeGeometry(source, target, labelT, spec)
       : routing === "straight"
-        ? straightEdgeGeometry(source, target, labelT)
-        : floatingEdgeGeometry(source, target, labelT);
+        ? straightEdgeGeometry(source, target, labelT, spec)
+        : floatingEdgeGeometry(source, target, labelT, spec);
   }
 
-  // With no waypoints an unpinned end takes the side it would take floating;
-  // with waypoints, the side facing the nearest one.
-  const free = waypoints.length ? undefined : floatingSides(source, target);
-  const startSide = spec?.start?.side ?? free?.start ?? autoSide(source, waypoints[0]);
-  const endSide = spec?.end?.side ?? free?.end ?? autoSide(target, waypoints[waypoints.length - 1]);
+  const free = !waypoints.length;
+  const { start: startSide, end: endSide } = endSides(source, target, spec);
   let p1 = anchorPoint(source, startSide, spec?.start?.t);
   let p2 = anchorPoint(target, endSide, spec?.end?.t);
   // An unpinned end facing a pinned one lines up with it where its side
@@ -656,6 +766,8 @@ export function edgeGeometryFor(
     if (!spec?.end) p2 = lineUp(target, endSide, p1) ?? p2;
     else if (!spec?.start) p1 = lineUp(source, startSide, p2) ?? p1;
   }
+  p1 = onOutline(source, startSide, p1, spec?.startShape);
+  p2 = onOutline(target, endSide, p2, spec?.endShape);
 
   return routing === "orthogonal"
     ? orthogonalSpecGeometry(p1, startSide, waypoints, p2, endSide, labelT)
@@ -670,6 +782,12 @@ export function edgeGeometryFor(
 export interface EndSlots {
   start?: number;
   end?: number;
+  /**
+   * The side a bundled end sits on (`bundleSideEnds`). An end with no anchor
+   * of its own floats, so its slot carries the side the fraction is along.
+   */
+  startSide?: EdgeAnchorSpec["side"];
+  endSide?: EdgeAnchorSpec["side"];
 }
 
 /** One edge as the un-crossing pass sees it: its boxes, its resolved spec, and which ends it may move. */
@@ -790,6 +908,105 @@ export function uncrossSideSlots(
     if (!changed) break;
   }
   return moved;
+}
+
+// ─── Bundling the ends that share a side ─────────────────────────────────────
+
+/** One end of a line as `bundleSideEnds` sees it. */
+export interface BundleEnd {
+  /** The edge's id. */
+  id: string;
+  which: "start" | "end";
+  /** The node this end attaches to, and the side of it. */
+  node: string;
+  side: EdgeAnchorSpec["side"];
+  /** How wide the end is across its line: its glyph, or the bare stroke (`endGlyphSpan`). */
+  span: number;
+  /** Where the line heads first, along the axis the side runs — the bundle's order. */
+  far: number;
+}
+
+/** Clear space between neighbouring ends of a bundle. */
+const BUNDLE_GAP = 1;
+
+/** A bare line's width at its end: the stroke. */
+const LINE_SPAN = 1.8;
+
+/**
+ * Each end glyph's width across its line, stroke included: the filled shapes
+ * are exactly their outline, a stroked one adds the 1.8 stroke. Read off the
+ * paths `edgeHeadPath` and `crowsFootPath` draw.
+ */
+const HEAD_SPAN: Record<EdgeHeadSpec, number> = {
+  arrow: 9,
+  open: 10.8,
+  diamond: 10.2,
+  "diamond-filled": 8.4,
+  triangle: 13.8,
+  circle: 8.8,
+  bar: 11.8,
+};
+const MARKER_SPAN = 13.8;
+
+/** How wide an end is across its line: its crow's foot, else its head, else the stroke. */
+export function endGlyphSpan(head: EdgeHeadSpec | undefined, marker: CardinalityMarker | undefined): number {
+  if (marker) return MARKER_SPAN;
+  return head ? (HEAD_SPAN[head] ?? HEAD_SPAN.arrow) : LINE_SPAN;
+}
+
+/**
+ * Lines that meet one side of a box enter it side by side, as if zip-tied:
+ * per (box, side), every end placed there is laid out along the side with
+ * a pixel between neighbouring glyphs — arrowhead beside arrowhead — the
+ * whole bundle centred on the side, and ordered by where each line heads
+ * (`far`), so lines arriving from the left take the left of the bundle and
+ * none cross on the way in. Ties keep document order.
+ *
+ * Where the ends sit depends only on the box, how many share the side and
+ * their order — not on where the far ends are. Dragging the nodes at the
+ * other ends leaves the bundle where it is until two of them trade places
+ * along the side. A bundle wider than the side is squeezed to fit it.
+ *
+ * Only sides two or more ends share are bundled; a lone end keeps floating.
+ * Returns each bundled end's fraction along its side, and the side.
+ */
+export function bundleSideEnds(
+  ends: readonly BundleEnd[],
+  boxOf: (id: string) => Box | undefined,
+): Map<string, EndSlots> {
+  const groups = new Map<string, Array<{ end: BundleEnd; index: number }>>();
+  ends.forEach((end, index) => {
+    const key = `${end.node}|${end.side}`;
+    const group = groups.get(key);
+    if (group) group.push({ end, index });
+    else groups.set(key, [{ end, index }]);
+  });
+
+  const out = new Map<string, EndSlots>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const { node, side } = group[0].end;
+    const box = boxOf(node);
+    const [start, size] = !box ? [0, 0] : isHorizontal(side) ? [box.y, box.height] : [box.x, box.width];
+    if (!(size > 0)) continue;
+    const order = [...group].sort((a, b) => a.end.far - b.end.far || a.index - b.index);
+    // Centre to centre, each neighbour sits half of each glyph plus the gap apart.
+    const offsets = [0];
+    for (let i = 1; i < order.length; i++) {
+      offsets.push(offsets[i - 1] + (order[i - 1].end.span + order[i].end.span) / 2 + BUNDLE_GAP);
+    }
+    const total = offsets[offsets.length - 1];
+    const [lo, hi] = usableSpan(start, size);
+    const squeeze = total > hi - lo ? (hi - lo) / total : 1;
+    const first = start + size / 2 - (total * squeeze) / 2;
+    order.forEach(({ end }, i) => {
+      const entry = out.get(end.id) ?? {};
+      entry[end.which] = (first + offsets[i] * squeeze - start) / size;
+      entry[end.which === "start" ? "startSide" : "endSide"] = side;
+      out.set(end.id, entry);
+    });
+  }
+  return out;
 }
 
 // ─── Crow's-foot cardinality markers ─────────────────────────────────────────

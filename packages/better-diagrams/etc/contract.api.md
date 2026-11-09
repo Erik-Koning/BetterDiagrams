@@ -23,6 +23,13 @@ export function addNode(template: DiagramTemplate, input?: NodeInput): DiagramTe
 export function addZone(template: DiagramTemplate, input?: ZoneInput): DiagramTemplate;
 
 // @public
+export interface AiModelOption {
+    group?: string;
+    id: string;
+    label: string;
+}
+
+// @public
 export function allSimplePaths(doc: GraphDocument, from: string, to: string, opts?: GraphOptions & {
     maxDepth?: number;
     limit?: number;
@@ -49,10 +56,50 @@ export const ANNOTATION_KINDS: readonly string[];
 export function approxTextWidth(text: string, size: number, font: TextFont): number;
 
 // @public
-export const ARRANGE_MODES: readonly ["flow", "untangle", "roadmap"];
+export const ARRANGE_MODES: readonly ["auto", "flow", "untangle", "roadmap"];
+
+// @public
+export function arrangeBest(template: DiagramTemplate, options?: ArrangeOptions): ArrangeResult;
 
 // @public (undocumented)
 export type ArrangeMode = (typeof ARRANGE_MODES)[number];
+
+// @public (undocumented)
+export interface ArrangeOptions {
+    algorithm?: LayoutAlgorithm;
+    // (undocumented)
+    containerKinds?: readonly string[];
+    direction?: LayoutDirection;
+    fitText?: boolean;
+    frames?: "root" | "all" | {
+        drill: string;
+    };
+    // (undocumented)
+    headerGap?: number;
+    inner?: LayoutDirection;
+    // (undocumented)
+    nodeGap?: number;
+    // (undocumented)
+    padding?: number;
+    rankGap?: number;
+    shape?: LayoutShape;
+    spacing?: LayoutSpacing;
+}
+
+// @public (undocumented)
+export interface ArrangeResult {
+    // (undocumented)
+    report: LayoutReport;
+    source: ArrangeSource;
+    // (undocumented)
+    template: DiagramTemplate;
+}
+
+// @public
+export function arrangeSelection(template: DiagramTemplate, ids: readonly string[], options?: ArrangeOptions): DiagramTemplate;
+
+// @public (undocumented)
+export type ArrangeSource = "kept" | "polished" | "placed";
 
 // @public
 export function assignZonesByGeometry(template: DiagramTemplate, opts?: {
@@ -64,6 +111,9 @@ export const AUTO_FOLD_NODES = 40;
 
 // @public
 export function autoLayout(template: DiagramTemplate, options?: LayoutOptions): DiagramTemplate;
+
+// @public
+export function autoPlace(template: DiagramTemplate, options?: ArrangeOptions): DiagramTemplate;
 
 // @public
 export function between(doc: GraphDocument, a: FieldEndpoint, b: FieldEndpoint, opts?: BetweenOptions): BetweenResult;
@@ -114,6 +164,12 @@ export function buildRefineMessage(current: DiagramTemplate | DiagramContent, in
         label: string;
     };
 }): string;
+
+// @public
+export function buildScene(template: DiagramTemplate, opts?: {
+    containerKinds?: readonly string[];
+    frame?: string | null;
+}): Scene;
 
 // @public
 export function buildSequencePrompt(): string;
@@ -462,6 +518,7 @@ export interface DiagramEdge {
     providers?: string[];
     relation?: string;
     routing?: EdgeRouting;
+    secondary?: boolean;
     seq?: number;
     // (undocumented)
     source: string;
@@ -485,6 +542,7 @@ export type DiagramEdgeData = {
     providers?: string[];
     tech?: string;
     relation?: string;
+    secondary?: boolean;
     direction?: EdgeDirection;
     startHead?: EdgeHead;
     endHead?: EdgeHead;
@@ -629,6 +687,7 @@ export interface DiagramSettings {
     htmlLines?: HtmlLines;
     htmlTimeline?: HtmlTimeline;
     htmlTimelineDate?: HtmlTimelineDate;
+    layout?: LayoutPreferences;
     notation?: Notation;
     roadmap?: RoadmapAxis;
 }
@@ -823,6 +882,7 @@ export const EDGE_STYLES: readonly ["solid", "dashed", "dotted"];
 
 // @public
 export interface EdgeAnchor {
+    auto?: boolean;
     // (undocumented)
     side: EdgeAnchorSide;
     t?: number;
@@ -909,7 +969,10 @@ export interface EndSlots {
     // (undocumented)
     end?: number;
     // (undocumented)
+    endSide?: EdgeAnchorSpec["side"];
+    // (undocumented)
     start?: number;
+    startSide?: EdgeAnchorSpec["side"];
 }
 
 // @public (undocumented)
@@ -1497,6 +1560,7 @@ export interface GenerateRequest {
     history?: GenerateTurn[];
     input: string;
     mode: "create" | "refine";
+    model?: string;
     systemPrompt: string;
 }
 
@@ -1613,6 +1677,9 @@ export function hasField(doc: FieldDocument, ref: Pin): boolean;
 export function hasOverlaps(template: DiagramTemplate, opts?: {
     containerKinds?: readonly string[];
 }): boolean;
+
+// @public
+export function hasPlacement(template: DiagramTemplate): boolean;
 
 // @public
 export type HopMultiplicity = "one" | "many" | "unknown";
@@ -1869,13 +1936,82 @@ export const KIND_DEFAULT_SIZE: Record<string, {
     h: number;
 }>;
 
+// @public
+export const LAYOUT_ALGORITHMS: readonly ["auto", "layered", "tree", "radial", "organic", "grid"];
+
+// @public
+export const LAYOUT_DIRECTIONS: readonly ["auto", "right", "down", "left", "up"];
+
+// @public
+export const LAYOUT_ENDS: readonly ["spread", "bundled"];
+
 // @public (undocumented)
 export const LAYOUT_FILE = ".better-diagrams/layout.json";
 
+// @public
+export const LAYOUT_GAP_RANGE: {
+    readonly min: 8;
+    readonly max: 480;
+};
+
+// @public
+export const LAYOUT_LINT_RULES: Record<string, LintRuleDef>;
+
+// @public
+export const LAYOUT_RULE_IDS: readonly ["box-overlap", "line-through-box", "line-crossing", "line-overlap", "words-collision", "words-on-line", "words-on-border", "box-too-close", "outside-container", "region-collision", "intruder", "line-over-title", "line-on-border", "almost-level", "text-clipped", "near-alignment", "uneven-spacing", "against-the-flow", "long-line", "line-detour", "loose-container", "sparse-canvas"];
+
+// @public
+export const LAYOUT_RULES: Record<LayoutRuleId, RuleMeta>;
+
+// @public
+export const LAYOUT_SHAPES: readonly ["any", "wide", "tall", "square"];
+
+// @public
+export const LAYOUT_SPACINGS: readonly ["compact", "normal", "airy"];
+
+// @public (undocumented)
+export type LayoutAlgorithm = (typeof LAYOUT_ALGORITHMS)[number];
+
+// @public (undocumented)
+export interface LayoutCandidate {
+    // (undocumented)
+    algorithm: LayoutAlgorithm;
+    // (undocumented)
+    direction: LayoutDirection;
+    // (undocumented)
+    id: string;
+    // (undocumented)
+    label: string;
+    // (undocumented)
+    report: LayoutReport;
+    // (undocumented)
+    template: DiagramTemplate;
+}
+
+// @public
+export function layoutCandidates(template: DiagramTemplate, options?: ArrangeOptions): LayoutCandidate[];
+
+// @public (undocumented)
+export type LayoutDirection = (typeof LAYOUT_DIRECTIONS)[number];
+
+// @public (undocumented)
+export type LayoutEnds = (typeof LAYOUT_ENDS)[number];
+
+// @public (undocumented)
+export interface LayoutFinding extends LintFinding {
+    frame?: string;
+    // (undocumented)
+    rule: LayoutRuleId;
+}
+
 // @public (undocumented)
 export interface LayoutOptions {
+    algorithm?: ArrangeOptions["algorithm"];
     aspect?: number;
     containerKinds?: readonly string[];
+    // (undocumented)
+    direction?: ArrangeOptions["direction"];
+    fitText?: boolean;
     frames?: "root" | "all" | {
         drill: string;
     };
@@ -1884,7 +2020,54 @@ export interface LayoutOptions {
     nodeGap?: number;
     padding?: number;
     rankGap?: number;
+    // (undocumented)
+    shape?: ArrangeOptions["shape"];
+    // (undocumented)
+    spacing?: ArrangeOptions["spacing"];
 }
+
+// @public
+export interface LayoutPreferences {
+    // (undocumented)
+    algorithm?: LayoutAlgorithm;
+    // (undocumented)
+    direction?: LayoutDirection;
+    // (undocumented)
+    ends?: LayoutEnds;
+    inner?: LayoutDirection;
+    nodeGap?: number;
+    rankGap?: number;
+    // (undocumented)
+    shape?: LayoutShape;
+    // (undocumented)
+    spacing?: LayoutSpacing;
+}
+
+// @public (undocumented)
+export interface LayoutReport {
+    cost: number;
+    counts: Partial<Record<LayoutRuleId, number>>;
+    // (undocumented)
+    findings: LayoutFinding[];
+    // (undocumented)
+    metrics: {
+        boxes: number;
+        lines: number;
+        width: number;
+        height: number;
+        lineLength: number;
+    };
+    score: number;
+}
+
+// @public (undocumented)
+export type LayoutRuleId = (typeof LAYOUT_RULE_IDS)[number];
+
+// @public (undocumented)
+export type LayoutShape = (typeof LAYOUT_SHAPES)[number];
+
+// @public (undocumented)
+export type LayoutSpacing = (typeof LAYOUT_SPACINGS)[number];
 
 // @public
 export function liftScopedReactFlow(nodes: readonly RFNodeLike[], edges: readonly RFEdgeLike[], focusId: string, opts: ValidateOptions & {
@@ -1928,6 +2111,9 @@ export interface LineageTrace {
 }
 
 // @public
+export function lineEndSlots(edges: ReadonlyArray<Pick<DiagramEdge, "id" | "source" | "target" | "start" | "end" | "startField" | "endField" | "points"> & Partial<Pick<DiagramEdge, "direction" | "startHead" | "endHead" | "startLabel" | "endLabel">>>, nodeOf: (id: string) => UncrossNode | undefined, notation?: Notation): Map<string, EndSlots>;
+
+// @public
 export const LINT_IGNORE_TAG = "lint-ignore";
 
 // @public (undocumented)
@@ -1966,6 +2152,18 @@ export interface LintIssue {
     message: string;
     nodeIds?: string[];
     severity?: LintSeverity;
+}
+
+// @public
+export function lintLayout(template: DiagramTemplate, opts?: LintLayoutOptions): LayoutReport;
+
+// @public (undocumented)
+export interface LintLayoutOptions {
+    // (undocumented)
+    containerKinds?: readonly string[];
+    frames?: "root" | "all" | {
+        drill: string;
+    };
 }
 
 // @public (undocumented)
@@ -2347,6 +2545,14 @@ export function placeUnpositioned(template: DiagramTemplate, ids: readonly strin
 
 // @public
 export function planProgress(doc: TaskDocument): TaskRollup;
+
+// @public
+export function polishLayout(template: DiagramTemplate, options?: PolishOptions): DiagramTemplate;
+
+// @public (undocumented)
+export interface PolishOptions extends ArrangeOptions {
+    alignWithin?: number;
+}
 
 // @public
 export const POSITIONAL_FIELDS: readonly ["x", "y", "w", "h", "labelT", "points", "start", "end"];
@@ -3028,6 +3234,20 @@ export function sequenceTimelineView(template: SequenceTemplate, at: DiagramDate
 export function setAllZoneProviders(template: DiagramTemplate, provider: string): DiagramTemplate;
 
 // @public
+export function settleLines(template: DiagramTemplate, opts?: SettleOptions): DiagramTemplate;
+
+// @public (undocumented)
+export interface SettleOptions {
+    // (undocumented)
+    containerKinds?: readonly string[];
+    // (undocumented)
+    frames?: "root" | "all" | {
+        drill: string;
+    };
+    keepWords?: boolean;
+}
+
+// @public
 export function settleRoadmap(doc: DiagramTemplate, opts?: Omit<RoadmapLayoutOptions, "refit">): DiagramTemplate;
 
 // @public
@@ -3089,6 +3309,9 @@ export interface StateSelection {
 
 // @public
 export const storesFields: (node: CoverageNode) => boolean;
+
+// @public
+export function straightenLines(template: DiagramTemplate, edgeIds: readonly string[]): DiagramTemplate;
 
 // @public (undocumented)
 export interface StructureOptions {

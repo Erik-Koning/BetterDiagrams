@@ -489,9 +489,11 @@ describe("a big tree opens folded", () => {
     expect(big.template.nodes.find((n) => n.id === "ops/support")!.collapsed).toBeUndefined();
     // And they are SPACED as chips: the stored size stays the expanded one
     // (expanding must restore the layout), but the canvas is compact.
+    // Measured both ways: which way a band's neighbours end up is the layout's call.
     const spread = (t: DiagramTemplate) => {
-      const tops = t.nodes.filter((n) => !n.parentId).map((n) => n.y);
-      return Math.max(...tops) - Math.min(...tops);
+      const roots = t.nodes.filter((n) => !n.parentId);
+      const range = (values: number[]) => Math.max(...values) - Math.min(...values);
+      return range(roots.map((n) => n.x)) * range(roots.map((n) => n.y)) + range(roots.map((n) => n.x)) + range(roots.map((n) => n.y));
     };
     const open = importFolder(await grown(AUTO_FOLD_NODES), { foldGroups: false }).template;
     expect(spread(big.template)).toBeLessThan(spread(open) / 4);

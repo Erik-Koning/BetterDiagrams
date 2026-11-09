@@ -8,8 +8,48 @@
  * work as they do for any file. Imports nothing: both sides bundle it.
  */
 
+/** The diagram editor's view type, as package.json contributes it. */
+export const VIEW_TYPE = "betterDiagrams.editor";
+
 /** `betterDiagrams.theme`: follow VS Code's light or dark, or pin one. */
 export type ThemeSetting = "auto" | "light" | "dark";
+
+/**
+ * How every diagram editor looks: the web app's Settings › View, kept in
+ * VS Code's settings (`betterDiagrams.*`) so they hold for every file and
+ * window, and change from the editor's Settings menu or the Settings UI alike.
+ */
+export interface ViewSettings {
+  theme: ThemeSetting;
+  /** The studio's presentation: marketing (bigger type, tucked-away labels) or technical. */
+  presentation: "marketing" | "technical";
+  /** Marketing's gradients, or one flat coat per card. */
+  gradients: boolean;
+  minimap: boolean;
+  /** Draw a connection only while the pointer is over a node it touches. */
+  linesOnHover: boolean;
+  /** A hex colour that replaces the theme's accent; empty for the theme's own. */
+  accent: string;
+  /** Offer the AI panel (Generate, Adjust with AI) when VS Code has a language model. */
+  ai: boolean;
+}
+
+export const VIEW_DEFAULTS: ViewSettings = {
+  theme: "auto",
+  presentation: "marketing",
+  gradients: false,
+  minimap: false,
+  linesOnHover: false,
+  accent: "",
+  ai: true,
+};
+
+/** A language model the AI panel can offer: the studio's `AiModelOption`. */
+export interface AiChoice {
+  id: string;
+  label: string;
+  group?: string;
+}
 
 /** What the document's text holds right now, as the extension read it. */
 export type TextRead =
@@ -26,13 +66,26 @@ export type HostMessage =
       text: string;
       read: TextRead;
       readOnly: boolean;
-      theme: ThemeSetting;
+      view: ViewSettings;
       /** Base name for exported files: the document's file name without `.json`. */
       filename: string;
     }
   /** The text changed outside the webview: typed, undone, pulled, or a refused edit put back. */
   | { type: "text"; text: string; read: TextRead }
-  | { type: "theme"; theme: ThemeSetting };
+  /** A `betterDiagrams.*` setting changed, here or anywhere. */
+  | { type: "view"; view: ViewSettings }
+  /**
+   * The language model the AI panel would use, by name (null when VS Code has
+   * none to offer) and id, and the others it could use instead.
+   */
+  | { type: "ai"; label: string | null; model?: string; models?: AiChoice[] }
+  /** A `generate` request's answer: the model's raw text, or why there is none. */
+  | { type: "generated"; id: number; text?: string; error?: string }
+  /**
+   * The answer to Open file…: a file to read in as a copy, or nothing — the
+   * person cancelled, or picked a diagram, which VS Code opened in its own tab.
+   */
+  | { type: "opened"; id: number; file?: { name: string; data: Uint8Array } };
 
 export type WebviewMessage =
   | { type: "ready" }
@@ -48,4 +101,25 @@ export type WebviewMessage =
   | { type: "open"; url: string }
   /** The studio's Undo and Redo buttons: VS Code's own, on the text. */
   | { type: "undo" }
-  | { type: "redo" };
+  | { type: "redo" }
+  /** The editor's Settings menu changed some of the view settings. */
+  | { type: "setView"; view: Partial<ViewSettings> }
+  /** The AI panel asks the model; `request` is the studio's GenerateRequest. */
+  | { type: "generate"; id: number; request: unknown }
+  /** The AI panel gave up on a request (Stop, or closed). */
+  | { type: "cancel"; id: number }
+  /** The AI panel's picker chose another language model: `betterDiagrams.aiModel`. */
+  | { type: "setAiModel"; id: string }
+  /**
+   * A diagram for a NEW file beside this one, as the web app opens a new
+   * workspace file: an import, a derived sequence, the welcome modal's other kind.
+   */
+  | { type: "create"; doc: unknown; name?: string }
+  /** Text for the clipboard, and what to tell the person once it's there. */
+  | { type: "copy"; text: string; note: string }
+  /** Import › Open file…: VS Code's open dialog, answered by `opened`. */
+  | { type: "openFile"; id: number }
+  /** Import › New file on disk…: the New Diagram File command. */
+  | { type: "newFile" }
+  /** What's selected on the canvas, as section → element ids, to light in the JSON beside it. */
+  | { type: "selection"; selection: Record<string, string[]> };

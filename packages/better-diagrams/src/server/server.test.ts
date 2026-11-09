@@ -24,6 +24,7 @@ const servers: Server[] = [];
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((s) => new Promise((resolve) => s.close(resolve))));
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 /** The SSE a Messages stream sends for one text reply. */
@@ -45,6 +46,135 @@ describe("resolveProvider", () => {
     expect(resolveProvider({ OPENAI_KEY: "sk-o", OPENAI_MODEL: "gpt-x" })).toMatchObject({ name: "openai", model: "gpt-x", keyVar: "OPENAI_KEY" });
     expect(resolveProvider({})).toMatchObject({ name: "anthropic", keyVar: null });
     expect(JSON.stringify(resolveProvider({ ANTHROPIC_API_KEY: "sk-secret" }))).not.toContain("sk-secret");
+  });
+});
+
+describe("the models a request can name", () => {
+  const ids = (route: ReturnType<typeof createDiagramRoute>) => route.status().models.map((m) => m.id);
+  const CLAUDE = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
+  const GPT = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"];
+
+  /** A fake Messages API answering every request with one line of text. */
+  const fakeClaude = () =>
+    fakeApi((_req, _body, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.end(anthropicStream("From Claude.\n{}"));
+    });
+  /** A fake Responses API answering every request with one line of text. */
+  const fakeOpenAi = () =>
+    fakeApi((_req, _body, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: "resp_1",
+          object: "response",
+          status: "completed",
+          model: "x",
+          output: [{ type: "message", id: "m1", role: "assistant", status: "completed", content: [{ type: "output_text", text: "From OpenAI.\n{}", annotations: [] }] }],
+        }),
+      );
+    });
+
+  it("lists a provider's models only when its key is set, and never the key", () => {
+    expect(ids(createDiagramRoute({ env: { ANTHROPIC_API_KEY: "sk-secret-a" } }))).toEqual(CLAUDE);
+    expect(ids(createDiagramRoute({ env: { OPENAI_KEY: "sk-secret-o" } }))).toEqual(GPT);
+    expect(ids(createDiagramRoute({ env: {} }))).toEqual([]);
+
+    const both = createDiagramRoute({ env: { ANTHROPIC_API_KEY: "sk-secret-a", OPENAI_API_KEY: "sk-secret-o" } });
+    expect(ids(both)).toEqual([...CLAUDE, ...GPT]);
+    expect(both.status().models[0]).toEqual({ id: "claude-fable-5-1", label: "Claude Fable 5.1", group: "Anthropic" });
+    expect(both.status().models.at(-1)).toEqual({ id: "gpt-6-luna", label: "GPT-6 Luna", group: "OpenAI" });
+    // Claude still answers a request that names no model.
+    expect(both.status()).toMatchObject({ provider: "anthropic", model: "claude-opus-5-5", label: "Claude Opus 5.5" });
+    expect(JSON.stringify(both.status())).not.toContain("sk-secret");
+  });
+
+  it("offers nothing when switched off or answered by the host's own call, which ignores a name", async () => {
+    expect(ids(createDiagramRoute({ env: { BD_AI: "off", ANTHROPIC_API_KEY: "k" } }))).toEqual([]);
+
+    const complete = vi.fn(async (_: CompletionRequest) => "Mine.\n{}");
+    const custom = createDiagramRoute({ env: { ANTHROPIC_API_KEY: "k" }, complete });
+    expect(ids(custom)).toEqual([]);
+    expect(await custom.handle({ ...BODY, model: "anything" })).toEqual({ status: 200, payload: { text: "Mine.\n{}" } });
+  });
+
+  it("keeps a model the environment names at the head of the list, and labels a known one", () => {
+    const custom = createDiagramRoute({ env: { ANTHROPIC_API_KEY: "k", ANTHROPIC_MODEL: "claude-opus-4-8" } });
+    expect(ids(custom)).toEqual(["claude-opus-4-8", ...CLAUDE]);
+    expect(custom.status()).toMatchObject({ model: "claude-opus-4-8", label: "claude-opus-4-8" });
+
+    const known = createDiagramRoute({ env: { ANTHROPIC_API_KEY: "k", ANTHROPIC_MODEL: "claude-sonnet-5-5" } });
+    expect(ids(known)).toEqual(CLAUDE);
+    expect(known.status()).toMatchObject({ model: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" });
+  });
+
+  it("offers only the model set for a gateway, whose names are its own", () => {
+    const route = createDiagramRoute({ env: { ANTHROPIC_API_KEY: "k", ANTHROPIC_BASE_URL: "https://gw.example", ANTHROPIC_MODEL: "gw/opus", OPENAI_API_KEY: "o" } });
+    expect(ids(route)).toEqual(["gw/opus", ...GPT]);
+  });
+
+  it("sends each request to the provider of the model it names", async () => {
+    const claude = await fakeClaude();
+    const openai = await fakeOpenAi();
+    vi.stubEnv("ANTHROPIC_BASE_URL", claude.url);
+    vi.stubEnv("OPENAI_BASE_URL", openai.url);
+    const route = createDiagramRoute({ env: { ANTHROPIC_API_KEY: "sk-a", OPENAI_API_KEY: "sk-o" } });
+
+    expect(await route.handle(BODY)).toEqual({ status: 200, payload: { text: "From Claude.\n{}" } });
+    expect(claude.seen.at(-1)?.body.model).toBe("claude-opus-5-5");
+
+    expect(await route.handle({ ...BODY, model: "claude-sonnet-5-5" })).toEqual({ status: 200, payload: { text: "From Claude.\n{}" } });
+    expect(claude.seen.at(-1)?.body.model).toBe("claude-sonnet-5-5");
+    expect(openai.seen).toHaveLength(0);
+
+    expect(await route.handle({ ...BODY, model: "gpt-6-luna" })).toEqual({ status: 200, payload: { text: "From OpenAI.\n{}" } });
+    expect(openai.seen.at(-1)?.body).toMatchObject({ model: "gpt-6-luna", reasoning: { effort: "medium" }, max_output_tokens: 64000 });
+    expect(openai.seen.at(-1)?.headers.authorization).toBe("Bearer sk-o");
+    expect(claude.seen).toHaveLength(2);
+  });
+
+  it("refuses a model it doesn't offer, without calling anyone", async () => {
+    const claude = await fakeClaude();
+    vi.stubEnv("ANTHROPIC_BASE_URL", claude.url);
+    const route = createDiagramRoute({ env: { ANTHROPIC_API_KEY: "sk-a" } });
+    const refused = { status: 400, payload: { error: "That model isn't offered here. Pick another one." } };
+
+    // Real models, but not ones this route offers: the OpenAI side has no key here.
+    expect(await route.handle({ ...BODY, model: "gpt-6-astra" })).toEqual(refused);
+    expect(await route.handle({ ...BODY, model: "claude-opus-4-1" })).toEqual(refused);
+    expect(await route.handle({ ...BODY, model: 42 })).toEqual(refused);
+    expect(claude.seen).toHaveLength(0);
+  });
+
+  it("names the provider that refused the key, not the default one", async () => {
+    const openai = await fakeApi((_req, _body, res) => {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "bad key", type: "invalid_request_error" } }));
+    });
+    vi.stubEnv("OPENAI_BASE_URL", openai.url);
+    const route = createDiagramRoute({ env: { ANTHROPIC_API_KEY: "sk-a", OPENAI_API_KEY: "sk-o" } });
+    const result = await route.handle({ ...BODY, model: "gpt-6.1-sol" });
+    expect(result.status).toBe(401);
+    expect((result.payload as { error: string }).error).toContain("GPT-6.1 Sol did not accept the key in OPENAI_API_KEY");
+  });
+
+  it("asks for the server-side refusal fallback on every Claude model but Haiku, which has none", async () => {
+    const claude = await fakeClaude();
+    vi.stubEnv("ANTHROPIC_BASE_URL", claude.url);
+    const route = createDiagramRoute({ env: { ANTHROPIC_API_KEY: "sk-a" } });
+
+    for (const model of ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"]) {
+      await route.handle({ ...BODY, model });
+      const { headers, body } = claude.seen.at(-1)!;
+      expect(body).toMatchObject({ model, fallbacks: "default", max_tokens: 64000, output_config: { effort: "medium" } });
+      expect(headers["anthropic-beta"]).toContain("server-side-fallback-2026-07-01");
+    }
+
+    await route.handle({ ...BODY, model: "claude-haiku-5-5" });
+    const { headers, body } = claude.seen.at(-1)!;
+    expect(body).toMatchObject({ model: "claude-haiku-5-5", max_tokens: 64000, output_config: { effort: "medium" } });
+    expect(body).not.toHaveProperty("fallbacks");
+    expect(headers["anthropic-beta"] ?? "").not.toContain("server-side-fallback");
   });
 });
 

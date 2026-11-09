@@ -79,9 +79,10 @@ export function templateFile(name, fallback) {
 }
 
 /**
- * How the editors are first shown. The app's Settings menu starts here; the
- * VS Code editor has no such menu and keeps them, taking only light or dark
- * from VS Code's own theme.
+ * How the editors are first shown. The app's Settings menu starts here. The
+ * VS Code editor's Settings menu keeps the same choices as VS Code settings
+ * (packages/vscode/src/protocol.ts, VIEW_DEFAULTS, defaults the same as
+ * these), with light or dark following VS Code's own theme to begin with.
  */
 export const DEFAULT_VIEW = {
   /** "light" | "dark" */
