@@ -625,3 +625,52 @@ describe("lines that share a side enter it side by side (lineEndSlots)", () => {
     expect(slots.get("in")).toMatchObject({ endSide: "bottom" });
   });
 });
+
+describe("a line ends on the shape it meets", () => {
+  const box = (x: number, y: number, width = 170, height = 100) => ({ x, y, width, height });
+
+  it("a card is unchanged: no shape, no difference", () => {
+    const plain = edgeGeometryFor(undefined, box(0, 0), box(400, 40));
+    const card = edgeGeometryFor(undefined, box(0, 0), box(400, 40), 0.5, { startShape: "card", endShape: "card" });
+    expect(card.path).toBe(plain.path);
+  });
+
+  it("a diamond is met at its point, wherever the other box is", () => {
+    const below = edgeGeometryFor(undefined, box(40, 0), box(0, 300), 0.5, { endShape: "diamond" });
+    expect(below.tip).toEqual({ x: 85, y: 300 });
+    const pinned = edgeGeometryFor(undefined, box(40, 0), box(0, 300), 0.5, {
+      end: { side: "top", t: 0.9 },
+      endShape: "diamond",
+    });
+    expect(pinned.tip).toEqual({ x: 85, y: 300 });
+  });
+
+  it("a parallelogram is met on its slant, not on the box around it", () => {
+    const fromLeft = edgeGeometryFor(undefined, box(0, 0), box(400, 0), 0.5, { endShape: "parallelogram" });
+    expect(fromLeft.tip.x).toBeGreaterThan(400);
+    expect(fromLeft.tip.x).toBeLessThan(420);
+  });
+
+  it("a pipe's rounded end and a cylinder's lid are followed", () => {
+    const pipe = edgeGeometryFor(undefined, box(0, 0), box(400, 0), 0.5, {
+      end: { side: "left", t: 0.1 },
+      endShape: "pipe",
+    });
+    expect(pipe.tip.x).toBeGreaterThan(400);
+    const lid = edgeGeometryFor(undefined, box(0, 0), box(0, 400), 0.5, {
+      end: { side: "top", t: 0.05 },
+      endShape: "cylinder",
+    });
+    expect(lid.tip.y).toBeGreaterThan(400);
+  });
+});
+
+describe("a line that leaves on one axis and arrives on the other", () => {
+  it("turns once, and never overshoots the far end's level", () => {
+    const geo = edgeGeometryFor(undefined, { x: 0, y: 300, width: 170, height: 76 }, { x: 400, y: 0, width: 170, height: 76 }, 0.5, {
+      start: { side: "top" },
+      end: { side: "left" },
+    });
+    for (let t = 0; t <= 1; t += 0.02) expect(geo.at(t).y).toBeGreaterThanOrEqual(geo.tip.y - 0.5);
+  });
+});

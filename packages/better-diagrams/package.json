@@ -180,6 +180,7 @@
   },
   "bin": {
     "bd-folder": "bin/bd-folder.mjs",
+    "bd-layout": "bin/bd-layout.mjs",
     "better-diagrams": "bin/better-diagrams.mjs"
   }
 }

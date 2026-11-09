@@ -80,5 +80,27 @@ if (!listing.templates?.some((entry) => `${entry.folder}/${entry.file}` === open
   fail(`?open=${open} names no file the editor lists`, output);
 }
 
+// The layout command, from the same tarball: a rough diagram, linted and fixed.
+const rough = join(work, "rough.json");
+writeFileSync(
+  rough,
+  JSON.stringify({
+    version: 1,
+    nodes: [
+      { id: "a", label: "Alpha", kind: "service", x: 0, y: 0, w: 170, h: 76 },
+      { id: "b", label: "Bravo", kind: "service", x: 30, y: 20, w: 170, h: 76 },
+    ],
+    edges: [{ id: "e", source: "a", target: "b", label: "" }],
+  }),
+);
+const layout = (...args) =>
+  spawnSync("npx", ["--yes", "--package", tarball, "bd-layout", ...args], { cwd: work, env, encoding: "utf8" });
+const lint = layout("lint", rough, "--min-score", "100");
+if (lint.status !== 1 || !lint.stdout.includes("box-overlap")) fail("bd-layout lint should find the overlap and exit 1", lint.stdout + lint.stderr);
+const fix = layout("fix", rough, "--write");
+if (fix.status !== 0) fail("bd-layout fix failed", fix.stdout + fix.stderr);
+const relint = layout("lint", rough);
+if (relint.status !== 0 || relint.stdout.includes("box-overlap")) fail("bd-layout fix left the overlap", relint.stdout + relint.stderr);
+
 console.log(`smoke-cli: ok — ${link}`);
 stop();

@@ -34,6 +34,12 @@ export {
   VERSION_TAG_POSITIONS,
   GROUP_CONTENTS,
   ARRANGE_MODES,
+  LAYOUT_ALGORITHMS,
+  LAYOUT_GAP_RANGE,
+  LAYOUT_DIRECTIONS,
+  LAYOUT_ENDS,
+  LAYOUT_SHAPES,
+  LAYOUT_SPACINGS,
   NOTATIONS,
   HTML_LINES,
   HTML_TIMELINES,
@@ -120,6 +126,12 @@ export type {
   VersionTagPosition,
   GroupContents,
   ArrangeMode,
+  LayoutAlgorithm,
+  LayoutDirection,
+  LayoutEnds,
+  LayoutPreferences,
+  LayoutShape,
+  LayoutSpacing,
   RoadmapAxis,
   Notation,
   HtmlLines,
@@ -374,6 +386,32 @@ export type {
 
 // ── Auto-layout ──────────────────────────────────────────────────────────────
 export { autoLayout, hasOverlaps, placeUnpositioned } from "./layout";
+export {
+  arrangeBest,
+  arrangeSelection,
+  autoPlace,
+  straightenLines,
+  hasPlacement,
+  layoutCandidates,
+  polishLayout,
+  type ArrangeOptions,
+  type ArrangeResult,
+  type ArrangeSource,
+  type LayoutCandidate,
+  type PolishOptions,
+} from "./arrange";
+export {
+  buildScene,
+  LAYOUT_LINT_RULES,
+  LAYOUT_RULE_IDS,
+  LAYOUT_RULES,
+  lintLayout,
+  type LayoutFinding,
+  type LayoutReport,
+  type LayoutRuleId,
+  type LintLayoutOptions,
+} from "./layout-lint";
+export { settleLines, type SettleOptions } from "./route-lines";
 export type { LayoutOptions } from "./layout";
 
 // ── Content/presentation split ───────────────────────────────────────────────

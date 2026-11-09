@@ -225,6 +225,12 @@ export interface EdgeAnchor {
   side: EdgeAnchorSide;
   /** Fraction along the side, 0–1. 0.5 (the centre) is the default and never stored. */
   t?: number;
+  /**
+   * The auto-placer chose this side, to keep a line entering its box the way
+   * the flow runs. A person's pin is intent and survives a Tidy; this one is
+   * the last layout's opinion, and the next Tidy forms its own.
+   */
+  auto?: boolean;
 }
 
 /** Key role of a field: primary key, foreign key, or both. */
@@ -677,8 +683,56 @@ export type GroupContents = (typeof GROUP_CONTENTS)[number];
  * bar from its `startDate` to its due `date`, and every edit re-lays it, so
  * the dates stay the only record of when. See `DiagramSettings`.
  */
-export const ARRANGE_MODES = ["flow", "untangle", "roadmap"] as const;
+export const ARRANGE_MODES = ["auto", "flow", "untangle", "roadmap"] as const;
 export type ArrangeMode = (typeof ARRANGE_MODES)[number];
+
+/**
+ * How "auto" arranges a document (`settings.layout`), every part optional and
+ * "let the graph decide" by default. A family of layout: "layered" ranks along a
+ * direction, "tree" is a tidy hierarchy, "radial" rings around a hub, "organic"
+ * lets a mesh take its own shape, "grid" lines up boxes with nothing joining
+ * them. "auto" tries the ones that apply and keeps what measures best.
+ */
+export const LAYOUT_ALGORITHMS = ["auto", "layered", "tree", "radial", "organic", "grid"] as const;
+export type LayoutAlgorithm = (typeof LAYOUT_ALGORITHMS)[number];
+/** Which way the picture reads. "auto" measures the options and keeps the better one. */
+export const LAYOUT_DIRECTIONS = ["auto", "right", "down", "left", "up"] as const;
+export type LayoutDirection = (typeof LAYOUT_DIRECTIONS)[number];
+/**
+ * A shape to aim for. "any", the default, aims for none: a diagram comes out the
+ * shape its structure has. The others exist for a person who has somewhere
+ * particular to put it, a slide or a sidebar.
+ */
+export const LAYOUT_SHAPES = ["any", "wide", "tall", "square"] as const;
+export type LayoutShape = (typeof LAYOUT_SHAPES)[number];
+/** How much room to leave between things. */
+export const LAYOUT_SPACINGS = ["compact", "normal", "airy"] as const;
+export type LayoutSpacing = (typeof LAYOUT_SPACINGS)[number];
+/**
+ * Where the lines meeting one side of a box attach. "spread" gives each its own
+ * place, so it can be followed from the start; "bundled" keeps them tight together,
+ * as if zip-tied, so a fan reads as one thing that divides.
+ */
+export const LAYOUT_ENDS = ["spread", "bundled"] as const;
+export type LayoutEnds = (typeof LAYOUT_ENDS)[number];
+
+/** The parts of `settings.layout`. */
+export interface LayoutPreferences {
+  algorithm?: LayoutAlgorithm;
+  direction?: LayoutDirection;
+  /** Which way the picture reads inside groups and zones, when that differs from outside them. */
+  inner?: LayoutDirection;
+  shape?: LayoutShape;
+  spacing?: LayoutSpacing;
+  ends?: LayoutEnds;
+  /** Room between ranks, in px, overriding what `spacing` would give. */
+  rankGap?: number;
+  /** Room between boxes in a rank, in px, overriding what `spacing` would give. */
+  nodeGap?: number;
+}
+
+/** How far the gaps in `settings.layout` may go. */
+export const LAYOUT_GAP_RANGE = { min: 8, max: 480 } as const;
 
 /** Where a roadmap's time axis starts and how wide a day is: x = (day − from) × dayWidth. */
 export interface RoadmapAxis {
@@ -1025,6 +1079,12 @@ export interface DiagramEdge {
   /** Technology / protocol, C4-style: rendered as a smaller `[JSON/HTTPS]` line. */
   tech?: string;
   /**
+   * A line that shouldn't shape the layout: drawn as ever, but auto-placement
+   * doesn't let it decide what comes after what. For a return path, an offline
+   * sync, a monitoring tap: real, but not what the picture is about.
+   */
+  secondary?: boolean;
+  /**
    * What KIND of relationship this is, in the registry's relation vocabulary
    * — `composition`, `reference`, `hierarchy`, `polymorphic` built in (see
    * `contract/relations.ts`); a host or dialect adds and relabels its own.
@@ -1105,12 +1165,18 @@ export interface DiagramSettings {
    */
   groupContents?: GroupContents;
   /**
-   * What Tidy optimises for — see `ARRANGE_MODES`. Absent means "flow".
+   * What Tidy optimises for — see `ARRANGE_MODES`. Absent means "auto".
    * Picking a mode from the Arrange menu re-arranges the canvas and stores
    * the choice here in the same edit, so one ⌘Z takes both back and the
    * next Tidy keeps arranging the way the document says.
    */
   arrange?: ArrangeMode;
+  /**
+   * How "auto" arranges this document — see `LayoutPreferences`. Stored when
+   * someone chooses from the Layout panel or a model has a reason to say, and
+   * every later Tidy keeps to it. Absent lets the graph decide.
+   */
+  layout?: LayoutPreferences;
   /**
    * The time axis a roadmap is laid out on — see `RoadmapAxis`. Fitted to
    * the plan's dates when it is first laid out by date, or tidied, and kept
@@ -1232,6 +1298,7 @@ export const TEMPLATE_KEYS: readonly string[] = Object.keys(TEMPLATE_KEY_MAP);
 const SETTINGS_KEY_MAP: Record<keyof DiagramSettings, true> = {
   groupContents: true,
   arrange: true,
+  layout: true,
   roadmap: true,
   notation: true,
   htmlLines: true,
@@ -1295,6 +1362,7 @@ const EDGE_KEY_MAP: Record<keyof DiagramEdge, true> = {
   providers: true,
   tech: true,
   relation: true,
+  secondary: true,
   direction: true,
   startHead: true,
   endHead: true,
@@ -1475,8 +1543,8 @@ Rules:
 - Use "shape":"polygon" with normalised "points":[[0,0],[1,0],[1,1]] (0..1 within the zone box) only for genuinely irregular regions; prefer "rounded".
 - ${
     geo
-      ? "Lay out left-to-right by request flow, spread vertically, no overlapping nodes. 6-14 nodes per level (a component's children form their own level with their own budget)."
-      : 'NEVER emit x/y/w/h on nodes, or labelT/routing/start/end/points on edges — placement and line routing are managed outside this document and are preserved across your edits. KEEP EVERY EXISTING ID EXACTLY as given (ids are how elements keep their places); give new elements new ids. Array order = rough left-to-right flow. 6-14 nodes per level (a component\'s children form their own level with their own budget).'
+      ? "Placement is yours to give or leave out: position the nodes when where they sit carries meaning, in whatever arrangement suits the subject, and omit x/y/w/h otherwise. An auto-placer lays out anything unplaced and a layout linter clears overlaps and lines through boxes, so a rough placement is fine. A diagram may be any shape and any size: use as many nodes as the subject needs. settings.layout says how the auto-placer should read it when the subject has a natural form: \"algorithm\":\"" + LAYOUT_ALGORITHMS.join("|") + "\", \"direction\":\"" + LAYOUT_DIRECTIONS.join("|") + "\"; omit it to let the structure decide. Mark an edge \"secondary\":true when it is real but shouldn't shape the picture: a return path, a monitoring tap."
+      : 'NEVER emit x/y/w/h on nodes, or labelT/routing/start/end/points on edges — placement and line routing are managed outside this document and are preserved across your edits. KEEP EVERY EXISTING ID EXACTLY as given (ids are how elements keep their places); give new elements new ids. Array order = rough reading order. A diagram may be any shape and any size: use as many nodes as the subject needs.'
   } Keep JSON compact.${opts.focus === "tasks" ? `\n${TASK_FOCUS_RULES}` : ""}${
     opts.extraRules ? `\n${opts.extraRules}` : ""
   }`;
@@ -1775,6 +1843,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         ...(providers && providers.length ? { providers } : {}),
         ...(tech ? { tech } : {}),
         ...(relation ? { relation } : {}),
+        ...(e.secondary === true ? { secondary: true } : {}),
         ...(date ? { date } : {}),
         // Defaults are stripped so an old document round-trips byte-identical.
         ...(e.direction === "both" || e.direction === "none" ? { direction: e.direction } : {}),
@@ -1883,6 +1952,23 @@ function validateSettings(raw: unknown): DiagramSettings | undefined {
   }
   if (ARRANGE_MODES.includes(r.arrange as ArrangeMode)) {
     out.arrange = r.arrange as ArrangeMode;
+  }
+  if (r.layout && typeof r.layout === "object" && !Array.isArray(r.layout)) {
+    const l = r.layout as Record<string, unknown>;
+    const layout: LayoutPreferences = {};
+    if (LAYOUT_ALGORITHMS.includes(l.algorithm as LayoutAlgorithm)) layout.algorithm = l.algorithm as LayoutAlgorithm;
+    if (LAYOUT_DIRECTIONS.includes(l.direction as LayoutDirection)) layout.direction = l.direction as LayoutDirection;
+    if (LAYOUT_DIRECTIONS.includes(l.inner as LayoutDirection)) layout.inner = l.inner as LayoutDirection;
+    if (LAYOUT_SHAPES.includes(l.shape as LayoutShape)) layout.shape = l.shape as LayoutShape;
+    if (LAYOUT_SPACINGS.includes(l.spacing as LayoutSpacing)) layout.spacing = l.spacing as LayoutSpacing;
+    if (LAYOUT_ENDS.includes(l.ends as LayoutEnds)) layout.ends = l.ends as LayoutEnds;
+    for (const key of ["rankGap", "nodeGap"] as const) {
+      const value = l[key];
+      if (typeof value === "number" && Number.isFinite(value)) {
+        layout[key] = Math.round(Math.min(LAYOUT_GAP_RANGE.max, Math.max(LAYOUT_GAP_RANGE.min, value)));
+      }
+    }
+    if (Object.keys(layout).length) out.layout = layout;
   }
   if (r.roadmap && typeof r.roadmap === "object" && !Array.isArray(r.roadmap)) {
     const { from, dayWidth } = r.roadmap as Record<string, unknown>;
@@ -2287,7 +2373,67 @@ export function lineEndSlots(
   for (const [id, entry] of bundleSideEnds(ends, (id) => nodeOf(id)?.box)) {
     slots.set(id, { ...slots.get(id), ...entry });
   }
+  spreadSharedRows(edges, nodeOf, slots);
   return slots;
+}
+
+/**
+ * Lines that land on one row land side by side inside it. A table's primary key is
+ * what everything points at, so otherwise its crow's feet and cardinalities pile up
+ * on a single point and nobody can tell them apart. In the order they arrive from,
+ * so they fan rather than cross; a row a person placed an end on isn't touched.
+ */
+function spreadSharedRows(
+  edges: ReadonlyArray<
+    Pick<DiagramEdge, "id" | "source" | "target" | "start" | "end" | "startField" | "endField" | "points">
+  >,
+  nodeOf: (id: string) => UncrossNode | undefined,
+  slots: Map<string, EndSlots>,
+): void {
+  const anchorNode = (n: UncrossNode): FieldAnchorNode => ({
+    fields: n.fields,
+    description: n.description,
+    h: n.box.height,
+    centerX: n.box.x + n.box.width / 2,
+  });
+  type Landing = { id: string; which: "start" | "end"; t: number; far: number };
+  const rows = new Map<string, Landing[]>();
+  const add = (key: string, landing: Landing) => {
+    const row = rows.get(key);
+    if (row) row.push(landing);
+    else rows.set(key, [landing]);
+  };
+  for (const e of edges) {
+    const s = nodeOf(e.source);
+    const t = nodeOf(e.target);
+    if (!s || !t || e.source === e.target) continue;
+    const start = rowAnchor(e.start, e.startField, anchorNode(s), anchorNode(t));
+    const end = rowAnchor(e.end, e.endField, anchorNode(t), anchorNode(s));
+    const slot = slots.get(e.id);
+    const farOf = (b: Box) => b.y + b.height / 2;
+    if (start.onRow && start.anchor) {
+      const at = slot?.start ?? start.anchor.t ?? 0.5;
+      add(`${e.source}|${start.anchor.side}|${Math.round(at * 10000)}`, { id: e.id, which: "start", t: at, far: farOf(t.box) });
+    }
+    if (end.onRow && end.anchor) {
+      const at = slot?.end ?? end.anchor.t ?? 0.5;
+      add(`${e.target}|${end.anchor.side}|${Math.round(at * 10000)}`, { id: e.id, which: "end", t: at, far: farOf(s.box) });
+    }
+  }
+  for (const [key, landings] of rows) {
+    if (landings.length < 2) continue;
+    const box = nodeOf(key.split("|")[0]!)?.box;
+    if (!box || !(box.height > 0)) continue;
+    // Inside the row's own height: a little further and a line reads as joining the next one.
+    const step = Math.min(FIELD_ROW_H * 0.45, (FIELD_ROW_H * 0.9) / (landings.length - 1)) / box.height;
+    const order = [...landings].sort((a, b) => a.far - b.far);
+    const first = order[0]!.t - (step * (order.length - 1)) / 2;
+    order.forEach((landing, i) => {
+      const entry = slots.get(landing.id) ?? {};
+      entry[landing.which] = first + step * i;
+      slots.set(landing.id, entry);
+    });
+  }
 }
 
 /**
@@ -2317,7 +2463,8 @@ function validateAnchor(raw: unknown): EdgeAnchor | undefined {
   const side = (raw as { side?: unknown }).side;
   if (!(EDGE_ANCHOR_SIDES as readonly string[]).includes(side as string)) return undefined;
   const t = clamp(num((raw as { t?: unknown }).t, 0.5), 0, 1);
-  return t === 0.5 ? { side: side as EdgeAnchorSide } : { side: side as EdgeAnchorSide, t };
+  const auto = (raw as { auto?: unknown }).auto === true ? { auto: true } : {};
+  return t === 0.5 ? { side: side as EdgeAnchorSide, ...auto } : { side: side as EdgeAnchorSide, t, ...auto };
 }
 
 /**
@@ -3348,6 +3495,8 @@ export type DiagramEdgeData = {
   tech?: string;
   /** The relationship kind; see the schema field of the same name. */
   relation?: string;
+  /** Doesn't shape the layout; see the schema field of the same name. */
+  secondary?: boolean;
   direction?: EdgeDirection;
   /** End glyph overrides; see the schema field of the same name. */
   startHead?: EdgeHead;
@@ -3860,6 +4009,7 @@ export function toReactFlow(
             ...(e.providers?.length ? { providers: e.providers } : {}),
             ...(!summarising && e.tech ? { tech: e.tech } : {}),
             ...(!summarising && e.relation ? { relation: e.relation } : {}),
+            ...(e.secondary ? { secondary: true } : {}),
             ...(!summarising && e.date ? { date: e.date } : {}),
             ...(e.direction ? { direction: e.direction } : {}),
             ...(e.startHead ? { startHead: e.startHead } : {}),
@@ -4042,6 +4192,7 @@ export function fromReactFlow(
       providers: e.data?.providers,
       tech: e.data?.tech,
       relation: e.data?.relation,
+      ...(e.data?.secondary ? { secondary: true } : {}),
       direction: e.data?.direction,
       startHead: e.data?.startHead,
       endHead: e.data?.endHead,

@@ -1594,6 +1594,8 @@ export function emitTemplate(
     const geo = edgeGeometryFor(edge.routing ?? defaultRouting, s.box, t.box, edge.labelT ?? 0.5, {
       ...withEndSlots(fieldAnchors(edge, anchorNode(s), anchorNode(t)), endSlots.get(edge.id)),
       points: edge.points,
+      startShape: kindDef(registry, s.node.kind).shape,
+      endShape: kindDef(registry, t.node.kind).shape,
     });
     const color = edgeHex[edge.color] ?? edgeHex.slate;
     const direction = edge.direction ?? "forward";

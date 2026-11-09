@@ -1582,7 +1582,8 @@ The schema and editor cover C4's notational essentials:
 | **Lock** | `node.locked` / zone lock pins an element against drags and resizes |
 | **Search** | ⌘K, matches id/label/description/kind/tags, Enter cycles and centres |
 | **Snap & align** | Arrange: snap-to-grid, align left/centre/right/top/middle/bottom (2+ selected), distribute (3+), clear routes |
-| **Arrange modes** | Arrange: *Left to right* (default, proximity-based), *Untangle lines* (fewest crossings, lanes for long lines) or, for a dated plan, *By date* (a roadmap); stored as `settings.arrange`, applied on pick, one `⌘Z` undoes both |
+| **Arrange modes** | Arrange: *Best fit* (default: the layout that measures best, in whatever shape that is), *Left to right* (proximity-based), *Untangle lines* (fewest crossings, lanes for long lines) or, for a dated plan, *By date* (a roadmap); stored as `settings.arrange`, applied on pick, one `⌘Z` undoes both |
+| **Layout panel** | Arrange → *Layout panel…*: a score out of 100 and what's behind it, *Polish* (keep the arrangement, fix what's wrong), Style, Direction, Inside groups, Shape and Spacing, and thumbnails of the other arrangements to compare. Each one undo step. See [Auto-placement and layout lint](#auto-placement-and-layout-lint) |
 | **Notation** — symbols and numbers / crow's foot / UML | View: how a line's ends draw cardinality; `settings.notation`. UML shows the end glyphs a crow's-foot symbol would replace |
 | **HTML page** — how it opens | Export ▸ Interactive HTML ▸ Page settings…: lines on hover or all shown, the legend, and for a dated diagram the timeline bar, the date it opens on, and later elements ghosted or hidden; `settings.htmlLines`, `htmlLegend`, `htmlTimeline`, `htmlTimelineDate`, `htmlLater` |
 | **Enumerations** | Kind `enum`: a record whose rows are the allowed values, «enumeration» style; Insert ▸ Enumeration |
@@ -2165,11 +2166,13 @@ render "the architecture as of 2026-06-15" without React.
 
 ## Layout, clipboard, ghosts
 
-**Tidy** arranges nodes within each zone and group using a layered (Sugiyama-style) layout,
-growing containers to fit but never moving them. The **arrange modes** live in the Arrange menu
-and are stored in the document as `settings.arrange`, so every later Tidy keeps arranging the
-same way. (The third, *By date*, lays a plan out on a calendar instead — see
-[Roadmap](#roadmap-a-plan-laid-out-by-date).) *Left to right* (the default, `"flow"`) is proximity-based: each node sits one rank
+**Tidy** places the document the way that measures best, whatever shape that comes out: see
+[Auto-placement and layout lint](#auto-placement-and-layout-lint). That's *Best fit* (`"auto"`), the
+default. The **arrange modes** live in the Arrange menu and are stored in the document as
+`settings.arrange`, so every later Tidy keeps arranging the same way. The others arrange nodes within
+each zone and group using a layered (Sugiyama-style) layout, growing containers to fit but never
+moving them. (*By date* lays a plan out on a calendar instead — see
+[Roadmap](#roadmap-a-plan-laid-out-by-date).) *Left to right* (`"flow"`) is proximity-based: each node sits one rank
 past what feeds it and rank-mates are ordered once by where their predecessors sit — compact and
 quick. *Untangle lines* (`"untangle"`) spends its effort on the lines instead: ranks are re-ordered
 by repeated sweeps in both directions until as few lines as possible cross, a line that skips a
@@ -2180,8 +2183,9 @@ on the spot, in the same edit that stores the choice — one `⌘Z` puts every b
 the mode. It's written in-package rather than delegating
 to dagre because the layout has to be *container-constrained* — a global layout that ignored
 zones would drag nodes out of the region deciding whether they're visible, silently changing the
-document's meaning. It also runs automatically on generated diagrams, but only when
-`hasOverlaps` says the output is actually a mess.
+document's meaning. On a generated diagram, `arrangeBest` decides: the model's arrangement is kept,
+polished, unless the auto-placer's is clearly better. A document that chose one of these modes keeps
+to it, and is only tidied when `hasOverlaps` says the output is actually a mess.
 
 Two things Tidy leaves alone, because moving them would contradict what they mean. A **locked**
 node keeps its position and its size — a lock says the editor refuses to drag or resize it, and
@@ -2226,7 +2230,7 @@ shows the active scenario.
 
 The toolbar opens with the **tool tray** (below), then groups its actions into four dropdowns —
 **Insert** (node/group/text/zone),
-**Arrange** (tidy, arrange mode, clear routes, align, distribute, routing, snap), **View** (ghosts, tag filter), and
+**Arrange** (tidy, polish, arrange selection, Layout panel, arrange mode, clear routes, align, distribute, routing, snap), **View** (ghosts, tag filter), and
 **Export** — all sharing one open-menu slot, so opening one closes the rest and a click
 anywhere else closes them all — and the click that dismisses a menu is spent on dismissing it,
 rather than also selecting whatever was under the pointer. The inspector reads as captioned
@@ -2259,6 +2263,69 @@ group its children), so a size the handle can reach on the dragged box never squ
 neighbour's contents. Locked nodes, zones, and dangling-arrow dots stay as they are, and so do
 the resized node's own container and contents: a band across a group selects the frame and what
 is in it, and resizing the frame must not stamp its size onto the cards inside.
+
+## Auto-placement and layout lint
+
+A good picture shouldn't depend on an author placing every box perfectly, and it shouldn't be
+forced into one shape either. Two tools work together, in `@mosphere/better-diagrams/contract`:
+
+```ts
+import { arrangeBest, autoPlace, lintLayout, polishLayout } from "@mosphere/better-diagrams/contract";
+
+autoPlace(doc);          // Place everything from the graph.
+polishLayout(doc);       // Keep the arrangement; fix what lint finds.
+arrangeBest(doc);        // Keep the author's arrangement unless the algorithm's is clearly better.
+lintLayout(doc);         // { score, cost, findings, counts, metrics }. Changes nothing.
+```
+
+**No shape is forced, and no size.** Nothing aims at an aspect ratio unless someone asks for one
+(`shape`). A chain comes out long, a tree as wide as it branches, a hub round. The system prompt no
+longer asks a model for a direction or a node count either.
+
+**`autoPlace` is a portfolio.** Each connected piece is laid out by every family that suits what it
+is, and the cheapest result, measured the way a reader would, is kept:
+
+| Family | For | |
+|---|---|---|
+| `layered` | flows and pipelines | ranks along a direction; the main path runs straight, and lines that skip a rank get a lane |
+| `tree` | hierarchies | a tidy tree, each parent centred on its children |
+| `radial` | a hub, or a pure cycle | rings around the best-connected box; lines arc rather than wiggle |
+| `organic` | a mesh with no direction | stress majorization, then overlaps pushed apart and near-misses lined up |
+| `grid` | boxes with little joining them | rows and columns |
+
+Disconnected pieces are packed across the flow, never end to end where they'd read as one chain
+with an arrow missing. It's deterministic, and it works through everything a document asks of it:
+groups, zones and islands; a card's own canvas; locked things stay put and the rest arranges around
+them; provider alternates stay one box; a line between two containers pulls them together, and each
+container's members face what they connect to outside it. A box whose words don't fit grows to fit,
+and lines leave a box the way the flow runs, each with its own place on the side.
+
+**`settings.layout`** says how, and every later Tidy keeps to it: `algorithm`, `direction`, `inner`
+(the direction inside groups and zones), `shape`, `spacing`, `rankGap`, `nodeGap`, and `ends`
+(`spread` gives each line its own place on a box, `bundled` keeps them tight). All optional; the
+default is to let the structure decide. An edge with `"secondary": true` is drawn as ever but doesn't
+get to decide what comes after what: for a return path or a monitoring tap.
+
+**`lintLayout` measures what's drawn**, using the same routes, row anchors and bundling as the
+canvas and the exporters, so a finding is a defect on the screen. No rule has an opinion about
+shape. It looks for boxes on boxes, lines through boxes, lines over lines, words on top of things,
+containers that don't hold what they should, text cut off, and the near-misses a reader sees as
+mistakes. See `LAYOUT_RULES` for each rule. A box can opt out with the tag `lint-ignore:<rule>`.
+`LAYOUT_LINT_RULES` puts them in the Checks menu, if a host wants that.
+
+**A model that places well keeps what it placed.** After a generation, `arrangeBest` measures both:
+the model's arrangement is polished and kept unless the auto-placer's scores clearly better, so a
+model that gets better at this keeps more of its choices, with no setting to flip, and one that
+can't place boxes at all is no worse off.
+
+The same thing from the command line, for a script, a CI job or a model checking its own work:
+
+```sh
+bd-layout lint diagram.json --min-score 90   # A score and findings; exit 1 under the floor. --json for tools.
+bd-layout fix diagram.json --write           # Keep the arrangement, fix what lint finds.
+bd-layout place diagram.json --direction down --algorithm tree --out placed.json
+bd-layout best diagram.json --write          # What to run after a model writes a diagram.
+```
 
 ## Canvas tools
 

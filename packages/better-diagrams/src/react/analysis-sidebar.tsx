@@ -23,6 +23,7 @@ import type { LintFinding } from "../contract/lint";
 import { impactChain, impactOf } from "../contract/impact";
 import { NeighbourhoodPanel, type NeighbourhoodState } from "./NeighbourhoodPanel";
 import { ChecksPanel, type ChecksState } from "./ChecksPanel";
+import { LayoutPanel, type LayoutPanelProps, type LayoutState } from "./LayoutPanel";
 import { ImpactPanel, type ImpactState } from "./ImpactPanel";
 import { dataDictionary, dictionaryCsv, dictionaryMarkdown, governanceReport } from "../contract/dictionary";
 import { schemaDiff, schemaDiffMarkdown } from "../contract/schema-diff";
@@ -36,8 +37,8 @@ import { lineageChain, sensitiveLineage, traceLineage } from "../contract/lineag
 import { LineagePanel, type LineageState } from "./LineagePanel";
 import type { OverlayLink } from "./LineageOverlay";
 
-export type { NeighbourhoodState, ChecksState, ImpactState, GovernanceState, SchemaChangesState, StructureState, LineageState };
-export type AnalysisState = NeighbourhoodState | ChecksState | ImpactState | GovernanceState | SchemaChangesState | StructureState | LineageState;
+export type { NeighbourhoodState, ChecksState, ImpactState, GovernanceState, SchemaChangesState, StructureState, LineageState, LayoutState };
+export type AnalysisState = NeighbourhoodState | ChecksState | ImpactState | GovernanceState | SchemaChangesState | StructureState | LineageState | LayoutState;
 
 /** What stays bright on the canvas while an analysis shows something. */
 export interface AnalysisMask {
@@ -67,6 +68,8 @@ export interface AnalysisSidebarArgs {
   selectNodes?: (ids: readonly string[]) => void;
   /** Save the open impact or neighbourhood analysis. Absent, no Save button. */
   onSave?: () => void;
+  /** What the Layout panel needs from the studio, besides the document. */
+  layout: Omit<LayoutPanelProps, "template" | "onClose" | "onPoint">;
 }
 
 export interface AnalysisSidebar {
@@ -185,6 +188,21 @@ export function useAnalysisSidebar(args: AnalysisSidebarArgs): AnalysisSidebar {
   const slug = (args.title || "model").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "model";
 
   const mask = useMemo<AnalysisMask | null>(() => {
+    // What a layout finding is about stays bright while it's pointed at, so a fault
+    // too small to spot at this zoom can be found without leaving the list.
+    if (state?.kind === "layout") {
+      const finding = state.pointing;
+      if (!finding) return null;
+      const keepEdges = new Set(finding.edgeIds ?? []);
+      const keep = new Set(finding.nodeIds ?? []);
+      for (const e of template.edges) {
+        if (keepEdges.has(e.id)) {
+          keep.add(e.source);
+          keep.add(e.target);
+        }
+      }
+      return { keep, keepEdges: keepEdges.size ? keepEdges : null };
+    }
     if (state?.kind === "neighbourhood" && reach) return { keep: new Set(reach.nodes.keys()), keepEdges: new Set(reach.edges) };
     if (state?.kind === "impact" && impact) {
       return { keep: new Set([state.subject.nodeId, ...impact.nodes.map((n) => n.id)]), keepEdges: new Set(impact.edges) };
@@ -240,6 +258,15 @@ export function useAnalysisSidebar(args: AnalysisSidebarArgs): AnalysisSidebar {
         onIgnore={args.onIgnoreFinding}
         onFix={args.onFixFinding}
         onDownload={(text) => csv(text, "checks.csv")}
+        onClose={close}
+      />
+    );
+  } else if (state?.kind === "layout") {
+    element = (
+      <LayoutPanel
+        template={template}
+        {...args.layout}
+        onPoint={(pointing) => setState((current) => (current?.kind === "layout" ? { ...current, pointing } : current))}
         onClose={close}
       />
     );

@@ -14,6 +14,12 @@
  */
 import {
   ARRANGE_MODES,
+  LAYOUT_ALGORITHMS,
+  LAYOUT_GAP_RANGE,
+  LAYOUT_DIRECTIONS,
+  LAYOUT_ENDS,
+  LAYOUT_SHAPES,
+  LAYOUT_SPACINGS,
   EDGE_ANCHOR_SIDES,
   EDGE_COLORS,
   EDGE_DIRECTIONS,
@@ -136,6 +142,7 @@ export function diagramJsonSchema(options: JsonSchemaOptions = {}): JsonSchema {
       providers: strings("Provider ids this connection exists on."),
       tech: str("Technology or protocol, C4 style: `[JSON/HTTPS]`."),
       relation: str("What kind of relationship: composition, reference, hierarchy, polymorphic, or a registry's own."),
+      secondary: { type: "boolean", description: "Real, but shouldn't shape the layout: a return path, a monitoring tap." },
       direction: oneOf(EDGE_DIRECTIONS, "Arrowheads. Default forward."),
       startHead: oneOf(EDGE_HEADS, "The glyph at the source end."),
       endHead: oneOf(EDGE_HEADS, "The glyph at the target end."),
@@ -262,7 +269,21 @@ export function diagramJsonSchema(options: JsonSchemaOptions = {}): JsonSchema {
       settings: object(
         {
           groupContents: oneOf(GROUP_CONTENTS, "Whether groups show their contents. Default show."),
-          arrange: oneOf(ARRANGE_MODES, "What Tidy optimises for. Default flow; roadmap lays a plan out by date."),
+          arrange: oneOf(ARRANGE_MODES, "What Tidy optimises for. Default auto, which picks the layout that measures best; roadmap lays a plan out by date."),
+          layout: object(
+            {
+              algorithm: oneOf(LAYOUT_ALGORITHMS, "Which family of layout auto uses. Default auto: try those that apply and keep the best."),
+              direction: oneOf(LAYOUT_DIRECTIONS, "Which way the picture reads. Default auto."),
+              inner: oneOf(LAYOUT_DIRECTIONS, "Which way it reads inside groups and zones. Default auto."),
+              shape: oneOf(LAYOUT_SHAPES, "A shape to aim for. Default any: the diagram comes out the shape its structure has."),
+              spacing: oneOf(LAYOUT_SPACINGS, "How much room to leave between things. Default normal."),
+              ends: oneOf(LAYOUT_ENDS, "Where the lines meeting one side of a box attach: each in its own place, or bundled tight. Default spread."),
+              rankGap: num("Room between ranks, overriding spacing.", { minimum: LAYOUT_GAP_RANGE.min, maximum: LAYOUT_GAP_RANGE.max }),
+              nodeGap: num("Room between boxes in a rank, overriding spacing.", { minimum: LAYOUT_GAP_RANGE.min, maximum: LAYOUT_GAP_RANGE.max }),
+            },
+            [],
+            "How auto arranges the diagram. Omit to let the graph decide.",
+          ),
           roadmap: object(
             {
               from: ref("date", "The day at the left edge of the axis."),
@@ -296,7 +317,7 @@ export function diagramJsonSchema(options: JsonSchemaOptions = {}): JsonSchema {
       color: str("`#rgb`, `#rrggbb`, `#rrggbbaa`, or `#rrggbb/NN` with NN a percent opacity.", {
         pattern: "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$|^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})/\\d{1,3}$",
       }),
-      anchor: object({ side: oneOf(EDGE_ANCHOR_SIDES, "Which side."), t: num("Where along that side.", { minimum: 0, maximum: 1 }) }, ["side"]),
+      anchor: object({ side: oneOf(EDGE_ANCHOR_SIDES, "Which side."), t: num("Where along that side.", { minimum: 0, maximum: 1 }), auto: { type: "boolean", description: "Chosen by the auto-placer rather than a person, so the next Tidy may change it." } }, ["side"]),
       points: {
         type: "array",
         items: { type: "array", prefixItems: [{ type: "number" }, { type: "number" }], minItems: 2, maxItems: 2 },

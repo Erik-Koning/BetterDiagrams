@@ -23,6 +23,7 @@
  *   - on a selected edge, drag an endpoint to pin where it attaches — or drop
  *     it on another node to re-attach the edge there
  */
+import { kindDef } from "./registry-types";
 import { memo, useCallback, useRef, useState, type CSSProperties } from "react";
 import {
   EdgeLabelRenderer,
@@ -311,6 +312,8 @@ export const LabeledEdge = memo(function LabeledEdge({
         { start: startSlot, end: endSlot, startSide, endSide },
       ),
       points: data?.points,
+      startShape: kindDef(registry, (sourceNode?.data as DiagramNodeData | undefined)?.kind as string).shape,
+      endShape: kindDef(registry, (targetNode?.data as DiagramNodeData | undefined)?.kind as string).shape,
     };
   };
 

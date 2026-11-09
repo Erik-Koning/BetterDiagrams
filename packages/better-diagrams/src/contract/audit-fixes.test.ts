@@ -179,12 +179,12 @@ describe("Tidy", () => {
       ],
       edges: [{ id: "e", source: "b", target: "c" }],
     });
-    const a = autoLayout(t).nodes.find((n) => n.id === "a")!;
+    const a = autoLayout(t, { mode: "flow" }).nodes.find((n) => n.id === "a")!;
     expect([a.x, a.y]).toEqual([900, 900]);
   });
 
   it("keeps provider alternates stacked, so switching cloud swaps them in place", () => {
-    const laid = autoLayout(EXAMPLE_ZONED_TEMPLATE);
+    const laid = autoLayout(EXAMPLE_ZONED_TEMPLATE, { mode: "flow" });
     const at = (id: string) => {
       const n = laid.nodes.find((x) => x.id === id)!;
       return `${n.x},${n.y}`;
@@ -208,15 +208,15 @@ describe("Tidy", () => {
       const b = templateBounds(laid);
       return { width: b.maxX - b.minX, height: b.maxY - b.minY };
     };
-    const wrapped = box(autoLayout(t));
-    const spine = box(autoLayout(t, { aspect: 0 }));
+    const wrapped = box(autoLayout(t, { mode: "flow" }));
+    const spine = box(autoLayout(t, { mode: "flow", aspect: 0 }));
     expect(spine.height).toBeGreaterThan(3000);
     expect(spine.width).toBe(230);
     expect(wrapped.height).toBeLessThan(spine.height / 2);
     expect(wrapped.width / wrapped.height).toBeGreaterThan(0.8);
     expect(wrapped.width / wrapped.height).toBeLessThan(2.4);
     // Every table still has a box of its own.
-    const boxes = autoLayout(t).nodes.map((n) => ({ x: n.x, y: n.y, r: n.x + n.w, b: n.y + n.h }));
+    const boxes = autoLayout(t, { mode: "flow" }).nodes.map((n) => ({ x: n.x, y: n.y, r: n.x + n.w, b: n.y + n.h }));
     for (let i = 0; i < boxes.length; i++)
       for (let j = i + 1; j < boxes.length; j++) {
         const a = boxes[i], b = boxes[j];
@@ -230,7 +230,7 @@ describe("Tidy", () => {
       nodes: ["a", "b", "c", "d", "e", "f"].map((id) => ({ id, label: id, kind: "service", x: 0, y: 0 })),
     });
     const at = (laid: DiagramTemplate) => laid.nodes.map((n) => `${n.id}:${n.x},${n.y}`);
-    expect(at(autoLayout(t))).toEqual(at(autoLayout(t, { aspect: 0 })));
+    expect(at(autoLayout(t, { mode: "flow" }))).toEqual(at(autoLayout(t, { mode: "flow", aspect: 0 })));
   });
 });
 
