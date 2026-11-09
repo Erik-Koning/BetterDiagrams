@@ -1958,7 +1958,7 @@ export const LAYOUT_GAP_RANGE: {
 export const LAYOUT_LINT_RULES: Record<string, LintRuleDef>;
 
 // @public
-export const LAYOUT_RULE_IDS: readonly ["box-overlap", "line-through-box", "line-crossing", "line-overlap", "words-collision", "words-on-line", "words-on-border", "box-too-close", "outside-container", "region-collision", "intruder", "line-over-title", "line-on-border", "almost-level", "text-clipped", "near-alignment", "uneven-spacing", "against-the-flow", "long-line", "line-detour", "loose-container", "sparse-canvas"];
+export const LAYOUT_RULE_IDS: readonly ["box-overlap", "line-through-box", "line-crossing", "line-overlap", "words-collision", "words-on-line", "words-on-border", "box-too-close", "outside-container", "region-collision", "intruder", "line-over-title", "line-on-border", "almost-level", "text-clipped", "near-alignment", "uneven-spacing", "against-the-flow", "long-line", "line-detour", "loose-container", "sparse-canvas", "shallow-crossing", "close-lines", "line-hook", "curve-bulge", "ambiguous-words", "crowded-ends", "too-dense"];
 
 // @public
 export const LAYOUT_RULES: Record<LayoutRuleId, RuleMeta>;
@@ -2056,6 +2056,7 @@ export interface LayoutReport {
         width: number;
         height: number;
         lineLength: number;
+        zoom: number;
     };
     score: number;
 }

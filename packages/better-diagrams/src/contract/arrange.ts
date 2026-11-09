@@ -85,11 +85,6 @@ const SPACING_SCALE: Record<LayoutSpacing, number> = { compact: 0.72, normal: 1,
 const POLISH_ROUNDS = 5;
 /** Times each container's members are re-ordered against where the last pass put things. */
 const REFINE_PASSES = 3;
-const TYPICAL_WINDOW = { w: 1500, h: 900 };
-const LEGIBILITY_WEIGHT = 16;
-/** Fitted smaller than this, a box's 13px label is under 7px on screen. */
-const READABLE_ZOOM = 0.5;
-const ILLEGIBLE_WEIGHT = 1500;
 /** Above this many boxes, Tidy takes the first direction rather than measuring each. */
 const COMPARE_LIMIT = 150;
 /** The narrowest and widest a box grows to fit its words, before they wrap instead. */
@@ -1311,14 +1306,9 @@ export function autoPlace(template: DiagramTemplate, options: ArrangeOptions = {
     const composed = composeDocument(template, prefs, outer, inner, options);
     const settled = settleLines(composed, { containerKinds: options.containerKinds, frames: options.frames });
     if (pairs.length === 1) return settled;
-    const report = lintLayout(settled, lintOptions);
-    // How small the words end up, fitted to a typical window, weighs in too: not a
-    // preference for any shape, since anything that fits at full size pays nothing.
-    // Past a point it stops being a preference: text nobody can read is as much a
-    // defect as a line through a box, however few crossings it took to get there.
-    const fit = Math.min(1, TYPICAL_WINDOW.w / Math.max(1, report.metrics.width), TYPICAL_WINDOW.h / Math.max(1, report.metrics.height));
-    const illegible = Math.max(0, READABLE_ZOOM - fit) * ILLEGIBLE_WEIGHT;
-    const cost = report.cost - Math.log2(fit) * LEGIBILITY_WEIGHT + illegible;
+    // The linter's cost already counts how small the words end up when the
+    // picture is fitted to a window, so this chooses by what readers do.
+    const { cost } = lintLayout(settled, lintOptions);
     // A real difference, or the first choice stands: flipping a diagram's
     // direction for a rounding error would make Tidy feel arbitrary.
     if (cost < bestCost * 0.97) {

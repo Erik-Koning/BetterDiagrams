@@ -23,6 +23,14 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   the layout settings, and thumbnails of the other arrangements. Pointing at a finding picks it out on
   the canvas. Arrange also gains Polish, Arrange selection and Best fit. The edge inspector gains "Doesn't shape the layout".
 - `bd-layout`, a command for the same: `lint`, `fix`, `place` and `best`.
+- Seven more layout rules, for what readers noticed that the first ones missed: `shallow-crossing`,
+  `close-lines`, `line-hook`, `curve-bulge`, `ambiguous-words`, `crowded-ends` and `too-dense`.
+  `lintLayout`'s cost now counts how small the words come out when the picture is fitted
+  to a window, which the auto-placer used to add on its own, and `LayoutReport.metrics.zoom` says how
+  far it's scaled.
+- `npm run gallery` (in the repo, not the package): draws the gallery's documents with two versions of
+  the code, or in every arrangement, in the real studio; makes blind pairs for reviewers, records
+  their picks, and fits the layout rules' costs to them.
 - A **Model** picker in the AI panel, in both editors. `aiModels`, `aiModel` and `onAiModelChange` on
   `ArchitectureStudio` and `SequenceStudio` offer the choice, and it travels as `GenerateRequest.model`
   (`AiModelOption`). On the server, `AiRouteStatus.models` lists every model the environment's keys
@@ -43,6 +51,9 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 
 ### Changed
 
+- A layout score below 40 keeps falling ever more slowly rather than stopping at 0, and more of one
+  problem past its cap still counts a little, so a mess and a worse mess score differently. Scores
+  of 40 and up are unchanged. The Layout panel shows the count of errors, warnings and notes beside it.
 - Tidy and the auto-tidy after a generation now use the auto-placer unless the document chose
   otherwise, so `autoLayout` with no mode means `"auto"`, not `"flow"`, and can move zones and grow a
   box that its words don't fit. A document with `settings.arrange: "flow"` or `"untangle"` arranges

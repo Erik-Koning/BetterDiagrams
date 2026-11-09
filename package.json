@@ -17,7 +17,9 @@
     "release:dry": "npm run build:app && npm publish --dry-run -w @mosphere/better-diagrams",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e:headed": "playwright test --headed",
+    "gallery": "node scripts/gallery/cli.mjs",
+    "test:gallery": "node --test scripts/gallery/gallery.test.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0"

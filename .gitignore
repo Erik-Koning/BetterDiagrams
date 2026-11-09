@@ -51,3 +51,6 @@ templates/symlinks/
 !.env.*.example
 !.env.*.sample
 !.env.*.template
+
+# Gallery runs (npm run gallery): pictures and contact sheets, regenerated at will.
+gallery/out/

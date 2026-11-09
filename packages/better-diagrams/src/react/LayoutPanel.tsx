@@ -131,6 +131,17 @@ export interface LayoutPanelProps {
   onClose: () => void;
 }
 
+/**
+ * What's behind the number, counted: the score bends as it falls, so the counts
+ * are what tell a picture with a handful of problems from one with hundreds.
+ */
+function problemCount(report: LayoutReport): string {
+  const by = { error: 0, warning: 0, info: 0 };
+  for (const f of report.findings) by[f.severity] += 1;
+  const part = (n: number, one: string, many: string) => (n ? `${n} ${n === 1 ? one : many}` : null);
+  return [part(by.error, "error", "errors"), part(by.warning, "warning", "warnings"), part(by.info, "note", "notes")].filter(Boolean).join(", ");
+}
+
 function scoreWord(score: number): string {
   if (score >= 95) return "Reads cleanly";
   if (score >= 80) return "A few rough spots";
@@ -172,8 +183,10 @@ export function LayoutPanel({
         <span className="as-layout__number">{report.score}</span>
         <span className="as-layout__scoretext">
           <span className="as-layout__scoreword">{scoreWord(report.score)}</span>
+          {report.findings.length ? <span className="as-paths__hint">{problemCount(report)}</span> : null}
           <span className="as-paths__hint">
             {report.metrics.boxes} boxes, {report.metrics.lines} lines, {Math.round(report.metrics.width)} × {Math.round(report.metrics.height)}
+            {report.metrics.zoom < 0.995 ? `, fits a window at ${Math.round(report.metrics.zoom * 100)}%` : ""}
           </span>
         </span>
       </div>

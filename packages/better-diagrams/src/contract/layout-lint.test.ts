@@ -39,6 +39,91 @@ const doc = (nodes: unknown[], edges: unknown[] = [], more: Record<string, unkno
   validateTemplate({ version: 1, nodes, edges, ...more });
 const count = (t: DiagramTemplate, rule: LayoutRuleId) => lintLayout(t).counts[rule] ?? 0;
 
+describe("what readers notice that the first rules missed", () => {
+  const straight = { routing: "straight" };
+  // Two lines through waypoints, running level `gap` pixels apart for 400px.
+  const parallel = (gap: number) =>
+    doc(
+      [service("a", 0, 0), service("b", 1000, 0), service("c", 0, 500), service("d", 1000, 500)],
+      [
+        line("a", "b", { ...straight, points: [[300, 250], [700, 250]] }),
+        line("c", "d", { ...straight, points: [[300, 250 + gap], [700, 250 + gap]] }),
+      ],
+    );
+
+  it("a crossing at a shallow angle, not one square across", () => {
+    const shallow = doc(
+      [service("a", 0, 0), service("b", 1200, 140), service("c", 0, 140), service("d", 1200, 0)],
+      [line("a", "b", straight), line("c", "d", straight)],
+    );
+    expect(count(shallow, "line-crossing")).toBe(1);
+    expect(count(shallow, "shallow-crossing")).toBe(1);
+    const square = doc(
+      [service("a", 0, 0), service("b", 0, 400), service("c", -300, 200), service("d", 300, 200)],
+      [line("a", "b", straight), line("c", "d", straight)],
+    );
+    expect(count(square, "line-crossing")).toBe(1);
+    expect(count(square, "shallow-crossing")).toBe(0);
+  });
+
+  it("lines a few pixels apart, apart from lines on top of each other and lines spaced out", () => {
+    expect(count(parallel(6), "close-lines")).toBe(1);
+    expect(count(parallel(6), "line-overlap")).toBe(0);
+    expect(count(parallel(2), "close-lines")).toBe(0);
+    expect(count(parallel(2), "line-overlap")).toBe(1);
+    expect(count(parallel(14), "close-lines")).toBe(0);
+  });
+
+  it("a line that doubles back into its box, not one that arrives the way it was going", () => {
+    const hook = doc([service("a", 0, 0), service("b", 400, 0)], [line("a", "b", { start: { side: "right" }, end: { side: "right" } })]);
+    expect(count(hook, "line-hook")).toBe(1);
+    const along = doc([service("a", 0, 0), service("b", 400, 0)], [line("a", "b", { start: { side: "right" }, end: { side: "left" } })]);
+    expect(count(along, "line-hook")).toBe(0);
+  });
+
+  it("a curve that swings far out of its way, not one that bends between its ends", () => {
+    const arc = doc([service("a", 0, 200), service("b", 400, 200)], [line("a", "b", { start: { side: "top" }, end: { side: "top" } })]);
+    expect(count(arc, "curve-bulge")).toBe(1);
+    const bend = doc([service("a", 0, 0), service("b", 300, 400)], [line("a", "b")]);
+    expect(count(bend, "curve-bulge")).toBe(0);
+  });
+
+  it("words as near another line as their own", () => {
+    // A label beside a vertical line, and another line passing `x` from it.
+    const beside = (x: number) =>
+      doc(
+        [service("a", 0, 0), service("b", 0, 400), service("c", 400, 0), service("d", 400, 400)],
+        [line("a", "b", { ...straight, label: "reads" }), line("c", "d", { ...straight, points: [[x, 120], [x, 360]] })],
+      );
+    expect(count(beside(132), "ambiguous-words")).toBe(1);
+    expect(count(beside(170), "ambiguous-words")).toBe(0);
+    // Touching the words is the other rule.
+    expect(count(beside(120), "ambiguous-words")).toBe(0);
+    expect(count(beside(120), "words-on-line")).toBe(1);
+  });
+
+  it("line ends too close together to tell apart, not ends spread along a side", () => {
+    const meet = (ts: number[]) =>
+      doc(
+        [service("t", 500, 200), ...ts.map((_, i) => service(`s${i}`, 0, i * 160))],
+        ts.map((t, i) => line(`s${i}`, "t", { end: { side: "left", t } })),
+      );
+    expect(count(meet([0.45, 0.5, 0.55]), "crowded-ends")).toBe(1);
+    expect(lintLayout(meet([0.45, 0.5, 0.55])).findings.find((f) => f.rule === "crowded-ends")).toMatchObject({ nodeIds: ["t"] });
+    expect(count(meet([0.2, 0.5, 0.8]), "crowded-ends")).toBe(0);
+  });
+
+  it("a picture too dense for one view, once, and not a long one with few lines", () => {
+    const row = (lines: number) =>
+      doc(
+        Array.from({ length: 30 }, (_, i) => service(`n${i}`, i * 260, 0)),
+        Array.from({ length: lines }, (_, i) => line(`n${i % 30}`, `n${(i * 7 + 3) % 30}`, { id: `e${i}` })),
+      );
+    expect(count(row(40), "too-dense")).toBe(1);
+    expect(count(row(12), "too-dense")).toBe(0);
+  });
+});
+
 describe("what each rule catches", () => {
   it("boxes on boxes, and boxes that nearly touch", () => {
     const t = doc([service("a", 0, 0), service("b", 100, 20), service("c", 400, 0), service("d", 574, 0)]);
@@ -175,10 +260,24 @@ describe("the score", () => {
     expect(lintLayout(overlap).score).toBeLessThan(lintLayout(nearMiss).score);
   });
 
-  it("one rule can't sink the whole score", () => {
-    const mess = doc(Array.from({ length: 40 }, (_, i) => service(`n${i}`, i, i)));
-    expect(lintLayout(mess).counts["box-overlap"]).toBeGreaterThan(40);
-    expect(lintLayout(mess).score).toBeGreaterThanOrEqual(100 - LAYOUT_RULES["box-overlap"].cap - 20);
+  it("one rule can't sink the whole score: past a point, more of the same costs nothing more", () => {
+    const pile = (n: number) => doc(Array.from({ length: n }, (_, i) => service(`n${i}`, i, i)));
+    expect(lintLayout(pile(40)).counts["box-overlap"]).toBeGreaterThan(40);
+    expect(lintLayout(pile(40)).score).toBeGreaterThanOrEqual(15);
+    expect(lintLayout(pile(60)).score).toBe(lintLayout(pile(40)).score);
+  });
+
+  it("keeps falling past 40 without reaching 0, so a mess and a worse mess read differently", () => {
+    const tangle = (n: number) =>
+      doc(
+        Array.from({ length: n }, (_, i) => service(`n${i}`, (i % 6) * 260, Math.floor(i / 6) * 160)),
+        Array.from({ length: n }, (_, i) => line(`n${i}`, `n${(i * 7 + 3) % n}`)),
+      );
+    const some = lintLayout(tangle(18)).score;
+    const more = lintLayout(tangle(36)).score;
+    expect(some).toBeLessThan(40);
+    expect(more).toBeLessThan(some);
+    expect(more).toBeGreaterThan(0);
   });
 
   it("findings come worst first", () => {

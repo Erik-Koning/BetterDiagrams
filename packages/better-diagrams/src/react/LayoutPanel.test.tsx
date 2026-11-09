@@ -52,6 +52,8 @@ describe("LayoutPanel", () => {
     const user = userEvent.setup();
     const { onJump } = panel();
     expect(screen.getByRole("status", { name: /Layout score \d+ out of 100/ })).toBeInTheDocument();
+    // The counts beside the score, which still tell a few problems from many where the score has bent.
+    expect(within(screen.getByRole("status")).getByText(/^2 errors, \d+ notes?$/)).toBeInTheDocument();
     await user.click(screen.getByText("Boxes overlap"));
     await user.click(screen.getByRole("button", { name: /"Alpha" and "Bravo" overlap/ }));
     expect(onJump).toHaveBeenCalledWith(expect.objectContaining({ rule: "box-overlap", nodeIds: ["a", "b"] }));
