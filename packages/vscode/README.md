@@ -83,8 +83,9 @@ The title bar's ◐ button (**Better Diagrams: Toggle Light/Dark**) switches the
 With a language model in VS Code — GitHub Copilot's, or any extension's that provides one — the
 studio's **AI** button opens **Generate** and **Adjust with AI**, as in the web app. The requests
 go to that model through VS Code (`vscode.lm`): there is no key to set, and the first one asks you
-to allow Better Diagrams to use it. `betterDiagrams.aiModel` picks a model by id, family or name;
-`betterDiagrams.ai: false` hides the panel.
+to allow Better Diagrams to use it. With more than one model, the panel's **Model** picker chooses
+between them and keeps the choice in `betterDiagrams.aiModel`, which also takes a model's id, family
+or name by hand; `betterDiagrams.ai: false` hides the panel.
 
 ## Agents
 

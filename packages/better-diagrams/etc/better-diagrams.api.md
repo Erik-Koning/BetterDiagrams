@@ -30,6 +30,13 @@ export function addNode(template: DiagramTemplate, input?: NodeInput): DiagramTe
 export function addZone(template: DiagramTemplate, input?: ZoneInput): DiagramTemplate;
 
 // @public
+export interface AiModelOption {
+    group?: string;
+    id: string;
+    label: string;
+}
+
+// @public
 export function allSimplePaths(doc: GraphDocument, from: string, to: string, opts?: GraphOptions & {
     maxDepth?: number;
     limit?: number;
@@ -63,6 +70,8 @@ export interface ArchitectureStudioProps {
     // (undocumented)
     activeFileId?: string;
     aiLabel?: string;
+    aiModel?: string;
+    aiModels?: AiModelOption[];
     // (undocumented)
     className?: string;
     defaultShowHidden?: boolean;
@@ -79,6 +88,7 @@ export interface ArchitectureStudioProps {
     minimap?: boolean;
     mode?: StudioMode;
     onActivePathsChange?: (ids: string[]) => void;
+    onAiModelChange?: (id: string) => void;
     onChange?: (template: DiagramTemplate) => void;
     onCoverageChange?: (keys: FieldRef[]) => void;
     onFileCreate?: (init?: StudioFileInit) => void;
@@ -1798,6 +1808,7 @@ export interface GenerateRequest {
     history?: GenerateTurn[];
     input: string;
     mode: "create" | "refine";
+    model?: string;
     systemPrompt: string;
 }
 
@@ -3556,6 +3567,8 @@ export interface SequenceStudioHandle {
 export interface SequenceStudioProps {
     // (undocumented)
     activeFileId?: string;
+    aiModel?: string;
+    aiModels?: AiModelOption[];
     // (undocumented)
     className?: string;
     defaultValue?: SequenceTemplate;
@@ -3567,6 +3580,7 @@ export interface SequenceStudioProps {
     // (undocumented)
     inspectorExtras?: ReactNode;
     mode?: StudioMode;
+    onAiModelChange?: (id: string) => void;
     onChange?: (template: SequenceTemplate) => void;
     onFileCreate?: (init?: StudioFileInit) => void;
     // (undocumented)

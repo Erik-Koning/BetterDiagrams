@@ -426,6 +426,7 @@ export {
   replyNote,
 } from "./llm";
 export type {
+  AiModelOption,
   GenerateRequest,
   GenerateTurn,
   DiagramGenerator,

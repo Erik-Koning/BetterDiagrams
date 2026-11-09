@@ -221,6 +221,8 @@ function seedWorkspace() {
  * generator serves both editors — each sends its own system prompt.
  */
 const generate = createProxyGenerator({ endpoint: "/api/diagram" });
+/** Where the AI panel's choice of model is kept between visits. */
+const AI_MODEL_KEY = "better-diagrams:ai-model";
 
 /**
  * The live template, rendered as the exact text of
@@ -302,16 +304,16 @@ export default function App() {
   const [accent, setAccent] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(false);
   // What answers the AI route, as the server reports it: the panel turns
-  // itself on when the server found a key, and says which model it is.
+  // itself on when the server found a key, and says which models there are.
   // Settings can still turn it off.
-  const [aiModel, setAiModel] = useState(null);
+  const [aiStatus, setAiStatus] = useState(null);
   useEffect(() => {
     let live = true;
     fetch("/api/ai")
       .then((response) => (response.ok ? response.json() : null))
       .then((status) => {
         if (!live || !status?.configured) return;
-        setAiModel(status.label);
+        setAiStatus(status);
         setAiEnabled(true);
       })
       // A static build has no route: the panel just stays off.
@@ -320,6 +322,26 @@ export default function App() {
       live = false;
     };
   }, []);
+  // The model picked in the AI panel, kept for the next visit. A pick the server
+  // no longer offers (its key has gone) falls back to the server's own default.
+  const [aiPick, setAiPick] = useState(() => {
+    try {
+      return localStorage.getItem(AI_MODEL_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const pickAiModel = useCallback((id) => {
+    setAiPick(id);
+    try {
+      localStorage.setItem(AI_MODEL_KEY, id);
+    } catch {
+      // Private window: the pick lasts until the page closes.
+    }
+  }, []);
+  const aiModels = aiStatus?.models;
+  const aiModelId = aiModels?.some((model) => model.id === aiPick) ? aiPick : aiStatus?.model;
+  const aiModelLabel = aiModels?.find((model) => model.id === aiModelId)?.label ?? aiStatus?.label;
   // The template panel starts collapsed; hovering the handle explains what it is.
   const [showJson, setShowJson] = useState(false);
   /** The template-JSON edit modal over the viewer panel. */
@@ -1973,7 +1995,7 @@ export default function App() {
                 {[
                   ["Read-only", readOnly, setReadOnly, "Hide every editing affordance; pan, zoom and export still work"],
                   ["Minimap", minimap, setMinimap, "The overview in the canvas corner"],
-                  ["AI panel", aiEnabled, setAiEnabled, aiModel ? `Offer the Adjust with AI chat — answered by ${aiModel}` : "Offer the Adjust with AI chat and Generate"],
+                  ["AI panel", aiEnabled, setAiEnabled, aiModelLabel ? `Offer the Adjust with AI chat — answered by ${aiModelLabel}` : "Offer the Adjust with AI chat and Generate"],
                   ["Light", mode === "light", (on) => setMode(on ? "light" : "dark"), "Light theme, or dark"],
                   [
                     "Marketing",
@@ -2247,6 +2269,9 @@ export default function App() {
               mode={studioMode}
               gradients={gradients}
               generate={aiEnabled ? generate : undefined}
+              aiModels={aiModels}
+              aiModel={aiModelId}
+              onAiModelChange={pickAiModel}
               filename={active.name}
               onSelectionChange={setSelection}
               onLinkFile={onLinkFile}
@@ -2269,7 +2294,10 @@ export default function App() {
               mode={studioMode}
               gradients={gradients}
               generate={aiEnabled ? generate : undefined}
-              aiLabel={aiModel ?? undefined}
+              aiLabel={aiModelLabel}
+              aiModels={aiModels}
+              aiModel={aiModelId}
+              onAiModelChange={pickAiModel}
               filename={active.name}
               onNavigateFile={navigateFile}
               onSelectionChange={setSelection}

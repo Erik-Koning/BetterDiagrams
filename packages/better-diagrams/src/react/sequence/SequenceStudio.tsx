@@ -85,7 +85,8 @@ import {
   type VersionTagPosition,
 } from "../../contract/schema";
 import { parseArchitectureText } from "../welcome-parse";
-import type { DiagramGenerator } from "../../contract/llm";
+import type { AiModelOption, DiagramGenerator } from "../../contract/llm";
+import { AiModelSelect, pickedAiModel } from "../ai-model-select";
 import type { DiagramTemplate } from "../../contract/schema";
 import {
   openingCursor,
@@ -220,6 +221,12 @@ export interface SequenceStudioProps {
    * code runs.
    */
   generate?: DiagramGenerator;
+  /** The models the AI panel can choose between, as the architecture editor takes them. */
+  aiModels?: AiModelOption[];
+  /** The chosen `id` in `aiModels`. With none, or one not listed, the first is used. */
+  aiModel?: string;
+  /** A different model was chosen. Keep it and pass it back as `aiModel`. */
+  onAiModelChange?: (id: string) => void;
   readOnly?: boolean;
   theme?: Theme;
   /**
@@ -339,6 +346,9 @@ function SequenceInner({
   onChange,
   onSave,
   generate,
+  aiModels,
+  aiModel,
+  onAiModelChange,
   readOnly = false,
   theme,
   mode,
@@ -1488,6 +1498,8 @@ function SequenceInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [metaTitle, activeFile?.id, activeFile?.name, onFileRename, patchMeta]);
 
+  const pickedModelId = pickedAiModel(aiModels, aiModel)?.id;
+
   const runGenerate = useCallback(
     async (mode: "create" | "refine") => {
       if (!generate || busy) return;
@@ -1512,6 +1524,7 @@ function SequenceInner({
             ...(mode === "refine"
               ? { current: templateRef.current as unknown as DiagramTemplate }
               : {}),
+            ...(pickedModelId ? { model: pickedModelId } : {}),
           },
           controller.signal,
         );
@@ -1538,7 +1551,7 @@ function SequenceInner({
         abortRef.current = null;
       }
     },
-    [generate, busy, createInput, refineInput, applyTemplate, showToast],
+    [generate, busy, createInput, refineInput, applyTemplate, showToast, pickedModelId],
   );
 
   const context = useMemo<SequenceContextValue>(
@@ -1888,6 +1901,8 @@ function SequenceInner({
                   <UiIcon name="close" />
                 </button>
               </div>
+
+              <AiModelSelect models={aiModels} value={aiModel} onChange={onAiModelChange} disabled={busy} />
 
               <textarea
                 className="as-textarea"

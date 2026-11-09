@@ -34,7 +34,7 @@ import {
 } from "@mosphere/better-diagrams";
 import "@mosphere/better-diagrams/styles.css";
 import { completeTheme, kindOf, lossOf, registry, studioTheme, validateDoc, type DocumentKind, type ViewMode } from "@app/documents.js";
-import { VIEW_DEFAULTS, type HostMessage, type TextRead, type ViewSettings, type WebviewMessage } from "../protocol";
+import { VIEW_DEFAULTS, type AiChoice, type HostMessage, type TextRead, type ViewSettings, type WebviewMessage } from "../protocol";
 import { HostTools } from "./host-tools";
 import { leaveHistoryToVsCode, removeVsCodeDefaultStyles, sendDownloadsToHost, sendLinksToHost, watchForInput } from "./shims";
 import "./webview.css";
@@ -158,6 +158,8 @@ function Editor() {
   const [filename, setFilename] = useState("diagram");
   const [view, setView] = useState<ViewSettings>(VIEW_DEFAULTS);
   const [aiLabel, setAiLabel] = useState<string | null>(null);
+  const [aiModels, setAiModels] = useState<AiChoice[]>([]);
+  const [aiModel, setAiModel] = useState<string | undefined>(undefined);
   const [schemaOpen, setSchemaOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const vsCode = useVsCodeMode();
@@ -193,6 +195,8 @@ function Editor() {
           return;
         case "ai":
           setAiLabel(message.label);
+          setAiModels(message.models ?? []);
+          setAiModel(message.model);
           return;
         case "generated": {
           const waiting = generating.get(message.id);
@@ -255,6 +259,13 @@ function Editor() {
     send({ type: "setView", view: change });
   }, []);
 
+  /** Shown at once; written to VS Code's settings, which every other diagram editor then follows. */
+  const onAiModelChange = useCallback((id: string) => {
+    setAiModel(id);
+    send({ type: "setAiModel", id });
+  }, []);
+  const shownAiLabel = aiModels.find((model) => model.id === aiModel)?.label ?? aiLabel;
+
   const accent = view.accent || undefined;
   // Memoised, as App.jsx does: the studio derives its export palette and more from it.
   const theme = useMemo(() => studioTheme(mode, accent), [mode, accent]);
@@ -298,14 +309,14 @@ function Editor() {
       readOnly={ownReadOnly}
       onReadOnly={setOwnReadOnly}
       canEdit={canEdit}
-      aiLabel={aiLabel}
+      aiLabel={shownAiLabel}
       onCopySchema={copySchema}
       onEditJson={() => setEditOpen(true)}
       onDeriveSequence={deriveSequence}
       onExample={(which) => replace({ kind: "architecture", doc: which === "zoned" ? EXAMPLE_ZONED_TEMPLATE : EXAMPLE_TEMPLATE })}
     />
   ) : null;
-  const ai = aiLabel && view.ai ? { generate, aiLabel } : {};
+  const ai = shownAiLabel && view.ai ? { generate, aiLabel: shownAiLabel, aiModels, aiModel, onAiModelChange } : {};
   const shared = {
     readOnly,
     theme,

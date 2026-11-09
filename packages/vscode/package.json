@@ -323,7 +323,7 @@
           "type": "string",
           "default": "",
           "order": 7,
-          "description": "The language model the AI panel asks, by id, family or name (for example gpt-4o or claude-sonnet-4). Empty: the first one VS Code offers."
+          "description": "The language model the AI panel asks, by id, family or name (for example gpt-4o or claude-sonnet-4). Empty: the first one VS Code offers. The panel's Model picker sets this."
         }
       }
     },

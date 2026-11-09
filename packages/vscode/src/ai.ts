@@ -5,22 +5,22 @@
  * person, in VS Code's own words, to let Better Diagrams use the model.
  */
 import * as vscode from "vscode";
-import { conversationOf, pickModel } from "./ai-request";
+import { conversationOf, modelChoices, pickModel } from "./ai-request";
 
 const preferredModel = () => vscode.workspace.getConfiguration("betterDiagrams").get<string>("aiModel", "");
 
 /** The model requests go to, or nothing when VS Code has none to offer. */
-export async function chatModel(): Promise<vscode.LanguageModelChat | undefined> {
+export async function chatModel(preferred = preferredModel()): Promise<vscode.LanguageModelChat | undefined> {
   if (!vscode.lm?.selectChatModels) return undefined;
-  return pickModel(await vscode.lm.selectChatModels(), preferredModel());
+  return pickModel(await vscode.lm.selectChatModels(), preferred);
 }
 
-/** The model's name for the AI panel to show, or null when there isn't one. */
-export async function aiLabel(): Promise<string | null> {
+/** What the AI panel offers: the model's name, or null when there isn't one, and the others to choose from. */
+export async function aiChoices(): Promise<ReturnType<typeof modelChoices>> {
   try {
-    return (await chatModel())?.name ?? null;
+    return modelChoices(vscode.lm?.selectChatModels ? await vscode.lm.selectChatModels() : [], preferredModel());
   } catch {
-    return null;
+    return modelChoices([], "");
   }
 }
 
@@ -32,7 +32,7 @@ export async function aiLabel(): Promise<string | null> {
 export async function generate(request: unknown, token: vscode.CancellationToken): Promise<string> {
   const conversation = conversationOf(request);
   if (!conversation) throw new Error("The request had no prompt in it.");
-  const model = await chatModel();
+  const model = await chatModel(conversation.model);
   if (!model) throw new Error("VS Code has no language model to ask. Sign in to GitHub Copilot, or install a model provider, then try again.");
   // There's no system role in VS Code's chat API: the schema goes first, as the person.
   const messages = [

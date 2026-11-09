@@ -27,5 +27,6 @@ export type {
   DiagramRoute,
   DiagramRouteOptions,
 } from "./ai-route";
+export type { AiModelOption } from "../contract/llm";
 export { serveAiRequest, createFetchHandler } from "./http";
 export type { ServeOptions } from "./http";

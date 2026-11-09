@@ -8,7 +8,7 @@ import { realpathSync } from "node:fs";
 import * as vscode from "vscode";
 import { formatDiagram, plainJson } from "@mosphere/better-diagrams/disk";
 import { templateFile } from "@app/documents.js";
-import { aiLabel, generate } from "./ai";
+import { aiChoices, generate } from "./ai";
 import { createDiagramFile, fileName } from "./files";
 import { webviewHtml } from "./html";
 import { VIEW_TYPE, type HostMessage, type ViewSettings, type WebviewMessage } from "./protocol";
@@ -41,18 +41,20 @@ export const readView = (): ViewSettings => {
  * back at its default leaves settings.json rather than sitting there.
  */
 export async function writeView(change: unknown): Promise<void> {
+  for (const [key, value] of Object.entries(viewChange(change)) as Array<[keyof ViewSettings, unknown]>) await writeSetting(key, value);
+}
+
+async function writeSetting(key: string, value: unknown): Promise<void> {
   const config = vscode.workspace.getConfiguration("betterDiagrams");
-  for (const [key, value] of Object.entries(viewChange(change)) as Array<[keyof ViewSettings, unknown]>) {
-    const set = config.inspect(key);
-    const target =
-      set?.workspaceFolderValue !== undefined
-        ? vscode.ConfigurationTarget.WorkspaceFolder
-        : set?.workspaceValue !== undefined
-          ? vscode.ConfigurationTarget.Workspace
-          : vscode.ConfigurationTarget.Global;
-    const fallback = set?.defaultValue;
-    await config.update(key, target === vscode.ConfigurationTarget.Global && value === fallback ? undefined : value, target);
-  }
+  const set = config.inspect(key);
+  const target =
+    set?.workspaceFolderValue !== undefined
+      ? vscode.ConfigurationTarget.WorkspaceFolder
+      : set?.workspaceValue !== undefined
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global;
+  const fallback = set?.defaultValue;
+  await config.update(key, target === vscode.ConfigurationTarget.Global && value === fallback ? undefined : value, target);
 }
 
 /** `3 things`, counted the way a person reads it. */
@@ -150,7 +152,7 @@ export class DiagramEditorProvider implements vscode.CustomTextEditorProvider {
     const report = (what: string) => (error: unknown) => this.log.error(`${what} (${name}): ${(error as Error)?.message ?? error}`);
     /** The AI panel's requests in flight, to stop when it gives up or the editor closes. */
     const asking = new Map<number, vscode.CancellationTokenSource>();
-    const postAi = () => void aiLabel().then((label) => post({ type: "ai", label }));
+    const postAi = () => void aiChoices().then((choices) => post({ type: "ai", ...choices }));
     /**
      * The canvas's selection in every editor showing this file's text (Show
      * JSON, ⌘L): lit, and the first of it scrolled into view when it's off
@@ -201,6 +203,13 @@ export class DiagramEditorProvider implements vscode.CustomTextEditorProvider {
           return;
         case "setView":
           writeView(message.view).catch((error: unknown) => {
+            report("Couldn't change a setting")(error);
+            void vscode.window.showErrorMessage(`Couldn't change the setting: ${(error as Error).message}`);
+          });
+          return;
+        case "setAiModel":
+          if (typeof message.id !== "string") return;
+          writeSetting("aiModel", message.id).catch((error: unknown) => {
             report("Couldn't change a setting")(error);
             void vscode.window.showErrorMessage(`Couldn't change the setting: ${(error as Error).message}`);
           });

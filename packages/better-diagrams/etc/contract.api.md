@@ -23,6 +23,13 @@ export function addNode(template: DiagramTemplate, input?: NodeInput): DiagramTe
 export function addZone(template: DiagramTemplate, input?: ZoneInput): DiagramTemplate;
 
 // @public
+export interface AiModelOption {
+    group?: string;
+    id: string;
+    label: string;
+}
+
+// @public
 export function allSimplePaths(doc: GraphDocument, from: string, to: string, opts?: GraphOptions & {
     maxDepth?: number;
     limit?: number;
@@ -1500,6 +1507,7 @@ export interface GenerateRequest {
     history?: GenerateTurn[];
     input: string;
     mode: "create" | "refine";
+    model?: string;
     systemPrompt: string;
 }
 

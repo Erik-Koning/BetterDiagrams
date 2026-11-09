@@ -178,6 +178,7 @@ import type { SchemaImport } from "../contract/import/table-model";
 import { CoveragePanel } from "./CoveragePanel";
 import { fieldUsage, searchFieldUsage, usageCoverage } from "../contract/key-usage";
 import { KeyUsagePanel } from "./KeyUsagePanel";
+import { AiModelSelect, pickedAiModel } from "./ai-model-select";
 import { useAnalysisSidebar, type AnalysisMask, type AnalysisState } from "./analysis-sidebar";
 import { routeSql } from "../contract/route-sql";
 import {
@@ -264,6 +265,7 @@ import {
   CHAT_REPLY_RULE,
   coerceGeneratorResult,
   replyNote,
+  type AiModelOption,
   type DiagramGenerator,
   type GenerateTurn,
 } from "../contract/llm";
@@ -508,9 +510,20 @@ export interface ArchitectureStudioProps {
   generate?: DiagramGenerator;
   /**
    * Names what answers `generate` — "Claude Opus 5.5" — for the AI panel to
-   * show. Purely informative: the editor never knows or picks the model.
+   * show when it offers no choice of model. Purely informative.
    */
   aiLabel?: string;
+  /**
+   * The models the AI panel can choose between. Two or more show a picker, and
+   * the chosen `id` travels as `model` on each `GenerateRequest` for the
+   * host's route to honour. `GET /api/ai` on `@mosphere/better-diagrams/server`
+   * lists what it offers as `models`.
+   */
+  aiModels?: AiModelOption[];
+  /** The chosen `id` in `aiModels`. With none, or one not listed, the first is used. */
+  aiModel?: string;
+  /** A different model was chosen. Keep it and pass it back as `aiModel`. */
+  onAiModelChange?: (id: string) => void;
   /** Base name for exported files. Defaults to "architecture". */
   filename?: string;
   /** Show the React Flow minimap. Defaults to true. */
@@ -924,6 +937,9 @@ function StudioInner({
   gradients = true,
   generate,
   aiLabel,
+  aiModels,
+  aiModel,
+  onAiModelChange,
   filename = "architecture",
   minimap = true,
   edgesOnHover = false,
@@ -5235,6 +5251,10 @@ function StudioInner({
 
   /** Where `error` has a home. Anything else has to say so for itself. */
   const aiPanelVisible = panelOpen && !!generate && !readOnly;
+  const pickedModel = pickedAiModel(aiModels, aiModel);
+  const pickedModelId = pickedModel?.id;
+  // A picker names the model itself; with none to show, the footnote does.
+  const answeredBy = aiModels && aiModels.length > 1 ? undefined : (pickedModel?.label ?? aiLabel);
 
   /**
    * A finger or a stylus rather than a mouse.
@@ -6184,6 +6204,7 @@ function StudioInner({
           systemPrompt: chat ? `${prompt}\n\n${CHAT_REPLY_RULE}` : prompt,
           ...(split ? { current: split.content } : {}),
           ...(history?.length ? { history } : {}),
+          ...(pickedModelId ? { model: pickedModelId } : {}),
         },
         signal,
       );
@@ -6255,7 +6276,7 @@ function StudioInner({
       const focusRemoved = !!focusScope && !next.nodes.some((n) => n.id === focusScope.id);
       return { next, note, outsideChanges, focusRemoved };
     },
-    [generate, systemPrompt, refineSystemPrompt, registry, studioMode],
+    [generate, systemPrompt, refineSystemPrompt, registry, studioMode, pickedModelId],
   );
 
   /** Generate: a new diagram from a description, replacing this one. */
@@ -8984,6 +9005,8 @@ function StudioInner({
                 </p>
               ) : null}
 
+              <AiModelSelect models={aiModels} value={aiModel} onChange={onAiModelChange} disabled={busy} />
+
               <div className="as-chat" ref={chatThreadRef} role="log" aria-label="Conversation">
                 {chat.length ? (
                   chat.map((entry) => (
@@ -9082,7 +9105,7 @@ function StudioInner({
               </details>
 
               <p className="as-panel__foot">
-                {aiLabel ? <>Answered by {aiLabel}. </> : null}
+                {answeredBy ? <>Answered by {answeredBy}. </> : null}
                 The model is prompted with the schema generated from this editor&apos;s registry, and
                 sees the diagram as it is when you send.
               </p>

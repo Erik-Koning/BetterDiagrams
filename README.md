@@ -57,8 +57,14 @@ export OPENAI_API_KEY=sk-...          # GPT-6 Astra; OPENAI_KEY works too, OPENA
 npm run dev
 ```
 
-`ANTHROPIC_MODEL` or `OPENAI_MODEL` picks another model, and `BD_AI=off` turns the route off. The
-dev server says which model it found when it starts. The keys stay in the server
+The panel's **Model** picker chooses among the models your keys open up: Claude Fable 5.1, Opus 5.5,
+Sonnet 5.5 and Haiku 5.5 with an Anthropic key, and GPT-6 Astra, GPT-6.1 Sol, GPT-6.1 Terra and GPT-6
+Luna with an OpenAI one. Set both to choose across all eight. The choice is kept for your next visit,
+and the server refuses any model it doesn't offer.
+
+`ANTHROPIC_MODEL` or `OPENAI_MODEL` changes the default on that side, and `BD_AI=off` turns the route
+off. Behind a custom base URL only the model set for it is offered, since a gateway's names are its
+own. The dev server says which model it found when it starts. The keys stay in the server
 (`@mosphere/better-diagrams/server`); the browser only ever sees `/api/diagram`.
 
 ## Using it
@@ -96,7 +102,10 @@ shadow.
 | `mode` | `"technical" \| "marketing"` | Presentation mode. Default `"technical"`. `"marketing"` restyles the same document for a slide or a landing page — see **Marketing mode** below. Both editors take it; unknown values fall back to technical. |
 | `gradients` | `boolean` | Marketing's one setting. Default `true`. `false` paints every fade the mode draws as one flat coat — on screen and in every picture export, which then carry no gradient at all. Ignored in technical. Both editors take it; see **Without gradients** under Marketing mode. |
 | `generate` | `DiagramGenerator` | Enables the AI panel. Omitted ⇒ no network code runs. |
-| `aiLabel` | `string` | Names what answers `generate` ("Claude Opus 5.5") in the AI panel. Informative only. |
+| `aiLabel` | `string` | Names what answers `generate` ("Claude Opus 5.5") in the AI panel when it offers no choice. Informative only. |
+| `aiModels` | `AiModelOption[]` | The models the AI panel can choose between; two or more show a picker. `GET /api/ai` on the server lists its own as `models`. |
+| `aiModel` | `string` | The chosen `id` in `aiModels`, sent as `model` on each request. With none, or one not listed, the first is used. |
+| `onAiModelChange` | `(id: string) => void` | A different model was chosen. Keep it and pass it back as `aiModel`. |
 | `minimap` | `boolean` | Default `true`. |
 | `edgesOnHover` | `boolean` | Default `false`. Hide every connection until the pointer is over a node it touches. Hovering a group draws its members' lines; a selected node, or a selected connection, keeps its lines while the pointer moves on. A view setting only — the document, the inspector and every export still carry every connection. Task **dependency** lines hide this way whatever the setting says (see [Task graphs](#task-graphs)). |
 | `welcome` | `boolean` | Default `true`. Shows the **welcome modal** over a brand-new document — see below. |
@@ -1501,8 +1510,13 @@ import { createProxyGenerator } from "@mosphere/better-diagrams";
 const generate = createProxyGenerator({ endpoint: "/api/diagram" });
 ```
 
-Your route receives `{ mode, input, systemPrompt, current, history }` and returns `{ text }` or
-`{ template }`.
+Your route receives `{ mode, input, systemPrompt, current, history, model }` and returns `{ text }`
+or `{ template }`.
+
+To let people choose the model, pass `aiModels`, `aiModel` and `onAiModelChange`: two or more models
+show a **Model** picker in the panel, and the chosen `id` arrives as `model`. It comes from the
+browser, so check it against what you offer before calling anyone, as
+`@mosphere/better-diagrams/server` does. Its `GET /api/ai` lists the models to pass as `models`.
 
 **Adjust with AI** is the panel's chat. Each message goes to the model with the live diagram (the
 content form, so the layout you arranged stays put) and lands as one undo step; the panel stays

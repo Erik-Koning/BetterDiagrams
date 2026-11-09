@@ -44,6 +44,13 @@ export const VIEW_DEFAULTS: ViewSettings = {
   ai: true,
 };
 
+/** A language model the AI panel can offer: the studio's `AiModelOption`. */
+export interface AiChoice {
+  id: string;
+  label: string;
+  group?: string;
+}
+
 /** What the document's text holds right now, as the extension read it. */
 export type TextRead =
   /** JSON that the disk store would list as a diagram. */
@@ -67,8 +74,11 @@ export type HostMessage =
   | { type: "text"; text: string; read: TextRead }
   /** A `betterDiagrams.*` setting changed, here or anywhere. */
   | { type: "view"; view: ViewSettings }
-  /** The language model the AI panel would use, by name; null when VS Code has none to offer. */
-  | { type: "ai"; label: string | null }
+  /**
+   * The language model the AI panel would use, by name (null when VS Code has
+   * none to offer) and id, and the others it could use instead.
+   */
+  | { type: "ai"; label: string | null; model?: string; models?: AiChoice[] }
   /** A `generate` request's answer: the model's raw text, or why there is none. */
   | { type: "generated"; id: number; text?: string; error?: string }
   /**
@@ -98,6 +108,8 @@ export type WebviewMessage =
   | { type: "generate"; id: number; request: unknown }
   /** The AI panel gave up on a request (Stop, or closed). */
   | { type: "cancel"; id: number }
+  /** The AI panel's picker chose another language model: `betterDiagrams.aiModel`. */
+  | { type: "setAiModel"; id: string }
   /**
    * A diagram for a NEW file beside this one, as the web app opens a new
    * workspace file: an import, a derived sequence, the welcome modal's other kind.

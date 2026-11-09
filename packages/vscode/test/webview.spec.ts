@@ -265,6 +265,31 @@ test.describe("the VS Code webview", () => {
     await expect.poll(async () => JSON.stringify((await webview.posted("edit")).at(-1)?.doc ?? null)).toContain("Order cache");
   });
 
+  test("the panel's picker chooses among VS Code's models and tells the extension", async ({ webview }) => {
+    await webview.open();
+    await webview.init(json(ARCHITECTURE));
+    await webview.send({
+      type: "ai",
+      label: "Model One",
+      model: "one",
+      models: [
+        { id: "one", label: "Model One", group: "copilot" },
+        { id: "two", label: "Model Two", group: "copilot" },
+      ],
+    });
+    await webview.root.getByRole("button", { name: "AI", exact: true }).click();
+    const picker = webview.root.getByRole("combobox", { name: "Model" });
+    await expect(picker).toHaveValue("one");
+    await picker.selectOption("two");
+    await expect.poll(() => webview.posted("setAiModel")).toEqual([{ type: "setAiModel", id: "two" }]);
+    await expect(picker).toHaveValue("two");
+    await webview.root.getByRole("textbox", { name: "Message" }).fill("add a cache");
+    await webview.root.getByRole("textbox", { name: "Message" }).press("Enter");
+    await expect.poll(() => webview.posted("generate")).toHaveLength(1);
+    const [asked] = await webview.posted("generate");
+    expect((asked.request as { model: string }).model).toBe("two");
+  });
+
   test("Derive sequence asks the extension for a new file holding the sequence", async ({ webview }) => {
     await webview.open();
     await webview.init(json({ ...ARCHITECTURE, edges: ARCHITECTURE.edges.map((e, i) => ({ ...e, seq: i + 1 })) }));

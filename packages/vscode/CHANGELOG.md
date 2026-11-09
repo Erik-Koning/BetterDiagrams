@@ -11,7 +11,8 @@
 - **Toggle Light/Dark** (◐ in the editor's title bar), **Copy Schema**, **Derive Sequence…** and
   **New Diagram from Example…** commands; **New Diagram File…** asks architecture or sequence.
 - The AI panel (Generate, Adjust with AI), answered by one of VS Code's language models, such as
-  GitHub Copilot's: no key to set. `betterDiagrams.aiModel` picks the model.
+  GitHub Copilot's: no key to set. The panel's **Model** picker chooses between VS Code's models and
+  keeps the choice in `betterDiagrams.aiModel`.
 - Where the web app opens a new workspace file, VS Code writes one where you pick and opens it:
   an import into a diagram with things in it (it used to replace the diagram), a sequence started
   from the welcome screen, a derived sequence. Import › Open file… is VS Code's open dialog.
