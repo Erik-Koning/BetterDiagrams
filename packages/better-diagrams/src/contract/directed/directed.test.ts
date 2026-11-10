@@ -102,6 +102,80 @@ describe("what it draws", () => {
     expect(measureFlow(after).crossings).toBe(0);
   });
 
+  it("and of an even one too: no worker is singled out to run dead level", () => {
+    const workers = Array.from({ length: 6 }, (_, i) => `w${i}`);
+    const fan = doc(
+      [box("router"), ...workers.map((id) => box(id)), box("collector")],
+      [...workers.map((id) => line("router", id)), ...workers.map((id) => line(id, "collector"))],
+    );
+    const after = directedLayout(fan, { method: "layered", direction: "right" });
+    const middle = workers.reduce((sum, id) => sum + at(after, id).y, 0) / workers.length;
+    expect(Math.abs(at(after, "collector").y - middle)).toBeLessThanOrEqual(1);
+    expect(Math.abs(at(after, "router").y - middle)).toBeLessThanOrEqual(1);
+  });
+
+  it("arcs sharing a side of a box leave it level and in order, each from a place of its own", () => {
+    const after = directedLayout(shortcuts, { method: "layered", direction: "down" });
+    const arcs = after.edges.filter((e) => (e.points?.length ?? 0) >= 6);
+    expect(arcs.length).toBeGreaterThanOrEqual(5);
+    for (const arc of arcs) {
+      const source = at(after, arc.source);
+      const target = at(after, arc.target);
+      // The corner starts level with where the line leaves the box, to the pixel.
+      const leaves = source.y + source.h * (arc.start!.t ?? 0.5);
+      const arrives = target.y + target.h * (arc.end!.t ?? 0.5);
+      expect(leaves).toBeLessThan(arc.points![0]![1]);
+      expect(arrives).toBeGreaterThan(arc.points![5]![1]);
+    }
+    // No two ends on one side of one box at the same place.
+    const places = new Map<string, number[]>();
+    for (const arc of arcs) {
+      for (const [box, anchor] of [[arc.source, arc.start!], [arc.target, arc.end!]] as const) {
+        const key = `${box}|${anchor.side}`;
+        places.set(key, [...(places.get(key) ?? []), anchor.t ?? 0.5]);
+      }
+    }
+    for (const ts of places.values()) expect(new Set(ts.map((t) => t.toFixed(3))).size).toBe(ts.length);
+  });
+
+  it("a line that skips a rank runs level through the channel kept for it, and turns only in the gaps", () => {
+    const ids = ["s1", "s2", "s3", "m1", "m2", "m3", "t1", "t2", "t3"];
+    const ranks = doc(
+      ids.map((id) => box(id)),
+      [line("s1", "m1"), line("s2", "m2"), line("s3", "m3"), line("m1", "t1"), line("m2", "t2"), line("m3", "t3"), line("s1", "t3")],
+    );
+    const after = directedLayout(ranks, { method: "layered", direction: "right" });
+    const long = after.edges.find((e) => e.id === "s1-t3")!;
+    expect(long.start).toMatchObject({ side: "right", auto: true });
+    expect(long.end).toMatchObject({ side: "left", auto: true });
+    // Out and back in: four points at one height, spanning the rank it skips.
+    expect(long.points).toHaveLength(4);
+    expect(new Set(long.points!.map(([, y]) => y)).size).toBe(1);
+    const middle = ["m1", "m2", "m3"].map((id) => at(after, id));
+    const [x0, y] = long.points![0]!;
+    const x1 = long.points![3]![0];
+    expect(x0).toBeLessThanOrEqual(Math.min(...middle.map((m) => m.x)));
+    expect(x1).toBeGreaterThanOrEqual(Math.max(...middle.map((m) => m.x + m.w)));
+    for (const m of middle) expect(y < m.y || y > m.y + m.h).toBe(true);
+    expect(lintLayout(after).counts["line-through-box"]).toBeUndefined();
+    // Best fit draws the same line as it always has: across, and bent round what's in the way.
+    const plain = autoPlace(ranks, { direction: "right" }).edges.find((e) => e.id === "s1-t3")!.points ?? [];
+    expect(plain.length === 4 && new Set(plain.map(([, py]) => py)).size === 1).toBe(false);
+  });
+
+  it("a tree is drawn as a tree: every parent level with the middle of its children", () => {
+    const tree = doc(
+      ["root", "a", "b", "a1", "a2", "a3", "b1", "b2"].map((id) => box(id)),
+      [line("root", "a"), line("root", "b"), line("a", "a1"), line("a", "a2"), line("a", "a3"), line("b", "b1"), line("b", "b2")],
+    );
+    const after = directedLayout(tree, { direction: "right" });
+    const mid = (...ids: string[]) => ids.reduce((sum, id) => sum + at(after, id).y, 0) / ids.length;
+    expect(Math.abs(at(after, "a").y - mid("a1", "a2", "a3"))).toBeLessThanOrEqual(1);
+    expect(Math.abs(at(after, "b").y - mid("b1", "b2"))).toBeLessThanOrEqual(1);
+    expect(Math.abs(at(after, "root").y - mid("a", "b"))).toBeLessThanOrEqual(1);
+    expect(measureFlow(after)).toMatchObject({ crossings: 0, backward: 0 });
+  });
+
   it("traffic both ways between neighbours is two lanes of one road, face to face", () => {
     const road = doc([box("client"), box("gateway"), box("orders")], [line("client", "gateway"), line("gateway", "client"), line("gateway", "orders"), line("orders", "gateway")]);
     const after = directedLayout(road, { method: "layered", direction: "right" });

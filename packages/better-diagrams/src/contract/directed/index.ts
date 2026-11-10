@@ -14,11 +14,10 @@
  * for every other arrangement. What is here is which rank a box takes.
  */
 import { autoPlaceWith, type ArrangeOptions } from "../arrange";
-import { acyclicOrder, flatRanks, layered, ranksInOrder, type Flow, type PlaceEngine, type PlaceLink, type PlacedBlock, type RankPlan } from "../autoplace";
+import { acyclicOrder, flatRanks, forestOf, layered, ranksInOrder, tidyTree, type Flow, type PlaceEngine, type PlaceLink, type RankPlan } from "../autoplace";
 import { LAYOUT_RULES, lintLayout, type LayoutReport, type LayoutRuleId } from "../layout-lint";
 import type { DiagramTemplate, DirectedMethod, DirectedPriority } from "../schema";
 import { measureFlow, type FlowMetrics } from "./metrics";
-import { pieceCost } from "./piece";
 import { fewestBackOrder, searchRanks, type RankWeights } from "./ranking";
 
 export interface DirectedOptions extends ArrangeOptions {
@@ -92,17 +91,18 @@ const graphKey = (ids: readonly string[], links: readonly PlaceLink[]) =>
 /**
  * Whose ranks a layout uses:
  *   "reading"   the ranked family's own, in the order a reader meets the boxes;
- *   "searched"  the search's, wherever it leads;
- *   "annealed"  the search allowed to get worse on the way to better;
- *   "piece"     for each connected piece, whichever of the rankings (those two,
- *               the one with fewest lines backward, and the one priced for
- *               crossings above all) measures best once that piece is laid out
- *               (`pieceCost`).
+ *   "eager"     the search priced for crossings above all;
+ *   "strict"    the search priced for direction above all;
+ *   "searched"  the search at the document's own priority, started from all three;
+ *   "annealed"  that search allowed to get worse on the way to better.
  * No one of them is best for every document: the search prices a model of the
  * drawing, and the model is not the drawing. So each is laid out in full, and
- * the pictures are compared as drawn (`directedCost`).
+ * the pictures are compared as drawn, at the document's priority
+ * (`directedCost`). The two ends are laid out at every priority, which is what
+ * keeps the priority honest: a picture found for one setting that is better at
+ * another is there to be chosen.
  */
-type Ranks = "reading" | "searched" | "annealed" | "piece";
+type Ranks = "reading" | "eager" | "strict" | "searched" | "annealed";
 
 /** The rankings of a graph, found once however many times it is laid out. */
 function rankingsFor(weights: DirectedWeights, anneal: boolean) {
@@ -119,7 +119,14 @@ function rankingsFor(weights: DirectedWeights, anneal: boolean) {
     turned: TURNED_COST * eager.direction,
     span: SPAN_COST,
   };
-  const found = new Map<string, { reading: RankPlan; fewestBack: RankPlan; eager: RankPlan; searched: RankPlan }>();
+  const strict = directedWeights("direction");
+  const strictWeights: RankWeights = {
+    crossing: BACKWARD_COST * strict.crossing,
+    backward: BACKWARD_COST * strict.direction,
+    turned: TURNED_COST * strict.direction,
+    span: SPAN_COST,
+  };
+  const found = new Map<string, { reading: RankPlan; eager: RankPlan; strict: RankPlan; searched: RankPlan }>();
   return (ids: readonly string[], links: readonly PlaceLink[]) => {
     const key = graphKey(ids, links);
     let entry = found.get(key);
@@ -132,11 +139,13 @@ function rankingsFor(weights: DirectedWeights, anneal: boolean) {
       // down, and some of them lead where this one wants to be. What it finds is
       // one more place to start from, judged at this priority's own prices.
       const eager = searchRanks(ids, links, eagerWeights, [reading, fewestBack], { reading: order });
-      const searched = searchRanks(ids, links, rankWeights, [reading, fewestBack, eager.rank], { anneal, reading: order });
+      // And one priced for direction above all: the other end of the same road.
+      const strictest = searchRanks(ids, links, strictWeights, [reading, fewestBack], { reading: order });
+      const searched = searchRanks(ids, links, rankWeights, [reading, fewestBack, eager.rank, strictest.rank], { anneal, reading: order });
       entry = {
         reading: { rank: reading },
-        fewestBack: { rank: fewestBack },
         eager: { rank: eager.rank, across: eager.across },
+        strict: { rank: strictest.rank, across: strictest.across },
         searched: { rank: searched.rank, across: searched.across },
       };
       found.set(key, entry);
@@ -148,29 +157,26 @@ function rankingsFor(weights: DirectedWeights, anneal: boolean) {
 /** The ranked layout, on ranks chosen one of the ways above. */
 function rankedEngine(weights: DirectedWeights, ranks: Ranks): PlaceEngine {
   const rankingsOf = rankingsFor(weights, ranks === "annealed");
-  /** Which ranking won for a piece read one way: decided once, so a second layout of it is the same picture. */
-  const chosen = new Map<string, RankPlan>();
+  const planOf = (ids: readonly string[], links: readonly PlaceLink[]): RankPlan => {
+    const rankings = rankingsOf(ids, links);
+    return ranks === "annealed" ? rankings.searched : rankings[ranks];
+  };
   return {
     place(items, links, opts) {
       // One box, or two: there is nothing to trade.
       if (items.length < 3) return null;
-      const ids = items.map((i) => i.id);
-      const rankings = rankingsOf(ids, links);
-      if (ranks === "reading") return { ...layered(items, links, opts, rankings.reading), family: "layered" };
-      if (ranks !== "piece") return { ...layered(items, links, opts, rankings.searched), family: "layered" };
-      const key = `${opts.flow}\u0002${graphKey(ids, links)}`;
-      const settled = chosen.get(key);
-      if (settled) return { ...layered(items, links, opts, settled), family: "layered" };
-      let best: { plan: RankPlan; block: PlacedBlock; cost: number } | null = null;
-      for (const plan of [rankings.reading, rankings.fewestBack, rankings.eager, rankings.searched]) {
-        const block = layered(items, links, opts, plan);
-        const cost = pieceCost(block.placed, links, opts.flow, weights);
-        if (!best || cost < best.cost - 1e-9) best = { plan, block, cost };
+      // A tree has no crossings to trade for anything: it is drawn as one, every parent centred on its children.
+      if (forestOf(items, links)) {
+        const tree = tidyTree(items, links, opts);
+        if (tree) return { ...tree, family: "tree" };
       }
-      chosen.set(key, best!.plan);
-      return { ...best!.block, family: "layered" };
+      const plan = planOf(
+        items.map((i) => i.id),
+        links,
+      );
+      return { ...layered(items, links, opts, plan), family: "layered" };
     },
-    ranks: (ids, links) => new Map(ranks === "reading" ? rankingsOf(ids, links).reading.rank : rankingsOf(ids, links).searched.rank),
+    ranks: (ids, links) => new Map(planOf(ids, links).rank),
   };
 }
 
@@ -208,7 +214,7 @@ export function directedLayout(template: DiagramTemplate, options: DirectedOptio
       ...(flows ? { flows } : { chose: (won: { outer: Flow; inner: Flow }) => (flows = won) }),
     });
   const ways: Array<() => DiagramTemplate> = [ranked("reading")];
-  if (method === "best" || method === "layered") ways.push(ranked("searched"), ranked("piece"));
+  if (method === "best" || method === "layered") ways.push(ranked("searched"), ranked("eager"), ranked("strict"));
   if (method === "best" || method === "anneal") ways.push(ranked("annealed"));
 
   let best: DiagramTemplate | null = null;

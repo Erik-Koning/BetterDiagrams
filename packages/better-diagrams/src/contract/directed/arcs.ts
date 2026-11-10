@@ -47,6 +47,12 @@ const SAME_WALL = 140;
 const EXHAUSTIVE = 12;
 /** What leaving its natural side costs an arc: less than any crossing, more than nothing. */
 const UNNATURAL = 0.3;
+/**
+ * What each arc more on one side than the other costs. A little more than
+ * half of UNNATURAL, so that with nothing else to choose by, arcs are shared
+ * out between the two sides rather than stacked four deep on one.
+ */
+const LOPSIDED = 0.2;
 
 const span = (a: Arc) => ({ lo: Math.min(a.from, a.to), hi: Math.max(a.from, a.to) });
 
@@ -92,7 +98,8 @@ export function pageArcs(arcs: readonly Arc[]): Map<string, PagedArc> {
         if (c.other > i && sides[c.other] === sides[i] && (sides[i] ? c.high : c.low)) cost += 1;
       }
     }
-    return cost;
+    const high = sides.filter(Boolean).length;
+    return cost + LOPSIDED * Math.abs(n - 2 * high);
   };
 
   let sides: boolean[] = arcs.map((a) => a.natural === "high");
@@ -142,7 +149,9 @@ export function pageArcs(arcs: readonly Arc[]): Map<string, PagedArc> {
     for (const j of byLength) {
       if (j === i || !depth[j] || sides[j] !== sides[i] || !sameWall(arcs[i]!, arcs[j]!, side)) continue;
       const q = span(arcs[j]!);
-      if (q.hi <= p.lo || q.lo >= p.hi) continue;
+      // Clear of each other along the flow. Meeting end to end is not clear: two
+      // arcs at one depth that meet at a box read as one line running past it.
+      if (q.hi < p.lo - 1 || q.lo > p.hi + 1) continue;
       // Spanned by this one: this one goes outside it. Merely overlapping: not the same depth.
       if (p.lo <= q.lo && q.hi <= p.hi) least = Math.max(least, depth[j]! + 1);
       used.add(depth[j]!);

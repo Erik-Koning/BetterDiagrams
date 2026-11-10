@@ -35,8 +35,9 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   running one way second, traded against each other at a rate the document sets
   (`settings.directed.priority`, `DIRECTED_PRIORITIES`; a Priority slider in the menu and the Layout
   panel) and found by a method it names (`settings.directed.method`, `DIRECTED_METHODS`). Lines that go
-  round nest on both sides of their column like brackets, two-way traffic runs as two lanes, and a box
-  that collects a fan sits in the middle of it. `directedCost` and `directedWeights` are how it tells
+  round nest on both sides of their column like brackets, a line that skips ranks runs level through
+  a channel of its own, two-way traffic runs as two lanes, and a box that collects a fan sits in the
+  middle of it. `directedCost` and `directedWeights` are how it tells
   one picture from another.
 - `measureFlow` (`FlowMetrics`): how a drawn picture reads as a flow, in numbers a reader would
   recognise: crossings and their angle, lines running backward and how many must, travel with the
@@ -67,6 +68,10 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 
 ### Changed
 
+- Fit (the toolbar's Fit, ⇧1, the canvas's own fit button, and the fit after an arrangement) takes in
+  lines that reach past the boxes: an arc round a column, a line that goes round the outside. Fitted
+  to the boxes alone, as before, such a line was cut off at the edge of the view. With no line
+  reaching out, the fit is what it was.
 - A layout score below 40 keeps falling ever more slowly rather than stopping at 0, and more of one
   problem past its cap still counts a little, so a mess and a worse mess score differently. Scores
   of 40 and up are unchanged. The Layout panel shows the count of errors, warnings and notes beside it.

@@ -2332,16 +2332,20 @@ a crossing counts as nine backward lines, through `balanced` to `direction`, the
 `mostly-crossings` is three for one). It searches for ranks one box at a time, where moving a box
 past a neighbour turns the line between them round, and keeps a move when crossings, backward lines
 and skipped ranks together cost less (`settings.directed.method`: `layered`, `anneal` for the same
-search allowed to get worse on the way to better, or `best` for both, compared as drawn). A main
+search allowed to get worse on the way to better, or `best` for both). Whatever the method, the
+rankings it finds are each laid out in full and compared as drawn, along with the ones found for
+crossings above all and for direction above all, so no setting misses a picture another found. A main
 line turned round costs more than a return line running back, so a loop still starts where the
 document starts it. What it draws differently: lines that skip ahead down a column, or run back
 against the flow, are given their sides and depths together, so they nest like brackets on both
-sides of the column instead of piling up on one; traffic both ways between neighbours runs as two
-lanes, face to face; and a box that collects a fan sits in the middle of it. Groups, zones, locks,
+sides of the column instead of piling up on one; a line that skips ranks, with something in its
+way, runs level through the channel the layout kept for it and turns only in the gaps; a tree is
+drawn as a tree; traffic both ways between neighbours
+runs as two lanes, face to face; and a box that collects a fan sits in the middle of it. Groups, zones, locks,
 text that fits and routed lines work as in every other arrangement, and direction, spacing and gaps
-still come from `settings.layout`. On the gallery's twelve flows it draws 15 crossings where Best
-fit draws 42, and no line on top of another where Best fit has 24; over all 35 documents, 12% fewer
-crossings and 44% fewer lines on lines. It only ranks, so a ring or a mesh with no direction to it
+still come from `settings.layout`. On the gallery's twelve flows it draws 11 crossings where Best
+fit draws 42, and no line on top of another where Best fit has 24; over all 35 documents, 21% fewer
+crossings and 47% fewer lines on lines. It only ranks, so a ring or a mesh with no direction to it
 is still Best fit's to draw.
 
 **`measureFlow` says how a picture reads as a flow**, where `lintLayout` says what's wrong with it:

@@ -94,11 +94,21 @@ export interface PlaceOptions {
   engine?: PlaceEngine;
 }
 
+/** The way a line was laid past the ranks it skips: the channel kept for it, as points in the block's own coordinates. */
+export interface PlacedRoute {
+  /** The two boxes it runs between, lower rank first. */
+  from: string;
+  to: string;
+  points: Array<{ x: number; y: number }>;
+}
+
 /** A block of placed boxes, as every family returns one. */
 export interface PlacedBlock {
   placed: PlacedBox[];
   width: number;
   height: number;
+  /** Only from a ranked layout handed its ranks (`RankPlan`): see `layered`. */
+  routes?: PlacedRoute[];
 }
 
 /**
@@ -147,6 +157,8 @@ export interface Placement {
   free: Set<string>;
   /** Pieces laid out around a centre: their lines arc rather than wiggle. */
   rings: Array<Set<string>>;
+  /** The channels long lines were laid through, where the layout kept any. */
+  routes: PlacedRoute[];
 }
 
 /** Past this many boxes in one piece, only the layered family is worth its cost. */
@@ -157,6 +169,10 @@ const THOROUGH_LIMIT = 300;
 const LANE_GAP = 22;
 /** Room kept beyond a lane, so its line doesn't run along the frame around it. */
 const LANE_CLEARANCE = 26;
+/** How near a box a straight line may pass before it is given its channel instead. */
+const CHANNEL_CLEARANCE = 12;
+/** How far in from each end of a level run the point that holds it level sits. */
+const LANE_HOLD = 18;
 /** How much more a main path's lines want to run level than a branch's. */
 const CHAIN_WEIGHT = 5;
 
@@ -168,7 +184,7 @@ export function placeItems(
   links: readonly PlaceLink[],
   opts: PlaceOptions,
 ): Placement {
-  if (!items.length) return { placed: [], width: 0, height: 0, family: "grid", free: new Set(), rings: [] };
+  if (!items.length) return { placed: [], width: 0, height: 0, family: "grid", free: new Set(), rings: [], routes: [] };
   const known = new Set(items.map((i) => i.id));
   const usable = links.filter((l) => known.has(l.source) && known.has(l.target) && l.source !== l.target);
   const { connected, loose } = splitComponents(items, usable);
@@ -179,7 +195,7 @@ export function placeItems(
 
   const free = new Set<string>();
   const rings: Array<Set<string>> = [];
-  const blocks: Array<{ placed: PlacedBox[]; width: number; height: number }> = [];
+  const blocks: PlacedBlock[] = [];
   let family: PlaceFamily = connected.length ? "layered" : "grid";
 
   // Members with a line leaving this container flow together, ranked with the
@@ -216,7 +232,7 @@ export function placeItems(
 }
 
 function finish(
-  block: { placed: PlacedBox[]; width: number; height: number },
+  block: PlacedBlock,
   family: PlaceFamily,
   free: Set<string>,
   rings: Array<Set<string>>,
@@ -231,6 +247,7 @@ function finish(
     family,
     free,
     rings,
+    routes: (block.routes ?? []).map((r) => ({ ...r, points: r.points.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })) })),
   };
 }
 
@@ -520,17 +537,21 @@ function outOfFrame(
   width: number,
   height: number,
   flow: Flow,
-): { placed: PlacedBox[]; width: number; height: number } {
-  if (flow === "right") return { placed: [...placed], width, height };
+  routes?: readonly PlacedRoute[],
+): PlacedBlock {
+  const routed = (turn: (p: { x: number; y: number }) => { x: number; y: number }) =>
+    routes?.length ? { routes: routes.map((r) => ({ ...r, points: r.points.map(turn) })) } : {};
+  if (flow === "right") return { placed: [...placed], width, height, ...routed((p) => p) };
   if (flow === "left") {
-    return { placed: placed.map((p) => ({ ...p, x: width - p.x - p.w })), width, height };
+    return { placed: placed.map((p) => ({ ...p, x: width - p.x - p.w })), width, height, ...routed((p) => ({ x: width - p.x, y: p.y })) };
   }
   const swapped = placed.map((p) => ({ id: p.id, x: p.y, y: p.x, w: p.h, h: p.w }));
-  if (flow === "down") return { placed: swapped, width: height, height: width };
+  if (flow === "down") return { placed: swapped, width: height, height: width, ...routed((p) => ({ x: p.y, y: p.x })) };
   return {
     placed: swapped.map((p) => ({ ...p, y: width - p.y - p.h })),
     width: height,
     height: width,
+    ...routed((p) => ({ x: p.y, y: width - p.x })),
   };
 }
 
@@ -767,6 +788,8 @@ export function layered(
     up.get(b)!.push({ id: a, w, self: offB, other: offA });
   };
   const lanes = new Set<string>();
+  /** Each line that skips a rank, and the lanes threaded for it, in order. */
+  const chains: Array<{ u: string; v: string; lanes: string[] }> = [];
   /** Where a lane would sit across the flow, going by the two boxes its line joins. */
   const laneAcross = new Map<string, number>();
   const labelInGap = new Array<number>(Math.max(0, depth - 1)).fill(0);
@@ -780,9 +803,12 @@ export function layered(
     }
     let prev = e.u;
     let offset = e.offU;
+    const chain: string[] = [];
+    if (to - from > 1) chains.push({ u: e.u, v: e.v, lanes: chain });
     for (let r = from + 1; r < to; r += 1) {
       const lane = `\u0001lane${laneCount++}`;
       lanes.add(lane);
+      chain.push(lane);
       if (plan?.across) {
         const a = plan.across.get(e.u) ?? 0.5;
         const b = plan.across.get(e.v) ?? 0.5;
@@ -811,7 +837,9 @@ export function layered(
 
   // Past the height the caller's shape wants, a rank wraps into sub-columns.
   const columns = wrapColumns(ordered, size, lanes, frame, opts);
-  const { top, centre } = assignCross(columns, size, lanes, up, down, opts);
+  // With ranks handed in, long lines are drawn through their lanes (see below),
+  // so the lanes stay where the crossing search and the levelling put them.
+  const { top, centre } = assignCross(columns, size, lanes, up, down, opts, !!plan, !!plan);
 
   // ── Along the flow ───────────────────────────────────────────────────────────
   const columnWidths = columns.map((col) => Math.max(0, ...col.map((id) => size.get(id)!.w)));
@@ -844,21 +872,71 @@ export function layered(
   // Gaps that nearly match are made to match: 96 next to 103 only looks careless.
   const even = evenedGaps(gaps);
   const placed: PlacedBox[] = [];
+  const columnAt: number[] = [];
+  const columnOf = new Map<string, number>();
   let x = 0;
   columns.forEach((col, ci) => {
+    columnAt.push(x);
     for (const id of col) {
+      columnOf.set(id, ci);
       if (lanes.has(id)) continue;
       const s = size.get(id)!;
       placed.push({ id, x: x + (columnWidths[ci]! - s.w) / 2, y: top.get(id)!, w: s.w, h: s.h });
     }
     x += columnWidths[ci]! + (even[ci] ?? 0);
   });
+
+  // ── Lines through their lanes ────────────────────────────────────────────────
+  // A line that skips ranks, drawn straight between its two boxes, sweeps across
+  // everything between them. Its lanes are a channel kept clear for it, ordered
+  // with the boxes so that lines cross as little as they can: drawn through them
+  // it runs level past each rank it skips and turns only in the gaps. Only where
+  // the ranks were handed in, so every other arrangement draws as it always has.
+  const routes: PlacedRoute[] = [];
+  const byPlaced = new Map(placed.map((p) => [p.id, p]));
+  if (plan) {
+    for (const chain of chains) {
+      const reach = Math.min(size.get(chain.u)!.h, size.get(chain.v)!.h) / 2;
+      // Level with each other, the two are joined by an arc round what's between them: see `directed/arcs.ts`.
+      if (Math.abs(centre(chain.u) - centre(chain.v)) <= reach) continue;
+      // With nothing in the way, one clean curve from box to box reads better than
+      // a run with a shelf in it. The channel is for the line that would otherwise
+      // have to pass through, or squeeze past, something between its ends.
+      const from = byPlaced.get(chain.u)!;
+      const to = byPlaced.get(chain.v)!;
+      const a = { x: from.x + from.w, y: from.y + from.h / 2 };
+      const b = { x: to.x, y: to.y + to.h / 2 };
+      const blocked = placed.some((p) => p !== from && p !== to && segmentHitsBox(a, b, p, -CHANNEL_CLEARANCE));
+      if (!blocked) continue;
+      const corners: Array<{ x: number; y: number }> = [];
+      for (const lane of chain.lanes) {
+        const ci = columnOf.get(lane)!;
+        const y = top.get(lane)!;
+        corners.push({ x: columnAt[ci]!, y }, { x: columnAt[ci]! + columnWidths[ci]!, y });
+      }
+      // Runs of points at one level become their two ends, each held by a second
+      // point a little way in: a curve passes through a point at the angle half
+      // way between its neighbours, so two in line are what keep a run straight.
+      const points: Array<{ x: number; y: number }> = [];
+      for (let i = 0; i < corners.length; ) {
+        let j = i;
+        while (j + 1 < corners.length && Math.abs(corners[j + 1]!.y - corners[i]!.y) < 1) j += 1;
+        const a = corners[i]!;
+        const b = corners[j]!;
+        const hold = Math.min(LANE_HOLD, (b.x - a.x) / 3);
+        if (b.x - a.x >= 8) points.push(a, { x: a.x + hold, y: a.y }, { x: b.x - hold, y: b.y }, b);
+        else points.push({ x: (a.x + b.x) / 2, y: a.y });
+        i = j + 1;
+      }
+      routes.push({ from: chain.u, to: chain.v, points });
+    }
+  }
   const width = placed.length ? Math.max(...placed.map((p) => p.x + p.w)) : 0;
   const height = Math.max(
     0,
     ...columns.flat().map((id) => top.get(id)! + size.get(id)!.h + (lanes.has(id) ? LANE_CLEARANCE : 0)),
   );
-  return outOfFrame(placed, width, height, opts.flow);
+  return outOfFrame(placed, width, height, opts.flow, routes);
 }
 
 /**
@@ -1171,6 +1249,8 @@ function assignCross(
   up: ReadonlyMap<string, readonly Adjacent[]>,
   down: ReadonlyMap<string, readonly Adjacent[]>,
   opts: PlaceOptions,
+  balanced = false,
+  channels = false,
 ): { top: Map<string, number>; centre: (id: string) => number } {
   const sep = (a: string, b: string) => {
     const la = lanes.has(a);
@@ -1267,6 +1347,9 @@ function assignCross(
           bestDelta = delta;
         }
       }
+      // A fan of an even number of boxes votes as hard one way as the other, and
+      // moving it either way trades a centred fan for one line dead level.
+      if (balanced && bestDelta && (votes.get(-bestDelta) ?? 0) >= bestVotes) continue;
       if (bestDelta && bestVotes >= 2) for (const id of col) top.set(id, top.get(id)! + bestDelta);
     }
   }
@@ -1288,7 +1371,7 @@ function assignCross(
   // A lane is where its line was going to go. The line is drawn straight between
   // the boxes it joins, wherever the lane ended up, so the lane moves to the line:
   // otherwise the line runs through whatever the lane was keeping out of its way.
-  for (let c = 0; c < columns.length; c += 1) {
+  for (let c = 0; c < columns.length && !channels; c += 1) {
     const col = columns[c]!;
     col.forEach((id, i) => {
       if (!lanes.has(id)) return;
@@ -1377,7 +1460,7 @@ function assignCross(
  * Each box's single parent, when the piece is a forest once links point
  * forward. Null otherwise: a box with two parents has no tidy place in a tree.
  */
-function forestOf(items: readonly PlaceItem[], links: readonly PlaceLink[]): Map<string, string> | null {
+export function forestOf(items: readonly PlaceItem[], links: readonly PlaceLink[]): Map<string, string> | null {
   const parent = new Map<string, string>();
   const seen = new Set<string>();
   for (const l of links) {
@@ -1406,7 +1489,7 @@ function forestOf(items: readonly PlaceItem[], links: readonly PlaceLink[]): Map
  * their outlines allow (Reingold–Tilford, by contours). Ranks stay aligned, so
  * it reads as levels.
  */
-function tidyTree(
+export function tidyTree(
   items: readonly PlaceItem[],
   links: readonly PlaceLink[],
   opts: PlaceOptions,
@@ -1994,10 +2077,7 @@ function gridBlock(
  * pipelines read as rows and separate top-down ones as columns. Set end to end,
  * two unrelated flows read as one with an arrow missing.
  */
-function packBlocks(
-  blocks: ReadonlyArray<{ placed: PlacedBox[]; width: number; height: number }>,
-  opts: PlaceOptions,
-): { placed: PlacedBox[]; width: number; height: number } {
+function packBlocks(blocks: readonly PlacedBlock[], opts: PlaceOptions): PlacedBlock {
   if (blocks.length === 1) return blocks[0]!;
   // Wider than any gap inside a piece: that is what says these are separate.
   const gap = Math.max(opts.rankGap * 1.5, opts.nodeGap * 3.5);
@@ -2050,13 +2130,16 @@ function packBlocks(
   }
 
   const placed: PlacedBox[] = [];
+  const routes: PlacedRoute[] = [];
   order.forEach((b, i) => {
     const at = best.offsets[i]!;
     const dx = vertical ? at.main : at.cross;
     const dy = vertical ? at.cross : at.main;
     for (const p of b.placed) placed.push({ ...p, x: p.x + dx, y: p.y + dy });
+    for (const r of b.routes ?? []) routes.push({ ...r, points: r.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) });
   });
   return {
+    ...(routes.length ? { routes } : {}),
     placed,
     width: vertical ? best.main : best.cross,
     height: vertical ? best.cross : best.main,
