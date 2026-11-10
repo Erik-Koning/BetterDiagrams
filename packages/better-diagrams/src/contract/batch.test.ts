@@ -902,6 +902,7 @@ describe("settings.groupContents — the document-wide fold", () => {
       "groupContents",
       "arrange",
       "layout",
+      "directed",
       "roadmap",
       "notation",
       "htmlLines",

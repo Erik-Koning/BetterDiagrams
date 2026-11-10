@@ -34,6 +34,7 @@ const OVERLAPPING = validateTemplate({
 const panel = (over: Partial<LayoutPanelProps> = {}) => {
   const handlers = {
     onPrefs: vi.fn(),
+    onDirected: vi.fn(),
     onArrange: vi.fn(),
     onPolish: vi.fn(),
     onArrangeSelection: vi.fn(),
@@ -73,7 +74,7 @@ describe("LayoutPanel", () => {
   it("stops pointing at a finding that went away under the pointer", async () => {
     const user = userEvent.setup();
     const onPoint = vi.fn();
-    const props = { options: {}, canEdit: true, selected: 0, selectedLines: 0, onPrefs: vi.fn(), onArrange: vi.fn(), onPolish: vi.fn(), onArrangeSelection: vi.fn(), onStraighten: vi.fn(), onCandidate: vi.fn(), onJump: vi.fn(), onClose: vi.fn() };
+    const props = { options: {}, canEdit: true, selected: 0, selectedLines: 0, onPrefs: vi.fn(), onDirected: vi.fn(), onArrange: vi.fn(), onPolish: vi.fn(), onArrangeSelection: vi.fn(), onStraighten: vi.fn(), onCandidate: vi.fn(), onJump: vi.fn(), onClose: vi.fn() };
     const { rerender } = render(<LayoutPanel template={OVERLAPPING} {...props} onPoint={onPoint} />);
     await user.click(screen.getByText("Boxes overlap"));
     await user.hover(screen.getByRole("button", { name: /"Alpha" and "Bravo" overlap/ }));
@@ -154,10 +155,41 @@ describe("LayoutPanel", () => {
     expect(onCandidate).toHaveBeenCalledWith(expect.objectContaining({ algorithm: "grid" }));
   });
 
+  it("offers a directed flow as an arrangement of its own, unless that is the one in use", async () => {
+    const user = userEvent.setup();
+    const flow = ARRANGE_FIXTURES.pipeline!();
+    const { onDirected } = panel({ template: flow });
+    await user.click(screen.getByTitle(/Use this arrangement: Directed flow/));
+    expect(onDirected).toHaveBeenCalledWith({});
+    document.body.innerHTML = "";
+    panel({ template: { ...flow, settings: { arrange: "directed" } } });
+    expect(screen.queryByTitle(/Use this arrangement: Directed flow/)).not.toBeInTheDocument();
+  });
+
+  it("a directed flow has its own two choices, in place of a family of layout", async () => {
+    const user = userEvent.setup();
+    const { onDirected, onPrefs } = panel({ template: { ...OVERLAPPING, settings: { arrange: "directed", directed: { priority: "balanced" } } } });
+    expect(screen.queryByRole("group", { name: "Style" })).not.toBeInTheDocument();
+    const priority = screen.getByRole("slider", { name: "Priority" });
+    expect(priority).toHaveValue("2");
+    expect(priority).toHaveAttribute("aria-valuetext", "Balanced");
+    // Dragging is free; the layout happens when the slider is let go.
+    fireEvent.change(priority, { target: { value: "4" } });
+    expect(onDirected).not.toHaveBeenCalled();
+    expect(screen.getByText(/Direction above all\./)).toBeInTheDocument();
+    fireEvent.pointerUp(priority);
+    expect(onDirected).toHaveBeenCalledWith({ priority: "direction" });
+    await user.selectOptions(screen.getByRole("combobox", { name: "Method" }), "Annealed");
+    expect(onDirected).toHaveBeenLastCalledWith({ method: "anneal" });
+    // Direction, spacing and the gaps are still the document's to set.
+    await user.click(within(screen.getByRole("group", { name: "Direction" })).getByRole("button", { name: "Top to bottom" }));
+    expect(onPrefs).toHaveBeenCalledWith({ direction: "down" });
+  });
+
   it("measures again once the document stops changing, not on every frame of a drag or a click", () => {
     vi.useFakeTimers();
     try {
-      const props = { options: {}, canEdit: true, selected: 0, selectedLines: 0, onPrefs: vi.fn(), onArrange: vi.fn(), onPolish: vi.fn(), onArrangeSelection: vi.fn(), onStraighten: vi.fn(), onCandidate: vi.fn(), onJump: vi.fn(), onPoint: vi.fn(), onClose: vi.fn() };
+      const props = { options: {}, canEdit: true, selected: 0, selectedLines: 0, onPrefs: vi.fn(), onDirected: vi.fn(), onArrange: vi.fn(), onPolish: vi.fn(), onArrangeSelection: vi.fn(), onStraighten: vi.fn(), onCandidate: vi.fn(), onJump: vi.fn(), onPoint: vi.fn(), onClose: vi.fn() };
       const doc = ARRANGE_FIXTURES.gatewayHub!();
       const moved = (dx: number) => ({ ...doc, nodes: doc.nodes.map((n, i) => (i === 0 ? { ...n, x: n.x + dx } : n)) });
       const { rerender } = render(<LayoutPanel template={doc} {...props} />);
@@ -181,7 +213,7 @@ describe("LayoutPanel", () => {
   it("catches the score up once the document settles", () => {
     vi.useFakeTimers();
     try {
-      const props = { options: {}, canEdit: false, selected: 0, selectedLines: 0, onPrefs: vi.fn(), onArrange: vi.fn(), onPolish: vi.fn(), onArrangeSelection: vi.fn(), onStraighten: vi.fn(), onCandidate: vi.fn(), onJump: vi.fn(), onPoint: vi.fn(), onClose: vi.fn() };
+      const props = { options: {}, canEdit: false, selected: 0, selectedLines: 0, onPrefs: vi.fn(), onDirected: vi.fn(), onArrange: vi.fn(), onPolish: vi.fn(), onArrangeSelection: vi.fn(), onStraighten: vi.fn(), onCandidate: vi.fn(), onJump: vi.fn(), onPoint: vi.fn(), onClose: vi.fn() };
       const { rerender } = render(<LayoutPanel template={OVERLAPPING} {...props} />);
       expect(screen.getByText("Boxes overlap")).toBeInTheDocument();
       const apart = { ...OVERLAPPING, nodes: OVERLAPPING.nodes.map((n) => (n.id === "b" ? { ...n, y: 300 } : n)) };
@@ -329,6 +361,37 @@ describe("in the studio", () => {
     const widths = last(onChange).nodes.filter((n) => n.kind === "task").map((n) => n.w);
     expect(new Set(widths).size).toBe(1);
     expect(widths[0]).toBeLessThan(390);
+  });
+
+  it("Directed flow from the Arrange menu arranges and remembers in one step, and its choices appear under it", async () => {
+    const user = userEvent.setup();
+    const onChange = mount({ doc: ARRANGE_FIXTURES.flowchart!() });
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    expect(screen.queryByRole("slider", { name: "Priority" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Directed flow" }));
+    await screen.findByText(/Arranged as a flow/);
+    expect(last(onChange).settings).toEqual({ arrange: "directed" });
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    expect(screen.getByRole("radio", { name: "Directed flow" })).toBeChecked();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Method" }), "Ranked");
+    await waitFor(() => expect(last(onChange).settings).toEqual({ arrange: "directed", directed: { method: "layered" } }));
+    // Back to the default is nothing stored, like every other layout choice.
+    await user.selectOptions(screen.getByRole("combobox", { name: "Method" }), "Best of all");
+    await waitFor(() => expect(last(onChange).settings).toEqual({ arrange: "directed" }));
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(last(onChange).settings).toEqual({ arrange: "directed", directed: { method: "layered" } }));
+  });
+
+  it("a directed flow stays one when its direction is chosen, and goes back to Best fit when a family of layout is", async () => {
+    const user = userEvent.setup();
+    const onChange = mount({ doc: { ...ARRANGE_FIXTURES.flowchart!(), settings: { arrange: "directed" } } });
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    await user.click(screen.getByRole("menuitem", { name: /Layout panel/ }));
+    const region = await screen.findByRole("region", { name: "Layout" });
+    await user.click(within(within(region).getByRole("group", { name: "Direction" })).getByRole("button", { name: "Left to right" }));
+    await waitFor(() => expect(last(onChange).settings).toEqual({ arrange: "directed", layout: { direction: "right" } }));
+    await user.click(await within(region).findByTitle(/Use this arrangement: Grid/));
+    await waitFor(() => expect(last(onChange).settings).toEqual({ arrange: "auto", layout: { algorithm: "grid", direction: "right" } }));
   });
 
   it("an old document that chose flow keeps arranging as flow", async () => {

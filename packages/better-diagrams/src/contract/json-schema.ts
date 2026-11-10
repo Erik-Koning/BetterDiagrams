@@ -14,6 +14,8 @@
  */
 import {
   ARRANGE_MODES,
+  DIRECTED_METHODS,
+  DIRECTED_PRIORITIES,
   LAYOUT_ALGORITHMS,
   LAYOUT_GAP_RANGE,
   LAYOUT_DIRECTIONS,
@@ -269,7 +271,7 @@ export function diagramJsonSchema(options: JsonSchemaOptions = {}): JsonSchema {
       settings: object(
         {
           groupContents: oneOf(GROUP_CONTENTS, "Whether groups show their contents. Default show."),
-          arrange: oneOf(ARRANGE_MODES, "What Tidy optimises for. Default auto, which picks the layout that measures best; roadmap lays a plan out by date."),
+          arrange: oneOf(ARRANGE_MODES, "What Tidy optimises for. Default auto, which picks the layout that measures best; directed keeps a flow's lines from crossing and running backward; roadmap lays a plan out by date."),
           layout: object(
             {
               algorithm: oneOf(LAYOUT_ALGORITHMS, "Which family of layout auto uses. Default auto: try those that apply and keep the best."),
@@ -283,6 +285,14 @@ export function diagramJsonSchema(options: JsonSchemaOptions = {}): JsonSchema {
             },
             [],
             "How auto arranges the diagram. Omit to let the graph decide.",
+          ),
+          directed: object(
+            {
+              priority: oneOf(DIRECTED_PRIORITIES, "What directed gives up for what: from crossings (never cross, whatever runs backward) to direction (never run backward, whatever crosses). Default mostly-crossings."),
+              method: oneOf(DIRECTED_METHODS, "How directed finds its arrangement. Default best: every method, and the picture that measures best."),
+            },
+            [],
+            "How the directed arrangement trades crossings against direction. Read only when arrange is directed.",
           ),
           roadmap: object(
             {

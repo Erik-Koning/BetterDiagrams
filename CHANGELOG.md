@@ -30,6 +30,14 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   `lintLayout`'s cost now counts how small the words come out when the picture is fitted
   to a window, which the auto-placer used to add on its own, and `LayoutReport.metrics.zoom` says how
   far it's scaled.
+- **Directed flow**, a fifth way to arrange (Arrange ▸ *Directed flow*, `settings.arrange: "directed"`,
+  `directedLayout`, `bd-layout place --mode directed`): for a flow, lines kept from crossing first and
+  running one way second, traded against each other at a rate the document sets
+  (`settings.directed.priority`, `DIRECTED_PRIORITIES`; a Priority slider in the menu and the Layout
+  panel) and found by a method it names (`settings.directed.method`, `DIRECTED_METHODS`). Lines that go
+  round nest on both sides of their column like brackets, two-way traffic runs as two lanes, and a box
+  that collects a fan sits in the middle of it. `directedCost` and `directedWeights` are how it tells
+  one picture from another.
 - `measureFlow` (`FlowMetrics`): how a drawn picture reads as a flow, in numbers a reader would
   recognise: crossings and their angle, lines running backward and how many must, travel with the
   flow, ports, bends, the straightness of the main path, stress, even ranks, symmetry. And

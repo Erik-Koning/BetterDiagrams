@@ -1,6 +1,7 @@
 # Directed flow: an Arrange mode that trades crossings against direction
 
-Status: step 1 (metrics and the baseline) built 2026-11-10. Steps 2 to 6 are not.
+Status: steps 1 and 2 built 2026-11-10 (the measures, and the mode with its ranked engine and its
+controls). Steps 3 to 6 are not.
 
 ## Where it stands
 
@@ -22,7 +23,57 @@ shortcuts past a stage: 11 crossings on `flow-shortcuts` where Untangle draws 1,
 `flow-long-skip`, 11 against 6 on `flow-mesh`. It picks a direction by how large the words come out,
 and pays for that in crossings, which is the trade this mode is for.
 
+**Step 2, the mode.** `settings.arrange: "directed"` (Arrange ▸ *Directed flow*, a card in the
+Layout panel's gallery, `bd-layout place --mode directed`), with a Priority slider and a Method
+choice in the menu and the panel (`settings.directed`). Methods: `layered`, `anneal`, `best`.
+
+What is in it:
+- **The ranking search** (`directed/ranking.ts`): cost = crossings + lines backward + ranks skipped,
+  at the priority's rate; one box moved at a time to a rank beside a neighbour, or to a new rank
+  between two; a move past a neighbour turns their line round. Seeded from the reader's order, the
+  order with fewest lines backward, and a pass priced for crossings above all. Annealing is the
+  same moves, allowed to get worse.
+- **A main line turned round costs double** a return line running back. Without it the search
+  starts a loop from its middle to save one backward line, and the flow reads inside out.
+- **Arcs as a book embedding** (`directed/arcs.ts`): lines that skip down a column or run back are
+  given sides and depths together. Every split is tried up to 12 arcs; past that, greedy with
+  flips. Each is drawn as a bracket with rounded corners and a dead-straight run.
+- **Two-way traffic** between neighbours runs face to face as two lanes. **A box that collects a
+  fan** sits in the middle of it.
+- **The choice between whole pictures** (`directedCost`): the linter's cost, crossings scaled by the
+  priority, direction charged for. Four rankings are laid out in full for `best` (the reader's,
+  the searched, the annealed, and whichever measures best piece by piece) and compared as drawn.
+
+Results, over all 35 documents:
+
+| Arrangement | Score | Crossings | Lines on lines | Backward (unavoidable) | Ports |
+|---|---|---|---|---|---|
+| Best fit | 85.0 | 252 | 70 | 38 (11) | 0.85 |
+| Directed, best | 89.3 | 222 | 39 | 30 (11) | 0.92 |
+| Directed, ranked | 89.1 | 221 | 43 | 31 (11) | 0.92 |
+| Directed, annealed | 88.9 | 231 | 43 | 31 (11) | 0.92 |
+
+On the twelve flows: 15 crossings against Best fit's 42, and 0 lines on lines against 24. It loses
+to Best fit on the two documents with no direction to them (a hub of twenty spokes, a mesh), which
+Best fit draws as a ring and a mesh and this draws as ranks.
+
+The Priority slider is monotone on all 35: crossings at the crossings end are never more than at
+the direction end, and backward lines the other way round. It changes the picture on 8 of them.
+
+Time: `best` 0.4 to 1.0 s on the documents of 30 to 60 boxes (Best fit: 0.2 to 0.35 s); `layered`
+0.3 to 0.6 s. That is over the 300 ms this plan set for 60 boxes.
+
 **Departures from the plan below, and why.**
+- **The search prices a model, and the model is not the drawing.** It counts crossings between
+  lanes threaded through the ranks; the picture draws a long line straight between its boxes and
+  routes it round what's in the way. A ranking the model likes can draw worse. So no single ranking
+  is trusted: several are laid out in full and compared as drawn. Making long lines follow their
+  lanes would close the gap, and is the next thing to do to the ranked engine.
+- **Network simplex and Brandes–Köpf were not needed**: the existing ranking and coordinate passes
+  are kept, and the search works on top of them.
+- **No engine falls back to a ring or a mesh.** A directed flow that comes out as a circle isn't
+  one; Best fit is there for those.
+- **Engines B (embedding first) and C (stress with direction) are not built yet.**
 - The measures are a function of their own, not fields of `LayoutReport.metrics`: stress and
   symmetry look at every pair of boxes, and `lintLayout` runs inside the placer's loop.
 - Engine B is "embedding first", not upward planarization: positions that cross little are found

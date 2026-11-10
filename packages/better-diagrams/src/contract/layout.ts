@@ -30,6 +30,7 @@ import { ASSIGNEE_STRIP_HEIGHT, DEPENDENCY_RELATION, hasAssigneeStrip } from "./
 import { roadmapLayout } from "./roadmap";
 import { bilayerCrossings, cardParentIdsOf, frameResolver, isotonic, variantGroups } from "./layout-frames";
 import { autoPlace, type ArrangeOptions } from "./arrange";
+import { directedLayout } from "./directed";
 
 export interface LayoutOptions {
   /** Horizontal gap between ranks. */
@@ -633,6 +634,10 @@ export function autoLayout(template: DiagramTemplate, options: LayoutOptions = {
   if (mode === "auto") {
     const { mode: _mode, aspect: _aspect, ...arrange } = options;
     return autoPlace(template, arrange);
+  }
+  if (mode === "directed") {
+    const { mode: _mode, aspect: _aspect, ...arrange } = options;
+    return directedLayout(template, arrange);
   }
   if (mode === "roadmap") {
     // A plan laid out by date is placed by its dates, on an axis refitted to

@@ -30,6 +30,7 @@ import {
   type SceneBox,
   type SceneLine,
 } from "../layout-lint";
+import { acyclicOrder } from "../autoplace";
 import { CONTAINER_KINDS, type DiagramTemplate } from "../schema";
 
 /** Which way a picture reads. */
@@ -52,6 +53,12 @@ export interface FlowMetrics {
   backward: number;
   /** Loops in the graph. Each needs at least one line to run back, whatever the arrangement. */
   backwardNeeded: number;
+  /**
+   * Of the backward lines, those a reader following the document from its first
+   * box would have followed forward: a main line turned round, as against a
+   * return line doing what return lines do.
+   */
+  turned: number;
   /** Lines whose ends sit level along the flow, so they run across it. */
   flat: number;
   /** Of the distance lines travel along the flow, the share travelled with it. 1 is every line all the way. */
@@ -356,7 +363,13 @@ export function measureScene(scene: Scene, report: LayoutReport, wanted?: FlowAx
   const overlaps = (report.counts["line-overlap"] ?? 0) + (report.counts["close-lines"] ?? 0);
 
   // ── Direction ───────────────────────────────────────────────────────────────
+  // The order a reader meets the boxes in, going by the document: what "forward" means before anything is drawn.
+  const reading = acyclicOrder(
+    scene.boxes.map((b) => b.id),
+    directed.map((l) => ({ source: l.source.id, target: l.target.id })),
+  );
   let backward = 0;
+  let turned = 0;
   let flat = 0;
   let withFlow = 0;
   let againstFlow = 0;
@@ -367,8 +380,10 @@ export function measureScene(scene: Scene, report: LayoutReport, wanted?: FlowAx
     const delta = along(centre(l.target)) - along(centre(l.source));
     // Level is within a quarter of the smaller box: nearer than that, neither is plainly ahead.
     const level = Math.max(8, Math.min(span(l.source), span(l.target)) * 0.25);
-    if (delta < -level) backward += 1;
-    else if (delta <= level) flat += 1;
+    if (delta < -level) {
+      backward += 1;
+      if (reading.get(l.source.id)! < reading.get(l.target.id)!) turned += 1;
+    } else if (delta <= level) flat += 1;
     else forward.push([l.source.id, l.target.id]);
     for (let i = 1; i < l.samples.length; i += 1) {
       const step = along(l.samples[i]!) - along(l.samples[i - 1]!);
@@ -444,7 +459,7 @@ export function measureScene(scene: Scene, report: LayoutReport, wanted?: FlowAx
   }
 
   // ── The lines themselves ────────────────────────────────────────────────────
-  let turned = 0;
+  let turning = 0;
   for (const l of lines) {
     let heading: number | null = null;
     for (let i = 1; i < l.samples.length; i += 1) {
@@ -455,7 +470,7 @@ export function measureScene(scene: Scene, report: LayoutReport, wanted?: FlowAx
       if (heading !== null) {
         let turn = Math.abs(next - heading);
         if (turn > Math.PI) turn = Math.PI * 2 - turn;
-        turned += turn;
+        turning += turn;
       }
       heading = next;
     }
@@ -548,12 +563,13 @@ export function measureScene(scene: Scene, report: LayoutReport, wanted?: FlowAx
     directed: directed.length,
     backward,
     backwardNeeded,
+    turned,
     flat,
     flowConsistency: share(withFlow, withFlow + againstFlow),
     portDiscipline: share(goodEnds, ends),
     sourceSinkPlacement: share(wellEnded, ended),
     angularResolution: share(resolution, hubs),
-    bends: lines.length ? turned / (Math.PI / 2) / lines.length : 0,
+    bends: lines.length ? turning / (Math.PI / 2) / lines.length : 0,
     spineStraightness,
     stress: stressOf(scene.boxes, lines),
     rankEvenness,

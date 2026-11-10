@@ -18,6 +18,8 @@
 import {
   ANNOTATION_KINDS,
   ARRANGE_MODES,
+  DIRECTED_METHODS,
+  DIRECTED_PRIORITIES,
   LAYOUT_ALGORITHMS,
   LAYOUT_DIRECTIONS,
   LAYOUT_ENDS,
@@ -323,6 +325,10 @@ export function validateTemplateReport(raw: unknown, opts: ValidateOptions = {})
       vocab(doc.settings.layout, "shape", LAYOUT_SHAPES, "/settings/layout", `the diagram comes out the shape its structure has`);
       vocab(doc.settings.layout, "spacing", LAYOUT_SPACINGS, "/settings/layout", `normal spacing is used`);
       vocab(doc.settings.layout, "ends", LAYOUT_ENDS, "/settings/layout", `each line gets its own place on a box`);
+    }
+    if (isObj(doc.settings.directed)) {
+      vocab(doc.settings.directed, "priority", DIRECTED_PRIORITIES, "/settings/directed", `a crossing counts three times a backward line`);
+      vocab(doc.settings.directed, "method", DIRECTED_METHODS, "/settings/directed", `every method is tried`);
     }
     if (given(doc.settings.roadmap) && !template.settings?.roadmap) {
       add("unknown-value", "/settings/roadmap", `The roadmap axis needs a "from" date and a numeric "dayWidth", so it was dropped and is fitted to the plan.`);

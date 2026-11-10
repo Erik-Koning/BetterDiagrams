@@ -1582,7 +1582,7 @@ The schema and editor cover C4's notational essentials:
 | **Lock** | `node.locked` / zone lock pins an element against drags and resizes |
 | **Search** | ⌘K, matches id/label/description/kind/tags, Enter cycles and centres |
 | **Snap & align** | Arrange: snap-to-grid, align left/centre/right/top/middle/bottom (2+ selected), distribute (3+), clear routes |
-| **Arrange modes** | Arrange: *Best fit* (default: the layout that measures best, in whatever shape that is), *Left to right* (proximity-based), *Untangle lines* (fewest crossings, lanes for long lines) or, for a dated plan, *By date* (a roadmap); stored as `settings.arrange`, applied on pick, one `⌘Z` undoes both |
+| **Arrange modes** | Arrange: *Best fit* (default: the layout that measures best, in whatever shape that is), *Left to right* (proximity-based), *Untangle lines* (fewest crossings, lanes for long lines), *Directed flow* (a flow's lines kept from crossing first and running one way second, with a Priority slider for what to give up for what and a Method to look with; `settings.directed`) or, for a dated plan, *By date* (a roadmap); stored as `settings.arrange`, applied on pick, one `⌘Z` undoes both |
 | **Layout panel** | Arrange → *Layout panel…*: a score out of 100 and what's behind it, *Polish* (keep the arrangement, fix what's wrong), *Selection* (arrange only what's selected), *Straighten* (the selected lines), Style, Direction, Inside groups, Shape, Spacing, Line ends and the two gaps, and thumbnails of the other arrangements to compare. Each one undo step. See [Auto-placement and layout lint](#auto-placement-and-layout-lint) |
 | **Notation** — symbols and numbers / crow's foot / UML | View: how a line's ends draw cardinality; `settings.notation`. UML shows the end glyphs a crow's-foot symbol would replace |
 | **HTML page** — how it opens | Export ▸ Interactive HTML ▸ Page settings…: lines on hover or all shown, the legend, and for a dated diagram the timeline bar, the date it opens on, and later elements ghosted or hidden; `settings.htmlLines`, `htmlLegend`, `htmlTimeline`, `htmlTimelineDate`, `htmlLater` |
@@ -2325,9 +2325,28 @@ The score is 100 less what's found, down to 40; below that it keeps falling ever
 picture with 30 problems and one with 300 read differently instead of both saying 0. No one rule can
 take it below about 20 on its own. The Layout panel shows the counts beside it.
 
+**Directed flow** (`settings.arrange: "directed"`, `directedLayout`) is the arrangement for a
+flow. Every other one decides which lines run backward before it counts a crossing; this one prices
+the two together, at a rate the document sets (`settings.directed.priority`, from `crossings`, where
+a crossing counts as nine backward lines, through `balanced` to `direction`, the reverse; the default
+`mostly-crossings` is three for one). It searches for ranks one box at a time, where moving a box
+past a neighbour turns the line between them round, and keeps a move when crossings, backward lines
+and skipped ranks together cost less (`settings.directed.method`: `layered`, `anneal` for the same
+search allowed to get worse on the way to better, or `best` for both, compared as drawn). A main
+line turned round costs more than a return line running back, so a loop still starts where the
+document starts it. What it draws differently: lines that skip ahead down a column, or run back
+against the flow, are given their sides and depths together, so they nest like brackets on both
+sides of the column instead of piling up on one; traffic both ways between neighbours runs as two
+lanes, face to face; and a box that collects a fan sits in the middle of it. Groups, zones, locks,
+text that fits and routed lines work as in every other arrangement, and direction, spacing and gaps
+still come from `settings.layout`. On the gallery's twelve flows it draws 15 crossings where Best
+fit draws 42, and no line on top of another where Best fit has 24; over all 35 documents, 12% fewer
+crossings and 44% fewer lines on lines. It only ranks, so a ring or a mesh with no direction to it
+is still Best fit's to draw.
+
 **`measureFlow` says how a picture reads as a flow**, where `lintLayout` says what's wrong with it:
 which way it reads (`axis`), `crossings` and how square they are, lines that run `backward` and how
-many have to (`backwardNeeded`, one for each loop), the share of line travel that goes with the flow
+many have to (`backwardNeeded`, one for each loop; `turned`, the main lines among them), the share of line travel that goes with the flow
 (`flowConsistency`), whether lines leave by the downstream face and arrive at the upstream one
 (`portDiscipline`), whether boxes that only send or only receive sit at the ends
 (`sourceSinkPlacement`), `bends`, how straight the longest path runs (`spineStraightness`),
@@ -2365,7 +2384,7 @@ bd-layout best diagram.json --write          # What to run after a model writes 
 ```
 
 `lint` and `fix` look at the top canvas unless `--all-canvases` is given; `place` also takes
-`--shape` and `--spacing`. A diagram with kinds of your own wants them named, `--kinds a,b` (and
+`--shape` and `--spacing`, and `--mode directed` (with `--priority` and `--method`) to place a flow. A diagram with kinds of your own wants them named, `--kinds a,b` (and
 `--container-kinds a,b` for those that hold other boxes): without that, a kind this package doesn't
 know reads as a service, so `fix`, `place` and `best` refuse to write the file. A flag it doesn't
 know, or a file that isn't a diagram, exits 2, so a misspelt `--min-score` can't pass a gate.
