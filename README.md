@@ -1583,7 +1583,7 @@ The schema and editor cover C4's notational essentials:
 | **Search** | ⌘K, matches id/label/description/kind/tags, Enter cycles and centres |
 | **Snap & align** | Arrange: snap-to-grid, align left/centre/right/top/middle/bottom (2+ selected), distribute (3+), clear routes |
 | **Arrange modes** | Arrange: *Best fit* (default: the layout that measures best, in whatever shape that is), *Left to right* (proximity-based), *Untangle lines* (fewest crossings, lanes for long lines) or, for a dated plan, *By date* (a roadmap); stored as `settings.arrange`, applied on pick, one `⌘Z` undoes both |
-| **Layout panel** | Arrange → *Layout panel…*: a score out of 100 and what's behind it, *Polish* (keep the arrangement, fix what's wrong), Style, Direction, Inside groups, Shape and Spacing, and thumbnails of the other arrangements to compare. Each one undo step. See [Auto-placement and layout lint](#auto-placement-and-layout-lint) |
+| **Layout panel** | Arrange → *Layout panel…*: a score out of 100 and what's behind it, *Polish* (keep the arrangement, fix what's wrong), *Selection* (arrange only what's selected), *Straighten* (the selected lines), Style, Direction, Inside groups, Shape, Spacing, Line ends and the two gaps, and thumbnails of the other arrangements to compare. Each one undo step. See [Auto-placement and layout lint](#auto-placement-and-layout-lint) |
 | **Notation** — symbols and numbers / crow's foot / UML | View: how a line's ends draw cardinality; `settings.notation`. UML shows the end glyphs a crow's-foot symbol would replace |
 | **HTML page** — how it opens | Export ▸ Interactive HTML ▸ Page settings…: lines on hover or all shown, the legend, and for a dated diagram the timeline bar, the date it opens on, and later elements ghosted or hidden; `settings.htmlLines`, `htmlLegend`, `htmlTimeline`, `htmlTimelineDate`, `htmlLater` |
 | **Enumerations** | Kind `enum`: a record whose rows are the allowed values, «enumeration» style; Insert ▸ Enumeration |
@@ -2313,7 +2313,8 @@ containers that don't hold what they should, text cut off, and the near-misses a
 mistakes. It also looks for what readers complained about when the first rules missed it: lines
 crossing at a shallow angle, lines running a few pixels apart, a line that doubles back into its
 box, a curve that swings far out of its way, words as near another line as their own, line ends
-crowded too close to tell apart, and a picture too dense to read on one screen. Its cost (what an
+pushed on top of each other, and a picture too dense to read on one screen (reported, and counted
+in the cost, but taking nothing off the score, since it depends on how big the picture is). Its cost (what an
 arrangement is chosen by) counts how small the words come out when the picture is fitted to a
 window, since readers named size more than anything else when choosing between two pictures; the
 score doesn't, so a long or tall picture is never marked down for its shape. See `LAYOUT_RULES`
@@ -2324,14 +2325,18 @@ The score is 100 less what's found, down to 40; below that it keeps falling ever
 picture with 30 problems and one with 300 read differently instead of both saying 0. No one rule can
 take it below about 20 on its own. The Layout panel shows the counts beside it.
 
-**The rule costs are fitted to readers.** `npm run gallery` draws the same documents with two
+**The rules are checked against readers.** `npm run gallery` draws the same documents with two
 versions of the code (`compare --base main`), or in every arrangement the engine offers
 (`variants`), in the real studio, and writes a contact sheet. `pairs` turns a run into blind A/B
 pictures; reviewers say which they'd ship, and `pick` records it in `gallery/picks.jsonl` with the
-two documents. `fit` then fits each rule's cost so the cheaper picture is the one readers chose, and
-reports how often the linter agrees with them on diagrams it wasn't fitted to. The gallery's real
-documents (`gallery/real/`) are anonymised: every word replaced by a pseudo-word of the same length,
-ids renumbered, and tags, links and dates dropped (`scripts/gallery/anonymise.mjs`).
+two documents, once per reviewer and pair (`--by` names the reviewer). `fit` then reports how often the linter's cost agrees with them, and fits each rule's
+cost to the picks to see how much better it could do on diagrams it wasn't fitted to (the best of
+four strengths of fit, so if anything a little high). The fitted
+costs are not the ones in use: on the picks so far they change too much from one fit to the next. The gallery's real
+documents (`gallery/real/`) are anonymised (`scripts/gallery/anonymise.mjs`): only what the layout
+needs is copied (geometry, kinds, icons, line styles and anchors, and how the document is arranged);
+every word, in any script, becomes a pseudo-word of the same shape; ids, fields and providers are
+renumbered; and everything else (tags, links, teams, people, dates, host data) is left behind.
 
 **A model that places well keeps what it placed.** After a generation, `arrangeBest` measures both:
 the model's arrangement is polished and kept unless the auto-placer's scores clearly better, so a
@@ -2346,6 +2351,12 @@ bd-layout fix diagram.json --write           # Keep the arrangement, fix what li
 bd-layout place diagram.json --direction down --algorithm tree --out placed.json
 bd-layout best diagram.json --write          # What to run after a model writes a diagram.
 ```
+
+`lint` and `fix` look at the top canvas unless `--all-canvases` is given; `place` also takes
+`--shape` and `--spacing`. A diagram with kinds of your own wants them named, `--kinds a,b` (and
+`--container-kinds a,b` for those that hold other boxes): without that, a kind this package doesn't
+know reads as a service, so `fix`, `place` and `best` refuse to write the file. A flag it doesn't
+know, or a file that isn't a diagram, exits 2, so a misspelt `--min-score` can't pass a gate.
 
 ## Canvas tools
 

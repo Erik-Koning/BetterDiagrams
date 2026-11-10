@@ -309,11 +309,18 @@ function runFamily(
   }
 }
 
+/**
+ * One key for a pair of boxes. Joined by a NUL, which no id contains: joined by
+ * anything an id can hold, "a b" to "c" and "a" to "b c" are the same key, and
+ * one of the two lines vanishes from the ranking.
+ */
+const pairKey = (a: string, b: string) => `${a}\u0000${b}`;
+
 function degreesOf(items: readonly PlaceItem[], links: readonly PlaceLink[]): Map<string, number> {
   const degree = new Map(items.map((i) => [i.id, 0]));
   const seen = new Set<string>();
   for (const l of links) {
-    const key = l.source < l.target ? `${l.source} ${l.target}` : `${l.target} ${l.source}`;
+    const key = l.source < l.target ? pairKey(l.source, l.target) : pairKey(l.target, l.source);
     if (seen.has(key)) continue;
     seen.add(key);
     degree.set(l.source, (degree.get(l.source) ?? 0) + 1);
@@ -613,9 +620,9 @@ export function flatRanks(ids: readonly string[], links: readonly PlaceLink[]): 
     const forward = position.get(l.source)! < position.get(l.target)!;
     const u = forward ? l.source : l.target;
     const v = forward ? l.target : l.source;
-    const hit = seen.get(`${u} ${v}`);
+    const hit = seen.get(pairKey(u, v));
     if (hit) hit.w += l.weight ?? 1;
-    else seen.set(`${u} ${v}`, { u, v, w: l.weight ?? 1 });
+    else seen.set(pairKey(u, v), { u, v, w: l.weight ?? 1 });
   }
   return assignRanks(ids, [...seen.values()]);
 }
@@ -649,7 +656,7 @@ function layered(
     const forward = position.get(l.source)! < position.get(l.target)!;
     const u = forward ? l.source : l.target;
     const v = forward ? l.target : l.source;
-    const key = `${u} ${v}`;
+    const key = pairKey(u, v);
     const room = (vertical ? l.labelH : l.labelW) ?? 0;
     const weight = l.weight ?? 1;
     const atSource = l.sourcePort ? crossOf(l.sourcePort, opts.flow) : 0;
@@ -1263,7 +1270,7 @@ function forestOf(items: readonly PlaceItem[], links: readonly PlaceLink[]): Map
   const seen = new Set<string>();
   for (const l of links) {
     if (l.tether) return null;
-    const key = `${l.source} ${l.target}`;
+    const key = pairKey(l.source, l.target);
     if (seen.has(key)) continue;
     seen.add(key);
     if (parent.has(l.target)) return null;

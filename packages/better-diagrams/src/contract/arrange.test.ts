@@ -285,6 +285,130 @@ describe("what a document asks of its layout", () => {
     expect(autoPlace(t, { fitText: false }).nodes.find((n) => n.id === "a")!.w).toBe(120);
   });
 
+  it("a note grows to fit its words, and is never made smaller than it was drawn", () => {
+    const t = doc([
+      service("roomy", { kind: "text", label: "hi", w: 400, h: 300 }),
+      service("tight", { kind: "text", label: "A note with rather more to say than a box this small has room for.", w: 140, h: 30 }),
+      service("a"),
+    ]);
+    const placed = autoPlace(t);
+    expect(placed.nodes.find((n) => n.id === "roomy")).toMatchObject({ w: 400, h: 300 });
+    const tight = placed.nodes.find((n) => n.id === "tight")!;
+    expect(tight.w).toBeGreaterThanOrEqual(140);
+    expect(tight.h).toBeGreaterThan(30);
+  });
+
+  it("an empty zone is given the room it's drawn at, so empty zones don't land on each other", () => {
+    const zone = (id: string, w: number, h: number) => ({ id, label: id, shape: "rect", x: 0, y: 0, w, h });
+    const t = doc([service("a"), service("b")], [], { zones: [zone("z1", 800, 600), zone("z2", 800, 600), zone("z3", 900, 700)] });
+    const placed = autoPlace(t);
+    expect(placed.zones!.map((z) => [z.w, z.h])).toEqual([[800, 600], [800, 600], [900, 700]]);
+    expect(count(placed, "region-collision")).toBe(0);
+    expect(count(placed, "intruder")).toBe(0);
+  });
+
+  it("a zone holding a locked box isn't slid to level a line, which would move the box", () => {
+    const t = doc(
+      [service("a", { zoneId: "z", locked: true, x: 350, y: 200 }), service("a2", { zoneId: "z", x: 350, y: 300 }), service("b"), service("c")],
+      [line("b", "a"), line("a", "c"), line("a2", "c")],
+      { zones: [{ id: "z", label: "Region", shape: "rect", x: 300, y: 100, w: 300, h: 400 }] },
+    );
+    const placed = autoPlace(t);
+    expect(placed.nodes.find((n) => n.id === "a")).toMatchObject({ x: 350, y: 200 });
+    expect(placed.zones![0]).toMatchObject({ x: 300, y: 100 });
+  });
+
+  it("a group holding a locked box stays where it is, and the rest of what's in it stays in it", () => {
+    const t = doc(
+      [
+        service("g", { kind: "group", x: 600, y: 600, w: 400, h: 300 }),
+        service("held", { parentId: "g", locked: true, x: 40, y: 60 }),
+        service("free", { parentId: "g", x: 40, y: 60 }),
+        service("outside"),
+      ],
+      [line("held", "free"), line("outside", "held")],
+    );
+    const placed = autoPlace(t);
+    const at = (id: string) => placed.nodes.find((n) => n.id === id)!;
+    // The lock is a place on the canvas: the group it's in can't carry it off.
+    expect([at("g").x, at("g").y]).toEqual([600, 600]);
+    expect(at("held")).toMatchObject({ x: 40, y: 60 });
+    const free = at("free");
+    expect(free.x).toBeGreaterThanOrEqual(0);
+    expect(free.y).toBeGreaterThanOrEqual(0);
+    expect(free.x + free.w).toBeLessThanOrEqual(at("g").w);
+    expect(free.y + free.h).toBeLessThanOrEqual(at("g").h);
+    expect(count(placed, "box-overlap")).toBe(0);
+    expect(count(placed, "outside-container")).toBe(0);
+  });
+
+  it("a locked zone drawn on another keeps its members, and holds the zone under it in place", () => {
+    const zone = (id: string, x: number, y: number, w: number, h: number, more: Record<string, unknown> = {}) => ({ id, label: id, shape: "rect", x, y, w, h, ...more });
+    const t = doc(
+      [
+        service("a", { zoneId: "host", x: 40, y: 80 }),
+        service("b", { zoneId: "host", x: 40, y: 300 }),
+        service("c", { zoneId: "island", x: 2050, y: 2060 }),
+        service("d", { x: 3200, y: 0 }),
+      ],
+      [line("a", "b"), line("b", "c"), line("d", "a")],
+      { zones: [zone("host", 0, 0, 3000, 3000), zone("island", 2000, 2000, 400, 300, { z: 1, locked: true })] },
+    );
+    const placed = autoPlace(t);
+    const [host, island] = placed.zones!;
+    expect(island).toMatchObject({ x: 2000, y: 2000, w: 400, h: 300 });
+    expect(host).toMatchObject({ x: 0, y: 0, w: 3000, h: 3000 });
+    const c = placed.nodes.find((n) => n.id === "c")!;
+    expect(c.x).toBeGreaterThanOrEqual(2000);
+    expect(c.y).toBeGreaterThanOrEqual(2000);
+    expect(c.x + c.w).toBeLessThanOrEqual(2400);
+    expect(c.y + c.h).toBeLessThanOrEqual(2300);
+  });
+
+  it("on a card's own canvas, nothing lands on a locked box", () => {
+    const t = doc(
+      [
+        service("card"),
+        service("other"),
+        service("k1", { parentId: "card", locked: true, x: 30, y: 200 }),
+        service("k2", { parentId: "card" }),
+        service("k3", { parentId: "card" }),
+        service("k4", { parentId: "card" }),
+      ],
+      [line("card", "other"), line("k2", "k1"), line("k3", "k1"), line("k4", "k1")],
+    );
+    const placed = autoPlace(t, { frames: { drill: "card" } });
+    const kids = placed.nodes.filter((n) => n.parentId === "card");
+    expect(kids.find((n) => n.id === "k1")).toMatchObject({ x: 30, y: 200 });
+    for (const a of kids) {
+      for (const b of kids) {
+        if (a.id >= b.id) continue;
+        expect(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h, `${a.id} on ${b.id}`).toBe(false);
+      }
+    }
+  });
+
+  it("keeps a hand-drawn route between two boxes that didn't move", () => {
+    const t = doc(
+      [service("a", { locked: true, x: 0, y: 0 }), service("b", { locked: true, x: 600, y: 0 }), service("c")],
+      [line("a", "b", { points: [[300, -200]] }), line("b", "c")],
+    );
+    expect(autoPlace(t).edges[0]!.points).toEqual([[300, -200]]);
+  });
+
+  it("ranks by the lines there are, whatever characters the ids hold", () => {
+    // Keyed on a space, "a b" to "c" and "a" to "b c" were one line, and "b c" lost its place.
+    const t = doc(
+      [service("a b"), service("c"), service("a"), service("b c")],
+      [line("a b", "c"), line("c", "a"), line("a", "b c")],
+    );
+    const placed = autoPlace(t, { direction: "right", algorithm: "layered" });
+    const x = (id: string) => placed.nodes.find((n) => n.id === id)!.x;
+    expect(x("a b")).toBeLessThan(x("c"));
+    expect(x("c")).toBeLessThan(x("a"));
+    expect(x("a")).toBeLessThan(x("b c"));
+  });
+
   it("autoLayout's other modes are untouched", () => {
     const t = ARRANGE_FIXTURES.webApp!();
     const flow = autoLayout(t, { mode: "flow" });
@@ -360,6 +484,19 @@ describe("polishLayout", () => {
     expect(count(after, "box-overlap")).toBe(0);
   });
 
+  it("doesn't push a group aside when that would carry off a locked box inside it", () => {
+    const t = doc([
+      service("g", { kind: "group", x: 0, y: 0, w: 300, h: 220 }),
+      service("held", { parentId: "g", locked: true, x: 40, y: 70 }),
+      service("crowding", { x: 250, y: 60 }),
+    ]);
+    const after = polishLayout(t);
+    const g = after.nodes.find((n) => n.id === "g")!;
+    const held = after.nodes.find((n) => n.id === "held")!;
+    expect([g.x + held.x, g.y + held.y]).toEqual([40, 70]);
+    expect(count(after, "box-overlap")).toBe(0);
+  });
+
   it("carries a zone's members with it when zones are pushed apart", () => {
     const t = doc(
       [service("m1", { zoneId: "a", x: 60, y: 80 }), service("m2", { zoneId: "b", x: 300, y: 80 })],
@@ -428,6 +565,12 @@ describe("layoutCandidates", () => {
     const ids = layoutCandidates(ARRANGE_FIXTURES.dataModel!()).map((c) => c.id);
     expect(ids).not.toContain("layered-down");
   });
+
+  it("doesn't offer a work plan a direction Tidy would never give it", () => {
+    const ids = layoutCandidates(ARRANGE_FIXTURES.taskPlan!()).map((c) => c.id);
+    expect(ids).not.toContain("layered-down");
+    expect(ids).not.toContain("tree-down");
+  });
 });
 
 describe("arrangeSelection", () => {
@@ -447,6 +590,52 @@ describe("arrangeSelection", () => {
   it("does nothing with fewer than two boxes in one container", () => {
     const t = doc([service("a", { x: 5, y: 5 }), service("b", { x: 500, y: 5 })]);
     expect(arrangeSelection(t, ["a"])).toBe(t);
+  });
+
+  it("keeps what it arranges inside its group, which grows to hold it", () => {
+    const t = doc(
+      [
+        service("g", { kind: "group", x: 100, y: 100, w: 440, h: 200 }),
+        service("a", { parentId: "g", x: 32, y: 60 }),
+        service("b", { parentId: "g", x: 232, y: 60 }),
+        service("c", { parentId: "g", x: 132, y: 100 }),
+      ],
+      [line("a", "b"), line("b", "c")],
+    );
+    const out = arrangeSelection(t, ["a", "b", "c"]);
+    const g = out.nodes.find((n) => n.id === "g")!;
+    expect([g.x, g.y]).toEqual([100, 100]);
+    for (const n of out.nodes.filter((k) => k.parentId === "g")) {
+      expect(n.x, n.id).toBeGreaterThanOrEqual(0);
+      expect(n.y, n.id).toBeGreaterThanOrEqual(0);
+      expect(n.x + n.w, n.id).toBeLessThanOrEqual(g.w);
+      expect(n.y + n.h, n.id).toBeLessThanOrEqual(g.h);
+    }
+    expect(count(out, "outside-container")).toBe(0);
+  });
+
+  it("arranges a zone's boxes within their zone, never into the one next door", () => {
+    const zone = (id: string, x: number) => ({ id, label: id, shape: "rect", x, y: 0, w: 500, h: 400 });
+    const t = doc(
+      [
+        service("a", { zoneId: "z1", x: 40, y: 80 }),
+        service("a2", { zoneId: "z1", x: 60, y: 100 }),
+        service("b", { zoneId: "z2", x: 840, y: 80 }),
+        service("b2", { zoneId: "z2", x: 860, y: 100 }),
+      ],
+      [line("a", "b"), line("a", "a2"), line("b", "b2")],
+      { zones: [zone("z1", 0), zone("z2", 800)] },
+    );
+    const out = arrangeSelection(t, ["a", "a2", "b", "b2"]);
+    for (const n of out.nodes) {
+      const z = out.zones!.find((zone) => zone.id === n.zoneId)!;
+      expect(n.x, n.id).toBeGreaterThanOrEqual(z.x);
+      expect(n.x + n.w, n.id).toBeLessThanOrEqual(z.x + z.w);
+      expect(n.y, n.id).toBeGreaterThanOrEqual(z.y);
+      expect(n.y + n.h, n.id).toBeLessThanOrEqual(z.y + z.h);
+    }
+    // The two that share a zone were still arranged: no longer one on the other.
+    expect(count(out, "box-overlap")).toBe(0);
   });
 });
 

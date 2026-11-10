@@ -671,10 +671,14 @@ export const GROUP_CONTENTS = ["show", "hide"] as const;
 export type GroupContents = (typeof GROUP_CONTENTS)[number];
 
 /**
- * What Tidy optimises for, document-wide. "flow" is the default and never
- * needs storing: a left-to-right layered layout where a node sits one rank
- * past its deepest predecessor and rank-mates are ordered by proximity to
- * what they connect to — compact, and the shape an LLM is asked to author.
+ * What Tidy optimises for, document-wide. "auto" is the default and never
+ * needs storing: the auto-placer lays the document out every way that suits
+ * it and keeps the one that measures best (see `arrange.ts`, and
+ * `LayoutPreferences` for what a document can ask of it). "flow" is the
+ * layout Tidy used to be, kept for the documents that chose it: a
+ * left-to-right layered layout where a node sits one rank past its deepest
+ * predecessor and rank-mates are ordered by proximity to what they connect
+ * to. It is compact, and it leaves zones where they are.
  * "untangle" spends more effort on the lines: crossings are minimised over
  * repeated sweeps, a line that spans several ranks is given a channel of its
  * own so it never runs through a box in between, and nodes are nudged level
@@ -2413,16 +2417,17 @@ function spreadSharedRows(
     const farOf = (b: Box) => b.y + b.height / 2;
     if (start.onRow && start.anchor) {
       const at = slot?.start ?? start.anchor.t ?? 0.5;
-      add(`${e.source}|${start.anchor.side}|${Math.round(at * 10000)}`, { id: e.id, which: "start", t: at, far: farOf(t.box) });
+      add(`${e.source}\u0000${start.anchor.side}\u0000${Math.round(at * 10000)}`, { id: e.id, which: "start", t: at, far: farOf(t.box) });
     }
     if (end.onRow && end.anchor) {
       const at = slot?.end ?? end.anchor.t ?? 0.5;
-      add(`${e.target}|${end.anchor.side}|${Math.round(at * 10000)}`, { id: e.id, which: "end", t: at, far: farOf(s.box) });
+      add(`${e.target}\u0000${end.anchor.side}\u0000${Math.round(at * 10000)}`, { id: e.id, which: "end", t: at, far: farOf(s.box) });
     }
   }
   for (const [key, landings] of rows) {
     if (landings.length < 2) continue;
-    const box = nodeOf(key.split("|")[0]!)?.box;
+    // Keyed on a NUL, which no id contains: an id may hold any character a key could be split on.
+    const box = nodeOf(key.split("\u0000")[0]!)?.box;
     if (!box || !(box.height > 0)) continue;
     // Inside the row's own height: a little further and a line reads as joining the next one.
     const step = Math.min(FIELD_ROW_H * 0.45, (FIELD_ROW_H * 0.9) / (landings.length - 1)) / box.height;

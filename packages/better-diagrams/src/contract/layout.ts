@@ -66,6 +66,9 @@ export interface LayoutOptions {
    * wrapped into side-by-side sub-columns. A rank that fits on a screen
    * ({@link WRAP_FLOOR}) is never wrapped, so small diagrams lay out exactly
    * as they always did. 0 turns the wrapping off.
+   *
+   * For the "flow" and "untangle" modes only. "auto", the default, aims at no
+   * shape unless asked for one by `shape`, and ignores this.
    */
   aspect?: number;
   /**

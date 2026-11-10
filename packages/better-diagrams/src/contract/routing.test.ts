@@ -626,6 +626,37 @@ describe("lines that share a side enter it side by side (lineEndSlots)", () => {
   });
 });
 
+describe("lines that land on one row land side by side, whatever the table is called", () => {
+  const table = (id: string, x: number, y: number, fields: unknown[]) => ({ id, label: id, kind: "table", x, y, fields });
+  const slotsFor = (pk: string) => {
+    const d = validateTemplate({
+      version: 1,
+      nodes: [
+        table(pk, 600, 200, [{ id: "id", name: "id", type: "int", key: "pk" }, { id: "n", name: "name", type: "text" }]),
+        ...[0, 1, 2].map((i) =>
+          table(`c${i}`, 0, i * 220, [{ id: "id", name: "id", type: "int", key: "pk" }, { id: "fk", name: "owner_id", type: "int", key: "fk" }]),
+        ),
+      ],
+      edges: [0, 1, 2].map((i) => ({ id: `e${i}`, source: `c${i}`, target: pk, startField: "fk", endField: "id" })),
+    } as unknown as DiagramTemplate);
+    const slots = lineEndSlots(d.edges, (id) => {
+      const n = d.nodes.find((node) => node.id === id);
+      return n && { fields: n.fields, description: n.description, box: { x: n.x, y: n.y, width: n.w, height: n.h } };
+    });
+    return ["e0", "e1", "e2"].map((id) => slots.get(id)?.end);
+  };
+
+  it("three foreign keys onto one primary key each get a place of their own", () => {
+    const ends = slotsFor("users");
+    expect(new Set(ends).size).toBe(3);
+    expect(ends.every((t) => typeof t === "number")).toBe(true);
+  });
+
+  it("and the same when the table's id holds a character a key could be split on", () => {
+    expect(slotsFor("us|ers")).toEqual(slotsFor("users"));
+  });
+});
+
 describe("a line ends on the shape it meets", () => {
   const box = (x: number, y: number, width = 170, height = 100) => ({ x, y, width, height });
 

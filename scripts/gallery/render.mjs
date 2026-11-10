@@ -39,10 +39,12 @@ export async function withStudio(checkout, scratch, work) {
     clearScreen: false,
     server: { port, strictPort: true, host: "127.0.0.1" },
   });
-  await server.listen();
-  const { chromium } = await import(pathToFileURL(join(REPO, "node_modules/playwright/index.mjs")).href);
-  const browser = await chromium.launch();
+  // From here every way out stops what was started: a server left listening keeps the process alive.
+  let browser = null;
   try {
+    await server.listen();
+    const { chromium } = await import(pathToFileURL(join(REPO, "node_modules/playwright/index.mjs")).href);
+    browser = await chromium.launch();
     return await work({
       /** Draw one document and save the canvas as a PNG. */
       async shoot(doc, file, name = "gallery") {
@@ -87,7 +89,7 @@ export async function withStudio(checkout, scratch, work) {
       },
     });
   } finally {
-    await browser.close();
+    await browser?.close();
     await server.close();
   }
 }
