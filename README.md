@@ -2325,6 +2325,18 @@ The score is 100 less what's found, down to 40; below that it keeps falling ever
 picture with 30 problems and one with 300 read differently instead of both saying 0. No one rule can
 take it below about 20 on its own. The Layout panel shows the counts beside it.
 
+**`measureFlow` says how a picture reads as a flow**, where `lintLayout` says what's wrong with it:
+which way it reads (`axis`), `crossings` and how square they are, lines that run `backward` and how
+many have to (`backwardNeeded`, one for each loop), the share of line travel that goes with the flow
+(`flowConsistency`), whether lines leave by the downstream face and arrive at the upstream one
+(`portDiscipline`), whether boxes that only send or only receive sit at the ends
+(`sourceSinkPlacement`), `bends`, how straight the longest path runs (`spineStraightness`),
+`stress`, `rankEvenness`, `symmetry`, `angularResolution`, `groupCompactness` and `lengthSpread`.
+Each is a number on its own scale, taken from the picture as drawn, so they compare a hand-placed
+diagram with any arrangement of it. `layoutStability(before, after)` says how far boxes moved and
+how many are still the same way round. `npm run gallery -- metrics` prints them for every gallery
+document in every arrangement.
+
 **The rules are checked against readers.** `npm run gallery` draws the same documents with two
 versions of the code (`compare --base main`), or in every arrangement the engine offers
 (`variants`), in the real studio, and writes a contact sheet. `pairs` turns a run into blind A/B

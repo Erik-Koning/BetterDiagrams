@@ -1,6 +1,35 @@
 # Directed flow: an Arrange mode that trades crossings against direction
 
-Status: plan, 2026-11-09. Nothing here is built.
+Status: step 1 (metrics and the baseline) built 2026-11-10. Steps 2 to 6 are not.
+
+## Where it stands
+
+**Step 1, measuring.** `measureFlow` and `layoutStability` (`contract/directed/metrics.ts`), and
+`npm run gallery -- metrics`, which prints them for every gallery document in every arrangement.
+The gallery has twelve more documents (`flow-*` in `scripts/gallery/corpus.mjs`), each one shape a
+flow takes.
+
+The baseline, over all 35 documents (counts are totals, shares are means):
+
+| Arrangement | Crossings | Lines on lines | Through a box | Backward (unavoidable) | With the flow | Ports |
+|---|---|---|---|---|---|---|
+| Best fit (today's default) | 252 | 70 | 1 | 38 (11) | 0.87 | 0.85 |
+| Untangle | 363 | 102 | 244 | 49 (11) | 0.85 | 0.88 |
+| Left to right (old) | 388 | 122 | 337 | 48 (11) | 0.85 | 0.89 |
+
+Best fit is the one to beat, not Untangle: it already crosses less. Where it loses is flows with
+shortcuts past a stage: 11 crossings on `flow-shortcuts` where Untangle draws 1, 8 against 2 on
+`flow-long-skip`, 11 against 6 on `flow-mesh`. It picks a direction by how large the words come out,
+and pays for that in crossings, which is the trade this mode is for.
+
+**Departures from the plan below, and why.**
+- The measures are a function of their own, not fields of `LayoutReport.metrics`: stress and
+  symmetry look at every pair of boxes, and `lintLayout` runs inside the placer's loop.
+- Engine B is "embedding first", not upward planarization: positions that cross little are found
+  with no ranks at all (stress), and ranks are read off them. A true planarization needs a planar
+  embedding and a dual-graph router, which is a project of its own.
+- The engines are families of the existing placer, so groups, zones, locks, routing and text all
+  work as they do for every other arrangement.
 
 ## What it is
 

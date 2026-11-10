@@ -1357,6 +1357,36 @@ export const FILE_LINK_PREFIX = "file:";
 export type FileMap = ReadonlyMap<string, string>;
 
 // @public
+export type FlowAxis = "right" | "down" | "left" | "up";
+
+// @public (undocumented)
+export interface FlowMetrics {
+    angularResolution: number;
+    axis: FlowAxis;
+    backward: number;
+    backwardNeeded: number;
+    bends: number;
+    // (undocumented)
+    boxes: number;
+    crossingAngle: number;
+    crossings: number;
+    directed: number;
+    flat: number;
+    flowConsistency: number;
+    groupCompactness: number;
+    lengthSpread: number;
+    // (undocumented)
+    lines: number;
+    overlaps: number;
+    portDiscipline: number;
+    rankEvenness: number;
+    sourceSinkPlacement: number;
+    spineStraightness: number;
+    stress: number | null;
+    symmetry: number;
+}
+
+// @public
 export function focusPath(t: DiagramTemplate, nodeId: string): string[];
 
 // @public (undocumented)
@@ -2070,6 +2100,15 @@ export type LayoutShape = (typeof LAYOUT_SHAPES)[number];
 // @public (undocumented)
 export type LayoutSpacing = (typeof LAYOUT_SPACINGS)[number];
 
+// @public (undocumented)
+export interface LayoutStability {
+    moved: number;
+    orderKept: number;
+}
+
+// @public
+export function layoutStability(before: DiagramTemplate, after: DiagramTemplate, opts?: LintLayoutOptions): LayoutStability;
+
 // @public
 export function liftScopedReactFlow(nodes: readonly RFNodeLike[], edges: readonly RFEdgeLike[], focusId: string, opts: ValidateOptions & {
     meta?: DiagramTemplate["meta"];
@@ -2207,6 +2246,15 @@ export const MAX_LINEAGE = 50000;
 
 // @public
 export const MAX_NODE_FIELDS = 500;
+
+// @public
+export function measureFlow(template: DiagramTemplate, opts?: MeasureFlowOptions): FlowMetrics;
+
+// @public (undocumented)
+export interface MeasureFlowOptions extends LintLayoutOptions {
+    axis?: FlowAxis;
+    report?: LayoutReport;
+}
 
 // @public
 export function mergeLineage(existing: readonly LineageLink[] | undefined, incoming: readonly LineageLink[]): LineageLink[];

@@ -30,6 +30,12 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   `lintLayout`'s cost now counts how small the words come out when the picture is fitted
   to a window, which the auto-placer used to add on its own, and `LayoutReport.metrics.zoom` says how
   far it's scaled.
+- `measureFlow` (`FlowMetrics`): how a drawn picture reads as a flow, in numbers a reader would
+  recognise: crossings and their angle, lines running backward and how many must, travel with the
+  flow, ports, bends, the straightness of the main path, stress, even ranks, symmetry. And
+  `layoutStability`: how much of the old picture survives a new arrangement. `npm run gallery --
+  metrics` prints them for every gallery document in every arrangement, which now include twelve
+  small flows.
 - `npm run gallery` (in the repo, not the package): draws the gallery's documents with two versions of
   the code, or in every arrangement, in the real studio; makes blind pairs for reviewers, records
   their picks, and fits the layout rules' costs to them.
