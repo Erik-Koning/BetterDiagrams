@@ -263,6 +263,8 @@ const CONTRACT_EXPORTS = [
   "settleLines",
   "straightenLines",
   "lintLayout",
+  "measureFlow",
+  "layoutStability",
   "LAYOUT_LINT_RULES",
   "LAYOUT_RULE_IDS",
   "LAYOUT_RULES",

@@ -9,6 +9,9 @@
  *   npm run gallery -- variants [--only a,b] [--out name]
  *       Every arrangement `layoutCandidates` offers for each document (and the
  *       real documents as authored), drawn by the working tree's studio.
+ *   npm run gallery -- metrics [--only a,b] [--out name]
+ *       How every arrangement of each document reads as a flow: crossings, lines
+ *       running back, ports, bends. Numbers only, no pictures, so it is quick.
  *   npm run gallery -- pairs <run> [--per 3] [--max 80] [--seed 1]
  *       Blind A/B pictures from a run, for reviewers; the key stays in the run.
  *   npm run gallery -- pick <run> <picks.txt> [--by reviewer]
@@ -32,6 +35,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { loadCorpus } from "./corpus.mjs";
 import { loadEngine, REPO } from "./engine.mjs";
+import { arrangementsOf, flowRow, flowSummary, flowTable } from "./flow.mjs";
 import { choosePairs, countFlag, escapeHtml, flagValue, newPicks, parsePicks, runName } from "./pairing.mjs";
 import { withStudio } from "./render.mjs";
 
@@ -198,6 +202,28 @@ async function variants() {
   }
 }
 
+/** Every arrangement of every document, measured as a flow. No studio, no pictures. */
+async function metrics() {
+  const only = flag("only", "").split(",").filter(Boolean);
+  const run = join(OUT, runName(flag("out", `metrics-${stamp()}`)));
+  const scratch = scratchDir();
+  try {
+    mkdirSync(run, { recursive: true });
+    const head = await loadEngine(REPO, join(scratch, "engine-head"));
+    const rows = loadCorpus(head, only).map((c) => ({
+      name: c.name,
+      cells: arrangementsOf(head, c.doc).map((v) => ({ variant: v.id, label: v.label, metrics: flowRow(head, v.template) })),
+    }));
+    const summary = flowSummary(rows);
+    writeFileSync(join(run, "metrics.json"), JSON.stringify({ kind: "metrics", rows, summary }, null, 1));
+    console.log(flowTable(rows));
+    console.log(flowTable([{ name: `every document (${rows.length}): counts are totals, shares are means`, cells: summary }]));
+    console.log(`\n${relative(REPO, join(run, "metrics.json"))}`);
+  } finally {
+    tidyUp();
+  }
+}
+
 /** The contact sheet as PNG pages, a few documents each, for reading as images. */
 async function shootSheet(html, run, scratch) {
   const manifest = JSON.parse(readFileSync(join(run, "manifest.json"), "utf8"));
@@ -293,9 +319,9 @@ async function fit() {
   await fitCommand({ write: has("write"), by: flag("by", "") });
 }
 
-const commands = { compare, variants, pairs, pick, fit };
+const commands = { compare, variants, metrics, pairs, pick, fit };
 if (!commands[command]) {
-  console.error("usage: npm run gallery -- compare|variants|pairs|pick|fit  (see scripts/gallery/cli.mjs)");
+  console.error("usage: npm run gallery -- compare|variants|metrics|pairs|pick|fit  (see scripts/gallery/cli.mjs)");
   process.exit(2);
 }
 try {

@@ -411,6 +411,14 @@ export {
   type LayoutRuleId,
   type LintLayoutOptions,
 } from "./layout-lint";
+export {
+  layoutStability,
+  measureFlow,
+  type FlowAxis,
+  type FlowMetrics,
+  type LayoutStability,
+  type MeasureFlowOptions,
+} from "./directed/metrics";
 export { settleLines, type SettleOptions } from "./route-lines";
 export type { LayoutOptions } from "./layout";
 

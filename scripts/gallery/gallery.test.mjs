@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { anonymise, pseudo } from "./anonymise.mjs";
 import { agreement, crossValidate, distinctPicks, fitWeights, reviewerAgreement, rowsFrom, withFittedCosts } from "./fit.mjs";
+import { flowDocs } from "./corpus.mjs";
+import { flowSummary, flowTable } from "./flow.mjs";
 import { choosePairs, countFlag, escapeHtml, flagValue, newPicks, parsePicks, runName } from "./pairing.mjs";
 
 function rng(seed) {
@@ -272,4 +274,47 @@ test("a flag with nothing after it, a count that isn't one, and a run that is a 
   assert.equal(runName("variants-2031-01-01T10-00-00"), "variants-2031-01-01T10-00-00");
   for (const bad of ["../elsewhere", "a/b", "..", ".", "", undefined]) assert.throws(() => runName(bad), /plain name/);
   assert.equal(escapeHtml(`<b onclick="x">R&D's</b>`), "&lt;b onclick=&quot;x&quot;&gt;R&amp;D&#39;s&lt;/b&gt;");
+});
+
+test("the flow documents are the same every time, each one piece, each with the shape it is named for", () => {
+  const docs = flowDocs();
+  assert.equal(docs.length, 12);
+  assert.deepEqual(docs, flowDocs());
+  assert.equal(new Set(docs.map((d) => d.name)).size, 12);
+  for (const { name, doc } of docs) {
+    const boxes = doc.nodes.filter((n) => n.kind !== "group").map((n) => n.id);
+    const reached = new Set([boxes[0]]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const e of doc.edges) {
+        if (reached.has(e.source) !== reached.has(e.target)) {
+          reached.add(e.source).add(e.target);
+          grew = true;
+        }
+      }
+    }
+    assert.equal(reached.size, boxes.length, `${name} is one piece`);
+    assert.ok(doc.nodes.every((n) => n.x === 0 && n.y === 0), `${name} is unplaced`);
+  }
+  const edgesOf = (name) => docs.find((d) => d.name === name).doc.edges.map((e) => `${e.source}>${e.target}`);
+  assert.ok(edgesOf("flow-retry").includes("n3>n1"), "a line back to an earlier stage");
+  assert.ok(edgesOf("flow-two-way").includes("n1>n0") && edgesOf("flow-two-way").includes("n0>n1"), "traffic both ways");
+  assert.equal(docs.find((d) => d.name === "flow-tiers").doc.nodes.filter((n) => n.kind === "group").length, 3);
+});
+
+test("a summary adds what is counted and averages what is a share, over the documents an arrangement covers", () => {
+  const cell = (variant, crossings, flow) => ({ variant, metrics: { score: 90, crossings, overlaps: 0, through: 0, backward: 1, backwardNeeded: 1, flow, ports: 1, bends: 0, spine: 1, zoom: 1 } });
+  const rows = [
+    { name: "one", cells: [cell("auto", 3, 1), cell("grid", 9, 0.5)] },
+    { name: "two", cells: [cell("auto", 2, 0.5)] },
+  ];
+  const summary = flowSummary(rows);
+  assert.deepEqual(summary.map((s) => s.variant), ["auto (2)", "grid (1)"]);
+  assert.equal(summary[0].metrics.crossings, 5);
+  assert.equal(summary[0].metrics.flow, 0.75);
+  assert.equal(summary[0].metrics.backward, 2);
+  const text = flowTable(rows);
+  assert.match(text, /^one$/m);
+  assert.match(text, /auto\s+90\s+3\s/);
+  assert.match(text, /\s1\/1\s/);
 });
