@@ -685,9 +685,12 @@ export type GroupContents = (typeof GROUP_CONTENTS)[number];
  * with what they connect to so lines run straight. "roadmap" lays a plan
  * out by date instead (see `roadmap.ts`): left to right is time, a task is a
  * bar from its `startDate` to its due `date`, and every edit re-lays it, so
- * the dates stay the only record of when. See `DiagramSettings`.
+ * the dates stay the only record of when. "directed" is for a flow: lines kept
+ * from crossing first and running one way second, each traded against the
+ * other at a rate the document sets (see `directed/`, and `DirectedPreferences`).
+ * See `DiagramSettings`.
  */
-export const ARRANGE_MODES = ["auto", "flow", "untangle", "roadmap"] as const;
+export const ARRANGE_MODES = ["auto", "flow", "untangle", "directed", "roadmap"] as const;
 export type ArrangeMode = (typeof ARRANGE_MODES)[number];
 
 /**
@@ -733,6 +736,32 @@ export interface LayoutPreferences {
   rankGap?: number;
   /** Room between boxes in a rank, in px, overriding what `spacing` would give. */
   nodeGap?: number;
+}
+
+/**
+ * What "directed" gives up for what, when it can't have both: a line running
+ * backward, or two lines crossing. The names are the trade, from "crossings"
+ * (a crossing costs nine backward lines) through "balanced" (one for one) to
+ * "direction" (a backward line costs nine crossings). "mostly-crossings", three
+ * for one, is the default: readers lose more time to a crossing than to a line
+ * that runs the other way (Purchase 1997).
+ */
+export const DIRECTED_PRIORITIES = ["crossings", "mostly-crossings", "balanced", "mostly-direction", "direction"] as const;
+export type DirectedPriority = (typeof DIRECTED_PRIORITIES)[number];
+/**
+ * How "directed" finds its arrangement. "layered" ranks the boxes, letting a
+ * line run backward where that is cheaper than the crossings it saves; "anneal"
+ * is the same search allowed to get worse on the way to better. "best" runs
+ * every method and keeps the picture that measures best. All of them rank: a
+ * ring or a mesh with no direction to it is Best fit's to draw, not this.
+ */
+export const DIRECTED_METHODS = ["best", "layered", "anneal"] as const;
+export type DirectedMethod = (typeof DIRECTED_METHODS)[number];
+
+/** The parts of `settings.directed`. */
+export interface DirectedPreferences {
+  priority?: DirectedPriority;
+  method?: DirectedMethod;
 }
 
 /** How far the gaps in `settings.layout` may go. */
@@ -1182,6 +1211,12 @@ export interface DiagramSettings {
    */
   layout?: LayoutPreferences;
   /**
+   * How "directed" arranges this document — see `DirectedPreferences`. Read
+   * only while `arrange` is "directed"; direction, spacing and gaps still come
+   * from `layout`.
+   */
+  directed?: DirectedPreferences;
+  /**
    * The time axis a roadmap is laid out on — see `RoadmapAxis`. Fitted to
    * the plan's dates when it is first laid out by date, or tidied, and kept
    * through every other edit so the canvas never jumps. Left behind when the
@@ -1303,6 +1338,7 @@ const SETTINGS_KEY_MAP: Record<keyof DiagramSettings, true> = {
   groupContents: true,
   arrange: true,
   layout: true,
+  directed: true,
   roadmap: true,
   notation: true,
   htmlLines: true,
@@ -1973,6 +2009,13 @@ function validateSettings(raw: unknown): DiagramSettings | undefined {
       }
     }
     if (Object.keys(layout).length) out.layout = layout;
+  }
+  if (r.directed && typeof r.directed === "object" && !Array.isArray(r.directed)) {
+    const d = r.directed as Record<string, unknown>;
+    const directed: DirectedPreferences = {};
+    if (DIRECTED_PRIORITIES.includes(d.priority as DirectedPriority)) directed.priority = d.priority as DirectedPriority;
+    if (DIRECTED_METHODS.includes(d.method as DirectedMethod)) directed.method = d.method as DirectedMethod;
+    if (Object.keys(directed).length) out.directed = directed;
   }
   if (r.roadmap && typeof r.roadmap === "object" && !Array.isArray(r.roadmap)) {
     const { from, dayWidth } = r.roadmap as Record<string, unknown>;

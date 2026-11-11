@@ -40,6 +40,8 @@ export {
   LAYOUT_ENDS,
   LAYOUT_SHAPES,
   LAYOUT_SPACINGS,
+  DIRECTED_METHODS,
+  DIRECTED_PRIORITIES,
   NOTATIONS,
   HTML_LINES,
   HTML_TIMELINES,
@@ -126,6 +128,9 @@ export type {
   VersionTagPosition,
   GroupContents,
   ArrangeMode,
+  DirectedMethod,
+  DirectedPreferences,
+  DirectedPriority,
   LayoutAlgorithm,
   LayoutDirection,
   LayoutEnds,
@@ -411,6 +416,7 @@ export {
   type LayoutRuleId,
   type LintLayoutOptions,
 } from "./layout-lint";
+export { directedCost, directedLayout, directedWeights, type DirectedOptions, type DirectedWeights } from "./directed";
 export {
   layoutStability,
   measureFlow,

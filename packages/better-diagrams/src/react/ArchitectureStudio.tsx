@@ -89,6 +89,7 @@ import {
   type DiagramTemplate,
   type EdgeRouting,
   type ArrangeMode,
+  type DirectedPreferences,
   type LayoutPreferences,
   type Notation,
   type GroupContents,
@@ -181,7 +182,7 @@ import { fieldUsage, searchFieldUsage, usageCoverage } from "../contract/key-usa
 import { KeyUsagePanel } from "./KeyUsagePanel";
 import { AiModelSelect, pickedAiModel } from "./ai-model-select";
 import { useAnalysisSidebar, type AnalysisMask, type AnalysisState } from "./analysis-sidebar";
-import type { LayoutPatch } from "./LayoutPanel";
+import { DirectedControls, type LayoutPatch } from "./LayoutPanel";
 import { routeSql } from "../contract/route-sql";
 import {
   DEPENDENCY_RELATION,
@@ -2392,6 +2393,7 @@ function StudioInner({
   // The Layout panel's actions are defined further down, with the rest of Arrange.
   const layoutActionsRef = useRef({
     setLayoutPrefs: (_patch: LayoutPatch) => {},
+    setDirectedPrefs: (_patch: DirectedPreferences) => {},
     tidy: () => {},
     polishNow: () => {},
     arrangeSelected: () => {},
@@ -2435,6 +2437,7 @@ function StudioInner({
       selected: selectedNodeIds.filter((id) => !isZoneNodeId(id)).length,
       selectedLines: selectedEdgeIds.length,
       onPrefs: (patch) => layoutActionsRef.current.setLayoutPrefs(patch),
+      onDirected: (patch) => layoutActionsRef.current.setDirectedPrefs(patch),
       onArrange: () => layoutActionsRef.current.tidy(),
       onPolish: () => layoutActionsRef.current.polishNow(),
       onArrangeSelection: () => layoutActionsRef.current.arrangeSelected(),
@@ -3372,7 +3375,9 @@ function StudioInner({
       showToast(
         next === "auto"
           ? `Arranged · ${mod}Z to undo`
-          : next === "untangle"
+          : next === "directed"
+            ? `Arranged as a flow: fewest crossings, then one direction · ${mod}Z to undo`
+            : next === "untangle"
             ? `Untangled the lines · ${mod}Z to undo`
             : next === "roadmap"
               ? `Laid out by date · ${mod}Z to undo`
@@ -3404,13 +3409,44 @@ function StudioInner({
       if (merged.ends === "spread") delete merged.ends;
       const from = offRoadmap(current);
       const { layout: _layout, ...settings } = from.settings ?? {};
+      // A directed flow takes its direction, spacing and gaps from here too, and
+      // stays one. A family of layout is Best fit's to choose between, so picking
+      // one goes back to it, as it does from every other arrangement.
+      const mode: ArrangeMode = current.settings?.arrange === "directed" && !("algorithm" in patch) ? "directed" : "auto";
       applyTemplate(
         autoLayout(
           {
             ...from,
-            settings: { ...settings, arrange: "auto", ...(Object.keys(merged).length ? { layout: merged } : {}) },
+            settings: { ...settings, arrange: mode, ...(Object.keys(merged).length ? { layout: merged } : {}) },
           },
-          { ...levelLayoutOptions(), mode: "auto" },
+          { ...levelLayoutOptions(), mode },
+        ),
+        { fit: true },
+      );
+    },
+    [readOnly, applyTemplate, levelLayoutOptions],
+  );
+
+  /**
+   * Arrange as a directed flow, with what it trades for what and how it looks
+   * for it, in one undo step. A choice equal to the default is dropped, like
+   * every other layout choice.
+   */
+  const setDirectedPrefs = useCallback(
+    (patch: DirectedPreferences) => {
+      if (readOnly) return;
+      const from = offRoadmap(templateRef.current);
+      const merged: DirectedPreferences = { ...from.settings?.directed, ...patch };
+      if (merged.priority === "mostly-crossings") delete merged.priority;
+      if (merged.method === "best") delete merged.method;
+      const { directed: _directed, ...settings } = from.settings ?? {};
+      applyTemplate(
+        autoLayout(
+          {
+            ...from,
+            settings: { ...settings, arrange: "directed", ...(Object.keys(merged).length ? { directed: merged } : {}) },
+          },
+          { ...levelLayoutOptions(), mode: "directed" },
         ),
         { fit: true },
       );
@@ -3496,7 +3532,7 @@ function StudioInner({
     showToast(`Straightened · ${mod}Z to undo`);
   }, [readOnly, flow, applyTemplate, showToast]);
 
-  layoutActionsRef.current = { setLayoutPrefs, tidy, polishNow, arrangeSelected, straighten, useLayoutCandidate };
+  layoutActionsRef.current = { setLayoutPrefs, setDirectedPrefs, tidy, polishNow, arrangeSelected, straighten, useLayoutCandidate };
 
   const addZone = useCallback(() => {
     if (readOnly) return;
@@ -7947,7 +7983,9 @@ function StudioInner({
                       ? "Fit the time axis to the plan's dates"
                       : arrangeMode === "auto"
                         ? "Place everything the way that measures best, whatever shape that is"
-                        : `Arrange nodes within their zones and groups${arrangeMode === "untangle" ? ", untangling the lines" : ", left to right"}`}
+                        : arrangeMode === "directed"
+                          ? "Arrange as a flow: lines kept from crossing first, and running one way second"
+                          : `Arrange nodes within their zones and groups${arrangeMode === "untangle" ? ", untangling the lines" : ", left to right"}`}
                   </div>
                 </button>
                 <button
@@ -8037,6 +8075,24 @@ function StudioInner({
                   />
                   Untangle lines
                 </label>
+                <label
+                  className="as-menu__check"
+                  title="For a flow: lines are kept from crossing first, and running one way second. A line that has to go round is given a side and a depth with the others, so they nest instead of piling up"
+                >
+                  <input
+                    type="radio"
+                    checked={arrangeMode === "directed"}
+                    onChange={() => {
+                      setArrangeMode("directed");
+                      setOpenMenu(null);
+                    }}
+                  />
+                  Directed flow
+                </label>
+                {/* What it gives up for what, and how it looks for it: only while it is the arrangement in use. */}
+                {arrangeMode === "directed" ? (
+                  <DirectedControls className="as-menu__fields" value={template.settings?.directed} onChange={setDirectedPrefs} />
+                ) : null}
                 {/* Offered once the plan has a date to go by. */}
                 {arrangeMode === "roadmap" || hasRoadmapWork(template) ? (
                   <label

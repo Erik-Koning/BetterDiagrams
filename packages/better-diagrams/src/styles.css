@@ -8258,6 +8258,31 @@ details.as-paths__section > .as-paths__caption {
   gap: 8px;
   accent-color: var(--as-accent);
 }
+/* A directed flow's two choices: in the Layout panel, and under its entry in the Arrange menu. */
+.as-directed {
+  display: grid;
+  gap: 4px;
+  accent-color: var(--as-accent);
+}
+.as-directed__row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.as-directed__ends {
+  display: flex;
+  justify-content: space-between;
+  margin-left: 72px;
+  font-size: 0.625rem;
+  color: var(--as-text-dim);
+}
+.as-directed .as-paths__hint {
+  margin: 0 0 4px;
+}
+.as-menu__fields {
+  padding: 4px 9px 8px 30px;
+}
 .as-layout__gapvalue {
   font-size: 0.6875rem;
   color: var(--as-text-dim);

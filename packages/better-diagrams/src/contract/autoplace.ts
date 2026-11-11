@@ -86,6 +86,44 @@ export interface PlaceOptions {
   rankHint?: ReadonlyMap<string, number>;
   /** Keep hinted items in one flow even with nothing joining them here. */
   together?: boolean;
+  /**
+   * An arrangement of the caller's own for each connected piece, in place of the
+   * families here. Loose boxes are still packed, pieces are still put together,
+   * and a container's hinted members still flow as one, by the engine's ranks.
+   */
+  engine?: PlaceEngine;
+}
+
+/** A block of placed boxes, as every family returns one. */
+export interface PlacedBlock {
+  placed: PlacedBox[];
+  width: number;
+  height: number;
+}
+
+/**
+ * A way of arranging connected pieces that isn't one of the families: see
+ * `directed/`. It is handed in, not imported, so this file knows nothing of it.
+ */
+export interface PlaceEngine {
+  /** Arrange one connected piece, or null to leave it to the ranked family. */
+  place(items: readonly PlaceItem[], links: readonly PlaceLink[], opts: PlaceOptions): (PlacedBlock & { family: PlaceFamily }) | null;
+  /** The rank each box takes on a canvas with no containers: what `flatRanks` is to the families. */
+  ranks(ids: readonly string[], links: readonly PlaceLink[]): Map<string, number>;
+}
+
+/**
+ * Ranks decided by the caller. A line runs from the lower rank to the higher
+ * whichever way it points, so a line the caller ranked backward is drawn
+ * backward: that is the caller's to decide, and the reason to hand ranks in.
+ */
+export interface RankPlan {
+  rank: ReadonlyMap<string, number>;
+  /**
+   * Where each box sat across the flow, 0 to 1, when the ranks were chosen: one
+   * more order for the crossing search to start from.
+   */
+  across?: ReadonlyMap<string, number>;
 }
 
 export interface PlacedBox {
@@ -154,7 +192,8 @@ export function placeItems(
     const flowingIds = new Set(flowing.map((i) => i.id));
     if (flowing.length) {
       const own = usable.filter((l) => flowingIds.has(l.source) && flowingIds.has(l.target));
-      blocks.push(layered(flowing, own, opts));
+      // An engine's hints are its ranks, backward lines and all: they are kept as given.
+      blocks.push(layered(flowing, own, opts, opts.engine ? { rank: hints } : undefined));
     }
     rest = [];
     spare = items.filter((i) => !flowingIds.has(i.id));
@@ -242,6 +281,8 @@ function placeComponent(
   links: readonly PlaceLink[],
   opts: PlaceOptions,
 ): { placed: PlacedBox[]; width: number; height: number; family: PlaceFamily } {
+  const own = opts.engine?.place(items, links, opts);
+  if (own) return own;
   const fixed = opts.algorithm === "auto" ? (opts.rankHint ? "layered" : null) : opts.algorithm;
   const families: PlaceFamily[] = fixed ? [fixed] : familiesFor(items, links);
   let best: { placed: PlacedBox[]; width: number; height: number; family: PlaceFamily } | null = null;
@@ -512,7 +553,7 @@ function crossOf(point: { x: number; y: number }, flow: Flow): number {
  * minimum (Eades, Lin & Smyth) reverses fewer lines but happily picks a mid-flow
  * box to start from, which turns a flow chart inside out.
  */
-function acyclicOrder(ids: readonly string[], links: readonly PlaceLink[]): Map<string, number> {
+export function acyclicOrder(ids: readonly string[], links: readonly PlaceLink[]): Map<string, number> {
   const out = new Map<string, string[]>(ids.map((id) => [id, []]));
   const incoming = new Map(ids.map((id) => [id, 0]));
   for (const l of links) {
@@ -612,9 +653,22 @@ function assignRanks(
  * passes through a group, even for a member joined to nothing inside it.
  */
 export function flatRanks(ids: readonly string[], links: readonly PlaceLink[]): Map<string, number> {
+  return ranksInOrder(ids, links);
+}
+
+/**
+ * Ranks for an order of the boxes: a line runs from whichever end comes first
+ * in `position`, so the order says which lines run backward. Left out, the
+ * order is the reader's (`acyclicOrder`).
+ */
+export function ranksInOrder(
+  ids: readonly string[],
+  links: readonly PlaceLink[],
+  order?: ReadonlyMap<string, number>,
+): Map<string, number> {
   const known = new Set(ids);
   const usable = links.filter((l) => !l.tether && known.has(l.source) && known.has(l.target) && l.source !== l.target);
-  const position = acyclicOrder(ids, usable);
+  const position = order ?? acyclicOrder(ids, usable);
   const seen = new Map<string, { u: string; v: string; w: number }>();
   for (const l of usable) {
     const forward = position.get(l.source)! < position.get(l.target)!;
@@ -638,16 +692,25 @@ export function flatRanks(ids: readonly string[], links: readonly PlaceLink[]): 
  * words, and one crossed by lines that travel far across the flow widens so
  * they don't arrive as near-vertical slashes.
  */
-function layered(
+export function layered(
   items: readonly PlaceItem[],
   links: readonly PlaceLink[],
   opts: PlaceOptions,
-): { placed: PlacedBox[]; width: number; height: number } {
+  plan?: RankPlan,
+): PlacedBlock {
   const vertical = isVertical(opts.flow);
   const frame = intoFrame(items, opts.flow);
   const size = new Map<string, { w: number; h: number }>(frame.map((i) => [i.id, i]));
   const ids = frame.map((i) => i.id);
-  const position = acyclicOrder(ids, links);
+  const reading = acyclicOrder(ids, links);
+  // With ranks handed in, a line runs from the lower rank; the reader's order only breaks a tie.
+  const position = plan
+    ? new Map(
+        [...ids]
+          .sort((a, b) => (plan.rank.get(a) ?? 0) - (plan.rank.get(b) ?? 0) || reading.get(a)! - reading.get(b)!)
+          .map((id, i) => [id, i]),
+      )
+    : reading;
 
   // ── Acyclic links, merged: two lines between one pair are one heavier link ──
   const merged = new Map<string, { u: string; v: string; w: number; label: number; offU: number; offV: number; heard: number }>();
@@ -681,7 +744,7 @@ function layered(
     }
   }
   const edges = [...merged.values()];
-  const rank = assignRanks(ids, edges, opts.rankHint);
+  const rank = assignRanks(ids, edges, plan?.rank ?? opts.rankHint);
 
   // A box only tethers touch ranks with what it is tethered to, not the far left.
   for (const l of links) {
@@ -704,6 +767,8 @@ function layered(
     up.get(b)!.push({ id: a, w, self: offB, other: offA });
   };
   const lanes = new Set<string>();
+  /** Where a lane would sit across the flow, going by the two boxes its line joins. */
+  const laneAcross = new Map<string, number>();
   const labelInGap = new Array<number>(Math.max(0, depth - 1)).fill(0);
   let laneCount = 0;
   for (const e of edges) {
@@ -718,6 +783,11 @@ function layered(
     for (let r = from + 1; r < to; r += 1) {
       const lane = `\u0001lane${laneCount++}`;
       lanes.add(lane);
+      if (plan?.across) {
+        const a = plan.across.get(e.u) ?? 0.5;
+        const b = plan.across.get(e.v) ?? 0.5;
+        laneAcross.set(lane, a + ((b - a) * (r - from)) / (to - from));
+      }
       size.set(lane, { w: 0, h: 0 });
       layers[r]!.push(lane);
       connect(prev, lane, e.w, offset, 0);
@@ -727,8 +797,17 @@ function layered(
     connect(prev, e.v, e.w, offset, e.offV);
   }
 
-  const ordered = orderLayers(layers, up, down, ids, frame, opts);
-  markChains(edges, rank, up, down);
+  const across = plan?.across;
+  const seeded = across
+    ? layers.map((layer) =>
+        layer
+          .map((id, i) => ({ id, i, at: laneAcross.get(id) ?? across.get(id) ?? 0.5 }))
+          .sort((a, b) => a.at - b.at || a.i - b.i)
+          .map((entry) => entry.id),
+      )
+    : undefined;
+  const ordered = orderLayers(layers, up, down, ids, frame, opts, seeded);
+  markChains(edges, rank, up, down, !!plan);
 
   // Past the height the caller's shape wants, a rank wraps into sub-columns.
   const columns = wrapColumns(ordered, size, lanes, frame, opts);
@@ -793,13 +872,43 @@ function markChains(
   rank: ReadonlyMap<string, number>,
   up: Map<string, Adjacent[]>,
   down: Map<string, Adjacent[]>,
+  mutual = false,
 ): void {
   const succs = new Map<string, string[]>();
+  const preds = new Map<string, string[]>();
   for (const e of edges) {
     const list = succs.get(e.u);
     if (list) list.push(e.v);
     else succs.set(e.u, [e.v]);
+    const back = preds.get(e.v);
+    if (back) back.push(e.u);
+    else preds.set(e.v, [e.u]);
   }
+  // How long a path leads up to a box: the other half of which line is the main one.
+  const behind = new Map<string, number>();
+  const behindOf = (id: string): number => {
+    const known = behind.get(id);
+    if (known !== undefined) return known;
+    behind.set(id, 0);
+    let best = 0;
+    for (const prev of preds.get(id) ?? []) best = Math.max(best, behindOf(prev) + 1);
+    behind.set(id, best);
+    return best;
+  };
+  /**
+   * Whether a line is also the main way INTO its target: of the lines arriving
+   * from the rank before, the one with the longest path behind it, if one is
+   * longer. Where several arrive level, as into the box that collects a fan,
+   * none is the main one, and the box sits in the middle of them all.
+   */
+  const mainInto = (from: string, to: string): boolean => {
+    const arriving = (preds.get(to) ?? [])
+      .filter((p) => rank.get(p) === rank.get(to)! - 1)
+      .map((p) => ({ p, behind: behindOf(p) }))
+      .sort((a, b) => b.behind - a.behind);
+    if (arriving.length <= 1) return true;
+    return arriving[0]!.p === from && arriving[0]!.behind > arriving[1]!.behind;
+  };
   const reach = new Map<string, number>();
   const reachOf = (id: string): number => {
     const known = reach.get(id);
@@ -821,7 +930,7 @@ function markChains(
       .sort((a, b) => b.reach - a.reach);
     if (!ranked.length) continue;
     const longer = ranked.length === 1 || ranked[0]!.reach > ranked[1]!.reach;
-    if (longer) heavy(from, ranked[0]!.n);
+    if (longer && (!mutual || mainInto(from, ranked[0]!.n))) heavy(from, ranked[0]!.n);
   }
 }
 
@@ -833,6 +942,7 @@ function orderLayers(
   ids: readonly string[],
   frame: readonly PlaceItem[],
   opts: PlaceOptions,
+  seeded?: readonly string[][],
 ): string[][] {
   const pos = new Map<string, number>();
   const index = (order: readonly (readonly string[])[]) => {
@@ -950,6 +1060,8 @@ function orderLayers(
 
   const thorough = frame.length <= THOROUGH_LIMIT;
   const starts = thorough ? [depthFirst(), layers.map((l) => [...l])] : [depthFirst()];
+  // An order someone already found few crossings in is tried first, so a tie keeps it.
+  if (seeded) starts.unshift(seeded.map((l) => [...l]));
   let best = starts[0]!.map((l) => [...l]);
   let bestCount = crossings(best);
   for (const start of starts) {

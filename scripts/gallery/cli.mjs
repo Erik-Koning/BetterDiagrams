@@ -6,9 +6,10 @@
  *   npm run gallery -- compare [--base main] [--only a,b] [--out name]
  *       Arrange every gallery document with the base ref's engine and with the
  *       working tree's, draw each in its own studio, and write a contact sheet.
- *   npm run gallery -- variants [--only a,b] [--out name]
- *       Every arrangement `layoutCandidates` offers for each document (and the
- *       real documents as authored), drawn by the working tree's studio.
+ *   npm run gallery -- variants [--only a,b] [--variants auto,untangle] [--out name]
+ *       Every arrangement of each document (those `layoutCandidates` offers, the
+ *       older modes, Directed flow by each method, and the real documents as
+ *       authored), or just the ones named, drawn by the working tree's studio.
  *   npm run gallery -- metrics [--only a,b] [--out name]
  *       How every arrangement of each document reads as a flow: crossings, lines
  *       running back, ports, bends. Numbers only, no pictures, so it is quick.
@@ -179,11 +180,8 @@ async function variants() {
     const rows = [];
     await withStudio(REPO, join(scratch, "studio"), async (studio) => {
       for (const c of corpus) {
-        const placed = c.doc.nodes.some((n) => n.x || n.y);
-        const options = [
-          ...(placed ? [{ id: "authored", label: "As authored", template: c.doc }] : []),
-          ...head.layoutCandidates(c.doc, { frames: "all" }).map((k) => ({ id: k.id, label: k.label, template: k.template })),
-        ];
+        const wanted = flag("variants", "").split(",").filter(Boolean);
+        const options = arrangementsOf(head, c.doc).filter((v) => !wanted.length || wanted.includes(v.id));
         const cells = [];
         for (const v of options) {
           const file = `${c.name}__${v.id}`;

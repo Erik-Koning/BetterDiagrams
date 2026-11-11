@@ -56,7 +56,7 @@ export const ANNOTATION_KINDS: readonly string[];
 export function approxTextWidth(text: string, size: number, font: TextFont): number;
 
 // @public
-export const ARRANGE_MODES: readonly ["auto", "flow", "untangle", "roadmap"];
+export const ARRANGE_MODES: readonly ["auto", "flow", "untangle", "directed", "roadmap"];
 
 // @public
 export function arrangeBest(template: DiagramTemplate, options?: ArrangeOptions): ArrangeResult;
@@ -681,6 +681,7 @@ export interface DiagramPresentation {
 export interface DiagramSettings {
     arrange?: ArrangeMode;
     capacity?: Record<string, number>;
+    directed?: DirectedPreferences;
     groupContents?: GroupContents;
     htmlLater?: HtmlLater;
     htmlLegend?: HtmlLegend;
@@ -832,6 +833,47 @@ export type DiffState = "added" | "removed" | "changed";
 export function diffTemplates(base: DiagramTemplate, current: DiagramTemplate, opts?: {
     ignore?: readonly string[];
 }): TemplateDiff;
+
+// @public
+export const DIRECTED_METHODS: readonly ["best", "layered", "anneal"];
+
+// @public
+export const DIRECTED_PRIORITIES: readonly ["crossings", "mostly-crossings", "balanced", "mostly-direction", "direction"];
+
+// @public
+export function directedCost(report: LayoutReport, flow: FlowMetrics, weights: DirectedWeights): number;
+
+// @public
+export function directedLayout(template: DiagramTemplate, options?: DirectedOptions): DiagramTemplate;
+
+// @public (undocumented)
+export type DirectedMethod = (typeof DIRECTED_METHODS)[number];
+
+// @public (undocumented)
+export interface DirectedOptions extends ArrangeOptions {
+    method?: DirectedMethod;
+    priority?: DirectedPriority;
+}
+
+// @public
+export interface DirectedPreferences {
+    // (undocumented)
+    method?: DirectedMethod;
+    // (undocumented)
+    priority?: DirectedPriority;
+}
+
+// @public (undocumented)
+export type DirectedPriority = (typeof DIRECTED_PRIORITIES)[number];
+
+// @public (undocumented)
+export interface DirectedWeights {
+    crossing: number;
+    direction: number;
+}
+
+// @public
+export function directedWeights(priority: DirectedPriority): DirectedWeights;
 
 // @public
 export function documentFieldRecords(doc: FieldDocument): Map<string, FieldRecord[]>;
@@ -1384,6 +1426,7 @@ export interface FlowMetrics {
     spineStraightness: number;
     stress: number | null;
     symmetry: number;
+    turned: number;
 }
 
 // @public

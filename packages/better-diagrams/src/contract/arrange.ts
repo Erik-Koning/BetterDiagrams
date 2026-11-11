@@ -25,10 +25,12 @@ import {
   placeItems,
   separateBoxes,
   type Flow,
+  type PlaceEngine,
   type PlaceLink,
   type PlacedBox,
 } from "./autoplace";
-import { buildScene, lintLayout, titleRect, zoneTitleRect, type LayoutReport } from "./layout-lint";
+import { buildScene, lintLayout, titleRect, zoneTitleRect, type LayoutReport, type SceneBox } from "./layout-lint";
+import { pageArcs, type Arc } from "./directed/arcs";
 import { settleLines } from "./route-lines";
 import { floatingSides } from "./geometry";
 import { shapeInsets, type NodeShape } from "./shapes";
@@ -99,6 +101,8 @@ interface Prefs {
   nodeGap: number;
   padding: number;
   headerGap: number;
+  /** An arrangement from outside the families: see `PlaceEngine`. */
+  engine?: PlaceEngine;
 }
 
 function resolvePrefs(template: DiagramTemplate, options: ArrangeOptions): Prefs {
@@ -227,6 +231,14 @@ export interface CanvasModel {
 const ZONE_ITEM = "zone:";
 
 type Rect2 = { x: number; y: number; w: number; h: number };
+
+/** How far past what it goes round the innermost arc swings, and how much further each one outside it. */
+const ARC_CLEAR = 48;
+const ARC_STEP = 28;
+/** The radius an arc turns its corners on, room allowing. */
+const ARC_CORNER = 40;
+/** How far past a corner the first of the two points holding the run straight sits; the second is three times this further on. */
+const ARC_HOLD = 6;
 
 /**
  * Which zone, if any, a zone is drawn inside: it sits within the host's box AND
@@ -408,7 +420,8 @@ function composeCanvas(
       touched.add(b);
       flatLinks.push({ source: a, target: b, ...(e.relation === DEPENDENCY_RELATION || e.secondary ? { tether: true } : {}) });
     }
-    for (const [id, r] of flatRanks([...touched], flatLinks)) ranks.set(id, r);
+    const flat = prefs.engine ? prefs.engine.ranks([...touched], flatLinks) : flatRanks([...touched], flatLinks);
+    for (const [id, r] of flat) ranks.set(id, r);
   }
   const rankOfMember = (m: Member): number | undefined => {
     if (!m.cluster) return ranks.get(m.id);
@@ -576,6 +589,7 @@ function composeCanvas(
       ...(memberPull.size ? { pull: memberPull } : {}),
       ...(cluster.kind !== "root" ? { stack: parentFlow } : {}),
       ...(hints.size ? { rankHint: hints, together: true } : {}),
+      ...(prefs.engine ? { engine: prefs.engine } : {}),
     };
     let placement = placeItems(items, placeLinks, placeOptions);
     for (const id of placement.free) out.free.add(id);
@@ -1016,7 +1030,7 @@ function composeDocument(
       }),
     };
   }
-  return pinFlowSides(levelled, canvases, flow, inner, free, rings, containerKinds);
+  return pinFlowSides(levelled, canvases, flow, inner, free, rings, containerKinds, !!prefs.engine);
 }
 
 /** How far a whole container or box slides so a line that crosses a frame runs level. */
@@ -1173,6 +1187,7 @@ function pinFlowSides(
   free: ReadonlySet<string>,
   rings: ReadonlyArray<ReadonlySet<string>>,
   containerKinds: readonly string[],
+  paged = false,
 ): DiagramTemplate {
   type Side = "top" | "right" | "bottom" | "left";
   /**
@@ -1208,6 +1223,39 @@ function pinFlowSides(
         x: members.reduce((sum, b) => sum + b.x + b.w / 2, 0) / members.length,
         y: members.reduce((sum, b) => sum + b.y + b.h / 2, 0) / members.length,
       };
+    };
+    // Lines that go round, when they are to be given their sides together: see `directed/arcs.ts`.
+    const arcs: Array<Arc & { sideways: boolean }> = [];
+    /** Lines leaving what an arc goes round, toward each side: each is one it would cut across. */
+    const tollOf = (run: readonly SceneBox[], s: SceneBox, t: SceneBox, sideways: boolean) => {
+      const inside = new Set(run.filter((b) => b !== s && b !== t).map((b) => b.id));
+      let low = 0;
+      let high = 0;
+      for (const l of scene.lines) {
+        const here = inside.has(l.source.id) ? l.source : inside.has(l.target.id) ? l.target : null;
+        if (!here) continue;
+        const there = here === l.source ? l.target : l.source;
+        if (inside.has(there.id) || there.id === s.id || there.id === t.id) continue;
+        const from = sideways ? here.y + here.h / 2 : here.x + here.w / 2;
+        const to = sideways ? there.y + there.h / 2 : there.x + there.w / 2;
+        if (to < from - 1) low += 1;
+        else if (to > from + 1) high += 1;
+      }
+      return { low, high };
+    };
+    const arcOf = (id: string, s: SceneBox, t: SceneBox, sideways: boolean, run: readonly SceneBox[], natural: "low" | "high") => {
+      const toll = tollOf(run, s, t, sideways);
+      arcs.push({
+        id,
+        sideways,
+        from: sideways ? s.x + s.w / 2 : s.y + s.h / 2,
+        to: sideways ? t.x + t.w / 2 : t.y + t.h / 2,
+        wallLow: Math.min(...run.map((b) => (sideways ? b.y : b.x))),
+        wallHigh: Math.max(...run.map((b) => (sideways ? b.y + b.h : b.x + b.w))),
+        tollLow: toll.low,
+        tollHigh: toll.high,
+        natural,
+      });
     };
     for (const line of scene.lines) {
       const { edge, source: s, target: t } = line;
@@ -1264,6 +1312,39 @@ function pinFlowSides(
           ? { near: s.y + s.h / 2, middle: extent.y + extent.h / 2, low: "top" as const, high: "bottom" as const }
           : { near: s.x + s.w / 2, middle: extent.x + extent.w / 2, low: "left" as const, high: "right" as const };
         const side = across.near < across.middle ? across.low : across.high;
+        // Traffic both ways between neighbours is one road with two lanes: the
+        // answer runs straight back beside the request, face to face. Sent round
+        // the outside it reads as a second, unrelated connection.
+        if (paged && scene.lines.some((l) => l.source.id === t.id && l.target.id === s.id)) {
+          const corridor = flowsSideways
+            ? { x: Math.min(s.x + s.w, t.x + t.w), y: Math.min(s.y, t.y), w: Math.abs(s.x - t.x) - Math.min(s.w, t.w), h: Math.max(s.y + s.h, t.y + t.h) - Math.min(s.y, t.y) }
+            : { x: Math.min(s.x, t.x), y: Math.min(s.y + s.h, t.y + t.h), w: Math.max(s.x + s.w, t.x + t.w) - Math.min(s.x, t.x), h: Math.abs(s.y - t.y) - Math.min(s.h, t.h) };
+          const clear = !solid.some(
+            (b) => b !== s && b !== t && b.x < corridor.x + corridor.w && corridor.x < b.x + b.w && b.y < corridor.y + corridor.h && corridor.y < b.y + b.h,
+          );
+          if (clear) {
+            pins.set(
+              edge.id,
+              own === "right"
+                ? { start: "left", end: "right" }
+                : own === "left"
+                  ? { start: "right", end: "left" }
+                  : own === "down"
+                    ? { start: "top", end: "bottom" }
+                    : { start: "bottom", end: "top" },
+            );
+            continue;
+          }
+        }
+        if (paged) {
+          const round = solid.filter((b) =>
+            flowsSideways
+              ? b.x + b.w > Math.min(s.x, t.x) && b.x < Math.max(s.x + s.w, t.x + t.w)
+              : b.y + b.h > Math.min(s.y, t.y) && b.y < Math.max(s.y + s.h, t.y + t.h),
+          );
+          arcOf(edge.id, s, t, flowsSideways, round.length ? round : [s, t], side === across.low ? "low" : "high");
+          continue;
+        }
         // Just far enough past what it goes around. The line has to stay on the
         // canvas: left to itself a long C swings out further the longer it is.
         const between = solid.filter((b) =>
@@ -1321,6 +1402,10 @@ function pinFlowSides(
               return want === low ? here < across.sc - 1 : here > across.sc + 1;
             }).length;
           const side = count(low) <= count(high) ? low : high;
+          if (paged) {
+            arcOf(edge.id, s, t, flowsSideways, [...inTheWay, s, t], side === low ? "low" : "high");
+            continue;
+          }
           const clear = 48;
           const run = [...inTheWay, s, t];
           const bulge = flowsSideways
@@ -1382,6 +1467,48 @@ function pinFlowSides(
       );
       if (floats.start !== want.start || floats.end !== want.end) pins.set(edge.id, want);
     }
+    // Arcs along the flow share its two sides; arcs across it share the other two.
+    for (const sideways of [true, false]) {
+      const group = arcs.filter((a) => a.sideways === sideways);
+      const pages = pageArcs(group);
+      for (const arc of group) {
+        const page = pages.get(arc.id)!;
+        const side: Side = sideways ? (page.side === "low" ? "top" : "bottom") : page.side === "low" ? "left" : "right";
+        const out = ARC_CLEAR + (page.depth - 1) * ARC_STEP;
+        const bulge = page.side === "low" ? arc.wallLow - out : arc.wallHigh + out;
+        // A bracket: out, round a corner, straight along, round a corner, and back
+        // in. One point in the middle lets a long arc sag toward it and wander
+        // across its neighbours, so each corner is three: one half way round the
+        // turn, and two just past it that hold the run between the corners dead
+        // straight (a curve passes through a point at the angle half way between
+        // its neighbours, and half way between two points in line is in line).
+        const at = (along: number, inward = 0): [number, number] => {
+          const across = bulge + (page.side === "low" ? inward : -inward);
+          return sideways ? [Math.round(along), Math.round(across)] : [Math.round(across), Math.round(along)];
+        };
+        const way = Math.sign(arc.to - arc.from) || 1;
+        const reach = Math.abs(arc.to - arc.from);
+        const radius = Math.min(ARC_CORNER, out * 0.8, reach / 4);
+        const settle = radius + ARC_HOLD;
+        // Ends sharing a side of a box are put in the order of where their lines
+        // head first. An arc outside another has to leave before it and arrive
+        // after it, or the two cross at the box they share, so its corners sit
+        // that little bit further out along the flow.
+        const lead = (page.depth - 1) * 3;
+        const points: Array<[number, number]> =
+          reach >= 2 * (settle + ARC_HOLD * 3) + 16
+            ? [
+                at(arc.from + way * (radius * 0.293 - lead), radius * 0.293),
+                at(arc.from + way * settle),
+                at(arc.from + way * (settle + ARC_HOLD * 3)),
+                at(arc.to - way * (settle + ARC_HOLD * 3)),
+                at(arc.to - way * settle),
+                at(arc.to - way * (radius * 0.293 - lead), radius * 0.293),
+              ]
+            : [at((arc.from + arc.to) / 2)];
+        pins.set(arc.id, { start: side, end: side, points });
+      }
+    }
   }
   if (!pins.size) return doc;
   return {
@@ -1406,7 +1533,31 @@ function pinFlowSides(
  * the cheapest wins.
  */
 export function autoPlace(template: DiagramTemplate, options: ArrangeOptions = {}): DiagramTemplate {
-  const prefs = resolvePrefs(template, options);
+  return autoPlaceWith(template, options, {});
+}
+
+/** What an arrangement from outside the families brings: how it places, and how it tells a good picture from a bad one. */
+export interface PlaceWith {
+  engine?: PlaceEngine;
+  /** What a settled document costs, read along `flow`. Lower is better; left out, it is the linter's cost. */
+  cost?: (settled: DiagramTemplate, flow: Flow) => number;
+  /**
+   * The directions to use, outside containers and inside them, when someone has
+   * already compared them: comparing is a full layout each, and a second way of
+   * placing the same document rarely reads better a different way round.
+   */
+  flows?: { outer: Flow; inner: Flow };
+  /** Told which directions won. */
+  chose?: (flows: { outer: Flow; inner: Flow }) => void;
+}
+
+/**
+ * `autoPlace`, with the placing and the choosing open to the caller: everything
+ * else an arrangement needs (containers, locks, text that fits, routed lines)
+ * is the same for all of them, and is here.
+ */
+export function autoPlaceWith(template: DiagramTemplate, options: ArrangeOptions, own: PlaceWith): DiagramTemplate {
+  const prefs: Prefs = { ...resolvePrefs(template, options), ...(own.engine ? { engine: own.engine, algorithm: "layered" as const } : {}) };
   const flows: Flow[] = prefs.direction === "auto" ? candidateFlows(template) : [prefs.direction];
   // A flow through containers may run differently inside them: regions stacked
   // down the page, each reading across, is often the picture that fits.
@@ -1424,21 +1575,26 @@ export function autoPlace(template: DiagramTemplate, options: ArrangeOptions = {
   // Comparing is a full layout each. Past this size the first choice is good
   // enough, and being quick about it matters more.
   if (template.nodes.length > COMPARE_LIMIT) pairs.length = 1;
+  if (own.flows) pairs.splice(0, pairs.length, own.flows);
   const lintOptions = { containerKinds: options.containerKinds, frames: options.frames ?? ("root" as const) };
   let best: DiagramTemplate | null = null;
   let bestCost = Infinity;
   for (const { outer, inner } of pairs) {
     const composed = composeDocument(template, prefs, outer, inner, options);
     const settled = settleLines(composed, { containerKinds: options.containerKinds, frames: options.frames });
-    if (pairs.length === 1) return settled;
+    if (pairs.length === 1) {
+      own.chose?.({ outer, inner });
+      return settled;
+    }
     // The linter's cost already counts how small the words end up when the
     // picture is fitted to a window, so this chooses by what readers do.
-    const { cost } = lintLayout(settled, lintOptions);
+    const cost = own.cost ? own.cost(settled, outer) : lintLayout(settled, lintOptions).cost;
     // A real difference, or the first choice stands: flipping a diagram's
     // direction for a rounding error would make Tidy feel arbitrary.
     if (cost < bestCost * 0.97) {
       best = settled;
       bestCost = cost;
+      own.chose?.({ outer, inner });
     }
   }
   return best ?? template;

@@ -14,6 +14,9 @@
  *   bd-layout place <file.json> [--algorithm <a>] [--direction <d>] [--shape <s>]
  *                               [--spacing <s>] [--write | --out <file>]
  *       Place everything from the graph, ignoring where things are now.
+ *       --mode directed places it as a flow instead (lines kept from crossing
+ *       first, running one way second), with --priority <p> for what to give up
+ *       for what and --method <m> for how to look; --algorithm is then unused.
  *
  *   bd-layout best <file.json> [--write | --out <file>]
  *       Keep the author's arrangement if it's any good (polished), otherwise
@@ -40,6 +43,9 @@ const contract = await import(new URL("../dist/contract.js", import.meta.url).hr
 });
 const {
   CONTAINER_KINDS,
+  DIRECTED_METHODS,
+  DIRECTED_PRIORITIES,
+  directedLayout,
   LAYOUT_ALGORITHMS,
   LAYOUT_DIRECTIONS,
   LAYOUT_SHAPES,
@@ -51,7 +57,7 @@ const {
   validateTemplate,
 } = contract;
 
-const VALUE_FLAGS = new Set(["min-score", "out", "algorithm", "direction", "shape", "spacing", "kinds", "container-kinds"]);
+const VALUE_FLAGS = new Set(["min-score", "out", "algorithm", "direction", "shape", "spacing", "kinds", "container-kinds", "mode", "priority", "method"]);
 const SWITCHES = new Set(["json", "write", "all-canvases", "help"]);
 
 function parseArgs(argv) {
@@ -93,6 +99,7 @@ const USAGE = [
   "usage: bd-layout lint <file.json> [--json] [--min-score <n>] [--all-canvases]",
   "       bd-layout fix <file.json> [--write | --out <file>] [--all-canvases]",
   "       bd-layout place <file.json> [--algorithm <a>] [--direction <d>] [--shape <s>] [--spacing <s>] [--write | --out <file>]",
+  "       bd-layout place <file.json> --mode directed [--priority <p>] [--method <m>] [--direction <d>] [--write | --out <file>]",
   "       bd-layout best <file.json> [--write | --out <file>]",
   "       each also takes --kinds <a,b> and --container-kinds <a,b> for kinds of your own",
 ].join("\n");
@@ -175,8 +182,18 @@ if (command === "fix") {
   result = polishLayout(doc, options);
   note = result === doc ? "nothing a polish could improve" : "polished";
 } else if (command === "place") {
-  result = autoPlace(doc, options);
-  note = "placed from the graph";
+  const mode = oneOf(flags.mode, ["auto", "directed"], "mode") ?? "auto";
+  const priority = oneOf(flags.priority, DIRECTED_PRIORITIES, "priority");
+  const method = oneOf(flags.method, DIRECTED_METHODS, "method");
+  if (mode !== "directed" && (priority || method)) fail("--priority and --method go with --mode directed");
+  if (mode === "directed") {
+    if (options.algorithm) fail("--algorithm picks a family for Best fit; a directed flow has --method");
+    result = directedLayout(doc, { ...options, ...(priority ? { priority } : {}), ...(method ? { method } : {}) });
+    note = "placed as a directed flow";
+  } else {
+    result = autoPlace(doc, options);
+    note = "placed from the graph";
+  }
 } else {
   const best = arrangeBest(doc, options);
   result = best.template;

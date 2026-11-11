@@ -16,7 +16,10 @@ import {
   type LintLayoutOptions,
 } from "../contract/layout-lint";
 import { layoutCandidates, layoutGaps, type ArrangeOptions, type LayoutCandidate } from "../contract/arrange";
+import { directedLayout } from "../contract/directed";
 import {
+  DIRECTED_METHODS,
+  DIRECTED_PRIORITIES,
   LAYOUT_ALGORITHMS,
   LAYOUT_DIRECTIONS,
   LAYOUT_ENDS,
@@ -24,6 +27,9 @@ import {
   LAYOUT_SHAPES,
   LAYOUT_SPACINGS,
   type DiagramTemplate,
+  type DirectedMethod,
+  type DirectedPreferences,
+  type DirectedPriority,
   type LayoutAlgorithm,
   type LayoutDirection,
   type LayoutEnds,
@@ -110,6 +116,85 @@ const SPACING_LABEL: Record<LayoutSpacing, { label: string; title: string }> = {
   airy: { label: "Airy", title: "More room around everything" },
 };
 
+const PRIORITY_LABEL: Record<DirectedPriority, { label: string; title: string }> = {
+  crossings: { label: "Crossings above all", title: "Lines don't cross if there is any way round it: one crossing counts as nine lines running backward" },
+  "mostly-crossings": { label: "Crossings first", title: "A crossing counts as three lines running backward" },
+  balanced: { label: "Balanced", title: "A crossing and a line running backward count the same" },
+  "mostly-direction": { label: "Direction first", title: "A line running backward counts as three crossings" },
+  direction: { label: "Direction above all", title: "Every line runs with the flow if there is any way to: one backward line counts as nine crossings" },
+};
+const METHOD_LABEL: Record<DirectedMethod, { label: string; title: string }> = {
+  best: { label: "Best of all", title: "Every method, compared as drawn: the one that measures best is kept" },
+  layered: { label: "Ranked", title: "Ranks searched one box at a time, letting a line run backward where that is cheaper than the crossings it saves" },
+  anneal: { label: "Annealed", title: "The same search, allowed to get worse on the way to better: slower, and sometimes finds what the other can't" },
+};
+
+/**
+ * What a directed flow gives up for what, and how it looks for its arrangement.
+ * Used in the Layout panel and under the mode's entry in the Arrange menu. The
+ * slider applies when it is let go: each stop is a whole layout and one undo step.
+ */
+export function DirectedControls({
+  value,
+  onChange,
+  className,
+}: {
+  value: DirectedPreferences | undefined;
+  onChange: (patch: DirectedPreferences) => void;
+  className?: string;
+}) {
+  const priority = value?.priority ?? "mostly-crossings";
+  const method = value?.method ?? "best";
+  const [draft, setDraft] = useState<DirectedPriority | null>(null);
+  const shown = draft ?? priority;
+  const commit = () => {
+    if (draft !== null && draft !== priority) onChange({ priority: draft });
+    setDraft(null);
+  };
+  return (
+    <div className={`as-directed${className ? ` ${className}` : ""}`}>
+      <label className="as-directed__row" title="What to give up when lines can't both stay uncrossed and run one way">
+        <span className="as-paths__caption">Priority</span>
+        <input
+          type="range"
+          min={0}
+          max={DIRECTED_PRIORITIES.length - 1}
+          step={1}
+          value={DIRECTED_PRIORITIES.indexOf(shown)}
+          aria-label="Priority"
+          aria-valuetext={PRIORITY_LABEL[shown].label}
+          onChange={(event) => setDraft(DIRECTED_PRIORITIES[Number(event.target.value)] ?? priority)}
+          onPointerUp={commit}
+          onKeyUp={commit}
+          onBlur={commit}
+        />
+      </label>
+      <div className="as-directed__ends" aria-hidden="true">
+        <span>Fewer crossings</span>
+        <span>One direction</span>
+      </div>
+      <p className="as-paths__hint">
+        {PRIORITY_LABEL[shown].label}. {PRIORITY_LABEL[shown].title}.
+      </p>
+      <label className="as-directed__row" title={METHOD_LABEL[method].title}>
+        <span className="as-paths__caption">Method</span>
+        <select
+          className="as-select"
+          value={method}
+          aria-label="Method"
+          onChange={(event) => onChange({ method: event.target.value as DirectedMethod })}
+        >
+          {DIRECTED_METHODS.map((m) => (
+            <option key={m} value={m} title={METHOD_LABEL[m].title}>
+              {METHOD_LABEL[m].label}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
 /** A choice, or undefined to go back to letting the document decide. */
 export type LayoutPatch = { [K in keyof LayoutPreferences]?: LayoutPreferences[K] | undefined };
 
@@ -123,6 +208,8 @@ export interface LayoutPanelProps {
   /** How many lines are selected, for Straighten. */
   selectedLines: number;
   onPrefs: (patch: LayoutPatch) => void;
+  /** Arrange as a directed flow, with these of its choices changed. */
+  onDirected: (patch: DirectedPreferences) => void;
   onArrange: () => void;
   onPolish: () => void;
   onArrangeSelection: () => void;
@@ -159,6 +246,7 @@ export function LayoutPanel({
   selected,
   selectedLines,
   onPrefs,
+  onDirected,
   onArrange,
   onPolish,
   onArrangeSelection,
@@ -204,6 +292,8 @@ export function LayoutPanel({
             title={
               mode === "auto"
                 ? "Place everything from the graph, using the choices below"
+                : mode === "directed"
+                  ? "Arrange as a directed flow again, using the choices below"
                 : "Arrange again the way this diagram is set to be arranged. Picking a choice below switches it to them"
             }
           >
@@ -235,13 +325,18 @@ export function LayoutPanel({
 
       {canEdit ? (
         <>
-          <Choice
-            caption="Style"
-            options={LAYOUT_ALGORITHMS}
-            labels={ALGORITHM_LABEL}
-            value={prefs.algorithm ?? "auto"}
-            onPick={(algorithm) => onPrefs({ algorithm })}
-          />
+          {mode === "directed" ? (
+            <DirectedControls value={template.settings?.directed} onChange={onDirected} />
+          ) : (
+            // A family of layout is Best fit's to choose between; a directed flow has its own choices above.
+            <Choice
+              caption="Style"
+              options={LAYOUT_ALGORITHMS}
+              labels={ALGORITHM_LABEL}
+              value={prefs.algorithm ?? "auto"}
+              onPick={(algorithm) => onPrefs({ algorithm })}
+            />
+          )}
           <Choice
             caption="Direction"
             options={LAYOUT_DIRECTIONS}
@@ -292,7 +387,7 @@ export function LayoutPanel({
         </>
       ) : null}
 
-      {canEdit ? <Gallery template={measured} options={options} onPick={onCandidate} /> : null}
+      {canEdit ? <Gallery template={measured} options={options} onPick={onCandidate} onDirected={mode === "directed" ? undefined : () => onDirected({})} /> : null}
 
       <Findings report={report} onJump={onJump} onPoint={onPoint} />
     </div>
@@ -382,15 +477,24 @@ function Gallery({
   template,
   options,
   onPick,
+  onDirected,
 }: {
   template: DiagramTemplate;
   options: ArrangeOptions & LintLayoutOptions;
   onPick: (candidate: LayoutCandidate) => void;
+  /** Switch to a directed flow: offered as a card of its own unless that is the arrangement already. */
+  onDirected?: () => void;
 }) {
   const large = template.nodes.length > GALLERY_LIMIT;
   const [asked, setAsked] = useState(false);
   const show = !large || asked;
   const candidates = useMemo(() => (show ? layoutCandidates(template, options) : []), [show, template, options]);
+  const offerDirected = !!onDirected && template.edges.length > 0;
+  const directed = useMemo(() => {
+    if (!show || !offerDirected) return null;
+    const arranged = directedLayout(template, options);
+    return { template: arranged, score: lintLayout(arranged, options).score };
+  }, [show, offerDirected, template, options]);
   return (
     <div className="as-paths__section">
       <div className="as-paths__caption">Other arrangements</div>
@@ -415,6 +519,20 @@ function Gallery({
               </span>
             </button>
           ))}
+          {directed && onDirected ? (
+            <button
+              type="button"
+              className="as-layout__card"
+              title={`Use this arrangement: Directed flow, scoring ${directed.score}. Lines kept from crossing first, and running one way second`}
+              onClick={onDirected}
+            >
+              <Thumbnail template={directed.template} options={options} />
+              <span className="as-layout__cardname">
+                Directed flow
+                <span className="as-layout__cardscore">{directed.score}</span>
+              </span>
+            </button>
+          ) : null}
         </div>
       )}
     </div>

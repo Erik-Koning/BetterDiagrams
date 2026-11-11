@@ -101,6 +101,8 @@ const typo = layout("lint", rough, "--min-scroe", "100");
 if (typo.status !== 2) fail("bd-layout should refuse a flag it doesn't know, not pass the gate", typo.stdout + typo.stderr);
 const fix = layout("fix", rough, "--write");
 if (fix.status !== 0) fail("bd-layout fix failed", fix.stdout + fix.stderr);
+const directed = layout("place", rough, "--mode", "directed", "--priority", "balanced", "--out", "directed.json");
+if (directed.status !== 0 || !directed.stderr.includes("directed flow")) fail("bd-layout place --mode directed failed", directed.stdout + directed.stderr);
 const relint = layout("lint", rough);
 if (relint.status !== 0 || relint.stdout.includes("box-overlap")) fail("bd-layout fix left the overlap", relint.stdout + relint.stderr);
 

@@ -81,6 +81,21 @@ describe("direction", () => {
     expect(measureFlow(chain).backwardNeeded).toBe(0);
   });
 
+  it("tells a return line running back from a main line turned round", () => {
+    // a → b → c with c → a closing the loop: drawn in order, the line back is the loop's own.
+    const inOrder = doc(
+      [box("a", 0, 0), box("b", 300, 0), box("c", 600, 0)],
+      [line("a", "b"), line("b", "c"), line("c", "a", { points: [[385, 160]] })],
+    );
+    expect(measureFlow(inOrder, { axis: "right" })).toMatchObject({ backward: 1, turned: 0 });
+    // The same loop drawn starting from b: now a → b, which a reader follows forward, runs back.
+    const rotated = doc(
+      [box("a", 600, 0), box("b", 0, 0), box("c", 300, 0)],
+      [line("a", "b", { points: [[385, 160]] }), line("b", "c"), line("c", "a")],
+    );
+    expect(measureFlow(rotated, { axis: "right" })).toMatchObject({ backward: 1, turned: 1 });
+  });
+
   it("a line with no direction, or both, is nobody's to call backward", () => {
     const m = measureFlow(doc([box("a", 300, 0), box("b", 0, 0), box("c", 600, 0)], [line("a", "b", { direction: "none" }), line("a", "c")]));
     expect(m).toMatchObject({ directed: 1, backward: 0 });
