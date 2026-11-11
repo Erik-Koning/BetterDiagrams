@@ -3338,6 +3338,7 @@ export interface SettleOptions {
         drill: string;
     };
     keepWords?: boolean;
+    tight?: boolean;
 }
 
 // @public

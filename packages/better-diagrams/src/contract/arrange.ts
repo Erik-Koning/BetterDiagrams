@@ -89,6 +89,8 @@ const POLISH_ROUNDS = 5;
 const REFINE_PASSES = 3;
 /** Above this many boxes, Tidy takes the first direction rather than measuring each. */
 const COMPARE_LIMIT = 150;
+/** The most a frame's contents step aside for its name (and the frame grows by twice this). */
+const TITLE_SLACK_LIMIT = 160;
 /** The narrowest and widest a box grows to fit its words, before they wrap instead. */
 const WIDEST_FIT = 264;
 
@@ -547,8 +549,14 @@ function composeCanvas(
         const n = item === nodeId ? nodeById.get(nodeId) : undefined;
         return n && hasAssigneeStrip(n) && !flowsVertically ? { x: 0, y: -ASSIGNEE_STRIP_HEIGHT / 2 } : undefined;
       };
-      const sourcePort = rowOffset(e.source, e.startField, a) ?? tabOffset(e.source, a) ?? ports?.(a, e.source);
-      const targetPort = rowOffset(e.target, e.endField, b) ?? tabOffset(e.target, b) ?? ports?.(b, e.target);
+      // Between two tables, row to row, it is their heads that are levelled. A
+      // line from a row low in one table to the first row of the next is level
+      // only with the second table a step down, and a chain of them is a staircase:
+      // no two tables share a row, and the lines are a few pixels long either way.
+      const heads = !!prefs.engine && !!e.startField && !!e.endField && a === e.source && b === e.target;
+      const head = (nodeId: string) => ({ x: 0, y: -nodeById.get(nodeId)!.h / 2 });
+      const sourcePort = heads ? head(e.source) : (rowOffset(e.source, e.startField, a) ?? tabOffset(e.source, a) ?? ports?.(a, e.source));
+      const targetPort = heads ? head(e.target) : (rowOffset(e.target, e.endField, b) ?? tabOffset(e.target, b) ?? ports?.(b, e.target));
       placeLinks.push({
         source: a,
         target: b,
@@ -569,7 +577,12 @@ function composeCanvas(
         const target = key.split("\u0000")[1]!;
         heaviest.set(target, Math.max(heaviest.get(target) ?? 0, weight));
       }
+      // What nothing leads to can't push anything further out: it goes first, whatever
+      // its line weighs. Tethered, it has no rank of its own and is parked beside
+      // what it points at, which for a frame the width of the page is a long way off.
+      const fed = prefs.engine ? new Set(placeLinks.map((l) => l.target)) : undefined;
       for (const link of placeLinks) {
+        if (fed && !fed.has(link.source)) continue;
         const weight = pairWeight.get(`${link.source}\u0000${link.target}`)!;
         if (weight * 2 < (heaviest.get(link.target) ?? 0)) link.tether = true;
       }
@@ -595,6 +608,11 @@ function composeCanvas(
         const r = rankOfMember(m);
         if (r !== undefined && !m.pinned) hints.set(m.id, r);
       }
+      // Where frames flow the way the canvas does, boxes of one rank stand side by
+      // side across it, and a frame is a tier: see `closeRanks`. Where they flow
+      // across it, it is the canvas's ranks that spread a frame's boxes into a row.
+      const vertical = (f: Flow) => f === "down" || f === "up";
+      if (prefs.engine && vertical(innerFlow) === vertical(flow)) closeRanks(hints, placeLinks);
     }
     const placeOptions = {
       algorithm: prefs.algorithm,
@@ -724,6 +742,10 @@ function composeCanvas(
         if (centre < chip + 28) titleSlack = Math.max(titleSlack, chip + 28 - centre);
       }
       titleSlack = Math.ceil(titleSlack);
+      // A name too long to step aside from is not stepped aside from. Its chip is
+      // cut short at the frame's edge wherever the boxes are, and clearing all of
+      // it takes a frame several times the width of what it holds.
+      if (prefs.engine && titleSlack > TITLE_SLACK_LIMIT) titleSlack = 0;
       inset.x += titleSlack;
     }
     if (pinned.length) {
@@ -922,6 +944,24 @@ function composeCanvas(
   }
 }
 
+/**
+ * A frame's members on the ranks its own lines need, and no more. Their ranks
+ * on the canvas as a whole say which of two joined members comes first; taken
+ * as they are, they also leave a row in the frame for every rank the rest of
+ * the canvas has between them, and a frame of six boxes stands five rows deep
+ * with one box in each. A member no sibling leads to goes in the first row.
+ */
+function closeRanks(hints: Map<string, number>, links: readonly PlaceLink[]): void {
+  const own = links
+    .filter((l) => !l.tether && hints.has(l.source) && hints.has(l.target) && hints.get(l.source) !== hints.get(l.target))
+    .map((l) => (hints.get(l.source)! < hints.get(l.target)! ? { from: l.source, to: l.target } : { from: l.target, to: l.source }))
+    .sort((a, b) => hints.get(a.from)! - hints.get(b.from)!);
+  const close = new Map<string, number>([...hints.keys()].map((id) => [id, 0]));
+  // In the order of where each line starts, every rank a line starts from is settled before the line is read.
+  for (const l of own) close.set(l.to, Math.max(close.get(l.to)!, close.get(l.from)! + 1));
+  for (const [id, r] of close) hints.set(id, r);
+}
+
 // ─── The document ────────────────────────────────────────────────────────────
 
 /** The directions worth trying when the author didn't say. */
@@ -1060,7 +1100,7 @@ function composeDocument(
     edges,
     ...(placedZones.length ? { zones: placedZones } : {}),
   };
-  let levelled = levelAcrossContainers(placedDoc, canvases, flow, containerKinds, prefs.nodeGap);
+  let levelled = levelAcrossContainers(placedDoc, canvases, flow, containerKinds, prefs.nodeGap, !!prefs.engine);
   if (keptRoutes.size && levelled !== placedDoc) {
     // Levelling slid a box after all: a route kept for it has gone stale like any other.
     const boxLevelled = boxOn(levelled.nodes);
@@ -1177,6 +1217,7 @@ function levelAcrossContainers(
   flow: Flow,
   containerKinds: readonly string[],
   gap: number,
+  heads = false,
 ): DiagramTemplate {
   if (!hasContainers(doc)) return doc;
   const axis: "x" | "y" = flow === "right" || flow === "left" ? "y" : "x";
@@ -1210,7 +1251,9 @@ function levelAcrossContainers(
           if (a === b || (a !== item && b !== item) || line.edge.points?.length) continue;
           const mine = a === item ? line.source : line.target;
           const other = a === item ? line.target : line.source;
-          const delta = Math.round(other[axis] + other[size] / 2 - (mine[axis] + mine[size] / 2));
+          // Two tables joined row to row are level when their heads are: see `layCluster`.
+          const byHead = heads && axis === "y" && !!line.edge.startField && !!line.edge.endField;
+          const delta = Math.round(byHead ? other[axis] - mine[axis] : other[axis] + other[size] / 2 - (mine[axis] + mine[size] / 2));
           if (delta === 0 || Math.abs(delta) > LEVEL_REACH) continue;
           votes.set(delta, (votes.get(delta) ?? 0) + 1);
         }
@@ -1691,7 +1734,7 @@ export function autoPlaceWith(template: DiagramTemplate, options: ArrangeOptions
   let bestCost = Infinity;
   for (const { outer, inner } of pairs) {
     const composed = composeDocument(template, prefs, outer, inner, options);
-    const settled = settleLines(composed, { containerKinds: options.containerKinds, frames: options.frames });
+    const settled = settleLines(composed, { containerKinds: options.containerKinds, frames: options.frames, ...(own.engine ? { tight: true } : {}) });
     if (pairs.length === 1) {
       own.chose?.({ outer, inner });
       return settled;
