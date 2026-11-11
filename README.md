@@ -1516,7 +1516,8 @@ or `{ template }`.
 To let people choose the model, pass `aiModels`, `aiModel` and `onAiModelChange`: two or more models
 show a **Model** picker in the panel, and the chosen `id` arrives as `model`. It comes from the
 browser, so check it against what you offer before calling anyone, as
-`@mosphere/better-diagrams/server` does. Its `GET /api/ai` lists the models to pass as `models`.
+`@mosphere/better-diagrams/server` does. Its `GET /api/ai` lists the models to pass as `models`,
+its default first: with no `aiModel` yet the panel starts on the first, so on that default.
 
 **Adjust with AI** is the panel's chat. Each message goes to the model with the live diagram (the
 content form, so the layout you arranged stays put) and lands as one undo step; the panel stays

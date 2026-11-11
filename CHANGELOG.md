@@ -56,7 +56,7 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 - A **Model** picker in the AI panel, in both editors. `aiModels`, `aiModel` and `onAiModelChange` on
   `ArchitectureStudio` and `SequenceStudio` offer the choice, and it travels as `GenerateRequest.model`
   (`AiModelOption`). On the server, `AiRouteStatus.models` lists every model the environment's keys
-  open up, a request can name one, and the route answers any other with a 400.
+  open up, its default first, a request can name one, and the route answers any other with a 400.
 - How the interactive HTML page opens is the document's to say, like `settings.htmlLines`:
   `settings.htmlTimeline` (`HTML_TIMELINES`: the timeline bar shown or put away),
   `settings.htmlTimelineDate` (`HTML_TIMELINE_DATES`: open on today, the first date or the last),

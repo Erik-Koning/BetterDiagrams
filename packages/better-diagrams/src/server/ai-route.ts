@@ -62,8 +62,9 @@ export interface AiRouteStatus {
   model: string;
   label: string;
   /**
-   * The models a request can name, for the panel's picker. Empty when the
-   * route is off, has no key, or answers through a host's own `complete`.
+   * The models a request can name, for the panel's picker, `model` first.
+   * Empty when the route is off, has no key, or answers through a host's own
+   * `complete`.
    */
   models: AiModelOption[];
   /** A key is set and the route is on — the panel can be offered. */
@@ -175,7 +176,12 @@ export function resolveProvider(env: AiEnv = processEnv()): AiProvider {
   return providerOf(keyVarOf("anthropic", env) || !keyVarOf("openai", env) ? "anthropic" : "openai", env);
 }
 
-/** Every model this environment's keys can answer with: all a request may name. */
+/**
+ * Every model this environment's keys can answer with: all a request may name.
+ * Each provider's default leads its own, so the first of the list is the model
+ * that answers a request naming none, and a host that shows the list without
+ * keeping a choice starts on the default rather than the most capable.
+ */
 function offeredModels(env: AiEnv): AiProvider[] {
   return (["anthropic", "openai"] as const).flatMap((name) => {
     if (!keyVarOf(name, env)) return [];
@@ -183,7 +189,7 @@ function offeredModels(env: AiEnv): AiProvider[] {
     // A gateway has its own names for models: only the one set for it is known to work.
     if (configured.baseURL) return [configured];
     const listed = CATALOG[name].map((entry) => providerOf(name, env, entry.id));
-    return listed.some((entry) => entry.model === configured.model) ? listed : [configured, ...listed];
+    return [configured, ...listed.filter((entry) => entry.model !== configured.model)];
   });
 }
 

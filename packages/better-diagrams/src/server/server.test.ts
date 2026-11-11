@@ -51,7 +51,8 @@ describe("resolveProvider", () => {
 
 describe("the models a request can name", () => {
   const ids = (route: ReturnType<typeof createDiagramRoute>) => route.status().models.map((m) => m.id);
-  const CLAUDE = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
+  // Each provider's default leads its models; the rest follow, most capable first.
+  const CLAUDE = ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"];
   const GPT = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna"];
 
   /** A fake Messages API answering every request with one line of text. */
@@ -82,7 +83,7 @@ describe("the models a request can name", () => {
 
     const both = createDiagramRoute({ env: { ANTHROPIC_API_KEY: "sk-secret-a", OPENAI_API_KEY: "sk-secret-o" } });
     expect(ids(both)).toEqual([...CLAUDE, ...GPT]);
-    expect(both.status().models[0]).toEqual({ id: "claude-fable-5-1", label: "Claude Fable 5.1", group: "Anthropic" });
+    expect(both.status().models[0]).toEqual({ id: "claude-opus-5-5", label: "Claude Opus 5.5", group: "Anthropic" });
     expect(both.status().models.at(-1)).toEqual({ id: "gpt-6-luna", label: "GPT-6 Luna", group: "OpenAI" });
     // Claude still answers a request that names no model.
     expect(both.status()).toMatchObject({ provider: "anthropic", model: "claude-opus-5-5", label: "Claude Opus 5.5" });
@@ -100,12 +101,28 @@ describe("the models a request can name", () => {
 
   it("keeps a model the environment names at the head of the list, and labels a known one", () => {
     const custom = createDiagramRoute({ env: { ANTHROPIC_API_KEY: "k", ANTHROPIC_MODEL: "claude-opus-4-8" } });
-    expect(ids(custom)).toEqual(["claude-opus-4-8", ...CLAUDE]);
+    expect(ids(custom)).toEqual(["claude-opus-4-8", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]);
     expect(custom.status()).toMatchObject({ model: "claude-opus-4-8", label: "claude-opus-4-8" });
 
     const known = createDiagramRoute({ env: { ANTHROPIC_API_KEY: "k", ANTHROPIC_MODEL: "claude-sonnet-5-5" } });
-    expect(ids(known)).toEqual(CLAUDE);
+    expect(ids(known)).toEqual(["claude-sonnet-5-5", "claude-fable-5-1", "claude-opus-5-5", "claude-haiku-5-5"]);
     expect(known.status()).toMatchObject({ model: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" });
+  });
+
+  it("lists first the model that answers a request naming none, so a host that keeps no choice starts on the default", () => {
+    const envs = [
+      { ANTHROPIC_API_KEY: "k" },
+      { OPENAI_API_KEY: "o" },
+      { ANTHROPIC_API_KEY: "k", OPENAI_API_KEY: "o" },
+      { ANTHROPIC_API_KEY: "k", ANTHROPIC_MODEL: "claude-haiku-5-5", OPENAI_API_KEY: "o" },
+      { OPENAI_API_KEY: "o", OPENAI_MODEL: "gpt-6-luna" },
+      { ANTHROPIC_API_KEY: "k", ANTHROPIC_BASE_URL: "https://gw.example", ANTHROPIC_MODEL: "gw/opus", OPENAI_API_KEY: "o" },
+    ];
+    for (const env of envs) {
+      const status = createDiagramRoute({ env }).status();
+      expect(status.models[0]?.id).toBe(status.model);
+      expect(new Set(status.models.map((m) => m.id)).size).toBe(status.models.length);
+    }
   });
 
   it("offers only the model set for a gateway, whose names are its own", () => {
