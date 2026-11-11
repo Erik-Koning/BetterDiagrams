@@ -271,9 +271,12 @@ fit 87.6, 381, 103. The twelve flows are as they were.
    made one width, so a longer name doesn't make a wider tier. `flow-tiers` went from a staircase
    with two crossings to a grid with the one it can't avoid.
 5. *Unconnected boxes* parked in a corner: named again in round 1 for `stress-dag` and
-   `stress-hub` ("stranded", a point each). Not this mode's doing; it costs every arrangement. The
-   box "its author drew far larger than what it holds" that stood here was the gallery's doing, and
-   is corrected (above).
+   `stress-hub` ("stranded", a point each). Not this mode's doing; it costs every arrangement.
+   Standing one to three such boxes in the picture's first rank was tried: it put two more
+   crossings in `stress-dag`, five in `stress-groups` and three lines on lines in `stress-hub`,
+   because a box in the first column is in the way of what leaves it. It wants a free corner
+   inside the picture, found after the lines are drawn. The box "its author drew far larger than
+   what it holds" that stood here was the gallery's doing, and is corrected (above).
 6. *Text* (step 6): labels on lines and on line ends. Tables that stand in a row have short lines
    between them, and the words on those sit on the end marks: the gap wants to be as wide as the
    words and the marks together.
