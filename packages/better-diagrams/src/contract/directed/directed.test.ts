@@ -292,6 +292,21 @@ describe("what it trades", () => {
     }
   });
 
+  it("three stages stay three columns: a box isn't moved into a column of its own to save crossings", () => {
+    // Five sources, five steps, five sinks. Moving one source a column back and one sink a column on clears every crossing.
+    const names = [...["a", "b", "c", "d", "e"].map((n) => `source-${n}`), ...["a", "b", "c", "d", "e"].map((n) => `step-${n}`), ...["a", "b", "c", "d", "e"].map((n) => `sink-${n}`)];
+    const pairs = [[0, 7], [1, 5], [2, 9], [3, 8], [4, 9], [4, 5], [2, 5], [2, 6], [1, 8], [9, 12], [8, 13], [6, 14], [8, 11], [6, 10], [5, 11], [7, 13], [6, 13], [9, 11]];
+    const wide = doc(names.map((id) => box(id)), pairs.map(([from, to]) => line(names[from!]!, names[to!]!)));
+    for (const method of ["layered", "best"] as const) {
+      const flow = measureFlow(directedLayout(wide, { method, direction: "right" }), { axis: "right" });
+      expect(flow.ranks).toBe(3);
+    }
+    // Asked for crossings above all, it takes the column, and nothing crosses.
+    const eager = measureFlow(directedLayout(wide, { method: "best", priority: "crossings", direction: "right" }), { axis: "right" });
+    expect(eager.crossings).toBe(0);
+    expect(eager.ranks).toBeGreaterThan(3);
+  });
+
   it("by distance is a picture to ask for by name: best of all never hands it back", () => {
     // On each of these it costs less than any ranked picture, and readers shown both chose the ranks.
     for (const name of ["mesh", "flowchart", "roughlyPlaced"]) {

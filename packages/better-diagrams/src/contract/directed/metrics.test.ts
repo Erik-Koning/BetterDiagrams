@@ -170,6 +170,18 @@ describe("the shape of the whole", () => {
     expect(measureFlow(wandering).spineStraightness).toBeLessThan(0.9);
   });
 
+  it("counts the ranks the boxes stand in: boxes level along the flow share one", () => {
+    expect(measureFlow(chain).ranks).toBe(4);
+    const fan = doc(
+      [box("s", 0, 200), box("t0", 400, 0), box("t1", 400, 200), box("t2", 400, 400)],
+      [line("s", "t0"), line("s", "t1"), line("s", "t2")],
+    );
+    expect(measureFlow(fan, { axis: "right" }).ranks).toBe(2);
+    // Read down the page, the same picture is three rows.
+    expect(measureFlow(fan, { axis: "down" }).ranks).toBe(3);
+    expect(measureFlow(doc([])).ranks).toBe(0);
+  });
+
   it("evenly spaced ranks are even, and one gap out of step isn't", () => {
     expect(measureFlow(chain).rankEvenness).toBe(1);
     const uneven = doc(
