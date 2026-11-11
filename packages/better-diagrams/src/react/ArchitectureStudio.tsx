@@ -27,6 +27,7 @@ import {
   Background,
   BackgroundVariant,
   ConnectionMode,
+  ControlButton,
   Controls,
   SelectionMode,
   MiniMap,
@@ -36,6 +37,7 @@ import {
   ViewportPortal,
   applyEdgeChanges,
   applyNodeChanges,
+  getViewportForBounds,
   useEdgesState,
   useNodesState,
   useReactFlow,
@@ -317,6 +319,10 @@ const SELECTED_EDGE_ELEVATION = SELECT_ELEVATION * 2;
  * rather than a diagram, and each one fitted at a different scale from the last.
  */
 const FIT_MAX_ZOOM = 1.25;
+/** As far out as the canvas zooms, fitted or by hand. */
+const FIT_MIN_ZOOM = 0.15;
+/** Room kept round a line that reaches past the boxes, when the view is fitted to it. */
+const FIT_LINE_MARGIN = 16;
 
 /** How close an edge has to come to a neighbour's before the guide catches. */
 const ALIGN_TOL = 6;
@@ -1340,6 +1346,42 @@ function StudioInner({
   const [pendingReplace, setPendingReplace] = useState<{ name: string; run: () => void } | null>(null);
   const compareInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+  /**
+   * Fit the picture, its lines included. The canvas's own fit looks only at
+   * the boxes, and a line that goes round (an arc past a column, a channel
+   * above a row) reaches beyond them: fitted to the boxes alone, it is cut off
+   * at the edge of the view. Where no line reaches out, this is the same fit
+   * as ever.
+   */
+  const fitPicture = useCallback(
+    (duration = 300) => {
+      const shown = flow.getNodes().filter((n) => !n.hidden);
+      const pane = canvasRef.current?.querySelector(".react-flow")?.getBoundingClientRect();
+      const boxes = shown.length ? flow.getNodesBounds(shown) : null;
+      if (!boxes || !pane || !(pane.width > 0) || !(pane.height > 0)) {
+        return void flow.fitView({ padding: 0.15, maxZoom: FIT_MAX_ZOOM, duration });
+      }
+      let minX = boxes.x;
+      let minY = boxes.y;
+      let maxX = boxes.x + boxes.width;
+      let maxY = boxes.y + boxes.height;
+      for (const edge of flow.getEdges()) {
+        if (edge.hidden) continue;
+        for (const [x, y] of (edge.data as DiagramEdgeData | undefined)?.points ?? []) {
+          minX = Math.min(minX, x - FIT_LINE_MARGIN);
+          minY = Math.min(minY, y - FIT_LINE_MARGIN);
+          maxX = Math.max(maxX, x + FIT_LINE_MARGIN);
+          maxY = Math.max(maxY, y + FIT_LINE_MARGIN);
+        }
+      }
+      if (minX >= boxes.x && minY >= boxes.y && maxX <= boxes.x + boxes.width && maxY <= boxes.y + boxes.height) {
+        return void flow.fitView({ padding: 0.15, maxZoom: FIT_MAX_ZOOM, duration });
+      }
+      const viewport = getViewportForBounds({ x: minX, y: minY, width: maxX - minX, height: maxY - minY }, pane.width, pane.height, FIT_MIN_ZOOM, FIT_MAX_ZOOM, 0.15);
+      void flow.setViewport(viewport, { duration });
+    },
+    [flow],
+  );
   const searchInputRef = useRef<HTMLInputElement>(null);
   /** The inspector's Link field, so ⌘⇧K can put the cursor in it. */
   const linkInputRef = useRef<HTMLInputElement>(null);
@@ -1825,9 +1867,9 @@ function StudioInner({
         lastEmitted.current = json;
         onChange(validated);
       }
-      if (fit) window.setTimeout(() => flow.fitView({ padding: 0.15, maxZoom: FIT_MAX_ZOOM, duration: 300 }), 50);
+      if (fit) window.setTimeout(() => fitPicture(300), 50);
     },
-    [registry, materializeTemplate, commitHistory, onChange, flow],
+    [registry, materializeTemplate, commitHistory, onChange, fitPicture],
   );
 
   // ── Node / edge mutations ─────────────────────────────────────────────────
@@ -7353,7 +7395,7 @@ function StudioInner({
       // something else on most others, but the physical key is Digit1 everywhere.
       if (event.shiftKey && !mod && event.code === "Digit1") {
         event.preventDefault();
-        void flow.fitView({ padding: 0.15, maxZoom: FIT_MAX_ZOOM, duration: 300 });
+        fitPicture(300);
         return;
       }
       if (event.shiftKey && !mod && event.code === "Digit2") {
@@ -8888,7 +8930,7 @@ function StudioInner({
             <button
               type="button"
               className="as-btn"
-              onClick={() => flow.fitView({ padding: 0.15, maxZoom: FIT_MAX_ZOOM, duration: 300 })}
+              onClick={() => fitPicture(300)}
             >
               Fit
             </button>
@@ -9529,7 +9571,7 @@ function StudioInner({
             selectNodesOnDrag={false}
             fitView
             fitViewOptions={{ padding: 0.15, maxZoom: FIT_MAX_ZOOM }}
-            minZoom={0.15}
+            minZoom={FIT_MIN_ZOOM}
             maxZoom={2.5}
             proOptions={{ hideAttribution: false }}
           >
@@ -9577,7 +9619,16 @@ function StudioInner({
                 />
               </ViewportPortal>
             ) : null}
-            <Controls showInteractive={false} />
+            {/* The canvas's own fit button fits the boxes alone, and asks for it in a
+                way that lands after anything set here. This one, in its place, fits
+                the lines too. */}
+            <Controls showInteractive={false} showFitView={false}>
+              <ControlButton className="react-flow__controls-fitview" onClick={() => fitPicture(250)} title="Fit View" aria-label="Fit View">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 30" aria-hidden="true">
+                  <path d="M3.692 4.63c0-.53.4-.938.939-.938h5.215V0H4.708C2.13 0 0 2.054 0 4.63v5.216h3.692V4.631zM27.354 0h-5.2v3.692h5.17c.53 0 .984.4.984.939v5.215H32V4.631A4.624 4.624 0 0027.354 0zm.954 24.83c0 .532-.4.94-.939.94h-5.215v3.768h5.215c2.577 0 4.631-2.13 4.631-4.707v-5.139h-3.692v5.139zm-23.677.94c-.531 0-.939-.4-.939-.94v-5.138H0v5.139c0 2.577 2.13 4.707 4.708 4.707h5.138V25.77H4.631z" />
+                </svg>
+              </ControlButton>
+            </Controls>
             {minimap ? (
               <MiniMap
                 pannable

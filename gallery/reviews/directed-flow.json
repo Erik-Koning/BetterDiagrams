@@ -1,0 +1,860 @@
+{
+ "about": "Blind reviews of the Directed flow arrangement (method: best, default priority), 2026-11-10. Three reviewers a round, each scoring every gallery document 1 to 10 overall from a shuffled, renamed picture. scores are the three reviewers'; median is what the plan quotes.",
+ "rounds": [
+  {
+   "round": 1,
+   "documents": {
+    "bipartite": {
+     "median": 7,
+     "scores": [
+      7,
+      6,
+      7
+     ]
+    },
+    "dataModel": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      6
+     ]
+    },
+    "flow-branch": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      8
+     ]
+    },
+    "flow-ends": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      7
+     ]
+    },
+    "flow-fan": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      9
+     ]
+    },
+    "flow-long-skip": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "flow-loops": {
+     "median": 9,
+     "scores": [
+      8,
+      9,
+      9
+     ]
+    },
+    "flow-mesh": {
+     "median": 5,
+     "scores": [
+      5,
+      5,
+      5
+     ]
+    },
+    "flow-pipeline": {
+     "median": 10,
+     "scores": [
+      10,
+      10,
+      10
+     ]
+    },
+    "flow-retry": {
+     "median": 9,
+     "scores": [
+      9,
+      9,
+      9
+     ]
+    },
+    "flow-shortcuts": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      6
+     ]
+    },
+    "flow-tiers": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      6
+     ]
+    },
+    "flow-two-way": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "flow-wide": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      7
+     ]
+    },
+    "flowchart": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      8
+     ]
+    },
+    "gatewayHub": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      7
+     ]
+    },
+    "islands": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      8
+     ]
+    },
+    "largeSystem": {
+     "median": 4,
+     "scores": [
+      4,
+      4,
+      4
+     ]
+    },
+    "mesh": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      7
+     ]
+    },
+    "nestedGroups": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "orgTree": {
+     "median": 8,
+     "scores": [
+      7,
+      8,
+      8
+     ]
+    },
+    "pipeline": {
+     "median": 10,
+     "scores": [
+      10,
+      10,
+      10
+     ]
+    },
+    "real-data-model": {
+     "median": 5,
+     "scores": [
+      5,
+      5,
+      5
+     ]
+    },
+    "real-multi-cloud": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      6
+     ]
+    },
+    "real-platform": {
+     "median": 3,
+     "scores": [
+      3,
+      2,
+      3
+     ]
+    },
+    "real-services": {
+     "median": 3,
+     "scores": [
+      2,
+      3,
+      3
+     ]
+    },
+    "ring": {
+     "median": 9,
+     "scores": [
+      9,
+      9,
+      9
+     ]
+    },
+    "roughlyPlaced": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      6
+     ]
+    },
+    "stress-dag": {
+     "median": 4,
+     "scores": [
+      4,
+      4,
+      4
+     ]
+    },
+    "stress-groups": {
+     "median": 3,
+     "scores": [
+      3,
+      3,
+      2
+     ]
+    },
+    "stress-hub": {
+     "median": 4,
+     "scores": [
+      4,
+      4,
+      4
+     ]
+    },
+    "stress-mesh": {
+     "median": 4,
+     "scores": [
+      4,
+      4,
+      4
+     ]
+    },
+    "taskPlan": {
+     "median": 9,
+     "scores": [
+      9,
+      9,
+      9
+     ]
+    },
+    "webApp": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "zonesCloud": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      8
+     ]
+    }
+   }
+  },
+  {
+   "round": 2,
+   "documents": {
+    "bipartite": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      6
+     ]
+    },
+    "dataModel": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      6
+     ]
+    },
+    "flow-branch": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      8
+     ]
+    },
+    "flow-ends": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "flow-fan": {
+     "median": 9,
+     "scores": [
+      9,
+      9,
+      9
+     ]
+    },
+    "flow-long-skip": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "flow-loops": {
+     "median": 9,
+     "scores": [
+      9,
+      9,
+      9
+     ]
+    },
+    "flow-mesh": {
+     "median": 5,
+     "scores": [
+      5,
+      6,
+      5
+     ]
+    },
+    "flow-pipeline": {
+     "median": 10,
+     "scores": [
+      10,
+      10,
+      10
+     ]
+    },
+    "flow-retry": {
+     "median": 9,
+     "scores": [
+      9,
+      9,
+      9
+     ]
+    },
+    "flow-shortcuts": {
+     "median": 6,
+     "scores": [
+      6,
+      7,
+      6
+     ]
+    },
+    "flow-tiers": {
+     "median": 7,
+     "scores": [
+      6,
+      7,
+      7
+     ]
+    },
+    "flow-two-way": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      8
+     ]
+    },
+    "flow-wide": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      6
+     ]
+    },
+    "flowchart": {
+     "median": 6,
+     "scores": [
+      7,
+      6,
+      6
+     ]
+    },
+    "gatewayHub": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      7
+     ]
+    },
+    "islands": {
+     "median": 8,
+     "scores": [
+      7,
+      8,
+      8
+     ]
+    },
+    "largeSystem": {
+     "median": 4,
+     "scores": [
+      4,
+      5,
+      4
+     ]
+    },
+    "mesh": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "nestedGroups": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      8
+     ]
+    },
+    "orgTree": {
+     "median": 7,
+     "scores": [
+      8,
+      7,
+      7
+     ]
+    },
+    "pipeline": {
+     "median": 10,
+     "scores": [
+      10,
+      10,
+      10
+     ]
+    },
+    "real-data-model": {
+     "median": 5,
+     "scores": [
+      5,
+      5,
+      5
+     ]
+    },
+    "real-multi-cloud": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      6
+     ]
+    },
+    "real-platform": {
+     "median": 3,
+     "scores": [
+      4,
+      3,
+      3
+     ]
+    },
+    "real-services": {
+     "median": 3,
+     "scores": [
+      3,
+      3,
+      3
+     ]
+    },
+    "ring": {
+     "median": 9,
+     "scores": [
+      9,
+      9,
+      9
+     ]
+    },
+    "roughlyPlaced": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "stress-dag": {
+     "median": 3,
+     "scores": [
+      4,
+      3,
+      3
+     ]
+    },
+    "stress-groups": {
+     "median": 2,
+     "scores": [
+      2,
+      3,
+      2
+     ]
+    },
+    "stress-hub": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      6
+     ]
+    },
+    "stress-mesh": {
+     "median": 3,
+     "scores": [
+      3,
+      4,
+      3
+     ]
+    },
+    "taskPlan": {
+     "median": 9,
+     "scores": [
+      9,
+      9,
+      9
+     ]
+    },
+    "webApp": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "zonesCloud": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      8
+     ]
+    }
+   }
+  },
+  {
+   "round": 3,
+   "documents": {
+    "bipartite": {
+     "median": 7,
+     "scores": [
+      6,
+      7,
+      7
+     ]
+    },
+    "dataModel": {
+     "median": 7,
+     "scores": [
+      6,
+      7,
+      7
+     ]
+    },
+    "flow-branch": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      9
+     ]
+    },
+    "flow-ends": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "flow-fan": {
+     "median": 9,
+     "scores": [
+      9,
+      9,
+      9
+     ]
+    },
+    "flow-long-skip": {
+     "median": 7,
+     "scores": [
+      7,
+      8,
+      7
+     ]
+    },
+    "flow-loops": {
+     "median": 8,
+     "scores": [
+      9,
+      8,
+      8
+     ]
+    },
+    "flow-mesh": {
+     "median": 5,
+     "scores": [
+      5,
+      5,
+      5
+     ]
+    },
+    "flow-pipeline": {
+     "median": 10,
+     "scores": [
+      10,
+      10,
+      10
+     ]
+    },
+    "flow-retry": {
+     "median": 9,
+     "scores": [
+      9,
+      9,
+      9
+     ]
+    },
+    "flow-shortcuts": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "flow-tiers": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      6
+     ]
+    },
+    "flow-two-way": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "flow-wide": {
+     "median": 6,
+     "scores": [
+      6,
+      7,
+      6
+     ]
+    },
+    "flowchart": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      8
+     ]
+    },
+    "gatewayHub": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      8
+     ]
+    },
+    "islands": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      8
+     ]
+    },
+    "largeSystem": {
+     "median": 4,
+     "scores": [
+      4,
+      4,
+      4
+     ]
+    },
+    "mesh": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      7
+     ]
+    },
+    "nestedGroups": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "orgTree": {
+     "median": 9,
+     "scores": [
+      8,
+      9,
+      9
+     ]
+    },
+    "pipeline": {
+     "median": 10,
+     "scores": [
+      10,
+      10,
+      10
+     ]
+    },
+    "real-data-model": {
+     "median": 5,
+     "scores": [
+      5,
+      5,
+      5
+     ]
+    },
+    "real-multi-cloud": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      8
+     ]
+    },
+    "real-platform": {
+     "median": 3,
+     "scores": [
+      3,
+      4,
+      3
+     ]
+    },
+    "real-services": {
+     "median": 3,
+     "scores": [
+      3,
+      3,
+      3
+     ]
+    },
+    "ring": {
+     "median": 9,
+     "scores": [
+      9,
+      9,
+      9
+     ]
+    },
+    "roughlyPlaced": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "stress-dag": {
+     "median": 4,
+     "scores": [
+      4,
+      4,
+      4
+     ]
+    },
+    "stress-groups": {
+     "median": 2,
+     "scores": [
+      2,
+      2,
+      2
+     ]
+    },
+    "stress-hub": {
+     "median": 6,
+     "scores": [
+      6,
+      6,
+      7
+     ]
+    },
+    "stress-mesh": {
+     "median": 3,
+     "scores": [
+      3,
+      3,
+      3
+     ]
+    },
+    "taskPlan": {
+     "median": 8,
+     "scores": [
+      8,
+      8,
+      9
+     ]
+    },
+    "webApp": {
+     "median": 7,
+     "scores": [
+      7,
+      7,
+      7
+     ]
+    },
+    "zonesCloud": {
+     "median": 7,
+     "scores": [
+      7,
+      8,
+      7
+     ]
+    }
+   }
+  }
+ ]
+}

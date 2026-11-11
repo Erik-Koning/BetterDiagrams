@@ -1,7 +1,9 @@
 # Directed flow: an Arrange mode that trades crossings against direction
 
-Status: steps 1 and 2 built 2026-11-10 (the measures, and the mode with its ranked engine and its
-controls). Steps 3 to 6 are not.
+Status: steps 1, 2 and three rounds of step 5 built 2026-11-10 (the measures; the mode with its
+ranked engine and its controls; three blind reviews and what they led to). The reviewers' bar is
+not met: see "three blind reviews" below. Engines B and C (steps 3 and 4) and the text step (6) are
+not built.
 
 ## Where it stands
 
@@ -41,10 +43,9 @@ What is in it:
 - **Two-way traffic** between neighbours runs face to face as two lanes. **A box that collects a
   fan** sits in the middle of it.
 - **The choice between whole pictures** (`directedCost`): the linter's cost, crossings scaled by the
-  priority, direction charged for. Four rankings are laid out in full for `best` (the reader's,
-  the searched, the annealed, and whichever measures best piece by piece) and compared as drawn.
+  priority, direction charged for. Several rankings are laid out in full and compared as drawn.
 
-Results, over all 35 documents:
+Results, over all 35 documents, as step 2 left it (the figures after the reviews are below):
 
 | Arrangement | Score | Crossings | Lines on lines | Backward (unavoidable) | Ports |
 |---|---|---|---|---|---|
@@ -60,15 +61,78 @@ Best fit draws as a ring and a mesh and this draws as ranks.
 The Priority slider is monotone on all 35: crossings at the crossings end are never more than at
 the direction end, and backward lines the other way round. It changes the picture on 8 of them.
 
-Time: `best` 0.4 to 1.0 s on the documents of 30 to 60 boxes (Best fit: 0.2 to 0.35 s); `layered`
-0.3 to 0.6 s. That is over the 300 ms this plan set for 60 boxes.
+Time (after the review changes): `best` 0.4 to 1.2 s on the documents of 30 to 60 boxes (Best
+fit: 0.2 to 0.35 s); `layered` 0.2 to 0.8 s. That is over the 300 ms this plan set for 60 boxes.
+
+**Step 5, three blind reviews.** Each round, three reviewers who knew nothing of how the pictures
+were made scored all 35, words on, on one rubric (tangle, direction, order, lines, overall), from
+shuffled copies with nothing in a file name to go by. In every round they agreed within one point
+on every picture.
+
+| | Round 1 | Round 2 | Round 3 |
+|---|---|---|---|
+| Median overall | 7 | 7 | 7 |
+| Mean | 6.57 | 6.60 | 6.77 |
+| At 8 or more | 13 of 35 | 11 | 14 |
+| Below 6 | 9 of 35 | 8 | 8 |
+
+**The bar this plan set (8 or more on 80% of documents) is not met, and three rounds moved the
+median nowhere.** The simple flows score 8 to 10 (pipelines, branches, retries, loops, fans, a
+tree, a ring). The dense documents score 2 to 5 and did not move: the four stress graphs, the large
+system, two of the real documents. In the middle, at 6 and 7, are the flows where lines have to
+skip or return.
+
+What the reviewers said cost most, the same in all three rounds:
+1. Connected boxes placed far apart in dense pictures, so long lines sweep across and cross.
+2. Many lines sharing one spot or one track on a box, so ends can't be told apart.
+3. Lines that aren't one clean curve: hooks, lumpy corners, and (once lines ran through channels)
+   flat shelves.
+4. Loose placement: near-miss rows, groups stepping sideways, a box in a column of its own, strays.
+5. Crossings a different order within a rank would avoid, and labels on lines.
+
+What was changed for them:
+- **Round 1 → 2. Long lines run through their lanes** (1): a line that skips ranks is drawn level
+  through the channel the layout kept for it, turning only in the gaps, which also makes the
+  picture what the search's model said it would be. **Arc ends are placed to the pixel** (2, 3):
+  each arc leaves its box dead level from a place of its own, in the order that keeps arcs from
+  crossing at the box, and arcs that meet end to end at a box take different tracks. **An even fan
+  stays centred** (4). **Four rankings are laid out in full at every priority** (the reader's, the
+  searched, and the ones priced for crossings above all and for direction above all), so a picture
+  found at one setting is there to be chosen at another; the per-piece chooser this replaces is
+  gone.
+- **Round 2 → 3.** Round 2 was flat: channels fixed some pictures and put shelves in others.
+  So **a channel is used only where the straight line is blocked** (3). **A decision's branches
+  leave by the diamond's own points** again (they had been sent through channels). **A tree is
+  drawn as a tree**, every parent centred (4). **Arcs are shared between the two sides** when
+  nothing else decides (2). And **Fit takes in the lines**: fitted to the boxes alone, a line that
+  goes round was cut off at the edge of the view, in the editor as in the review pictures.
+
+After all of it, by the numbers (best; ranked alone is 90.1, 196 and 38; annealed 89.4, 213 and
+42): score 89.9 against Best fit's 85.0, 200 crossings against 252, 37 lines on lines against 70; on the twelve flows, 11 crossings against 42 and no lines on lines
+against 24. The Priority slider is monotone on all 35, counting lines on lines with crossings as
+the objective does. The linter's score rose more than the reviewers' did: it counts what is wrong,
+and what holds the dense pictures down is how far apart their boxes are, which it doesn't.
+
+**What would move the reviewers next, in the order they put it.**
+1. *Placement in dense documents.* Boxes that talk to each other end up ranks apart or in separate
+   groups. This is engine C's job (stress with direction: near in the graph is near on the page),
+   and the strongest reason to build it.
+2. *A box in a column of its own.* The search opens a rank for one box to save a crossing. A cost
+   per rank, or per box alone in one, would stop it where the saving is small.
+3. *Bunched ends.* A fan of twelve leaves as one trunk. Ends want spreading along the face, and a
+   wider gap after a big fan.
+4. *Groups stepping sideways*, and the order of boxes inside a group facing the ranks outside it.
+5. *Unconnected boxes* parked in a corner, and one box its author drew far larger than what it
+   holds (`real-platform`): neither is this mode's doing, both cost every arrangement.
+6. *Text* (step 6): labels on lines and on line ends.
 
 **Departures from the plan below, and why.**
 - **The search prices a model, and the model is not the drawing.** It counts crossings between
   lanes threaded through the ranks; the picture draws a long line straight between its boxes and
   routes it round what's in the way. A ranking the model likes can draw worse. So no single ranking
-  is trusted: several are laid out in full and compared as drawn. Making long lines follow their
-  lanes would close the gap, and is the next thing to do to the ranked engine.
+  is trusted: several are laid out in full and compared as drawn. Since the first review long
+  lines follow their lanes, which closes most of the gap; return lines still go round the outside
+  as arcs, which the model doesn't know about.
 - **Network simplex and Brandes–Köpf were not needed**: the existing ranking and coordinate passes
   are kept, and the search works on top of them.
 - **No engine falls back to a ring or a mesh.** A directed flow that comes out as a circle isn't

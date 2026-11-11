@@ -235,6 +235,8 @@ type Rect2 = { x: number; y: number; w: number; h: number };
 /** How far past what it goes round the innermost arc swings, and how much further each one outside it. */
 const ARC_CLEAR = 48;
 const ARC_STEP = 28;
+/** How far apart the ends of arcs sharing a side of a box sit: room for an arrowhead each. */
+const ARC_END_PITCH = 14;
 /** The radius an arc turns its corners on, room allowing. */
 const ARC_CORNER = 40;
 /** How far past a corner the first of the two points holding the run straight sits; the second is three times this further on. */
@@ -382,6 +384,22 @@ interface Composed {
   innerFlow: Map<string, Flow>;
   /** Boxes laid out as one ring: their lines arc around it. */
   rings: Array<Set<string>>;
+  /** Channels long lines were laid through, each with where its two boxes were when it was. */
+  routes: LaidRoute[];
+}
+
+/**
+ * A channel kept for a long line (`PlacedRoute`), with where its two boxes sat
+ * in the same coordinates. The boxes go on to be moved with their container,
+ * so the points are carried to wherever the boxes end up, if both went together.
+ */
+interface LaidRoute {
+  from: string;
+  to: string;
+  fromAt: { x: number; y: number };
+  toAt: { x: number; y: number };
+  points: Array<{ x: number; y: number }>;
+  flow: Flow;
 }
 
 function composeCanvas(
@@ -643,6 +661,19 @@ function composeCanvas(
 
     if (cluster.kind !== "root" && innerFlow !== flow) for (const it of items) out.innerFlow.set(it.id, innerFlow);
 
+    // Channels are for lines between two boxes placed here, as themselves: a line
+    // into a container ends somewhere inside it, which this level knows nothing of.
+    for (const route of placement.routes) {
+      const isBox = (id: string) => {
+        const member = cluster.members.find((m) => m.id === id);
+        return !!member?.node && !member.cluster;
+      };
+      const a = placement.placed.find((p) => p.id === route.from);
+      const b = placement.placed.find((p) => p.id === route.to);
+      if (!a || !b || !isBox(route.from) || !isBox(route.to)) continue;
+      out.routes.push({ from: route.from, to: route.to, fromAt: { x: a.x, y: a.y }, toAt: { x: b.x, y: b.y }, points: route.points, flow: ownFlow });
+    }
+
     const placed = placement.placed;
     if (notes.length) {
       // A row above what's there, wrapping at its width.
@@ -875,6 +906,7 @@ function composeCanvas(
     out.free.clear();
     out.innerFlow.clear();
     out.rings.length = 0;
+    out.routes.length = 0;
     laid = layCluster(model.root, pull, (item, nodeId) => portCache.get(`${item}\u0000${nodeId}`));
     placedAt = new Map();
     emit(model.root, laid, rootOrigin, placedAt);
@@ -930,7 +962,8 @@ function composeDocument(
   }
   const sized: DiagramTemplate = { ...template, nodes };
 
-  const composed: Composed = { positions: new Map(), sizes: new Map(), zones: new Map(), free: new Set(), innerFlow: new Map(), rings: [] };
+  const composed: Composed = { positions: new Map(), sizes: new Map(), zones: new Map(), free: new Set(), innerFlow: new Map(), rings: [], routes: [] };
+  const routes: LaidRoute[] = [];
   const positions = new Map<string, { x: number; y: number }>();
   const sizes = new Map<string, { w: number; h: number }>();
   const zones = new Map<string, { x: number; y: number; w: number; h: number }>();
@@ -945,7 +978,9 @@ function composeDocument(
     for (const k of composed.free) free.add(k);
     for (const [k, v] of composed.innerFlow) inner.set(k, v);
     rings.push(...composed.rings);
+    routes.push(...composed.routes);
     composed.rings.length = 0;
+    composed.routes.length = 0;
     composed.positions.clear();
     composed.sizes.clear();
     composed.zones.clear();
@@ -1030,7 +1065,91 @@ function composeDocument(
       }),
     };
   }
-  return pinFlowSides(levelled, canvases, flow, inner, free, rings, containerKinds, !!prefs.engine);
+  return pinFlowSides(channelled(levelled, routes, cardParents), canvases, flow, inner, free, rings, containerKinds, !!prefs.engine);
+}
+
+/** How far apart lines sharing one channel run. */
+const CHANNEL_PITCH = 10;
+
+/**
+ * Draw long lines through the channels the layout kept for them. A channel is
+ * carried to where its two boxes ended up, and dropped if they didn't go
+ * together (one was levelled, or pushed off something locked): then the line
+ * is drawn as any other. A line a person has pinned, or that ends on a row, is
+ * theirs and stays as it is; a line out of or into a decision leaves by the
+ * point that says which answer it is; and a line running back against the flow
+ * goes round the outside instead, as an arc.
+ */
+function channelled(doc: DiagramTemplate, routes: readonly LaidRoute[], cardParents: ReadonlySet<string>): DiagramTemplate {
+  if (!routes.length) return doc;
+  const byId = new Map(doc.nodes.map((n) => [n.id, n]));
+  const absolute = (id: string) => {
+    const n = byId.get(id);
+    if (!n) return undefined;
+    let { x, y } = n;
+    const guard = new Set<string>([id]);
+    // Up through the groups it's in, as far as the canvas it's drawn on.
+    for (let p = n.parentId; p && !guard.has(p) && !cardParents.has(p); ) {
+      guard.add(p);
+      const parent = byId.get(p);
+      if (!parent) break;
+      x += parent.x;
+      y += parent.y;
+      p = parent.parentId;
+    }
+    return { x, y };
+  };
+  const carried = new Map<string, { route: LaidRoute; dx: number; dy: number }>();
+  for (const route of routes) {
+    const a = absolute(route.from);
+    const b = absolute(route.to);
+    if (!a || !b) continue;
+    const dx = a.x - route.fromAt.x;
+    const dy = a.y - route.fromAt.y;
+    if (Math.abs(b.x - route.toAt.x - dx) > 1 || Math.abs(b.y - route.toAt.y - dy) > 1) continue;
+    carried.set(`${route.from}\u0000${route.to}`, { route, dx, dy });
+  }
+  if (!carried.size) return doc;
+  const isDiamond = (id: string) => KIND_SHAPES[byId.get(id)?.kind as string] === "diamond";
+  /** How many lines have taken each channel so far: the second runs beside the first. */
+  const taken = new Map<string, number>();
+  const sharing = new Map<string, number>();
+  const channelOf = (e: DiagramTemplate["edges"][number]) => {
+    if (e.points?.length || e.start || e.end || e.startField || e.endField) return undefined;
+    // A decision branches from its points, one way for each answer: which point a
+    // line leaves by is the picture's meaning, and is decided where sides are pinned.
+    if (isDiamond(e.source) || isDiamond(e.target)) return undefined;
+    const forward = carried.get(`${e.source}\u0000${e.target}`);
+    if (forward) return { key: `${e.source}\u0000${e.target}`, ...forward, reversed: false };
+    // Only a line with no direction of its own is drawn back along a channel.
+    const back = (e.direction ?? "forward") !== "forward" ? carried.get(`${e.target}\u0000${e.source}`) : undefined;
+    return back ? { key: `${e.target}\u0000${e.source}`, ...back, reversed: true } : undefined;
+  };
+  for (const e of doc.edges) {
+    const channel = channelOf(e);
+    if (channel) sharing.set(channel.key, (sharing.get(channel.key) ?? 0) + 1);
+  }
+  return {
+    ...doc,
+    edges: doc.edges.map((e) => {
+      const channel = channelOf(e);
+      if (!channel) return e;
+      const { route, dx, dy, key, reversed } = channel;
+      const nth = taken.get(key) ?? 0;
+      taken.set(key, nth + 1);
+      const aside = (nth - ((sharing.get(key) ?? 1) - 1) / 2) * CHANNEL_PITCH;
+      const sideways = route.flow === "right" || route.flow === "left";
+      const points = route.points.map((p): [number, number] => [Math.round(p.x + dx + (sideways ? 0 : aside)), Math.round(p.y + dy + (sideways ? aside : 0))]);
+      const out = route.flow === "right" ? "right" : route.flow === "left" ? "left" : route.flow === "down" ? "bottom" : "top";
+      const into = route.flow === "right" ? "left" : route.flow === "left" ? "right" : route.flow === "down" ? "top" : "bottom";
+      return {
+        ...e,
+        start: { side: reversed ? into : out, auto: true },
+        end: { side: reversed ? out : into, auto: true },
+        points: reversed ? points.reverse() : points,
+      };
+    }),
+  };
 }
 
 /** How far a whole container or box slides so a line that crosses a frame runs level. */
@@ -1206,7 +1325,7 @@ function pinFlowSides(
             : bulge - Math.max(s.y + s.h, t.y + t.h);
     return free > 96;
   };
-  const pins = new Map<string, { start: Side; end: Side; points?: Array<[number, number]> }>();
+  const pins = new Map<string, { start: Side; end: Side; points?: Array<[number, number]>; startT?: number; endT?: number }>();
   for (const frame of canvases) {
     const scene = buildScene(doc, { containerKinds, frame });
     const solid = scene.boxes.filter((b) => !b.frame);
@@ -1225,7 +1344,7 @@ function pinFlowSides(
       };
     };
     // Lines that go round, when they are to be given their sides together: see `directed/arcs.ts`.
-    const arcs: Array<Arc & { sideways: boolean }> = [];
+    const arcs: Array<Arc & { sideways: boolean; s: SceneBox; t: SceneBox }> = [];
     /** Lines leaving what an arc goes round, toward each side: each is one it would cut across. */
     const tollOf = (run: readonly SceneBox[], s: SceneBox, t: SceneBox, sideways: boolean) => {
       const inside = new Set(run.filter((b) => b !== s && b !== t).map((b) => b.id));
@@ -1248,6 +1367,8 @@ function pinFlowSides(
       arcs.push({
         id,
         sideways,
+        s,
+        t,
         from: sideways ? s.x + s.w / 2 : s.y + s.h / 2,
         to: sideways ? t.x + t.w / 2 : t.y + t.h / 2,
         wallLow: Math.min(...run.map((b) => (sideways ? b.y : b.x))),
@@ -1471,42 +1592,79 @@ function pinFlowSides(
     for (const sideways of [true, false]) {
       const group = arcs.filter((a) => a.sideways === sideways);
       const pages = pageArcs(group);
+      const sideOf = (arc: (typeof group)[number]): Side => {
+        const low = pages.get(arc.id)!.side === "low";
+        return sideways ? (low ? "top" : "bottom") : low ? "left" : "right";
+      };
+
+      // Where each arc's two ends sit on their boxes. Arcs are the only lines on
+      // these sides, so they are placed here and now, to the pixel: an arc that
+      // heads on along the flow leaves below one that heads back, and of two
+      // heading the same way the one further out leaves from further behind, so
+      // no two cross at the box they share and every arc leaves its box dead level.
+      const along = (b: SceneBox) => (sideways ? { start: b.x, size: b.w } : { start: b.y, size: b.h });
+      const ends = new Map<string, Array<{ arc: (typeof group)[number]; which: "from" | "to"; ahead: boolean; depth: number }>>();
+      for (const arc of group) {
+        for (const which of ["from", "to"] as const) {
+          const box = which === "from" ? arc.s : arc.t;
+          const other = which === "from" ? arc.to : arc.from;
+          const here = which === "from" ? arc.from : arc.to;
+          const key = `${box.id}\u0000${sideOf(arc)}`;
+          const list = ends.get(key) ?? [];
+          list.push({ arc, which, ahead: other > here, depth: pages.get(arc.id)!.depth });
+          ends.set(key, list);
+        }
+      }
+      const attach = new Map<string, { from?: number; to?: number }>();
+      for (const list of ends.values()) {
+        const box = list[0]!.which === "from" ? list[0]!.arc.s : list[0]!.arc.t;
+        const { start, size } = along(box);
+        // Heading back first, shallowest outermost; then heading on, deepest first.
+        list.sort((a, b) => Number(a.ahead) - Number(b.ahead) || (a.ahead ? b.depth - a.depth : a.depth - b.depth) || (a.arc.id < b.arc.id ? -1 : 1));
+        const pitch = Math.min(ARC_END_PITCH, (size - 20) / Math.max(1, list.length - 1));
+        list.forEach((end, i) => {
+          const at = start + size / 2 + (i - (list.length - 1) / 2) * pitch;
+          attach.set(end.arc.id, { ...attach.get(end.arc.id), [end.which]: at });
+        });
+      }
+
       for (const arc of group) {
         const page = pages.get(arc.id)!;
-        const side: Side = sideways ? (page.side === "low" ? "top" : "bottom") : page.side === "low" ? "left" : "right";
+        const side = sideOf(arc);
         const out = ARC_CLEAR + (page.depth - 1) * ARC_STEP;
         const bulge = page.side === "low" ? arc.wallLow - out : arc.wallHigh + out;
+        const from = attach.get(arc.id)?.from ?? arc.from;
+        const to = attach.get(arc.id)?.to ?? arc.to;
         // A bracket: out, round a corner, straight along, round a corner, and back
         // in. One point in the middle lets a long arc sag toward it and wander
         // across its neighbours, so each corner is three: one half way round the
         // turn, and two just past it that hold the run between the corners dead
         // straight (a curve passes through a point at the angle half way between
         // its neighbours, and half way between two points in line is in line).
-        const at = (along: number, inward = 0): [number, number] => {
+        const at = (position: number, inward = 0): [number, number] => {
           const across = bulge + (page.side === "low" ? inward : -inward);
-          return sideways ? [Math.round(along), Math.round(across)] : [Math.round(across), Math.round(along)];
+          return sideways ? [Math.round(position), Math.round(across)] : [Math.round(across), Math.round(position)];
         };
-        const way = Math.sign(arc.to - arc.from) || 1;
-        const reach = Math.abs(arc.to - arc.from);
+        const way = Math.sign(to - from) || 1;
+        const reach = Math.abs(to - from);
         const radius = Math.min(ARC_CORNER, out * 0.8, reach / 4);
         const settle = radius + ARC_HOLD;
-        // Ends sharing a side of a box are put in the order of where their lines
-        // head first. An arc outside another has to leave before it and arrive
-        // after it, or the two cross at the box they share, so its corners sit
-        // that little bit further out along the flow.
-        const lead = (page.depth - 1) * 3;
         const points: Array<[number, number]> =
           reach >= 2 * (settle + ARC_HOLD * 3) + 16
             ? [
-                at(arc.from + way * (radius * 0.293 - lead), radius * 0.293),
-                at(arc.from + way * settle),
-                at(arc.from + way * (settle + ARC_HOLD * 3)),
-                at(arc.to - way * (settle + ARC_HOLD * 3)),
-                at(arc.to - way * settle),
-                at(arc.to - way * (radius * 0.293 - lead), radius * 0.293),
+                at(from + way * radius * 0.293, radius * 0.293),
+                at(from + way * settle),
+                at(from + way * (settle + ARC_HOLD * 3)),
+                at(to - way * (settle + ARC_HOLD * 3)),
+                at(to - way * settle),
+                at(to - way * radius * 0.293, radius * 0.293),
               ]
-            : [at((arc.from + arc.to) / 2)];
-        pins.set(arc.id, { start: side, end: side, points });
+            : [at((from + to) / 2)];
+        const fraction = (box: SceneBox, position: number) => {
+          const { start, size } = along(box);
+          return Math.min(0.95, Math.max(0.05, (position - start) / size));
+        };
+        pins.set(arc.id, { start: side, end: side, points, startT: fraction(arc.s, from), endT: fraction(arc.t, to) });
       }
     }
   }
@@ -1518,8 +1676,8 @@ function pinFlowSides(
       return pin
         ? {
             ...e,
-            start: { side: pin.start, auto: true },
-            end: { side: pin.end, auto: true },
+            start: { side: pin.start, ...(pin.startT === undefined ? {} : { t: pin.startT }), auto: true },
+            end: { side: pin.end, ...(pin.endT === undefined ? {} : { t: pin.endT }), auto: true },
             ...(pin.points ? { points: pin.points } : {}),
           }
         : e;

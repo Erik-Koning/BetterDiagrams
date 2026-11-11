@@ -41,11 +41,13 @@ describe("which side", () => {
     expect(pages.get("a")!.side).toBe("high");
   });
 
-  it("arcs round different things don't count as crossing, and each keeps its side", () => {
-    const arcs = [arc("a", 0, 300), arc("b", 150, 450, { wallLow: 600, wallHigh: 770 })];
+  it("arcs round different things don't count as crossing, even on one side with spans that interleave", () => {
+    // Both barred from the high side by the lines there, so both take the low one.
+    const arcs = [arc("a", 0, 300, { tollHigh: 2 }), arc("b", 150, 450, { wallLow: 600, wallHigh: 770, tollHigh: 2 })];
     const pages = pageArcs(arcs);
     expect(pages.get("a")).toEqual({ side: "low", depth: 1 });
     expect(pages.get("b")).toEqual({ side: "low", depth: 1 });
+    expect(arcCrossings(arcs, pages)).toBe(0);
   });
 
   it("runs either way round: an arc back against the flow is paged like one ahead", () => {
@@ -55,16 +57,43 @@ describe("which side", () => {
   });
 });
 
+describe("sharing the two sides", () => {
+  it("with nothing else to choose by, arcs are shared out between the sides, not stacked on one", () => {
+    // Four arcs clear of each other, all of which would take the low side left to themselves.
+    const row = [arc("a", 0, 200), arc("b", 300, 500), arc("c", 600, 800), arc("d", 900, 1100)];
+    const sides = [...pageArcs(row).values()].map((p) => p.side);
+    expect(sides.filter((side) => side === "low")).toHaveLength(2);
+  });
+
+  it("but never at the price of a crossing", () => {
+    // Nested like brackets on one side: nothing crosses. Barred from the other side by the lines there.
+    const nested = [arc("outer", 0, 900, { tollHigh: 1 }), arc("inner", 300, 600, { tollHigh: 1 })];
+    const pages = pageArcs(nested);
+    expect(pages.get("outer")!.side).toBe("low");
+    expect(pages.get("inner")!.side).toBe("low");
+    expect(arcCrossings(nested, pages)).toBe(0);
+  });
+});
+
 describe("how far out", () => {
   it("an arc that spans another on its side goes outside it", () => {
-    const pages = pageArcs([arc("outer", 0, 900), arc("inner", 300, 600), arc("innermost", 400, 500)]);
+    const barred = { tollHigh: 2 };
+    const pages = pageArcs([arc("outer", 0, 900, barred), arc("inner", 300, 600, barred), arc("innermost", 400, 500, barred)]);
     expect([pages.get("innermost")!.depth, pages.get("inner")!.depth, pages.get("outer")!.depth]).toEqual([1, 2, 3]);
     expect(new Set([...pages.values()].map((p) => p.side)).size).toBe(1);
   });
 
-  it("arcs one after another along the flow share the innermost place", () => {
-    const pages = pageArcs([arc("a", 0, 300), arc("b", 300, 600), arc("c", 700, 900)]);
+  it("arcs clear of each other along the flow share the innermost place", () => {
+    const pages = pageArcs([arc("a", 0, 300), arc("b", 400, 600), arc("c", 700, 900)]);
     expect([...pages.values()].map((p) => p.depth)).toEqual([1, 1, 1]);
+  });
+
+  it("two that meet end to end at a box don't share a place, or they read as one line running past it", () => {
+    // Both barred from the high side, so they have to share the low one.
+    const pages = pageArcs([arc("into", 0, 300, { tollHigh: 9 }), arc("onward", 300, 600, { tollHigh: 9 })]);
+    expect(pages.get("into")!.side).toBe("low");
+    expect(pages.get("onward")!.side).toBe("low");
+    expect(pages.get("into")!.depth).not.toBe(pages.get("onward")!.depth);
   });
 
   it("two forced onto one side that overlap never share a depth", () => {
