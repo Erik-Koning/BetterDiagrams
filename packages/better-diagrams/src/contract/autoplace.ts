@@ -526,13 +526,13 @@ function segmentHitsBox(a: Pt, b: Pt, box: PlacedBox, inset: number): boolean {
  * every other flow is that frame swapped and mirrored, so a change of direction
  * can never change the algorithm, only how its answer is read.
  */
-function intoFrame(items: readonly PlaceItem[], flow: Flow): PlaceItem[] {
+export function intoFrame(items: readonly PlaceItem[], flow: Flow): PlaceItem[] {
   return flow === "down" || flow === "up"
     ? items.map((i) => ({ id: i.id, w: i.h, h: i.w }))
     : items.map((i) => ({ ...i }));
 }
 
-function outOfFrame(
+export function outOfFrame(
   placed: readonly PlacedBox[],
   width: number,
   height: number,
@@ -702,6 +702,19 @@ export function ranksInOrder(
   return assignRanks(ids, [...seen.values()]);
 }
 
+/** The weighted median: the value half the weight lies either side of, and midway between two that share it. */
+function middleOf(values: Array<{ by: number; w: number }>): number {
+  const sorted = [...values].sort((a, b) => a.by - b.by);
+  const half = sorted.reduce((sum, v) => sum + v.w, 0) / 2;
+  let run = 0;
+  for (let i = 0; i < sorted.length; i += 1) {
+    run += sorted[i]!.w;
+    if (run > half) return sorted[i]!.by;
+    if (run === half && i + 1 < sorted.length) return (sorted[i]!.by + sorted[i + 1]!.by) / 2;
+  }
+  return sorted[sorted.length - 1]!.by;
+}
+
 /**
  * Sugiyama layout: break cycles, rank, thread a lane through every rank a line
  * skips, minimise crossings by repeated sweeps, then slide each rank along its
@@ -735,6 +748,8 @@ export function layered(
 
   // ── Acyclic links, merged: two lines between one pair are one heavier link ──
   const merged = new Map<string, { u: string; v: string; w: number; label: number; offU: number; offV: number; heard: number }>();
+  /** How far across the flow each line lifted onto a pair travels, for the pairs that want one of them level. */
+  const travel = new Map<string, Array<{ by: number; w: number }>>();
   for (const l of links) {
     if (l.tether) continue;
     const forward = position.get(l.source)! < position.get(l.target)!;
@@ -747,6 +762,11 @@ export function layered(
     const atTarget = l.targetPort ? crossOf(l.targetPort, opts.flow) : 0;
     const offU = forward ? atSource : atTarget;
     const offV = forward ? atTarget : atSource;
+    if (plan && forward) {
+      const lines = travel.get(key);
+      if (lines) lines.push({ by: offV - offU, w: weight });
+      else travel.set(key, [{ by: offV - offU, w: weight }]);
+    }
     const hit = merged.get(key);
     if (hit) {
       // Several lines lifted onto one pair: aim for the middle of where they land.
@@ -763,6 +783,15 @@ export function layered(
     } else {
       merged.set(key, { u, v, w: weight, label: room, offU, offV, heard: forward ? weight : 0 });
     }
+  }
+  // Two containers joined by several lines line up on the line in the middle,
+  // not on the middle of the lines. The average leaves every line a little off
+  // level and the frames stepping sideways down the page like stairs; the median
+  // is where the most lines run straight, and frames of a size sit square.
+  for (const [key, lines] of travel) {
+    if (lines.length < 2) continue;
+    const hit = merged.get(key)!;
+    hit.offV = hit.offU + middleOf(lines);
   }
   const edges = [...merged.values()];
   const rank = assignRanks(ids, edges, plan?.rank ?? opts.rankHint);

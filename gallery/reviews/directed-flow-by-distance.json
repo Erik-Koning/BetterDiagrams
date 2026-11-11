@@ -1,0 +1,333 @@
+{
+ "about": "Blind paired reviews of Directed flow's two kinds of picture, 2026-11-10: ranked (method: layered) against by distance (method: stress), default priority. Three reviewers a pairing, each scoring every picture 1 to 10 overall from shuffled, renamed copies, not told which pictures show the same document. scores are the three reviewers'; median is what the plan quotes.",
+ "pairings": [
+  {
+   "pairing": 1,
+   "what": "The twelve documents the third review round scored lowest.",
+   "documents": {
+    "bipartite": {
+     "byDistance": {
+      "median": 4,
+      "scores": [
+       4,
+       3,
+       4
+      ]
+     },
+     "ranked": {
+      "median": 8,
+      "scores": [
+       8,
+       8,
+       8
+      ]
+     }
+    },
+    "flow-mesh": {
+     "byDistance": {
+      "median": 3,
+      "scores": [
+       3,
+       3,
+       3
+      ]
+     },
+     "ranked": {
+      "median": 7,
+      "scores": [
+       7,
+       6,
+       7
+      ]
+     }
+    },
+    "flow-tiers": {
+     "ranked": {
+      "median": 7,
+      "scores": [
+       7,
+       6,
+       7
+      ]
+     },
+     "byDistance": {
+      "median": 9,
+      "scores": [
+       9,
+       9,
+       9
+      ]
+     }
+    },
+    "flow-wide": {
+     "ranked": {
+      "median": 7,
+      "scores": [
+       7,
+       7,
+       7
+      ]
+     },
+     "byDistance": {
+      "median": 5,
+      "scores": [
+       5,
+       5,
+       4
+      ]
+     }
+    },
+    "largeSystem": {
+     "ranked": {
+      "median": 5,
+      "scores": [
+       5,
+       5,
+       5
+      ]
+     },
+     "byDistance": {
+      "median": 4,
+      "scores": [
+       4,
+       4,
+       4
+      ]
+     }
+    },
+    "real-data-model": {
+     "byDistance": {
+      "median": 5,
+      "scores": [
+       5,
+       5,
+       5
+      ]
+     },
+     "ranked": {
+      "median": 6,
+      "scores": [
+       6,
+       7,
+       6
+      ]
+     }
+    },
+    "real-platform": {
+     "byDistance": {
+      "median": 3,
+      "scores": [
+       3,
+       4,
+       3
+      ]
+     },
+     "ranked": {
+      "median": 5,
+      "scores": [
+       5,
+       5,
+       4
+      ]
+     }
+    },
+    "real-services": {
+     "ranked": {
+      "median": 4,
+      "scores": [
+       4,
+       4,
+       4
+      ]
+     },
+     "byDistance": {
+      "median": 3,
+      "scores": [
+       3,
+       3,
+       3
+      ]
+     }
+    },
+    "stress-dag": {
+     "byDistance": {
+      "median": 3,
+      "scores": [
+       3,
+       3,
+       3
+      ]
+     },
+     "ranked": {
+      "median": 6,
+      "scores": [
+       6,
+       6,
+       6
+      ]
+     }
+    },
+    "stress-groups": {
+     "ranked": {
+      "median": 3,
+      "scores": [
+       3,
+       3,
+       3
+      ]
+     },
+     "byDistance": {
+      "median": 2,
+      "scores": [
+       2,
+       2,
+       2
+      ]
+     }
+    },
+    "stress-hub": {
+     "byDistance": {
+      "median": 4,
+      "scores": [
+       4,
+       3,
+       4
+      ]
+     },
+     "ranked": {
+      "median": 8,
+      "scores": [
+       8,
+       8,
+       8
+      ]
+     }
+    },
+    "stress-mesh": {
+     "byDistance": {
+      "median": 4,
+      "scores": [
+       4,
+       4,
+       4
+      ]
+     },
+     "ranked": {
+      "median": 5,
+      "scores": [
+       4,
+       5,
+       5
+      ]
+     }
+    }
+   }
+  },
+  {
+   "pairing": 2,
+   "what": "The five documents where the arrangement's own cost preferred the picture by distance, and flow-tiers ranked again after groups were lined up on the middle line (by distance not redrawn: its 9 is in pairing 1).",
+   "documents": {
+    "flow-long-skip": {
+     "ranked": {
+      "median": 8,
+      "scores": [
+       8,
+       8,
+       8
+      ]
+     },
+     "byDistance": {
+      "median": 5,
+      "scores": [
+       5,
+       5,
+       5
+      ]
+     }
+    },
+    "flow-shortcuts": {
+     "byDistance": {
+      "median": 5,
+      "scores": [
+       4,
+       5,
+       5
+      ]
+     },
+     "ranked": {
+      "median": 7,
+      "scores": [
+       7,
+       7,
+       7
+      ]
+     }
+    },
+    "flow-tiers": {
+     "ranked": {
+      "median": 9,
+      "scores": [
+       9,
+       9,
+       9
+      ]
+     }
+    },
+    "flowchart": {
+     "byDistance": {
+      "median": 6,
+      "scores": [
+       6,
+       6,
+       6
+      ]
+     },
+     "ranked": {
+      "median": 8,
+      "scores": [
+       8,
+       8,
+       8
+      ]
+     }
+    },
+    "mesh": {
+     "byDistance": {
+      "median": 7,
+      "scores": [
+       7,
+       7,
+       7
+      ]
+     },
+     "ranked": {
+      "median": 8,
+      "scores": [
+       8,
+       8,
+       8
+      ]
+     }
+    },
+    "roughlyPlaced": {
+     "byDistance": {
+      "median": 5,
+      "scores": [
+       5,
+       5,
+       5
+      ]
+     },
+     "ranked": {
+      "median": 7,
+      "scores": [
+       7,
+       7,
+       7
+      ]
+     }
+    }
+   }
+  }
+ ]
+}

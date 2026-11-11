@@ -614,15 +614,22 @@ function composeCanvas(
     // Containers sharing a rank are made the same size across it. Frames that step
     // in and out by a few dozen pixels look accidental; a column of equal frames
     // reads as a column. Their contents stay centred in the extra room.
-    const evenUpFrames = () => {
+    //
+    // The same goes for frames in a line through the ranks, one after another on
+    // one axis (`inLine`): tiers down a page whose frames are each a little wider
+    // or narrower than the last, by the length of their names, look like a mistake.
+    const evenUpFrames = (inLine = false) => {
       const vertical = ownFlow === "down" || ownFlow === "up";
+      // Across a rank it is the frames' extent along the flow that is evened; down a line, their extent across it.
+      const wide = inLine ? vertical : !vertical;
       const ranks = new Map<number, PlacedBox[]>();
       for (const p of placement.placed) {
         if (!children.has(p.id)) continue;
         const member = cluster.members.find((m) => m.id === p.id);
         if (member?.node && chips.has(member.node.id)) continue;
         if (member && isEmptyZone(member)) continue;
-        const key = Math.round((vertical ? p.y : p.x + p.w / 2) / 8);
+        const at = inLine ? (vertical ? p.x + p.w / 2 : p.y + p.h / 2) : vertical ? p.y : p.x + p.w / 2;
+        const key = Math.round(at / 8);
         const rank = ranks.get(key);
         if (rank) rank.push(p);
         else ranks.set(key, [p]);
@@ -630,15 +637,15 @@ function composeCanvas(
       let changed = false;
       for (const rank of ranks.values()) {
         if (rank.length < 2) continue;
-        const widest = Math.max(...rank.map((p) => (vertical ? p.h : p.w)));
+        const widest = Math.max(...rank.map((p) => (wide ? p.w : p.h)));
         for (const p of rank) {
-          const own = vertical ? p.h : p.w;
+          const own = wide ? p.w : p.h;
           // Only frames that nearly match already: a small frame stretched to a big
           // neighbour's size is just a frame with a lot of nothing in it.
-          if (own === widest || widest / own > 2) continue;
+          if (own === widest || widest / own > (inLine ? 1.25 : 2)) continue;
           const child = children.get(p.id)!;
           const extra = widest - own;
-          if (vertical) {
+          if (!wide) {
             child.height += extra;
             child.inset.y += extra / 2;
           } else {
@@ -654,6 +661,10 @@ function composeCanvas(
       return changed;
     };
     if (evenUpFrames()) {
+      placement = placeItems(items, placeLinks, placeOptions);
+    }
+    // Only where frames are lined up on the line in the middle (see `layered`): that is what puts them on one axis.
+    if (prefs.engine && evenUpFrames(true)) {
       placement = placeItems(items, placeLinks, placeOptions);
     }
 

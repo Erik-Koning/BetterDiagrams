@@ -211,6 +211,49 @@ describe("what it draws", () => {
     expect(new Set(arc.points!.slice(1, 5).map(([x]) => x)).size).toBe(1);
     expect(arc.start?.side).toBe(arc.end?.side);
   });
+
+  it("tiers of groups stack square: on one axis, at one width, their boxes in columns", () => {
+    // Three groups of three. Every line runs from one tier to the next, most of
+    // them to the box straight below; lined up on the average of where the lines
+    // land, each tier steps sideways from the one above and no line runs straight.
+    const tier = (id: string, label: string) => box(id, { kind: "group", label, w: 400, h: 300 });
+    const tiers = doc(
+      [
+        tier("front", "Front ends"),
+        tier("services", "Services"),
+        tier("data", "Data"),
+        ...["web", "mobile", "partner"].map((id) => box(id, { parentId: "front" })),
+        ...["auth", "catalog", "checkout"].map((id) => box(id, { parentId: "services" })),
+        ...["users", "products", "ledger"].map((id) => box(id, { parentId: "data" })),
+      ],
+      [
+        line("web", "auth"),
+        line("mobile", "auth"),
+        line("partner", "auth"),
+        line("web", "catalog"),
+        line("mobile", "checkout"),
+        line("auth", "users"),
+        line("catalog", "products"),
+        line("checkout", "ledger"),
+        line("checkout", "products"),
+        line("catalog", "users"),
+        line("ledger", "checkout"),
+      ],
+    );
+    const after = directedLayout(tiers, { method: "layered", direction: "down" });
+    const frames = ["front", "services", "data"].map((id) => at(after, id));
+    const middles = frames.map((f) => f.x + f.w / 2);
+    expect(Math.max(...middles) - Math.min(...middles)).toBeLessThanOrEqual(1);
+    // A longer name is no reason for a wider frame than the tier below it.
+    expect(new Set(frames.map((f) => f.w)).size).toBe(1);
+    expect(frames[0]!.y).toBeLessThan(frames[1]!.y);
+    expect(frames[1]!.y).toBeLessThan(frames[2]!.y);
+    // The boxes stand in three columns, tier over tier.
+    const columns = new Set(after.nodes.filter((n) => n.parentId).map((n) => Math.round(n.x + at(after, n.parentId!).x)));
+    expect(columns.size).toBe(3);
+    // Which leaves the one crossing the graph can't be drawn without.
+    expect(measureFlow(after).crossings).toBe(1);
+  });
 });
 
 describe("what it trades", () => {
@@ -246,6 +289,17 @@ describe("what it trades", () => {
       const best = costOf("best");
       // A later way has to be plainly better to displace an earlier one, which is the slack here.
       for (const method of ["layered", "anneal"] as const) expect(best).toBeLessThanOrEqual(costOf(method) / 0.97 + 1e-6);
+    }
+  });
+
+  it("by distance is a picture to ask for by name: best of all never hands it back", () => {
+    // On each of these it costs less than any ranked picture, and readers shown both chose the ranks.
+    for (const name of ["mesh", "flowchart", "roughlyPlaced"]) {
+      const t = validateTemplate(ARRANGE_FIXTURES[name]!());
+      const places = (arranged: DiagramTemplate) => JSON.stringify(arranged.nodes.map((n) => [n.id, n.x, n.y]));
+      const byDistance = places(directedLayout(t, { method: "stress" }));
+      expect(byDistance).not.toBe(places(directedLayout(t, { method: "layered" })));
+      expect(places(directedLayout(t, { method: "best" }))).not.toBe(byDistance);
     }
   });
 

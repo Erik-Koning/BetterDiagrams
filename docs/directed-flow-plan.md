@@ -27,7 +27,8 @@ and pays for that in crossings, which is the trade this mode is for.
 
 **Step 2, the mode.** `settings.arrange: "directed"` (Arrange ▸ *Directed flow*, a card in the
 Layout panel's gallery, `bd-layout place --mode directed`), with a Priority slider and a Method
-choice in the menu and the panel (`settings.directed`). Methods: `layered`, `anneal`, `best`.
+choice in the menu and the panel (`settings.directed`). Methods: `layered`, `anneal`, `best` (the
+better of those two), and `stress`, by name only (see "Engine C" below).
 
 What is in it:
 - **The ranking search** (`directed/ranking.ts`): cost = crossings + lines backward + ranks skipped,
@@ -119,18 +120,85 @@ mode's alone. Best fit over the 35 documents went from 85.0, 252 crossings and 7
 88.9, 235 and 45; on the twelve flows from 42 crossings to 17. What is still this mode's own: the
 search, the priority, the four rankings compared as drawn, and lines through their channels.
 
+**Engine C, placing by distance (2026-11-10), and what it showed.** `method: "stress"` ("By
+distance" in the menu, `directed/stress.ts`): stress majorization on distances that know how big
+the boxes are, with every line a reader follows forward held pointing that way, then boxes pushed
+apart and near-misses lined up. No ranks at all. It was built because reviewers said connected
+boxes sat too far apart in the dense pictures, and it was tested on exactly those: the twelve
+lowest-scoring documents, each drawn ranked and by distance, the 24 pictures shuffled and scored
+blind by three reviewers (within one point of each other on every picture).
+
+| Document | Ranked | By distance | | Document | Ranked | By distance |
+|---|---|---|---|---|---|---|
+| bipartite | 8 | 4 | | real-platform | 5 | 3 |
+| flow-mesh | 7 | 3 | | real-services | 4 | 3 |
+| flow-tiers | 7 | **9** | | stress-dag | 6 | 3 |
+| flow-wide | 7 | 5 | | stress-groups | 3 | 2 |
+| largeSystem | 5 | 4 | | stress-hub | 8 | 4 |
+| real-data-model | 6 | 5 | | stress-mesh | 5 | 4 |
+
+Mean of medians: ranked 5.9, by distance 4.1. **Readers prefer ranks on eleven of twelve.** What
+they marked the by-distance pictures down for is the thing ranks give for free: "boxes zig-zag
+with no common column", "staggered boxes with no shared rows or columns", and the long loops round
+the outside that follow from it. Boxes being nearer each other did not buy back a grid. So the
+first item on the reviewers' list was read wrongly: what costs the dense pictures is not distance.
+
+The one win, `flow-tiers`, was not the engine's doing. Its picture was three groups in a row with
+every box in a grid; the ranked picture of the same document had the groups stepping sideways down
+the page and a crossing more than it needed. Both were defects in how ranked layouts line groups
+up, and both are fixed (item 4 below): drawn ranked again, `flow-tiers` scored 9 from all three,
+which leaves by distance without a document it wins.
+
+**"Best of all" does not try it.** With by distance among the pictures `best` compared, the
+arrangement's own cost chose it on five documents. Those five pairs went to three more reviewers:
+
+| Document | Ranked | By distance (what the cost chose) |
+|---|---|---|
+| flow-long-skip | 8 | 5 |
+| flow-shortcuts | 7 | 5 |
+| flowchart | 8 | 6 |
+| mesh | 8 | 7 |
+| roughlyPlaced | 7 | 5 |
+
+Readers chose the ranks on all five ("boxes zigzag left and right down the page for no visible
+reason, so nearly every link is an S-shaped swoop"; "the same boxes in a straight column or row
+scored about 2 to 3 points higher"). The cost counts crossings, lengths and how small the words
+come out, and has no charge for boxes that share no row or column, so it cannot be trusted to
+choose between a ranked picture and one by distance. `stress` is therefore a method to ask for by
+name, and `best` is the best of the ranked ones. Sixteen pairs of seventeen went to the ranks; the
+scores are in `gallery/reviews/directed-flow-by-distance.json`.
+
+By the numbers after this (35 documents; score, crossings, lines on lines): best 89.9, 201, 38;
+ranked 90.1, 197, 39; annealed 89.3, 214, 43; by distance 86.1, 258, 41; Best fit 88.9, 235, 45.
+That `best` measures a hair under what it did with by distance in it (90.2, 197, 37) is the point:
+the five pictures it gave up were the ones readers marked down.
+
 **What would move the reviewers next, in the order they put it.**
-1. *Placement in dense documents.* Boxes that talk to each other end up ranks apart or in separate
-   groups. This is engine C's job (stress with direction: near in the graph is near on the page),
-   and the strongest reason to build it.
-2. *A box in a column of its own.* The search opens a rank for one box to save a crossing. A cost
-   per rank, or per box alone in one, would stop it where the saving is small.
+1. *Dense documents.* Not placement by distance (above). What reviewers name in the ranked
+   pictures of the same documents: lines that share a track or pass behind a box, so an end can't
+   be followed; return lines that swing wide; one oversized box. Routing, not placement.
+2. *A box in a column of its own.* The search opens a rank for one box to save a crossing
+   (`flow-wide`: two boxes each alone in a column, 7 from every reviewer). A cost per rank, or per
+   box alone in one, would stop it where the saving is small.
 3. *Bunched ends.* A fan of twelve leaves as one trunk. Ends want spreading along the face, and a
    wider gap after a big fan.
-4. *Groups stepping sideways*, and the order of boxes inside a group facing the ranks outside it.
+4. *Groups stepping sideways.* **Done, 2026-11-10.** Two groups joined by several lines were lined
+   up on the average of where those lines leave and land, which puts no line straight and steps
+   each group sideways from the last. They now line up on the line in the middle (the weighted
+   median), where the most lines run straight; and frames that follow one another on one axis are
+   made one width, so a longer name doesn't make a wider tier. `flow-tiers` went from a staircase
+   with two crossings to a grid with the one it can't avoid.
 5. *Unconnected boxes* parked in a corner, and one box its author drew far larger than what it
    holds (`real-platform`): neither is this mode's doing, both cost every arrangement.
 6. *Text* (step 6): labels on lines and on line ends.
+
+Found on the way, and not fixed: **the passes that order a group's boxes against what they join
+outside it all move at once**, so two groups facing each other can each answer the order the other
+has just left, and trade places every pass without settling (`flow-tiers` did, until the alignment
+above happened to hold it still). Taking turns, the way the ranks of a layered drawing are swept,
+settles it; but on the gallery it bought nothing the alignment hadn't, and moved one large
+document (`real-services`) for the worse or the better depending on which pass it stopped at. Left
+as it is until there is a document that needs it.
 
 **Departures from the plan below, and why.**
 - **The search prices a model, and the model is not the drawing.** It counts crossings between
@@ -143,7 +211,8 @@ search, the priority, the four rankings compared as drawn, and lines through the
   are kept, and the search works on top of them.
 - **No engine falls back to a ring or a mesh.** A directed flow that comes out as a circle isn't
   one; Best fit is there for those.
-- **Engines B (embedding first) and C (stress with direction) are not built yet.**
+- **Engine B (embedding first) is not built.** Engine C (stress with direction) is, as the
+  `stress` method; see "Engine C" above for why it is offered by name and not chosen for anyone.
 - The measures are a function of their own, not fields of `LayoutReport.metrics`: stress and
   symmetry look at every pair of boxes, and `lintLayout` runs inside the placer's loop.
 - Engine B is "embedding first", not upward planarization: positions that cross little are found

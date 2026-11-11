@@ -124,9 +124,10 @@ const PRIORITY_LABEL: Record<DirectedPriority, { label: string; title: string }>
   direction: { label: "Direction above all", title: "Every line runs with the flow if there is any way to: one backward line counts as nine crossings" },
 };
 const METHOD_LABEL: Record<DirectedMethod, { label: string; title: string }> = {
-  best: { label: "Best of all", title: "Every method, compared as drawn: the one that measures best is kept" },
+  best: { label: "Best of all", title: "The ranked methods, compared as drawn: the one that measures best is kept" },
   layered: { label: "Ranked", title: "Ranks searched one box at a time, letting a line run backward where that is cheaper than the crossings it saves" },
   anneal: { label: "Annealed", title: "The same search, allowed to get worse on the way to better: slower, and sometimes finds what the other can't" },
+  stress: { label: "By distance", title: "No ranks: boxes that are joined sit near each other, and every line that runs with the flow still does. Looser than ranks, with no rows or columns: one to try, not one Best of all picks" },
 };
 
 /**
