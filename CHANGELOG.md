@@ -68,6 +68,11 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 
 ### Changed
 
+- Best fit, and every ranked layout, draws the lines that can't run straight the way Directed flow
+  does. Lines that skip ahead down a column or run back against the flow nest like brackets on both
+  sides of it, where they used to pile up on one side at one distance; traffic both ways between
+  neighbours runs as two lanes; a box that collects a fan sits in the middle of it. A document
+  tidied again can come out different: on the gallery's flows, 17 crossings where there were 42.
 - Fit (the toolbar's Fit, ⇧1, the canvas's own fit button, and the fit after an arrangement) takes in
   lines that reach past the boxes: an arc round a column, a line that goes round the outside. Fitted
   to the boxes alone, as before, such a line was cut off at the edge of the view. With no line

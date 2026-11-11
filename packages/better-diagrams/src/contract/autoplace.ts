@@ -833,13 +833,13 @@ export function layered(
       )
     : undefined;
   const ordered = orderLayers(layers, up, down, ids, frame, opts, seeded);
-  markChains(edges, rank, up, down, !!plan);
+  markChains(edges, rank, up, down);
 
   // Past the height the caller's shape wants, a rank wraps into sub-columns.
   const columns = wrapColumns(ordered, size, lanes, frame, opts);
   // With ranks handed in, long lines are drawn through their lanes (see below),
   // so the lanes stay where the crossing search and the levelling put them.
-  const { top, centre } = assignCross(columns, size, lanes, up, down, opts, !!plan, !!plan);
+  const { top, centre } = assignCross(columns, size, lanes, up, down, opts, !!plan);
 
   // ── Along the flow ───────────────────────────────────────────────────────────
   const columnWidths = columns.map((col) => Math.max(0, ...col.map((id) => size.get(id)!.w)));
@@ -950,7 +950,6 @@ function markChains(
   rank: ReadonlyMap<string, number>,
   up: Map<string, Adjacent[]>,
   down: Map<string, Adjacent[]>,
-  mutual = false,
 ): void {
   const succs = new Map<string, string[]>();
   const preds = new Map<string, string[]>();
@@ -1008,7 +1007,7 @@ function markChains(
       .sort((a, b) => b.reach - a.reach);
     if (!ranked.length) continue;
     const longer = ranked.length === 1 || ranked[0]!.reach > ranked[1]!.reach;
-    if (longer && (!mutual || mainInto(from, ranked[0]!.n))) heavy(from, ranked[0]!.n);
+    if (longer && mainInto(from, ranked[0]!.n)) heavy(from, ranked[0]!.n);
   }
 }
 
@@ -1249,7 +1248,6 @@ function assignCross(
   up: ReadonlyMap<string, readonly Adjacent[]>,
   down: ReadonlyMap<string, readonly Adjacent[]>,
   opts: PlaceOptions,
-  balanced = false,
   channels = false,
 ): { top: Map<string, number>; centre: (id: string) => number } {
   const sep = (a: string, b: string) => {
@@ -1349,7 +1347,7 @@ function assignCross(
       }
       // A fan of an even number of boxes votes as hard one way as the other, and
       // moving it either way trades a centred fan for one line dead level.
-      if (balanced && bestDelta && (votes.get(-bestDelta) ?? 0) >= bestVotes) continue;
+      if (bestDelta && (votes.get(-bestDelta) ?? 0) >= bestVotes) continue;
       if (bestDelta && bestVotes >= 2) for (const id of col) top.set(id, top.get(id)! + bestDelta);
     }
   }

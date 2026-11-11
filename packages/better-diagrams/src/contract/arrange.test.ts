@@ -726,3 +726,63 @@ describe("settings.layout", () => {
     expect(y("web")).toBeLessThan(y("svc"));
   });
 });
+
+describe("how a ranked layout draws the lines that can't run straight", () => {
+  const at = (t: DiagramTemplate, id: string) => t.nodes.find((n) => n.id === id)!;
+  const stages = (n: number) => Array.from({ length: n }, (_, i) => service(`s${i}`));
+  const chain = (n: number) => Array.from({ length: n - 1 }, (_, i) => line(`s${i}`, `s${i + 1}`));
+
+  it("lines that skip ahead down a column go round as brackets on both sides of it, not as a pile on one", () => {
+    const shortcuts = doc(stages(8), [...chain(8), line("s0", "s2"), line("s1", "s4"), line("s2", "s5"), line("s3", "s6"), line("s0", "s5"), line("s4", "s7")]);
+    const placed = autoPlace(shortcuts, { direction: "down", algorithm: "layered" });
+    const arcs = placed.edges.filter((e) => e.points?.length);
+    expect(arcs).toHaveLength(6);
+    expect(new Set(arcs.map((e) => e.start?.side))).toEqual(new Set(["left", "right"]));
+    for (const arc of arcs) expect(arc.start?.side).toBe(arc.end?.side);
+    // Three of the six spans interleave one another, so two crossings is the least any split can leave.
+    expect(count(placed, "line-crossing")).toBeLessThanOrEqual(2);
+    expect(count(placed, "line-overlap")).toBe(0);
+    expect(count(placed, "close-lines")).toBe(0);
+  });
+
+  it("a line back against the flow goes round the outside, and two of them nest", () => {
+    const loops = doc(stages(5), [...chain(5), line("s3", "s1"), line("s4", "s0")]);
+    const placed = autoPlace(loops, { direction: "right", algorithm: "layered" });
+    const inner = placed.edges.find((e) => e.id === "s3-s1")!;
+    const outer = placed.edges.find((e) => e.id === "s4-s0")!;
+    for (const arc of [inner, outer]) {
+      expect(arc.start?.side).toBe(arc.end?.side);
+      expect(arc.points?.length).toBeGreaterThan(0);
+    }
+    // On one side, the one that spans the other runs further out; on two sides, neither is in the other's way.
+    if (inner.start!.side === outer.start!.side) {
+      const out = (e: typeof inner) => Math.max(...e.points!.map(([, y]) => Math.abs(y - at(placed, "s0").y)));
+      expect(out(outer)).toBeGreaterThan(out(inner));
+    }
+    expect(count(placed, "line-crossing")).toBe(0);
+  });
+
+  it("traffic both ways between neighbours is two lanes of one road", () => {
+    const road = doc([service("client"), service("gateway")], [line("client", "gateway"), line("gateway", "client")]);
+    const placed = autoPlace(road, { direction: "right", algorithm: "layered" });
+    const answer = placed.edges.find((e) => e.id === "gateway-client")!;
+    expect(answer.start).toMatchObject({ side: "left" });
+    expect(answer.end).toMatchObject({ side: "right" });
+    expect(answer.points).toBeUndefined();
+    expect(count(placed, "line-overlap")).toBe(0);
+  });
+
+  it("a box that collects a fan sits in the middle of it, whether the fan is odd or even", () => {
+    for (const size of [5, 6]) {
+      const workers = Array.from({ length: size }, (_, i) => `w${i}`);
+      const fan = doc(
+        [service("router"), ...workers.map((id) => service(id)), service("collector")],
+        [...workers.map((id) => line("router", id)), ...workers.map((id) => line(id, "collector"))],
+      );
+      const placed = autoPlace(fan, { direction: "right", algorithm: "layered" });
+      const middle = workers.reduce((sum, id) => sum + at(placed, id).y, 0) / workers.length;
+      expect(Math.abs(at(placed, "collector").y - middle)).toBeLessThanOrEqual(1);
+      expect(Math.abs(at(placed, "router").y - middle)).toBeLessThanOrEqual(1);
+    }
+  });
+});

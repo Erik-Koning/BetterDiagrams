@@ -75,7 +75,7 @@ describe("an arrangement like the others", () => {
 });
 
 describe("what it draws", () => {
-  it("lines that skip ahead down a column nest on both sides of it, where Best fit piles them on one", () => {
+  it("lines that skip ahead down a column nest on both sides of it", () => {
     const directed = directedLayout(shortcuts, { method: "layered" });
     const flow = measureFlow(directed);
     expect(flow.backward).toBe(0);
@@ -84,7 +84,8 @@ describe("what it draws", () => {
     // Three of the six interleave each other, so one side can't hold them all apart: two crossings is the least there is.
     expect(flow.crossings).toBeLessThanOrEqual(2);
     expect(flow.overlaps).toBe(0);
-    expect(measureFlow(autoPlace(shortcuts)).crossings).toBeGreaterThan(flow.crossings * 2);
+    // Best fit draws them the same way: the arcs are how any ranked layout is drawn, not this one's alone.
+    expect(measureFlow(autoPlace(shortcuts)).crossings).toBeLessThanOrEqual(2);
     const sides = new Set(directed.edges.filter((e) => e.points?.length).map((e) => e.start?.side));
     expect(sides.size).toBe(2);
   });
