@@ -75,6 +75,12 @@ export interface FlowMetrics {
   spineStraightness: number;
   /** How far drawn distances are from graph distances, at the best scale. 0 is a perfect match; null when there are too many boxes to say. */
   stress: number | null;
+  /**
+   * How many ranks the boxes stand in: columns when the flow runs across, rows
+   * when it runs down. A rank is a stage to a reader, so a box in one of its
+   * own reads as coming before or after the boxes it would otherwise stand with.
+   */
+  ranks: number;
   /** How even the gaps between ranks are: 1 is all the same. */
   rankEvenness: number;
   /** Share of boxes with a mirror image across the line the flow runs along. */
@@ -494,11 +500,11 @@ export function measureScene(scene: Scene, report: LayoutReport, wanted?: FlowAx
 
   // ── Ranks ───────────────────────────────────────────────────────────────────
   let rankEvenness = 1;
-  if (solids.length >= 3) {
+  // Leading and trailing edge of each rank, along the flow.
+  const ranks: Array<{ lead: number; trail: number }> = [];
+  if (solids.length) {
     const sorted = [...solids].sort((a, b) => along(centre(a)) - along(centre(b)));
     const apart = Math.max(8, median(solids.map(span)) * 0.5);
-    // Leading and trailing edge of each rank, along the flow.
-    const ranks: Array<{ lead: number; trail: number }> = [];
     let last = -Infinity;
     for (const b of sorted) {
       const at = along(centre(b));
@@ -512,7 +518,7 @@ export function measureScene(scene: Scene, report: LayoutReport, wanted?: FlowAx
       }
       last = at;
     }
-    if (ranks.length >= 3) {
+    if (solids.length >= 3 && ranks.length >= 3) {
       const gaps = ranks.slice(1).map((r, i) => r.lead - ranks[i]!.trail);
       const mean = gaps.reduce((sum, g) => sum + g, 0) / gaps.length;
       const deviation = Math.sqrt(gaps.reduce((sum, g) => sum + (g - mean) ** 2, 0) / gaps.length);
@@ -572,6 +578,7 @@ export function measureScene(scene: Scene, report: LayoutReport, wanted?: FlowAx
     bends: lines.length ? turning / (Math.PI / 2) / lines.length : 0,
     spineStraightness,
     stress: stressOf(scene.boxes, lines),
+    ranks: ranks.length,
     rankEvenness,
     symmetry,
     groupCompactness: fills.length ? fills.reduce((sum, f) => sum + f, 0) / fills.length : 1,

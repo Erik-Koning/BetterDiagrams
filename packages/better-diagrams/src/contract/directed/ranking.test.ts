@@ -122,6 +122,20 @@ describe("searching for ranks", () => {
     expect(ids.map((id) => found.rank.get(id))).toEqual([0, 1, 2]);
   });
 
+  it("opens a rank for one box to save a crossing when ranks are free, and not when one costs more than the crossing", () => {
+    // Two senders, two receivers, every sender to every receiver: one crossing in two ranks, none in three.
+    const ids = ["a", "b", "x", "y"];
+    const links = [link("a", "x"), link("a", "y"), link("b", "x"), link("b", "y")];
+    const start = flatRanks(ids, links);
+    const depth = (rank: ReadonlyMap<string, number>) => new Set(rank.values()).size;
+    const free = searchRanks(ids, links, weights(15, 5), [start]);
+    expect([depth(free.rank), free.crossings]).toEqual([3, 0]);
+    const priced = searchRanks(ids, links, { ...weights(15, 5), rank: 48 }, [start]);
+    expect([depth(priced.rank), priced.crossings]).toEqual([2, 1]);
+    // A crossing dearer than the rank buys it back.
+    expect(depth(searchRanks(ids, links, { ...weights(60, 5), rank: 48 }, [start]).rank)).toBe(3);
+  });
+
   it("an empty graph, and boxes with nothing joining them, come back ranked", () => {
     expect(searchRanks([], [], weights(15, 5), [new Map()]).rank.size).toBe(0);
     const loose = searchRanks(letters(3), [], weights(15, 5), [new Map()]);

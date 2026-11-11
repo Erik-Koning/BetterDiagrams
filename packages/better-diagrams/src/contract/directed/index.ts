@@ -66,12 +66,24 @@ const PORT_COST = 2;
 const AGAINST_COST = 3;
 /** A rank skipped: a lane to thread and a longer line, worth a fraction of a crossing. */
 const SPAN_COST = 1.2;
+/**
+ * A rank more than the reader's ranking has. A rank is a stage to a reader: a
+ * box moved into a column of its own to save a crossing reads as coming before
+ * the boxes it stood beside, and its lines run long to get back. Readers shown
+ * three clean columns with five crossings, four columns with none and five with
+ * none chose the three, every one of them. About six crossings at the default
+ * priority and three and a half at "crossings", where a column that clears
+ * five is still taken: crossings above all means what it says.
+ */
+const RANK_COST = 96;
 
 /**
  * What a picture costs as a directed flow: the linter's cost, with its charge
- * for crossings scaled by the priority, and a charge for direction added.
+ * for crossings scaled by the priority, and a charge for direction added. Told
+ * how many ranks the flow needs (`fewestRanks`: what the reader's ranking
+ * stands in), it charges for each one more than that.
  */
-export function directedCost(report: LayoutReport, flow: FlowMetrics, weights: DirectedWeights): number {
+export function directedCost(report: LayoutReport, flow: FlowMetrics, weights: DirectedWeights, fewestRanks?: number): number {
   let crossing = 0;
   for (const rule of CROSSING_RULES) crossing += (report.counts[rule] ?? 0) * LAYOUT_RULES[rule].cost;
   const forward = Math.max(0, flow.directed - flow.backward - flow.flat);
@@ -80,7 +92,8 @@ export function directedCost(report: LayoutReport, flow: FlowMetrics, weights: D
     TURNED_COST * flow.turned +
     PORT_COST * (1 - flow.portDiscipline) * forward * 2 +
     AGAINST_COST * (1 - flow.flowConsistency) * flow.directed;
-  return report.cost + (weights.crossing - 1) * crossing + weights.direction * direction;
+  const spare = fewestRanks === undefined ? 0 : Math.max(0, flow.ranks - fewestRanks);
+  return report.cost + (weights.crossing - 1) * crossing + weights.direction * direction + RANK_COST * spare;
 }
 
 /** A graph's own key: its boxes and its lines, in the order given. */
@@ -114,6 +127,7 @@ function rankingsFor(weights: DirectedWeights, anneal: boolean) {
     backward: BACKWARD_COST * weights.direction,
     turned: TURNED_COST * weights.direction,
     span: SPAN_COST,
+    rank: RANK_COST,
   };
   const eager = directedWeights("crossings");
   const eagerWeights: RankWeights = {
@@ -121,6 +135,7 @@ function rankingsFor(weights: DirectedWeights, anneal: boolean) {
     backward: BACKWARD_COST * eager.direction,
     turned: TURNED_COST * eager.direction,
     span: SPAN_COST,
+    rank: RANK_COST,
   };
   const strict = directedWeights("direction");
   const strictWeights: RankWeights = {
@@ -128,6 +143,7 @@ function rankingsFor(weights: DirectedWeights, anneal: boolean) {
     backward: BACKWARD_COST * strict.direction,
     turned: TURNED_COST * strict.direction,
     span: SPAN_COST,
+    rank: RANK_COST,
   };
   const found = new Map<string, { reading: RankPlan; eager: RankPlan; strict: RankPlan; searched: RankPlan }>();
   return (ids: readonly string[], links: readonly PlaceLink[]) => {
@@ -200,14 +216,18 @@ export function directedLayout(template: DiagramTemplate, options: DirectedOptio
   const drilled = typeof arrange.frames === "object" ? arrange.frames.drill : null;
   const lintOptions = { containerKinds: arrange.containerKinds, frames: arrange.frames ?? ("root" as const) };
   const flowOptions = { containerKinds: arrange.containerKinds, frames: drilled === null ? ("root" as const) : { drill: drilled } };
-  const priced = new WeakMap<DiagramTemplate, number>();
-  const cost = (settled: DiagramTemplate, flow?: Flow): number => {
+  const priced = new WeakMap<DiagramTemplate, { cost: number; ranks: number }>();
+  // The ranks the first picture stands in, once there is one: the reader's own, which every later way is held to.
+  let fewest: number | undefined;
+  const price = (settled: DiagramTemplate, flow?: Flow): { cost: number; ranks: number } => {
     const known = priced.get(settled);
-    if (known !== undefined) return known;
-    const value = directedCost(lintLayout(settled, lintOptions), measureFlow(settled, { ...flowOptions, axis: flow }), weights);
+    if (known) return known;
+    const measured = measureFlow(settled, { ...flowOptions, axis: flow });
+    const value = { cost: directedCost(lintLayout(settled, lintOptions), measured, weights, fewest), ranks: measured.ranks };
     priced.set(settled, value);
     return value;
   };
+  const cost = (settled: DiagramTemplate, flow?: Flow): number => price(settled, flow).cost;
 
   // The reader's ranks go first in every method, and are read every way the
   // document allows. What follows is laid out the way that won, since comparing
@@ -232,7 +252,9 @@ export function directedLayout(template: DiagramTemplate, options: DirectedOptio
   let bestCost = Infinity;
   for (const way of ways) {
     const doc = way();
-    const value = cost(doc);
+    // Read the way it was laid out: a picture's ranks are counted along its flow, and not along a guess at it.
+    const { cost: value, ranks } = price(doc, flows?.outer);
+    if (fewest === undefined && method !== "stress") fewest = ranks;
     // The first way stands unless a later one is plainly better: see `autoPlace`.
     if (value < bestCost * 0.97) {
       best = doc;

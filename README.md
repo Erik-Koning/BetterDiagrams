@@ -2341,12 +2341,14 @@ of seventeen. For the ranked methods, the rankings it finds are each laid out in
 as drawn, along with the ones found for
 crossings above all and for direction above all, so no setting misses a picture another found. A main
 line turned round costs more than a return line running back, so a loop still starts where the
-document starts it. A line that skips ranks, with something in its way, runs level through the
+document starts it. A rank more than the flow needs costs too, about six crossings by default: a rank
+is a stage to a reader, so a box isn't moved into a column of its own to save a crossing or two
+(at `crossings` it is, when that clears enough of them). A line that skips ranks, with something in its way, runs level through the
 channel the layout kept for it and turns only in the gaps. Groups, zones, locks, text that fits and
 routed lines work as in every other arrangement, and direction, spacing and gaps still come from
-`settings.layout`. On the gallery's twelve flows it draws 11 crossings where Best fit draws 17, and
-no line on top of another where Best fit has 3; over all 35 documents, 15% fewer crossings and 18%
-fewer lines on lines. It only ranks, so a ring or a mesh with no direction to it is still Best fit's
+`settings.layout`. On the gallery's twelve flows it draws 16 crossings where Best fit draws 17
+(it would draw 11, and readers preferred the columns), and no line on top of another where Best fit
+has 3; over all 35 documents, 17% fewer crossings and a third fewer lines on lines. It only ranks, so a ring or a mesh with no direction to it is still Best fit's
 to draw.
 
 **How any ranked layout draws the lines that can't run straight** (Best fit's, a named family's,
@@ -2361,7 +2363,8 @@ many have to (`backwardNeeded`, one for each loop; `turned`, the main lines amon
 (`flowConsistency`), whether lines leave by the downstream face and arrive at the upstream one
 (`portDiscipline`), whether boxes that only send or only receive sit at the ends
 (`sourceSinkPlacement`), `bends`, how straight the longest path runs (`spineStraightness`),
-`stress`, `rankEvenness`, `symmetry`, `angularResolution`, `groupCompactness` and `lengthSpread`.
+`stress`, how many `ranks` the boxes stand in and how even the gaps between them are
+(`rankEvenness`), `symmetry`, `angularResolution`, `groupCompactness` and `lengthSpread`.
 Each is a number on its own scale, taken from the picture as drawn, so they compare a hand-placed
 diagram with any arrangement of it. `layoutStability(before, after)` says how far boxes moved and
 how many are still the same way round. `npm run gallery -- metrics` prints them for every gallery

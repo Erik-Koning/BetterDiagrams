@@ -40,11 +40,13 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   column like brackets, a line that skips ranks runs level through a channel of its own, two-way
   traffic runs as two lanes, and a box that collects a fan sits in the middle of it. Groups that
   follow one another line up where the most lines between them run straight, at one width, in place
-  of stepping sideways down the page. `directedCost` and `directedWeights` are how it tells one
-  picture from another.
+  of stepping sideways down the page. A box isn't moved into a column of its own to save a crossing
+  or two: a rank more than the flow needs has a price, which *Crossings above all* still pays.
+  `directedCost` and `directedWeights` are how it tells one picture from another.
 - `measureFlow` (`FlowMetrics`): how a drawn picture reads as a flow, in numbers a reader would
   recognise: crossings and their angle, lines running backward and how many must, travel with the
-  flow, ports, bends, the straightness of the main path, stress, even ranks, symmetry. And
+  flow, ports, bends, the straightness of the main path, stress, how many ranks and how even,
+  symmetry. And
   `layoutStability`: how much of the old picture survives a new arrangement. `npm run gallery --
   metrics` prints them for every gallery document in every arrangement, which now include twelve
   small flows.

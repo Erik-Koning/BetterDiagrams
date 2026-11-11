@@ -1,0 +1,126 @@
+{
+ "about": "Blind reviews behind the price Directed flow puts on a rank more than the reader's ranking has, 2026-11-10. Three reviewers a round, each scoring every picture 1 to 10 overall from shuffled, renamed copies, not told which pictures show the same document. scores are the three reviewers'; median is what the plan quotes.",
+ "rounds": [
+  {
+   "round": 1,
+   "what": "Two flows drawn with and without a box in a column of its own.",
+   "documents": {
+    "flow-wide": [
+     {
+      "what": "three columns, five crossings",
+      "median": 7,
+      "scores": [
+       7,
+       7,
+       7
+      ]
+     },
+     {
+      "what": "four columns, three crossings, a step standing among the sinks",
+      "median": 6,
+      "scores": [
+       6,
+       6,
+       6
+      ]
+     },
+     {
+      "what": "five columns, no crossings, a source and a sink each alone in one",
+      "median": 6,
+      "scores": [
+       6,
+       6,
+       6
+      ]
+     }
+    ],
+    "flow-ends": [
+     {
+      "what": "three columns, two crossings",
+      "median": 7,
+      "scores": [
+       7,
+       7,
+       7
+      ]
+     },
+     {
+      "what": "four columns, one crossing, an input alone in one",
+      "median": 6,
+      "scores": [
+       6,
+       6,
+       6
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "round": 2,
+   "what": "One column against five crossings, and two larger documents before and after a price of 48 a rank. The price that shipped is 96: stress-dag then draws as before, and real-services draws with fewer crossings again (29) than the picture scored here (37).",
+   "documents": {
+    "flow-wide": [
+     {
+      "what": "three columns, five crossings",
+      "median": 8,
+      "scores": [
+       8,
+       8,
+       8
+      ]
+     },
+     {
+      "what": "four columns, no crossings, a source alone in one",
+      "median": 7,
+      "scores": [
+       7,
+       7,
+       7
+      ]
+     }
+    ],
+    "stress-dag": [
+     {
+      "what": "before",
+      "median": 5,
+      "scores": [
+       5,
+       5,
+       5
+      ]
+     },
+     {
+      "what": "after, ranked, at 48 a rank",
+      "median": 6,
+      "scores": [
+       5,
+       6,
+       6
+      ]
+     }
+    ],
+    "real-services": [
+     {
+      "what": "before",
+      "median": 3,
+      "scores": [
+       3,
+       4,
+       3
+      ]
+     },
+     {
+      "what": "after, best, at 48 a rank",
+      "median": 4,
+      "scores": [
+       4,
+       5,
+       4
+      ]
+     }
+    ]
+   }
+  }
+ ]
+}

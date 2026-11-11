@@ -44,6 +44,13 @@ export interface RankWeights {
   turned: number;
   /** What each rank a line skips costs: a lane to thread, and a longer line to follow. */
   span: number;
+  /**
+   * What each rank more than the first start has costs. Left out, ranks are
+   * free, and the search will open one for a single box wherever that saves a
+   * crossing: the box then stands in a column of its own, which a reader takes
+   * for a stage of its own.
+   */
+  rank?: number;
 }
 
 export interface Ranking {
@@ -188,6 +195,8 @@ export function searchRanks(
 ): Ranking {
   const n = ids.length;
   const index = new Map(ids.map((id, i) => [id, i]));
+  // The ranks the first start stands in (the reader's, as `directedLayout` calls this): what a rank more is counted from.
+  const fewest = seeds.length ? new Set(ids.map((id) => seeds[0]!.get(id) ?? 0)).size : 0;
 
   // ── The graph, as pairs of boxes ────────────────────────────────────────────
   const pairs: Pair[] = [];
@@ -335,7 +344,12 @@ export function searchRanks(
       crossings,
       backward,
       span,
-      cost: weights.crossing * crossings + weights.backward * backward + weights.turned * turned + weights.span * span,
+      cost:
+        weights.crossing * crossings +
+        weights.backward * backward +
+        weights.turned * turned +
+        weights.span * span +
+        (weights.rank ?? 0) * Math.max(0, depth - fewest),
     };
   };
 

@@ -173,13 +173,37 @@ ranked 90.1, 197, 39; annealed 89.3, 214, 43; by distance 86.1, 258, 41; Best fi
 That `best` measures a hair under what it did with by distance in it (90.2, 197, 37) is the point:
 the five pictures it gave up were the ones readers marked down.
 
+And after the price on ranks (item 2 below): best 90.5, 194, 30; ranked 89.9, 203, 39; annealed
+89.9, 206, 35. What the reviews of this day say, three times over, is that **the linter's cost
+and readers part company on order**: rows and columns that mean something outweigh a handful of
+crossings, and the cost has no word for them. Each fix here put one such word in by hand.
+
 **What would move the reviewers next, in the order they put it.**
 1. *Dense documents.* Not placement by distance (above). What reviewers name in the ranked
    pictures of the same documents: lines that share a track or pass behind a box, so an end can't
    be followed; return lines that swing wide; one oversized box. Routing, not placement.
-2. *A box in a column of its own.* The search opens a rank for one box to save a crossing
-   (`flow-wide`: two boxes each alone in a column, 7 from every reviewer). A cost per rank, or per
-   box alone in one, would stop it where the saving is small.
+2. *A box in a column of its own.* **Done, 2026-11-10.** The search opened a rank for one box
+   wherever that saved a crossing. Readers were shown the same flow both ways, blind:
+
+   | `flow-wide` (five sources, five steps, five sinks) | Overall |
+   |---|---|
+   | Three columns, five crossings | 7, then 8 on a second showing |
+   | Four columns, no crossings, one source alone in a column | 7 |
+   | Four columns, three crossings, a step standing among the sinks | 6 |
+   | Five columns, no crossings, a source and a sink each alone | 6 |
+
+   Every reviewer in both rounds chose the three columns ("its strict Sources | Steps | Sinks
+   columns read at a glance despite five crossings"; a box alone "wrongly suggests it sits
+   upstream of the others"). `flow-ends` the same: three columns and two crossings, 7; four
+   columns and one, 6. A rank is a stage to a reader, and a crossing in a gap is cheap by
+   comparison. So **a rank more than the reader's ranking has now costs** (`RANK_COST`), in the
+   search and in the comparison of whole pictures: about six crossings at the default priority,
+   three and a half at *Crossings above all*, where `best` still takes the fourth column and
+   nothing crosses. `measureFlow` reports `ranks`. It changes three documents: the two above, and
+   `real-services`, where `best` now finds 29 crossings and 3 lines on lines against 42 and 11
+   (reviewers scored an earlier version of that picture 4 against 3; the one that ships was not
+   shown again). Directed flow now crosses 16 times on the twelve flows, up from 11, on purpose.
+   Scores: `gallery/reviews/directed-flow-columns.json`.
 3. *Bunched ends.* A fan of twelve leaves as one trunk. Ends want spreading along the face, and a
    wider gap after a big fan.
 4. *Groups stepping sideways.* **Done, 2026-11-10.** Two groups joined by several lines were lined

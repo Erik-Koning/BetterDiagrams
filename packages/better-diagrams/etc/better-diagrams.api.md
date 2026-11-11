@@ -1009,7 +1009,7 @@ export const DIRECTED_METHODS: readonly ["best", "layered", "anneal", "stress"];
 export const DIRECTED_PRIORITIES: readonly ["crossings", "mostly-crossings", "balanced", "mostly-direction", "direction"];
 
 // @public
-export function directedCost(report: LayoutReport, flow: FlowMetrics, weights: DirectedWeights): number;
+export function directedCost(report: LayoutReport, flow: FlowMetrics, weights: DirectedWeights, fewestRanks?: number): number;
 
 // @public
 export function directedLayout(template: DiagramTemplate, options?: DirectedOptions): DiagramTemplate;
@@ -1720,6 +1720,7 @@ export interface FlowMetrics {
     overlaps: number;
     portDiscipline: number;
     rankEvenness: number;
+    ranks: number;
     sourceSinkPlacement: number;
     spineStraightness: number;
     stress: number | null;
