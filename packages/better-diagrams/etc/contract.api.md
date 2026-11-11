@@ -835,7 +835,7 @@ export function diffTemplates(base: DiagramTemplate, current: DiagramTemplate, o
 }): TemplateDiff;
 
 // @public
-export const DIRECTED_METHODS: readonly ["best", "layered", "anneal"];
+export const DIRECTED_METHODS: readonly ["best", "layered", "anneal", "stress"];
 
 // @public
 export const DIRECTED_PRIORITIES: readonly ["crossings", "mostly-crossings", "balanced", "mostly-direction", "direction"];

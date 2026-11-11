@@ -19,6 +19,7 @@ import { LAYOUT_RULES, lintLayout, type LayoutReport, type LayoutRuleId } from "
 import type { DiagramTemplate, DirectedMethod, DirectedPriority } from "../schema";
 import { measureFlow, type FlowMetrics } from "./metrics";
 import { fewestBackOrder, searchRanks, type RankWeights } from "./ranking";
+import { stressBlock } from "./stress";
 
 export interface DirectedOptions extends ArrangeOptions {
   /** What to give up for what. Unset, the document's `settings.directed` decides, then "mostly-crossings". */
@@ -94,15 +95,17 @@ const graphKey = (ids: readonly string[], links: readonly PlaceLink[]) =>
  *   "eager"     the search priced for crossings above all;
  *   "strict"    the search priced for direction above all;
  *   "searched"  the search at the document's own priority, started from all three;
- *   "annealed"  that search allowed to get worse on the way to better.
- * No one of them is best for every document: the search prices a model of the
+ *   "annealed"  that search allowed to get worse on the way to better;
+ *   "stress"    no ranks at all: boxes placed by distance, the direction kept by
+ *               constraint (`stress.ts`). Only when asked for by name.
+ * No one of the ranked ones is best for every document: the search prices a model of the
  * drawing, and the model is not the drawing. So each is laid out in full, and
  * the pictures are compared as drawn, at the document's priority
  * (`directedCost`). The two ends are laid out at every priority, which is what
  * keeps the priority honest: a picture found for one setting that is better at
  * another is there to be chosen.
  */
-type Ranks = "reading" | "eager" | "strict" | "searched" | "annealed";
+type Ranks = "reading" | "eager" | "strict" | "searched" | "annealed" | "stress";
 
 /** The rankings of a graph, found once however many times it is laid out. */
 function rankingsFor(weights: DirectedWeights, anneal: boolean) {
@@ -159,7 +162,8 @@ function rankedEngine(weights: DirectedWeights, ranks: Ranks): PlaceEngine {
   const rankingsOf = rankingsFor(weights, ranks === "annealed");
   const planOf = (ids: readonly string[], links: readonly PlaceLink[]): RankPlan => {
     const rankings = rankingsOf(ids, links);
-    return ranks === "annealed" ? rankings.searched : rankings[ranks];
+    // Laid out by distance, a piece has no ranks of its own: what flows through a container keeps the reader's.
+    return ranks === "annealed" ? rankings.searched : ranks === "stress" ? rankings.reading : rankings[ranks];
   };
   return {
     place(items, links, opts) {
@@ -170,11 +174,13 @@ function rankedEngine(weights: DirectedWeights, ranks: Ranks): PlaceEngine {
         const tree = tidyTree(items, links, opts);
         if (tree) return { ...tree, family: "tree" };
       }
-      const plan = planOf(
-        items.map((i) => i.id),
-        links,
-      );
-      return { ...layered(items, links, opts, plan), family: "layered" };
+      const ids = items.map((i) => i.id);
+      if (ranks === "stress") {
+        const usable = links.filter((l) => !l.tether && l.source !== l.target);
+        const placed = stressBlock(items, links, opts, acyclicOrder(ids, usable));
+        if (placed) return { ...placed, family: "layered" };
+      }
+      return { ...layered(items, links, opts, planOf(ids, links)), family: "layered" };
     },
     ranks: (ids, links) => new Map(planOf(ids, links).rank),
   };
@@ -213,7 +219,12 @@ export function directedLayout(template: DiagramTemplate, options: DirectedOptio
       cost,
       ...(flows ? { flows } : { chose: (won: { outer: Flow; inner: Flow }) => (flows = won) }),
     });
-  const ways: Array<() => DiagramTemplate> = [ranked("reading")];
+  // The layout by distance is a different kind of picture, and comes back only
+  // when asked for by name. "best" does not try it: this cost prefers it on
+  // documents where readers, shown both, prefer the ranks every time (it counts
+  // crossings and lengths, and has no charge for boxes that share no row or
+  // column, which is what readers mark a picture by distance down for).
+  const ways: Array<() => DiagramTemplate> = method === "stress" ? [ranked("stress")] : [ranked("reading")];
   if (method === "best" || method === "layered") ways.push(ranked("searched"), ranked("eager"), ranked("strict"));
   if (method === "best" || method === "anneal") ways.push(ranked("annealed"));
 

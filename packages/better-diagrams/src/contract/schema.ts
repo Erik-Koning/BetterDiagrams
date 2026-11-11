@@ -752,10 +752,14 @@ export type DirectedPriority = (typeof DIRECTED_PRIORITIES)[number];
  * How "directed" finds its arrangement. "layered" ranks the boxes, letting a
  * line run backward where that is cheaper than the crossings it saves; "anneal"
  * is the same search allowed to get worse on the way to better. "best" runs
- * every method and keeps the picture that measures best. All of them rank: a
- * ring or a mesh with no direction to it is Best fit's to draw, not this.
+ * both and keeps the picture that measures best. "stress" has no ranks: boxes
+ * are placed so that near in the graph is near on the page, and every line
+ * that runs with the flow is held to it. It is there to be asked for and is
+ * never chosen by "best": the boxes end up nearer what they join and share no
+ * rows or columns, and readers shown both prefer the ranks. All of them keep
+ * the direction: a ring or a mesh with none is Best fit's to draw, not this.
  */
-export const DIRECTED_METHODS = ["best", "layered", "anneal"] as const;
+export const DIRECTED_METHODS = ["best", "layered", "anneal", "stress"] as const;
 export type DirectedMethod = (typeof DIRECTED_METHODS)[number];
 
 /** The parts of `settings.directed`. */

@@ -289,7 +289,7 @@ export function diagramJsonSchema(options: JsonSchemaOptions = {}): JsonSchema {
           directed: object(
             {
               priority: oneOf(DIRECTED_PRIORITIES, "What directed gives up for what: from crossings (never cross, whatever runs backward) to direction (never run backward, whatever crosses). Default mostly-crossings."),
-              method: oneOf(DIRECTED_METHODS, "How directed finds its arrangement. Default best: every method, and the picture that measures best."),
+              method: oneOf(DIRECTED_METHODS, "How directed finds its arrangement: layered and anneal search for ranks, stress places boxes by distance with the direction held. Default best: every method, and the picture that measures best."),
             },
             [],
             "How the directed arrangement trades crossings against direction. Read only when arrange is directed.",

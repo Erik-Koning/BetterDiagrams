@@ -2332,8 +2332,13 @@ a crossing counts as nine backward lines, through `balanced` to `direction`, the
 `mostly-crossings` is three for one). It searches for ranks one box at a time, where moving a box
 past a neighbour turns the line between them round, and keeps a move when crossings, backward lines
 and skipped ranks together cost less (`settings.directed.method`: `layered`, `anneal` for the same
-search allowed to get worse on the way to better, or `best` for both). Whatever the method, the
-rankings it finds are each laid out in full and compared as drawn, along with the ones found for
+search allowed to get worse on the way to better, `best` for both, or `stress` for no ranks at all).
+`stress` places boxes so that near in the graph is near on the page, and holds every line that runs
+with the flow to it by constraint: the picture is more compact and its boxes sit nearer what they
+talk to, at the price of the rows and columns a ranked layout gives. It is there to be asked for and
+`best` never picks it: readers shown both pictures of a document preferred the ranked one on sixteen
+of seventeen. For the ranked methods, the rankings it finds are each laid out in full and compared
+as drawn, along with the ones found for
 crossings above all and for direction above all, so no setting misses a picture another found. A main
 line turned round costs more than a return line running back, so a loop still starts where the
 document starts it. A line that skips ranks, with something in its way, runs level through the

@@ -32,13 +32,16 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   far it's scaled.
 - **Directed flow**, a fifth way to arrange (Arrange ▸ *Directed flow*, `settings.arrange: "directed"`,
   `directedLayout`, `bd-layout place --mode directed`): for a flow, lines kept from crossing first and
-  running one way second, traded against each other at a rate the document sets
-  (`settings.directed.priority`, `DIRECTED_PRIORITIES`; a Priority slider in the menu and the Layout
-  panel) and found by a method it names (`settings.directed.method`, `DIRECTED_METHODS`). Lines that go
-  round nest on both sides of their column like brackets, a line that skips ranks runs level through
-  a channel of its own, two-way traffic runs as two lanes, and a box that collects a fan sits in the
-  middle of it. `directedCost` and `directedWeights` are how it tells
-  one picture from another.
+  running one way second (or, by the `stress` method, which is only ever used when asked for, boxes
+  placed near what they are joined to with the direction held by constraint), traded against each
+  other at a rate the document sets (`settings.directed.priority`, `DIRECTED_PRIORITIES`; a Priority
+  slider in the menu and the Layout panel) and found by a method it names
+  (`settings.directed.method`, `DIRECTED_METHODS`). Lines that go round nest on both sides of their
+  column like brackets, a line that skips ranks runs level through a channel of its own, two-way
+  traffic runs as two lanes, and a box that collects a fan sits in the middle of it. Groups that
+  follow one another line up where the most lines between them run straight, at one width, in place
+  of stepping sideways down the page. `directedCost` and `directedWeights` are how it tells one
+  picture from another.
 - `measureFlow` (`FlowMetrics`): how a drawn picture reads as a flow, in numbers a reader would
   recognise: crossings and their angle, lines running backward and how many must, travel with the
   flow, ports, bends, the straightness of the main path, stress, even ranks, symmetry. And
