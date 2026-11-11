@@ -230,8 +230,6 @@ export interface CanvasModel {
 
 const ZONE_ITEM = "zone:";
 
-type Rect2 = { x: number; y: number; w: number; h: number };
-
 /** How far past what it goes round the innermost arc swings, and how much further each one outside it. */
 const ARC_CLEAR = 48;
 const ARC_STEP = 28;
@@ -1065,7 +1063,7 @@ function composeDocument(
       }),
     };
   }
-  return pinFlowSides(channelled(levelled, routes, cardParents), canvases, flow, inner, free, rings, containerKinds, !!prefs.engine);
+  return pinFlowSides(channelled(levelled, routes, cardParents), canvases, flow, inner, free, rings, containerKinds);
 }
 
 /** How far apart lines sharing one channel run. */
@@ -1306,25 +1304,8 @@ function pinFlowSides(
   free: ReadonlySet<string>,
   rings: ReadonlyArray<ReadonlySet<string>>,
   containerKinds: readonly string[],
-  paged = false,
 ): DiagramTemplate {
   type Side = "top" | "right" | "bottom" | "left";
-  /**
-   * Whether a C leaving this side has to be told how far out to go. It swings about
-   * a hundred pixels out on its own, in one clean curve: only something sticking out
-   * past that needs a waypoint to go round.
-   */
-  const needsWaypoint = (s: Rect2, t: Rect2, side: Side, bulge: number) => {
-    const free =
-      side === "left"
-        ? Math.min(s.x, t.x) - bulge
-        : side === "right"
-          ? bulge - Math.max(s.x + s.w, t.x + t.w)
-          : side === "top"
-            ? Math.min(s.y, t.y) - bulge
-            : bulge - Math.max(s.y + s.h, t.y + t.h);
-    return free > 96;
-  };
   const pins = new Map<string, { start: Side; end: Side; points?: Array<[number, number]>; startT?: number; endT?: number }>();
   for (const frame of canvases) {
     const scene = buildScene(doc, { containerKinds, frame });
@@ -1343,7 +1324,7 @@ function pinFlowSides(
         y: members.reduce((sum, b) => sum + b.y + b.h / 2, 0) / members.length,
       };
     };
-    // Lines that go round, when they are to be given their sides together: see `directed/arcs.ts`.
+    // Lines that go round are given their sides and depths together: see `directed/arcs.ts`.
     const arcs: Array<Arc & { sideways: boolean; s: SceneBox; t: SceneBox }> = [];
     /** Lines leaving what an arc goes round, toward each side: each is one it would cut across. */
     const tollOf = (run: readonly SceneBox[], s: SceneBox, t: SceneBox, sideways: boolean) => {
@@ -1436,7 +1417,7 @@ function pinFlowSides(
         // Traffic both ways between neighbours is one road with two lanes: the
         // answer runs straight back beside the request, face to face. Sent round
         // the outside it reads as a second, unrelated connection.
-        if (paged && scene.lines.some((l) => l.source.id === t.id && l.target.id === s.id)) {
+        if (scene.lines.some((l) => l.source.id === t.id && l.target.id === s.id)) {
           const corridor = flowsSideways
             ? { x: Math.min(s.x + s.w, t.x + t.w), y: Math.min(s.y, t.y), w: Math.abs(s.x - t.x) - Math.min(s.w, t.w), h: Math.max(s.y + s.h, t.y + t.h) - Math.min(s.y, t.y) }
             : { x: Math.min(s.x, t.x), y: Math.min(s.y + s.h, t.y + t.h), w: Math.max(s.x + s.w, t.x + t.w) - Math.min(s.x, t.x), h: Math.abs(s.y - t.y) - Math.min(s.h, t.h) };
@@ -1457,37 +1438,12 @@ function pinFlowSides(
             continue;
           }
         }
-        if (paged) {
-          const round = solid.filter((b) =>
-            flowsSideways
-              ? b.x + b.w > Math.min(s.x, t.x) && b.x < Math.max(s.x + s.w, t.x + t.w)
-              : b.y + b.h > Math.min(s.y, t.y) && b.y < Math.max(s.y + s.h, t.y + t.h),
-          );
-          arcOf(edge.id, s, t, flowsSideways, round.length ? round : [s, t], side === across.low ? "low" : "high");
-          continue;
-        }
-        // Just far enough past what it goes around. The line has to stay on the
-        // canvas: left to itself a long C swings out further the longer it is.
-        const between = solid.filter((b) =>
+        const round = solid.filter((b) =>
           flowsSideways
             ? b.x + b.w > Math.min(s.x, t.x) && b.x < Math.max(s.x + s.w, t.x + t.w)
             : b.y + b.h > Math.min(s.y, t.y) && b.y < Math.max(s.y + s.h, t.y + t.h),
         );
-        const clear = 56;
-        const bulge = flowsSideways
-          ? side === "top"
-            ? Math.min(...between.map((b) => b.y)) - clear
-            : Math.max(...between.map((b) => b.y + b.h)) + clear
-          : side === "left"
-            ? Math.min(...between.map((b) => b.x)) - clear
-            : Math.max(...between.map((b) => b.x + b.w)) + clear;
-        const midway = flowsSideways
-          ? (s.x + s.w / 2 + t.x + t.w / 2) / 2
-          : (s.y + s.h / 2 + t.y + t.h / 2) / 2;
-        const point: [number, number] = flowsSideways
-          ? [Math.round(midway), Math.round(bulge)]
-          : [Math.round(bulge), Math.round(midway)];
-        pins.set(edge.id, { start: side, end: side, ...(needsWaypoint(s, t, side, bulge) ? { points: [point] } : {}) });
+        arcOf(edge.id, s, t, flowsSideways, round.length ? round : [s, t], side === across.low ? "low" : "high");
         continue;
       }
       if (!ahead) continue;
@@ -1523,22 +1479,7 @@ function pinFlowSides(
               return want === low ? here < across.sc - 1 : here > across.sc + 1;
             }).length;
           const side = count(low) <= count(high) ? low : high;
-          if (paged) {
-            arcOf(edge.id, s, t, flowsSideways, [...inTheWay, s, t], side === low ? "low" : "high");
-            continue;
-          }
-          const clear = 48;
-          const run = [...inTheWay, s, t];
-          const bulge = flowsSideways
-            ? side === "top"
-              ? Math.min(...run.map((b) => b.y)) - clear
-              : Math.max(...run.map((b) => b.y + b.h)) + clear
-            : side === "left"
-              ? Math.min(...run.map((b) => b.x)) - clear
-              : Math.max(...run.map((b) => b.x + b.w)) + clear;
-          const midway = flowsSideways ? (s.x + s.w / 2 + t.x + t.w / 2) / 2 : (s.y + s.h / 2 + t.y + t.h / 2) / 2;
-          const point: [number, number] = flowsSideways ? [Math.round(midway), Math.round(bulge)] : [Math.round(bulge), Math.round(midway)];
-          pins.set(edge.id, { start: side, end: side, ...(needsWaypoint(s, t, side, bulge) ? { points: [point] } : {}) });
+          arcOf(edge.id, s, t, flowsSideways, [...inTheWay, s, t], side === low ? "low" : "high");
           continue;
         }
       }

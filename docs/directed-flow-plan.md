@@ -113,6 +113,12 @@ against 24. The Priority slider is monotone on all 35, counting lines on lines w
 the objective does. The linter's score rose more than the reviewers' did: it counts what is wrong,
 and what holds the dense pictures down is how far apart their boxes are, which it doesn't.
 
+**Best fit draws the same way since 2026-11-10** (asked for after the reviews): the nested
+bracket arcs, two-lane traffic and centred fans are how every ranked layout is drawn, not this
+mode's alone. Best fit over the 35 documents went from 85.0, 252 crossings and 70 lines on lines to
+88.9, 235 and 45; on the twelve flows from 42 crossings to 17. What is still this mode's own: the
+search, the priority, the four rankings compared as drawn, and lines through their channels.
+
 **What would move the reviewers next, in the order they put it.**
 1. *Placement in dense documents.* Boxes that talk to each other end up ranks apart or in separate
    groups. This is engine C's job (stress with direction: near in the graph is near on the page),
