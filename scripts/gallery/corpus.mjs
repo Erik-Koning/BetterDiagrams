@@ -145,13 +145,28 @@ export function flowDocs() {
   ];
 }
 
+/**
+ * Kinds a real document's own project registered as containers
+ * (`nodeKinds: { region: { container: true } }`). The gallery's studio has the
+ * built-in registry only, where such a frame is a box whose contents are
+ * drill-in detail: drawn at the size of everything it held, and empty.
+ */
+const CONTAINERS_ELSEWHERE = ["region"];
+
+/** A real document with its project's containers as the built-in one, so what is in a frame is drawn in it. */
+export function withBuiltInContainers(doc) {
+  const parents = new Set(doc.nodes.map((n) => n.parentId).filter(Boolean));
+  const frame = (n) => parents.has(n.id) && CONTAINERS_ELSEWHERE.includes(n.kind);
+  return doc.nodes.some(frame) ? { ...doc, nodes: doc.nodes.map((n) => (frame(n) ? { ...n, kind: "group" } : n)) } : doc;
+}
+
 /** Every gallery document, validated by `engine`; `only` narrows it by name. */
 export function loadCorpus(engine, only = []) {
   const docs = [];
   for (const [name, make] of Object.entries(engine.ARRANGE_FIXTURES ?? {})) docs.push({ name, doc: make() });
   const real = join(REPO, "gallery/real");
   for (const file of readdirSync(real).filter((f) => f.endsWith(".json")).sort()) {
-    docs.push({ name: `real-${file.replace(/\.json$/, "")}`, doc: JSON.parse(readFileSync(join(real, file), "utf8")) });
+    docs.push({ name: `real-${file.replace(/\.json$/, "")}`, doc: withBuiltInContainers(JSON.parse(readFileSync(join(real, file), "utf8"))) });
   }
   docs.push(...stressDocs(), ...flowDocs());
   return docs

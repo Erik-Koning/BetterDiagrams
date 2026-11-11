@@ -37,6 +37,14 @@ export interface SettleOptions {
   frames?: "root" | "all" | { drill: string };
   /** Leave words where they are. */
   keepWords?: boolean;
+  /**
+   * Keep a line between table rows close to what it goes round. One bend reads
+   * as one stroke, but a line from a row leaves its table sideways, and to clear
+   * a table standing right beside it the bend has to be far out: a swing down
+   * the page and back. There, a way round by the table's corners is taken if it
+   * is plainly shorter and crosses no more lines.
+   */
+  tight?: boolean;
 }
 
 /**
@@ -119,10 +127,10 @@ function routeCanvas(doc: DiagramTemplate, frame: string | null, opts: SettleOpt
     // sideways sets off out of the top to swing round to where it was going anyway.
     const held = holdSides(line);
     let drawnLine = held;
-    let points = routeAround(held, scene, routing, routed, polishRoutes);
+    let points = routeAround(held, scene, routing, routed, polishRoutes, opts.tight);
     if (!points) {
       drawnLine = line;
-      points = routeAround(line, scene, routing, routed, polishRoutes);
+      points = routeAround(line, scene, routing, routed, polishRoutes, opts.tight);
     }
     if (!points && (line.edge.start?.auto || line.edge.end?.auto)) {
       // The side the placer chose may be what's boxing it in: let the route choose.
@@ -131,7 +139,7 @@ function routeCanvas(doc: DiagramTemplate, frame: string | null, opts: SettleOpt
         ...line,
         edge: { ...rest, ...(start && !start.auto ? { start } : {}), ...(end && !end.auto ? { end } : {}) },
       };
-      points = routeAround(drawnLine, scene, routing, routed, polishRoutes);
+      points = routeAround(drawnLine, scene, routing, routed, polishRoutes, opts.tight);
     }
     if (!points) continue;
     const drawn = sampleGeometry(lineGeometry(drawnLine, routing, points), 36);
@@ -205,6 +213,7 @@ function routeAround(
   routing: ReturnType<typeof resolveRouting>,
   others: readonly Pt[][],
   polish: boolean,
+  tight = false,
 ): Array<[number, number]> | null {
   const obstacles = obstaclesFor(line, scene);
   const otherReach = polish ? others.map((points) => ({ points, bounds: boundsOf(points) })) : [];
@@ -235,20 +244,25 @@ function routeAround(
   // run, as close to it as will clear everything. Threading corner to corner finds a
   // shorter line, but a line with one bend reads as one stroke, and one with three
   // wobbles. Of the two sides, the one that crosses the fewest other lines.
+  // The one bend found, where it is far enough out that a way round by the corners is worth a look.
+  let swing: { points: Array<[number, number]>; length: number; crossings: number } | null = null;
   if (span > 0) {
     const nx = -(end.y - start.y) / span;
     const ny = (end.x - start.x) / span;
     const mid = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
     for (const off of SINGLE_BEND_OFFSETS) {
-      let best: { points: Array<[number, number]>; crossings: number } | null = null;
+      let best: { points: Array<[number, number]>; crossings: number; samples: Pt[] } | null = null;
       for (const sign of [1, -1]) {
         const points: Array<[number, number]> = [[Math.round(mid.x + nx * off * sign), Math.round(mid.y + ny * off * sign)]];
         const { clean, samples } = drawsClean(points, SINGLE_BEND_CLEARANCE);
         if (!clean) continue;
         const crossings = others.reduce((sum, other) => sum + crossingsBetween(samples, other), 0);
-        if (!best || crossings < best.crossings) best = { points, crossings };
+        if (!best || crossings < best.crossings) best = { points, crossings, samples };
       }
-      if (best) return best.points;
+      if (!best) continue;
+      if (!tight || off <= TIGHT_BEND || !(line.edge.startField || line.edge.endField)) return best.points;
+      swing = { points: best.points, length: lengthOf(best.samples), crossings: best.crossings };
+      break;
     }
   }
 
@@ -271,6 +285,12 @@ function routeAround(
     for (let i = points.length - 1; i >= 0 && points.length > 1; i -= 1) {
       const without = points.filter((_, n) => n !== i);
       if (drawsClean(without).clean) points = without;
+    }
+    if (swing) {
+      // Plainly shorter, and across no more lines than the bend: or the bend stands.
+      const { samples } = drawsClean(points);
+      const crossings = others.reduce((sum, other) => sum + crossingsBetween(samples, other), 0);
+      if (lengthOf(samples) > swing.length * TIGHT_GAIN || crossings > swing.crossings) return swing.points;
     }
 
     if (!polish) return points;
@@ -322,7 +342,7 @@ function routeAround(
     }
     return points;
   }
-  return null;
+  return swing?.points ?? null;
 }
 
 function distanceToRect(p: Pt, r: Rect): number {
@@ -427,6 +447,10 @@ function inflate(r: Rect, by: number): Rect {
 /** How far off the straight run a single bend may go, nearest first, and how much room it wants. */
 const SINGLE_BEND_OFFSETS = [24, 40, 60, 84, 112, 144, 180, 224, 280, 350, 440];
 const SINGLE_BEND_CLEARANCE = 12;
+/** How far out one bend may be before a `tight` route looks for a way that keeps to the boxes. */
+const TIGHT_BEND = 144;
+/** How much shorter that way has to be to replace the bend. */
+const TIGHT_GAIN = 0.85;
 
 /** Whether a segment passes through a rectangle's interior; running along an edge doesn't count. */
 function segmentCrossesOpenRect(a: Pt, b: Pt, r: Rect): boolean {

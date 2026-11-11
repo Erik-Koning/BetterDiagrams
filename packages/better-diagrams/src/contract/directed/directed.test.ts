@@ -254,6 +254,80 @@ describe("what it draws", () => {
     // Which leaves the one crossing the graph can't be drawn without.
     expect(measureFlow(after).crossings).toBe(1);
   });
+
+  const frame = (id: string, label = id) => box(id, { kind: "group", label, w: 400, h: 300 });
+
+  it("a box nothing leads to goes before the frame it points at, however little its line weighs", () => {
+    // Three lines from `main` into the frame and one from `side`: the one decides
+    // nothing about where the frame goes, and still `side` is not parked beside it.
+    const fed = doc(
+      [box("main"), box("side"), frame("g"), ...["a", "b", "c"].map((id) => box(id, { parentId: "g" }))],
+      [line("main", "a"), line("main", "b"), line("main", "c"), line("side", "a")],
+    );
+    const after = directedLayout(fed, { method: "layered", direction: "right" });
+    expect(at(after, "side").x + at(after, "side").w).toBeLessThanOrEqual(at(after, "g").x);
+    expect(at(after, "main").x + at(after, "main").w).toBeLessThanOrEqual(at(after, "g").x);
+  });
+
+  it("a frame is as wide as what it holds: a name too long to step aside from is cut short at its edge", () => {
+    const named = (label: string) =>
+      doc(
+        [box("in"), frame("g", label), ...["a", "b", "c"].map((id) => box(id, { parentId: "g" }))],
+        [line("in", "a"), line("in", "b"), line("in", "c")],
+      );
+    const widthOf = (label: string) => at(directedLayout(named(label), { method: "layered", direction: "down" }), "g").w;
+    const long = "Ingest · everything that arrives from partners, queued, checked and written down before anything else sees it";
+    // A short name is stepped aside from, so that a line from above doesn't run through it.
+    expect(widthOf("Ingest queue")).toBeGreaterThan(widthOf(long));
+    expect(widthOf(long)).toBeLessThanOrEqual(3 * 170 + 2 * 60 + 2 * 40);
+  });
+
+  it("a frame's boxes stand on the ranks its own lines need: the first row, for one no other leads to", () => {
+    // On the canvas `late` comes four ranks after `early`. In the frame nothing
+    // leads to it, so it stands beside `early`, and the frame is two rows deep.
+    const spread = doc(
+      [box("start"), box("x"), box("y"), box("z"), frame("g"), ...["early", "next", "late"].map((id) => box(id, { parentId: "g" }))],
+      [line("start", "early"), line("early", "next"), line("early", "x"), line("x", "y"), line("y", "z"), line("z", "late")],
+    );
+    const after = directedLayout(spread, { method: "layered", direction: "down" });
+    expect(at(after, "late").y).toBe(at(after, "early").y);
+    expect(at(after, "next").y).toBeGreaterThan(at(after, "early").y);
+  });
+
+  const column = (id: string, key?: string) => ({ id, name: id, type: "uuid", ...(key ? { key } : {}) });
+  /** A table of `rows` rows: `id` first, then `f1`, `f2` and so on. */
+  const table = (id: string, rows: number) =>
+    box(id, { kind: "table", w: 230, h: 48 + rows * 19, fields: [column("id", "pk"), ...Array.from({ length: rows - 1 }, (_, i) => column(`f${i + 1}`))] });
+  const joined = (source: string, target: string, startField: string) => line(source, target, { startField, endField: "id" });
+
+  it("tables joined row to row stand in a row by their heads, whichever rows the lines join", () => {
+    // Each line leaves a row low in one table for the first row of the next.
+    // Levelled row to row, every table stands a step lower than the last.
+    const tables = doc(
+      [table("a", 5), table("b", 4), table("c", 6), table("d", 3)],
+      [joined("a", "b", "f4"), joined("b", "c", "f3"), joined("c", "d", "f5")],
+    );
+    const after = directedLayout(tables, { method: "layered" });
+    expect(new Set(["a", "b", "c", "d"].map((id) => at(after, id).y)).size).toBe(1);
+  });
+
+  it("a line from a row goes round the table beside it by its corners, not by a swing down the page", () => {
+    const tables = doc(
+      [table("order", 5), table("address", 4), table("customer", 4)],
+      [joined("order", "address", "f2"), joined("address", "customer", "f1"), joined("order", "customer", "f1")],
+    );
+    const after = directedLayout(tables, { method: "layered" });
+    const boxes = ["order", "address", "customer"].map((id) => at(after, id));
+    const top = Math.min(...boxes.map((b) => b.y));
+    const bottom = Math.max(...boxes.map((b) => b.y + b.h));
+    const round = after.edges.find((e) => e.id === "order-customer")!.points ?? [];
+    expect(round.length).toBeGreaterThan(0);
+    // Within a table's height of the row it goes round, above or below.
+    for (const [, y] of round) {
+      expect(y).toBeGreaterThan(top - 120);
+      expect(y).toBeLessThan(bottom + 120);
+    }
+  });
 });
 
 describe("what it trades", () => {

@@ -178,10 +178,68 @@ And after the price on ranks (item 2 below): best 90.5, 194, 30; ranked 89.9, 20
 and readers part company on order**: rows and columns that mean something outweigh a handful of
 crossings, and the cost has no word for them. Each fix here put one such word in by hand.
 
+**Frames and tables (2026-11-11), and a correction to the gallery.** Asked what cost each of the
+eight lowest pictures most, and what one change would raise it most, three reviewers named the same
+things (`gallery/reviews/directed-flow-tiers.json`, round 1). The first was not this mode's doing.
+
+- *The gallery drew two real documents wrongly.* `real-platform` and `real-services` hold frames
+  of a kind their own project registered as a container (`region`). The gallery's studio has the
+  built-in registry only, so each such frame was drawn as one box the size of everything it held,
+  with nothing in it: the "oversized box" of item 5 below, and what all three reviewers said cost
+  those two pictures most. The gallery now reads such a frame as a group (`withBuiltInContainers`).
+  `real-services` went from 3 to 6 on that alone. `real-platform` is now what it is, 59 boxes in
+  frames three deep, and scores 3 for reasons of its own (item 1 below). **Every figure above this
+  section counted those two documents the old way. The figures from here on don't, and the two
+  sets can't be compared.**
+- *A frame's boxes stood on the ranks of the canvas as a whole.* A frame of six boxes, none of
+  which leads to another, stood five rows deep with a box a row, because the canvas has that many
+  ranks between them. On the ranks the frame's own lines need (`closeRanks`), a frame is a tier.
+  Applied everywhere, that was better on two documents and worse on two (round 2, each drawn both
+  ways): `largeSystem` 7 against 5 from all three ("stacking the Data stores as a row directly
+  under Core services replaces the long crossing arcs with short downward lines"), `stress-groups`
+  4 against 3; but `real-services` 5 against 6, where it turned a page of frames as rows into one
+  narrow column, and `real-platform` 3 against 3 with the old picture preferred by all three. What
+  the two losses share is frames that flow across the canvas in the picture readers preferred:
+  there it is the canvas's ranks that spread a frame's boxes along a row, and closing them stacks
+  the boxes instead. So it applies only where frames flow the way the canvas does. With that,
+  `largeSystem` draws as the picture that scored 7 and the other three as the pictures they had,
+  which gives up the point on `stress-groups`. The linter's cost again went the other way from
+  readers: it prices the `largeSystem` that scored 7 a quarter higher than the one that scored 5.
+- *Boxes were parked beside a frame the width of the page.* A line that weighs little beside the
+  heaviest into a frame doesn't get to say where the frame goes. Its source then had no rank of its
+  own and was stood beside the frame: beside one as wide as `real-platform`'s, thousands of pixels
+  from what it points at. Something nothing leads to can't push anything further out, so it now
+  goes first.
+  *And a frame was made wide enough to clear the whole of its name*: with a name a hundred
+  characters long, a frame of three boxes was 2,088 wide. A name too long to step aside from is
+  now cut short at the frame's edge, which is how it is drawn. Together these took `real-platform`
+  from 6,056 by 4,217 with 72 lines on lines to 5,869 by 2,874 with 38, in half the time (it
+  crosses as it did: 154 times, for 148). No other gallery document changes.
+- *Tables in a chain stepped down the page.* Two tables joined row to row were levelled by the
+  rows their line joins, so each stood a step lower than the last and no two shared a row. They are
+  levelled by their heads now, and a line that has to pass a table goes round its corners: the one
+  bend it took before has to swing far out to clear a table standing right beside a line that
+  leaves sideways. Round 3: `real-data-model` 7 against 6 from all three, `dataModel` 8 against 7
+  from two of three (the third preferred the straighter lines).
+
+By the numbers now (35 documents, the two real ones in full; score, crossings, lines on lines):
+best 87.5, 344, 69; ranked 88.1, 347, 87; annealed 86.9, 356, 74; by distance 84.8, 464, 122; Best
+fit 87.6, 381, 103. The twelve flows are as they were.
+
 **What would move the reviewers next, in the order they put it.**
 1. *Dense documents.* Not placement by distance (above). What reviewers name in the ranked
    pictures of the same documents: lines that share a track or pass behind a box, so an end can't
-   be followed; return lines that swing wide; one oversized box. Routing, not placement.
+   be followed; return lines that swing wide. Routing, not placement. Round 1 of
+   `directed-flow-tiers.json` has it document by document: `stress-dag` (5) wants lanes of their
+   own for two lines that share one and swap; `stress-mesh` (4) wants the three boxes beside its
+   spine in a column, so two lines stop snaking round them; `stress-groups` (3) wants its tiers as
+   rows with each box under what feeds it. And `real-platform` (3), the one that matters most,
+   wants what its author drew: that picture crosses 53 times in 2,640 by 1,490, and every
+   arrangement here crosses about 150 times in more than twice the width. Its frames want to be
+   rows that wrap (a frame of eleven boxes is laid as one row 3,400 wide, or one column), and a
+   frame of frames wants to flow the way the page does while the frames in it flow across.
+   Wrapping every rank in a frame past four boxes was tried and was worse (183 crossings): a wrap
+   has to know which boxes are a chain.
 2. *A box in a column of its own.* **Done, 2026-11-10.** The search opened a rank for one box
    wherever that saved a crossing. Readers were shown the same flow both ways, blind:
 
@@ -212,9 +270,13 @@ crossings, and the cost has no word for them. Each fix here put one such word in
    median), where the most lines run straight; and frames that follow one another on one axis are
    made one width, so a longer name doesn't make a wider tier. `flow-tiers` went from a staircase
    with two crossings to a grid with the one it can't avoid.
-5. *Unconnected boxes* parked in a corner, and one box its author drew far larger than what it
-   holds (`real-platform`): neither is this mode's doing, both cost every arrangement.
-6. *Text* (step 6): labels on lines and on line ends.
+5. *Unconnected boxes* parked in a corner: named again in round 1 for `stress-dag` and
+   `stress-hub` ("stranded", a point each). Not this mode's doing; it costs every arrangement. The
+   box "its author drew far larger than what it holds" that stood here was the gallery's doing, and
+   is corrected (above).
+6. *Text* (step 6): labels on lines and on line ends. Tables that stand in a row have short lines
+   between them, and the words on those sit on the end marks: the gap wants to be as wide as the
+   words and the marks together.
 
 Found on the way, and not fixed: **the passes that order a group's boxes against what they join
 outside it all move at once**, so two groups facing each other can each answer the order the other

@@ -1551,6 +1551,14 @@ export function tidyTree(
 
   type Contour = Map<number, { lo: number; hi: number }>;
   const shift = new Map<string, number>();
+  /** How far below its parent's middle a child's middle goes for their line to run level, by the ports an engine's caller gave. */
+  const levelWith = (up: string, child: string): number => {
+    if (!opts.engine) return 0;
+    const link = links.find((l) => !l.tether && ((l.source === up && l.target === child) || (l.source === child && l.target === up)));
+    if (!link?.sourcePort || !link.targetPort) return 0;
+    const [atUp, atChild] = link.source === up ? [link.sourcePort, link.targetPort] : [link.targetPort, link.sourcePort];
+    return crossOf(atUp, opts.flow) - crossOf(atChild, opts.flow);
+  };
 
   const layout = (id: string): Contour => {
     const own = size.get(id)!;
@@ -1583,7 +1591,10 @@ export function tidyTree(
     // On an odd number of children the parent sits straight across from the middle
     // one, which reads as a spine; on an even number, midway between the outer two.
     const middle = children.length % 2 === 1 ? children[(children.length - 1) / 2]! : null;
-    const mid = first === null ? 0 : middle ? shift.get(middle)! : (first + last) / 2;
+    // An only child is level with its parent where their line leaves and lands,
+    // when the caller says where that is: two tables in a chain by their heads,
+    // where their middles would leave the shorter one hanging half a row low.
+    const mid = (first === null ? 0 : middle ? shift.get(middle)! : (first + last) / 2) - (children.length === 1 ? levelWith(id, children[0]!) : 0);
     for (const child of children) shift.set(child, shift.get(child)! - mid);
     const out: Contour = new Map();
     for (const [level, band] of contour) out.set(level, { lo: band.lo - mid, hi: band.hi - mid });
