@@ -3363,19 +3363,9 @@ function StudioInner({
       const current = templateRef.current;
       // Leaving a roadmap, a task's width stops meaning how long it runs:
       // every task goes back to a standard card, and the axis is forgotten.
-      const leaving = isRoadmap(current) && next !== "roadmap";
-      const { roadmap: _axis, ...settings } = current.settings ?? {};
+      const from = next === "roadmap" ? current : offRoadmap(current);
       applyTemplate(
-        autoLayout(
-          {
-            ...current,
-            nodes: leaving
-              ? current.nodes.map((n) => (n.kind === TASK_KIND ? { ...n, w: KIND_DEFAULT_SIZE.task!.w } : n))
-              : current.nodes,
-            settings: { ...(leaving ? settings : current.settings), arrange: next },
-          },
-          levelLayoutOptions(),
-        ),
+        autoLayout({ ...from, settings: { ...from.settings, arrange: next } }, levelLayoutOptions()),
         { fit: true },
       );
       const mod = isMac() ? "⌘" : "Ctrl+";
@@ -3411,20 +3401,14 @@ function StudioInner({
       if (merged.inner === "auto") delete merged.inner;
       if (merged.shape === "any") delete merged.shape;
       if (merged.spacing === "normal") delete merged.spacing;
-      const leaving = isRoadmap(current);
-      const { roadmap: _axis, layout: _layout, ...settings } = current.settings ?? {};
+      if (merged.ends === "spread") delete merged.ends;
+      const from = offRoadmap(current);
+      const { layout: _layout, ...settings } = from.settings ?? {};
       applyTemplate(
         autoLayout(
           {
-            ...current,
-            nodes: leaving
-              ? current.nodes.map((n) => (n.kind === TASK_KIND ? { ...n, w: KIND_DEFAULT_SIZE.task!.w } : n))
-              : current.nodes,
-            settings: {
-              ...(leaving ? settings : { ...settings, ...(current.settings?.roadmap ? { roadmap: current.settings.roadmap } : {}) }),
-              arrange: "auto",
-              ...(Object.keys(merged).length ? { layout: merged } : {}),
-            },
+            ...from,
+            settings: { ...settings, arrange: "auto", ...(Object.keys(merged).length ? { layout: merged } : {}) },
           },
           { ...levelLayoutOptions(), mode: "auto" },
         ),
@@ -3459,12 +3443,15 @@ function StudioInner({
       // The card was measured once the document settled, so it can be a moment
       // older than what's on the canvas: arrange what's there now the same way,
       // which gives the card's picture when nothing has changed since.
-      const placed = autoPlace(templateRef.current, { ...levelLayoutOptions(), algorithm, direction });
+      const placed = autoPlace(offRoadmap(templateRef.current), { ...levelLayoutOptions(), algorithm, direction });
       const layout: LayoutPreferences = { ...placed.settings?.layout };
       if (algorithm === "auto") delete layout.algorithm;
       else layout.algorithm = algorithm;
-      if (direction === "auto") delete layout.direction;
-      else layout.direction = direction;
+      // A ring, a mesh and a grid read no particular way: the direction someone chose stays theirs.
+      if (algorithm === "auto" || algorithm === "layered" || algorithm === "tree") {
+        if (direction === "auto") delete layout.direction;
+        else layout.direction = direction;
+      }
       const { layout: _layout, ...settings } = placed.settings ?? {};
       applyTemplate(
         {
@@ -10421,3 +10408,18 @@ function StudioInner({
 }
 
 export default ArchitectureStudio;
+
+/**
+ * A roadmap about to be arranged some other way. A task's width stops meaning
+ * how long it runs, so every task goes back to a standard card, and the axis is
+ * forgotten. Any other document comes back as it is.
+ */
+function offRoadmap(template: DiagramTemplate): DiagramTemplate {
+  if (!isRoadmap(template)) return template;
+  const { roadmap: _axis, ...settings } = template.settings ?? {};
+  return {
+    ...template,
+    nodes: template.nodes.map((n) => (n.kind === TASK_KIND ? { ...n, w: KIND_DEFAULT_SIZE.task!.w } : n)),
+    settings,
+  };
+}

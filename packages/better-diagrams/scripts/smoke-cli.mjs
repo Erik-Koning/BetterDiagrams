@@ -97,6 +97,8 @@ const layout = (...args) =>
   spawnSync("npx", ["--yes", "--package", tarball, "bd-layout", ...args], { cwd: work, env, encoding: "utf8" });
 const lint = layout("lint", rough, "--min-score", "100");
 if (lint.status !== 1 || !lint.stdout.includes("box-overlap")) fail("bd-layout lint should find the overlap and exit 1", lint.stdout + lint.stderr);
+const typo = layout("lint", rough, "--min-scroe", "100");
+if (typo.status !== 2) fail("bd-layout should refuse a flag it doesn't know, not pass the gate", typo.stdout + typo.stderr);
 const fix = layout("fix", rough, "--write");
 if (fix.status !== 0) fail("bd-layout fix failed", fix.stdout + fix.stderr);
 const relint = layout("lint", rough);

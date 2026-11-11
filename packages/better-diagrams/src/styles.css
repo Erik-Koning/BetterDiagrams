@@ -8183,7 +8183,6 @@ details.as-paths__section > .as-paths__caption {
 .as-layout__thumbbox {
   fill: color-mix(in srgb, var(--as-accent) 22%, var(--as-surface));
   stroke: color-mix(in srgb, var(--as-accent) 60%, transparent);
-  stroke-width: 4;
   vector-effect: non-scaling-stroke;
   stroke-width: 1;
 }

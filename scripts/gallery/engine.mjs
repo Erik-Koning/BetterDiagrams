@@ -7,9 +7,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const REPO = resolve(new URL("../..", import.meta.url).pathname);
+export const REPO = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
 export async function loadEngine(checkout, outDir) {
   mkdirSync(outDir, { recursive: true });

@@ -7,10 +7,13 @@
  * The model is the linter's own: cost = Σ rule cost × count + the soft part
  * (line length and canvas size). Each weight is the current cost times a
  * factor e^u, so weights stay positive and the fit is pulled toward today's
- * judgement unless the picks say otherwise (an L2 penalty on u). Errors keep a
- * floor: no fit may make an overlap cheap. Agreement is measured on picks the
- * fit didn't see, grouped by diagram, so one diagram's pictures can't teach
- * the fit about themselves.
+ * judgement unless the picks say otherwise (an L2 penalty on u). The soft part
+ * is the unit everything else is measured in, so its factor stays 1 and every
+ * other factor is in the linter's own units: the ones printed, and written.
+ * Errors keep a floor in those units: no fit may make an overlap cheap.
+ * Agreement is measured on picks the fit didn't see, grouped by diagram, so one
+ * diagram's pictures can't teach the fit about themselves. One reviewer's pick
+ * of one pair counts once however often it was recorded.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -32,6 +35,7 @@ export function featuresOf(engine, doc) {
   const L = engine.lintInternals ?? {};
   const shrink = -Math.log2(zoom);
   const illegible = Math.max(0, (L.READABLE_ZOOM ?? 0.5) - zoom);
+  // Weights of 0 where the engine has none: an older linter's cost has no legibility in it to take out.
   let soft = report.cost - shrink * (L.LEGIBILITY_WEIGHT ?? 0) - illegible * (L.ILLEGIBLE_WEIGHT ?? 0);
   for (const [rule, n] of Object.entries(report.counts)) soft -= n * engine.LAYOUT_RULES[rule].cost;
   return { counts: report.counts, soft, shrink, illegible };
@@ -40,10 +44,25 @@ export function featuresOf(engine, doc) {
 /** The features past the rules, in the order a row lists them after the rule counts. */
 export const EXTRA_FEATURES = ["soft", "shrink", "illegible"];
 
+/** The two pictures of a pick, whichever was shown as A. */
+const pairKey = (p) => (p.a && p.b ? [p.a, p.b].sort().join("|") : `${p.run}/${p.pair}`);
+
+/**
+ * Each reviewer's last word on each pair. A picks file read in twice, or a pair
+ * judged again under the same name, is still one opinion: counted twice it would
+ * weigh double in the fit and pass for two reviewers agreeing. A pick with no
+ * name on it can't be told from anyone else's, so it stands.
+ */
+export function distinctPicks(picks) {
+  const last = new Map();
+  picks.forEach((p, i) => last.set(p.by ? `${p.by}|${pairKey(p)}` : `#${i}`, p));
+  return [...last.values()];
+}
+
 /** Rows for fitting: x = features of B minus features of A; y = +1 when A was picked. */
 export function rowsFrom(picks, featuresByHash, ruleIds) {
   const rows = [];
-  for (const p of picks) {
+  for (const p of distinctPicks(picks)) {
     if (p.pick === "tie") continue;
     const a = featuresByHash.get(p.a);
     const b = featuresByHash.get(p.b);
@@ -72,9 +91,12 @@ export function agreement(rows, w) {
 /**
  * Fit weights w = prior × scale × e^u. The scale is fitted first (a cost is
  * only meaningful up to one), then u, by Adam on the logistic loss plus
- * lambda·Σu². `floors` are the least factor each weight may fall to.
+ * lambda·Σu². `floors` are the least factor each weight may fall to. `unit`
+ * is the index of the weight the others are measured against: its factor stays
+ * 1, so a floor of 0.5 means half of today's cost in the units the linter
+ * uses, whatever the fit would have liked to do to the unit itself.
  */
-export function fitWeights(rows, prior, { lambda = 1, iterations = 3000, floors = [] } = {}) {
+export function fitWeights(rows, prior, { lambda = 1, iterations = 3000, floors = [], unit = null } = {}) {
   const n = prior.length;
   const loss = (w) => rows.reduce((sum, r) => sum + Math.log1p(Math.exp(-r.y * dot(w, r.x))), 0);
   // The scale: a coarse search, then a finer one around the best.
@@ -102,6 +124,7 @@ export function fitWeights(rows, prior, { lambda = 1, iterations = 3000, floors 
       for (let i = 0; i < n; i += 1) if (r.x[i]) grad[i] += g * r.x[i] * w[i];
     }
     for (let i = 0; i < n; i += 1) {
+      if (i === unit) continue;
       grad[i] += 2 * lambda * u[i];
       m[i] = 0.9 * m[i] + 0.1 * grad[i];
       v[i] = 0.999 * v[i] + 0.001 * grad[i] * grad[i];
@@ -139,10 +162,11 @@ export function crossValidate(rows, prior, options = {}, k = 5) {
 /** How often two reviewers who saw the same pair agreed: the ceiling a linter can reach. */
 export function reviewerAgreement(picks) {
   const byPair = new Map();
-  for (const p of picks) {
-    const key = `${p.run}/${p.pair}`;
+  for (const p of distinctPicks(picks)) {
+    const key = pairKey(p);
     const list = byPair.get(key) ?? [];
-    list.push(p.pick);
+    // The picture chosen, not the letter: another run may show the same two the other way round.
+    list.push(p.pick === "tie" ? "tie" : (p[p.pick] ?? p.pick));
     byPair.set(key, list);
   }
   let agree = 0;
@@ -158,11 +182,40 @@ export function reviewerAgreement(picks) {
   return total ? { rate: agree / total, pairs: total } : null;
 }
 
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
+
+/**
+ * The linter's source with a fitted model written into it: every rule's cost
+ * and the named constants. All of it or nothing: a rule or a constant whose
+ * line can't be found is an error naming it, since a linter with half a fit in
+ * it is not the one whose agreement was reported.
+ */
+export function withFittedCosts(source, costs, constants = {}) {
+  let text = source;
+  const missed = [];
+  for (const [rule, cost] of Object.entries(costs)) {
+    const pattern = new RegExp(`(\\n  "?${escapeRegExp(rule)}"?: \\{[^\\n]*?cost: )([\\d.]+)( \\})`);
+    if (pattern.test(text)) text = text.replace(pattern, `$1${cost}$3`);
+    else missed.push(rule);
+  }
+  for (const [name, value] of Object.entries(constants)) {
+    const pattern = new RegExp(`(\\bconst ${escapeRegExp(name)} = )([\\d.]+)(;)`);
+    if (pattern.test(text)) text = text.replace(pattern, `$1${value}$3`);
+    else missed.push(name);
+  }
+  if (missed.length) throw new Error(`nothing written: no line to put the fitted value on for ${missed.join(", ")}`);
+  return text;
+}
+
 export async function fitCommand({ write = false, by = "" } = {}) {
   if (!existsSync(PICKS)) throw new Error("no picks yet: record some with `npm run gallery -- pick`");
   const engine = await loadEngine(REPO, join(REPO, "gallery/out/.engine"));
   // `by` keeps only the picks of reviewers whose name starts with it: one round, or one person.
-  const picks = readFileSync(PICKS, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((p) => p.by.startsWith(by));
+  const recorded = readFileSync(PICKS, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const picks = distinctPicks(recorded).filter((p) => (p.by ?? "").startsWith(by));
+  if (recorded.length !== distinctPicks(recorded).length) {
+    console.log(`${recorded.length - distinctPicks(recorded).length} picks recorded more than once by one reviewer, counted once`);
+  }
   const ruleIds = [...engine.LAYOUT_RULE_IDS];
   const features = new Map();
   for (const p of picks) {
@@ -175,7 +228,9 @@ export async function fitCommand({ write = false, by = "" } = {}) {
   const rows = rowsFrom(picks, features, ruleIds);
   const L = engine.lintInternals ?? {};
   const prior = [...ruleIds.map((r) => engine.LAYOUT_RULES[r].cost), 1, L.LEGIBILITY_WEIGHT ?? 16, L.ILLEGIBLE_WEIGHT ?? 1500];
-  const floors = [...ruleIds.map((r) => (engine.LAYOUT_RULES[r].severity === "error" ? 0.5 : null)), 0.25, null, null];
+  const floors = [...ruleIds.map((r) => (engine.LAYOUT_RULES[r].severity === "error" ? 0.5 : null)), null, null, null];
+  // The soft part keeps its weight of 1, so every factor, and every floor, is in the linter's units.
+  const unitAt = ruleIds.length;
   const ceiling = reviewerAgreement(picks);
   console.log(`${picks.length} picks, ${rows.length} usable (not ties, both pictures stored), from ${new Set(rows.map((r) => r.doc)).size} diagrams`);
   if (ceiling) console.log(`reviewers agreed with each other on ${(ceiling.rate * 100).toFixed(0)}% of ${ceiling.pairs} shared pairs`);
@@ -183,14 +238,15 @@ export async function fitCommand({ write = false, by = "" } = {}) {
 
   let chosen = null;
   for (const lambda of [0.3, 1, 3, 10]) {
-    const cv = crossValidate(rows, prior, { lambda, floors });
+    const cv = crossValidate(rows, prior, { lambda, floors, unit: unitAt });
     console.log(`lambda ${String(lambda).padEnd(4)} held-out agreement: fitted ${(cv.fitted * 100).toFixed(0)}%, today's ${(cv.prior * 100).toFixed(0)}%`);
     if (!chosen || cv.fitted > chosen.cv.fitted) chosen = { lambda, cv };
   }
-  const { weights, scale } = fitWeights(rows, prior, { lambda: chosen.lambda, floors });
-  console.log(`\nfitted on every pick with lambda ${chosen.lambda}: agrees with ${(agreement(rows, weights) * 100).toFixed(0)}% (held out: ${(chosen.cv.fitted * 100).toFixed(0)}%)`);
+  const { weights, scale } = fitWeights(rows, prior, { lambda: chosen.lambda, floors, unit: unitAt });
+  // The lambda was chosen by the same held-out picks it is then reported on, so that figure flatters a little.
+  console.log(`\nfitted on every pick with lambda ${chosen.lambda}: agrees with ${(agreement(rows, weights) * 100).toFixed(0)}% (held out: ${(chosen.cv.fitted * 100).toFixed(0)}%, the best of the four lambdas above, so if anything a little high)`);
   // Back in the linter's own units: the soft part keeps its weight of 1.
-  const unit = weights[ruleIds.length];
+  const unit = weights[unitAt];
   console.log("\nrule".padEnd(22), "today".padStart(8), "fitted".padStart(8), "seen in".padStart(9));
   const fitted = {};
   for (const [i, rule] of ruleIds.entries()) {
@@ -198,20 +254,18 @@ export async function fitCommand({ write = false, by = "" } = {}) {
     fitted[rule] = Math.round((weights[i] / unit) * 10) / 10;
     console.log(rule.padEnd(22), String(engine.LAYOUT_RULES[rule].cost).padStart(8), String(fitted[rule]).padStart(8), String(seen).padStart(9));
   }
+  const constants = {};
   for (const [k, name] of EXTRA_FEATURES.entries()) {
     if (name === "soft") continue;
     const i = ruleIds.length + k;
-    console.log(`${name} weight`.padEnd(22), String(prior[i]).padStart(8), String(Math.round((weights[i] / unit) * 10) / 10).padStart(8), String(rows.filter((r) => r.x[i]).length).padStart(9));
+    const value = Math.round((weights[i] / unit) * 10) / 10;
+    constants[name === "shrink" ? "LEGIBILITY_WEIGHT" : "ILLEGIBLE_WEIGHT"] = value;
+    console.log(`${name} weight`.padEnd(22), String(prior[i]).padStart(8), String(value).padStart(8), String(rows.filter((r) => r.x[i]).length).padStart(9));
   }
   console.log(`(scale ${scale.toFixed(3)}; the soft part keeps a weight of 1)`);
   if (write) {
-    let text = readFileSync(RULES_FILE, "utf8");
-    for (const [rule, cost] of Object.entries(fitted)) {
-      const key = /^[a-z]+$/.test(rule) ? rule : `"${rule}"`;
-      const pattern = new RegExp(`(\\n  ${key.replace(/[-"]/g, (c) => `\\${c}`)}: \\{[^\\n]*?cost: )([\\d.]+)( \\})`);
-      text = text.replace(pattern, `$1${cost}$3`);
-    }
-    writeFileSync(RULES_FILE, text);
-    console.log(`\nwrote the fitted costs into ${RULES_FILE.replace(`${REPO}/`, "")}`);
+    // The rules' costs and the two legibility weights together: they were fitted together.
+    writeFileSync(RULES_FILE, withFittedCosts(readFileSync(RULES_FILE, "utf8"), fitted, constants));
+    console.log(`\nwrote the fitted costs and legibility weights into ${RULES_FILE.replace(`${REPO}/`, "")}`);
   }
 }

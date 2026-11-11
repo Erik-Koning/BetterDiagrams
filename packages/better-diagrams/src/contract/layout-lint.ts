@@ -19,6 +19,8 @@
  */
 import {
   edgeGeometryFor,
+  endGlyphSpan,
+  endNotation,
   runsVerticallyAt,
   type Box,
   type EdgeGeometry,
@@ -41,6 +43,7 @@ import {
   type DiagramEdge,
   type DiagramNode,
   type DiagramTemplate,
+  type Notation,
 } from "./schema";
 import { approxTextWidth, wrapText, wrappedLineCount } from "./text";
 import type { DiagramZone } from "./zones";
@@ -86,6 +89,8 @@ export interface Scene {
   boxes: SceneBox[];
   zones: DiagramZone[];
   lines: SceneLine[];
+  /** How the document draws cardinalities, which decides how wide a line's end is. */
+  notation: Notation | undefined;
 }
 
 /** The font the canvas and the exporters draw an edge's words in. */
@@ -203,12 +208,13 @@ export function buildScene(
 
   const boxes: SceneBox[] = [];
   const boxById = new Map<string, SceneBox>();
+  const parents = new Set(template.nodes.map((n) => n.parentId).filter(Boolean));
   for (const n of template.nodes) {
     if (frameOf(n.id) !== frame) continue;
     if (!visible.nodes.has(n.id) || insideClosed(n)) continue;
     const { x, y } = positionOf(n);
     const chip = closed.has(n.id);
-    const hasKids = template.nodes.some((c) => c.parentId === n.id);
+    const hasKids = parents.has(n.id);
     const ancestors: string[] = [];
     let cursor = n.parentId ? byId.get(n.parentId) : undefined;
     const guard = new Set<string>([n.id]);
@@ -290,7 +296,10 @@ export function buildScene(
     });
     const coarse = sampleGeometry(geo, 16);
     const estimate = polylineLength(coarse);
-    const samples = sampleGeometry(geo, Math.min(64, Math.max(10, Math.ceil(estimate / 14))));
+    const samples = withCorners(
+      sampleGeometry(geo, Number.isFinite(estimate) ? Math.min(64, Math.max(10, Math.ceil(estimate / 14))) : 10),
+      edge.points,
+    );
     return {
       edge,
       source,
@@ -302,7 +311,36 @@ export function buildScene(
     };
   });
 
-  return { frame, boxes, zones: frame === null ? (template.zones ?? []) : [], lines };
+  return { frame, boxes, zones: frame === null ? (template.zones ?? []) : [], lines, notation };
+}
+
+/**
+ * A route's own corners, put among its samples. A long route is sampled far
+ * apart, and a chord between two samples either side of a corner cuts across
+ * it, through whatever the route was drawn to go round. Each waypoint goes
+ * between the two samples it lies between; one the path doesn't pass through
+ * (a curve's control, say) is left out.
+ */
+function withCorners(samples: Pt[], points: DiagramEdge["points"]): Pt[] {
+  if (!points?.length || samples.length < 2) return samples;
+  const out = [...samples];
+  for (const [x, y] of points) {
+    let at = -1;
+    let least = Infinity;
+    for (let i = 1; i < out.length; i += 1) {
+      const a = out[i - 1]!;
+      const b = out[i]!;
+      const extra = Math.hypot(x - a.x, y - a.y) + Math.hypot(b.x - x, b.y - y) - Math.hypot(b.x - a.x, b.y - a.y);
+      if (extra < least) {
+        least = extra;
+        at = i;
+      }
+    }
+    // Going by way of it at most doubles the step: more than that and it isn't a point on this path.
+    const span = at > 0 ? Math.hypot(out[at]!.x - out[at - 1]!.x, out[at]!.y - out[at - 1]!.y) : 0;
+    if (at > 0 && least > 0.01 && least <= span) out.splice(at, 0, { x, y });
+  }
+  return out;
 }
 
 export function sampleGeometry(geo: EdgeGeometry, count: number): Pt[] {
@@ -652,6 +690,10 @@ interface RuleMeta {
 }
 
 /**
+ * `too-dense` takes nothing off the score: it depends on how big the picture
+ * is, and the score never marks a picture down for its size. It still counts
+ * in the cost, and it is still reported.
+ *
  * The penalties are a judgement about what a reader notices first, and the only
  * tuning knob here. Errors are the things that make a diagram wrong; warnings
  * the things that make it hard to read; info the polish that separates a good
@@ -685,8 +727,8 @@ export const LAYOUT_RULES: Record<LayoutRuleId, RuleMeta> = {
   "line-hook": { label: "A line doubles back", description: "A line turns back on itself near one of its ends, which reads as a mistake.", severity: "warning", penalty: 2, cap: 10, cost: 6 },
   "curve-bulge": { label: "A curve bulges out", description: "A curve swings far outside the space between its ends, taking room and crossing what's there.", severity: "info", penalty: 1, cap: 6, cost: 4 },
   "ambiguous-words": { label: "Words could belong to another line", description: "A label sits as near another line as its own, so a reader can't tell which line it names.", severity: "warning", penalty: 2, cap: 10, cost: 6 },
-  "crowded-ends": { label: "Line ends crowd together", description: "Lines meet a box so close together that their arrowheads or crow's feet can't be told apart.", severity: "warning", penalty: 1.5, cap: 9, cost: 5 },
-  "too-dense": { label: "Too much for one view", description: "Fitted to a screen this picture is too small to read, and it has more lines than boxes. Collapsing a group, or splitting the diagram, helps more than any arrangement.", severity: "warning", penalty: 10, cap: 10, cost: 30 },
+  "crowded-ends": { label: "Line ends crowd together", description: "Lines meet a box so close together that their ends sit on top of each other.", severity: "warning", penalty: 1.5, cap: 9, cost: 5 },
+  "too-dense": { label: "Too much for one view", description: "Fitted to a screen this picture is too small to read, and it has more lines than boxes. Collapsing a group, or splitting the diagram, helps more than any arrangement.", severity: "warning", penalty: 0, cap: 0, cost: 30 },
 };
 
 export interface LayoutFinding extends LintFinding {
@@ -710,7 +752,7 @@ export interface LayoutReport {
     height: number;
     /** Total drawn length of every line. */
     lineLength: number;
-    /** How far the root canvas is scaled to fit a typical window: 1 when it fits as it is. */
+    /** How far the canvas (the drilled one if one was asked for, else the root) is scaled to fit a typical window: 1 when it fits as it is. */
     zoom: number;
   };
 }
@@ -729,8 +771,8 @@ const HOOK_REACH = 160;
 const BULGE_MIN = 60;
 /** How near another line can be to a label before the label could name it. */
 const AMBIGUOUS_REACH = 24;
-/** Line ends nearer than an arrowhead's width can't be told apart. */
-const CROWDED_GAP = 10;
+/** Line ends whose glyphs are nearer than this have run into each other: a little under the pixel a bundle leaves between them. */
+const CROWDED_SLACK = 0.75;
 /** Below this many lines, a picture isn't dense, however small it is. */
 const DENSE_LINES = 20;
 
@@ -821,7 +863,8 @@ function lintScene(scene: Scene, emit: Emit): void {
     }
   }
   for (const z of zones) {
-    const members = solids.filter((b) => b.node.zoneId === z.id);
+    // A group in the zone counts as the room it takes; what's inside it is the group's business.
+    const members = boxes.filter((b) => !b.ancestors.length && b.node.zoneId === z.id);
     const held = zones.filter((o) => o !== z && contains(zoneOf(z), zoneOf(o)));
     if (!members.length && !held.length) continue;
     const area =
@@ -882,21 +925,22 @@ function lintScene(scene: Scene, emit: Emit): void {
         }
       }
     }
-    for (const run of sharedRuns(lines).values()) {
-      const a = lines[run.a]!;
-      const b = lines[run.b]!;
-      if (run.length > 36) {
-        emit("line-overlap", {
-          message: `The lines ${describeLine(a)} and ${describeLine(b)} run on top of each other`,
-          edgeIds: [a.edge.id, b.edge.id],
-        });
-      }
-      if (run.close > CLOSE_RUN) {
-        emit("close-lines", {
-          message: `The lines ${describeLine(a)} and ${describeLine(b)} run a few pixels apart`,
-          edgeIds: [a.edge.id, b.edge.id],
-        });
-      }
+  }
+  // Shared stretches are found through an index, so they are counted however many lines there are.
+  for (const run of sharedRuns(lines).values()) {
+    const a = lines[run.a]!;
+    const b = lines[run.b]!;
+    if (run.length > 36) {
+      emit("line-overlap", {
+        message: `The lines ${describeLine(a)} and ${describeLine(b)} run on top of each other`,
+        edgeIds: [a.edge.id, b.edge.id],
+      });
+    }
+    if (run.close > CLOSE_RUN) {
+      emit("close-lines", {
+        message: `The lines ${describeLine(a)} and ${describeLine(b)} run a few pixels apart`,
+        edgeIds: [a.edge.id, b.edge.id],
+      });
     }
   }
 
@@ -1015,7 +1059,7 @@ function lintScene(scene: Scene, emit: Emit): void {
         // A box only reads as "meant to line up" with what is next to it.
         const dx = Math.abs(a.x + a.w / 2 - b.x - b.w / 2);
         const dy = Math.abs(a.y + a.h / 2 - b.y - b.h / 2);
-        // Off by a quarter of a box still reads as a row someone meant.
+        // Off by a small share of a box still reads as a row someone meant.
         const nearX = Math.max(NEAR, Math.min(a.w, b.w) * 0.12);
         const nearY = Math.max(NEAR, Math.min(a.h, b.h) * 0.3);
         const offX = dx > 0.5 && dx <= nearX && Math.abs(a.x - b.x) > 0.5 && Math.abs(a.x + a.w - b.x - b.w) > 0.5;
@@ -1160,10 +1204,13 @@ function lintScene(scene: Scene, emit: Emit): void {
   }
 
   // ── Where lines meet boxes ──────────────────────────────────────────────────
-  const ends = new Map<string, Array<{ at: number; line: SceneLine; box: SceneBox }>>();
+  const ends = new Map<string, Array<{ at: number; span: number; line: SceneLine; box: SceneBox }>>();
   for (const l of lines) {
     if (l.source.id === l.target.id) continue;
-    for (const [box, p] of [[l.source, l.samples[0]!], [l.target, l.samples[l.samples.length - 1]!]] as const) {
+    const direction = l.edge.direction ?? "forward";
+    const startSpan = endGlyphSpan(l.edge.startHead ?? (direction === "both" ? "arrow" : undefined), endNotation(l.edge.startLabel, scene.notation).marker);
+    const endSpan = endGlyphSpan(l.edge.endHead ?? (direction !== "none" ? "arrow" : undefined), endNotation(l.edge.endLabel, scene.notation).marker);
+    for (const [box, p, span] of [[l.source, l.samples[0]!, startSpan], [l.target, l.samples[l.samples.length - 1]!, endSpan]] as const) {
       const sides = [
         { side: "left", gap: Math.abs(p.x - box.x), at: p.y },
         { side: "right", gap: Math.abs(p.x - box.x - box.w), at: p.y },
@@ -1172,7 +1219,7 @@ function lintScene(scene: Scene, emit: Emit): void {
       ].sort((a, b) => a.gap - b.gap);
       const key = `${box.id}|${sides[0]!.side}`;
       const list = ends.get(key) ?? [];
-      list.push({ at: sides[0]!.at, line: l, box });
+      list.push({ at: sides[0]!.at, span, line: l, box });
       ends.set(key, list);
     }
   }
@@ -1182,8 +1229,10 @@ function lintScene(scene: Scene, emit: Emit): void {
     const crowded = new Set<SceneLine>();
     for (let i = 1; i < list.length; i += 1) {
       const gap = list[i]!.at - list[i - 1]!.at;
-      // Exactly together is a bundle someone asked for; apart by less than an arrowhead is a pile.
-      if (gap > 0.5 && gap < CROWDED_GAP) {
+      // Exactly together is a bundle someone asked for. Side by side with their
+      // glyphs clear of each other is how ends sharing a side are drawn
+      // (`bundleSideEnds`); nearer than that, the glyphs sit on each other.
+      if (gap > 0.5 && gap < (list[i]!.span + list[i - 1]!.span) / 2 + CROWDED_SLACK) {
         crowded.add(list[i]!.line);
         crowded.add(list[i - 1]!.line);
       }
@@ -1263,13 +1312,15 @@ export function lintLayout(template: DiagramTemplate, opts: LintLayoutOptions = 
   const metrics = { boxes: 0, lines: 0, width: 0, height: 0, lineLength: 0, zoom: 1 };
   let softCost = 0;
 
+  // The size reported is the drilled canvas when one was asked for, else the root's.
+  const measured = typeof opts.frames === "object" ? opts.frames.drill : null;
   for (const frame of canvasesOf(template, opts)) {
     const scene = buildScene(template, { containerKinds: opts.containerKinds, frame });
     metrics.boxes += scene.boxes.length;
     metrics.lines += scene.lines.length;
     const lineLength = scene.lines.reduce((sum, l) => sum + l.length, 0);
     metrics.lineLength += lineLength;
-    if (frame === null) {
+    if (frame === measured) {
       const spread = extentOf(scene);
       metrics.width = spread.w;
       metrics.height = spread.h;
@@ -1280,13 +1331,10 @@ export function lintLayout(template: DiagramTemplate, opts: LintLayoutOptions = 
       softCost += -Math.log2(metrics.zoom) * LEGIBILITY_WEIGHT + Math.max(0, READABLE_ZOOM - metrics.zoom) * ILLEGIBLE_WEIGHT;
     }
 
-    // A box or a line can opt out of a rule with the same tag every other check honours.
+    // A box can opt out of a rule with the same tag every other check honours.
+    const tagged = new Map(scene.boxes.filter((b) => b.node.tags?.length).map((b) => [b.id, b.node.tags!]));
     const ignored = (issue: LintIssue, rule: LayoutRuleId) =>
-      !!issue.nodeIds?.length &&
-      issue.nodeIds.every((id) => {
-        const n = scene.boxes.find((b) => b.id === id)?.node;
-        return n?.tags?.includes(`lint-ignore:${rule}`) ?? false;
-      });
+      !!tagged.size && !!issue.nodeIds?.length && issue.nodeIds.every((id) => tagged.get(id)?.includes(`lint-ignore:${rule}`) ?? false);
     lintScene(scene, (rule, issue) => {
       if (ignored(issue, rule)) return;
       counts[rule] = (counts[rule] ?? 0) + 1;
@@ -1353,6 +1401,14 @@ function scoreOf(penalty: number): number {
   return Math.round(SCORE_BEND * Math.exp((straight - SCORE_BEND) / SCORE_BEND));
 }
 
+const rootReports = new WeakMap<DiagramTemplate, LayoutReport>();
+/** One measurement per document, shared by every rule below. */
+function rootReport(template: DiagramTemplate): LayoutReport {
+  let report = rootReports.get(template);
+  if (!report) rootReports.set(template, (report = lintLayout(template)));
+  return report;
+}
+
 /**
  * The layout rules in the shape the Checks menu takes, for a host that would
  * rather see them there: `registry={{ lintRules: LAYOUT_LINT_RULES }}`. Each
@@ -1368,7 +1424,7 @@ export const LAYOUT_LINT_RULES: Record<string, LintRuleDef> = Object.fromEntries
       description: LAYOUT_RULES[rule].description,
       severity: LAYOUT_RULES[rule].severity,
       check(t: DiagramTemplate): LintIssue[] {
-        return lintLayout(t).findings.filter((f) => f.rule === rule);
+        return rootReport(t).findings.filter((f) => f.rule === rule);
       },
     } satisfies LintRuleDef,
   ]),

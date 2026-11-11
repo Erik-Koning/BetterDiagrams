@@ -15,7 +15,7 @@ import {
   type LayoutReport,
   type LintLayoutOptions,
 } from "../contract/layout-lint";
-import { layoutCandidates, type ArrangeOptions, type LayoutCandidate } from "../contract/arrange";
+import { layoutCandidates, layoutGaps, type ArrangeOptions, type LayoutCandidate } from "../contract/arrange";
 import {
   LAYOUT_ALGORITHMS,
   LAYOUT_DIRECTIONS,
@@ -41,6 +41,9 @@ export interface LayoutState {
 
 /** Past this many boxes the gallery waits to be asked: every candidate is a full layout. */
 const GALLERY_LIMIT = 120;
+
+/** How many findings of one rule are listed; the count beside the rule is all of them. */
+const FINDINGS_SHOWN = 60;
 
 /** How long the document has to stay still before the panel measures it again. */
 const SETTLE_MS = 250;
@@ -169,6 +172,10 @@ export function LayoutPanel({
   const report = useMemo(() => lintLayout(measured, options), [measured, options]);
   // The choices show what was just picked, not what was last measured.
   const prefs = template.settings?.layout ?? {};
+  // Arrange follows how the document says it is arranged, which the choices only steer when that is "auto".
+  const mode = template.settings?.arrange ?? "auto";
+  // The sliders start where an arrangement would put the gaps, so a nudge is a nudge from there.
+  const gaps = layoutGaps(template, options);
 
   return (
     <div className="as-panel as-panel--paths as-layout" role="region" aria-label="Layout">
@@ -193,7 +200,13 @@ export function LayoutPanel({
 
       {canEdit ? (
         <div className="as-layout__actions">
-          <button type="button" className="as-btn as-btn--primary" onClick={onArrange} title="Place everything from the graph, using the choices below">
+          <button type="button" className="as-btn as-btn--primary" onClick={onArrange}
+            title={
+              mode === "auto"
+                ? "Place everything from the graph, using the choices below"
+                : "Arrange again the way this diagram is set to be arranged. Picking a choice below switches it to them"
+            }
+          >
             Arrange
           </button>
           <button type="button" className="as-btn" onClick={onPolish} title="Keep this arrangement. Line up what's nearly in line, clear overlaps, and route lines and labels around what's in the way">
@@ -267,13 +280,13 @@ export function LayoutPanel({
           <Gap
             label="Between ranks"
             title="Room between one rank and the next"
-            value={prefs.rankGap ?? 96}
+            value={gaps.rankGap}
             onCommit={(rankGap) => onPrefs({ rankGap })}
           />
           <Gap
             label="Between boxes"
             title="Room between the boxes in a rank"
-            value={prefs.nodeGap ?? 40}
+            value={gaps.nodeGap}
             onCommit={(nodeGap) => onPrefs({ nodeGap })}
           />
         </>
@@ -310,7 +323,8 @@ function Choice<T extends string>({
             className={`as-btn${value === option ? " as-btn--on" : ""}`}
             aria-pressed={value === option}
             title={labels[option].title}
-            aria-label={labels[option].title}
+            // Words name themselves, and the title says more; an arrow needs saying.
+            aria-label={/^[\p{L}\p{N} ]+$/u.test(labels[option].label) ? undefined : labels[option].title}
             onClick={() => onPick(option)}
           >
             {labels[option].label}
@@ -348,7 +362,8 @@ function Gap({
       <input
         type="range"
         min={LAYOUT_GAP_RANGE.min}
-        max={Math.min(LAYOUT_GAP_RANGE.max, 320)}
+        // Wide enough for most; a document that stores more still shows where it is.
+        max={Math.max(Math.min(LAYOUT_GAP_RANGE.max, 320), value)}
         step={4}
         value={shown}
         aria-label={label}
@@ -464,6 +479,11 @@ function Findings({
     }
     return [...byRule.entries()];
   }, [report]);
+  // A finding that is pointed at can go away under the pointer (an undo, a
+  // polish, a pick), and then nothing leaves or blurs to say so.
+  const point = useRef(onPoint);
+  point.current = onPoint;
+  useEffect(() => () => point.current(null), [report]);
   if (!groups.length) {
     return <p className="as-paths__empty">Nothing to fix. No overlaps, nothing in the way of a line, no label on top of anything.</p>;
   }
@@ -479,7 +499,7 @@ function Findings({
           </summary>
           <p className="as-paths__hint">{LAYOUT_RULES[rule].description}</p>
           <ul className="as-layout__list">
-            {findings.slice(0, 60).map((finding, i) => (
+            {findings.slice(0, FINDINGS_SHOWN).map((finding, i) => (
               <li key={i}>
                 <button
                   type="button"
@@ -495,6 +515,7 @@ function Findings({
               </li>
             ))}
           </ul>
+          {findings.length > FINDINGS_SHOWN ? <p className="as-paths__hint">and {findings.length - FINDINGS_SHOWN} more</p> : null}
         </details>
       ))}
     </div>

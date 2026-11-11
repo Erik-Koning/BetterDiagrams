@@ -116,6 +116,12 @@ function resolvePrefs(template: DiagramTemplate, options: ArrangeOptions): Prefs
   };
 }
 
+/** The gaps an arrangement of this document would use: its own if it stores them, else what its spacing gives. */
+export function layoutGaps(template: DiagramTemplate, options: ArrangeOptions = {}): { rankGap: number; nodeGap: number } {
+  const { rankGap, nodeGap } = resolvePrefs(template, options);
+  return { rankGap, nodeGap };
+}
+
 // ─── Text that fits ──────────────────────────────────────────────────────────
 
 const FIXED_BOX_KINDS = new Set(["text", "point", "table", "enum", "group", TASK_KIND]);
@@ -125,16 +131,18 @@ const DIAMOND_KINDS = new Set(["decision", "milestone"]);
  * A box big enough for its words. An author who left a label too long for its
  * box wanted the label: growing costs nothing, and "Payment reconcili…" tells a
  * reader nothing. Past `WIDEST_FIT` the text wraps rather than widening further.
- * Only ever grows, and never touches a locked box.
+ * Only ever grows, a note included, and never touches a locked box.
  */
 function growToFit(n: DiagramNode): DiagramNode {
   if (n.locked || n.wrap || n.fields?.length) return n;
   if (n.kind === "text") {
-    // A note is its words: a box twice their height reads as something missing.
+    // A note needs room for its words. One drawn bigger than they need was drawn
+    // that size by somebody, so it grows to fit and never shrinks to fit.
     const font = n.fontSize ?? 13;
     const lines = wrappedLineCount(n.label, font, "sans", Math.max(24, n.w - 24));
-    const w = lines > 1 ? n.w : Math.max(120, Math.min(n.w, Math.ceil(approxTextWidth(n.label, font, "sans") + 32)));
-    return { ...n, w, h: Math.ceil(lines * font * 1.35 + 22) };
+    const w = Math.max(n.w, lines > 1 ? n.w : Math.max(120, Math.min(n.w, Math.ceil(approxTextWidth(n.label, font, "sans") + 32))));
+    const h = Math.max(n.h, Math.ceil(lines * font * 1.35 + 22));
+    return w === n.w && h === n.h ? n : { ...n, w, h };
   }
   if (FIXED_BOX_KINDS.has(n.kind as string)) return n;
 
@@ -298,6 +306,18 @@ export function canvasModel(
     const holdsLocked = template.nodes.some((n) => n.zoneId === z.id && n.locked);
     clusters.get(key)!.members.push({ id: item, cluster, pinned: !!z.locked || holdsLocked });
   }
+  // The same goes for anything that holds something held, however deep: a group
+  // with a locked box in it, the zone that group is in, the zone an island sits on.
+  // Moving any of them would carry the locked thing across the canvas with it.
+  const holds = (cluster: Cluster): boolean => {
+    let any = false;
+    for (const m of cluster.members) {
+      if (m.cluster && holds(m.cluster)) m.pinned = true;
+      if (m.pinned) any = true;
+    }
+    return any;
+  };
+  holds(root);
 
   const ownerAt = (cluster: Cluster, nodeId: string): string | null => {
     let cursor: string | null = leadOf(nodeId);
@@ -412,6 +432,13 @@ function composeCanvas(
     return chips.has(n.id) ? { ...COLLAPSED_SIZE } : { w: n.w, h };
   };
 
+  /** A zone nobody has put anything in: it keeps the size it was drawn. */
+  const isEmptyZone = (m: Member): m is Member & { cluster: Cluster } => !!m.cluster?.zone && m.cluster.members.length === 0;
+  /** Locked by a person, as against held in place by something locked inside it. */
+  const lockedItself = (m: Member) => (m.node ? !!m.node.locked : !!m.cluster?.zone?.locked);
+  // A drilled canvas starts a little in from its corner; the visible one starts at its corner.
+  const rootOrigin = frame === null ? { x: 0, y: 0 } : { x: prefs.padding, y: prefs.headerGap };
+
   type Laid = {
     /** The container's own size when it isn't pinned. */
     width: number;
@@ -439,11 +466,16 @@ function composeCanvas(
         continue;
       }
       if (m.pinned) {
-        const size = m.node ? (m.cluster ? { w: m.node.w, h: m.node.h } : leafSize(m.node)) : { w: m.cluster!.zone!.w, h: m.cluster!.zone!.h };
-        pinned.push({ id: m.id, x: 0, y: 0, ...size });
+        const own = m.node ? (m.cluster ? { w: m.node.w, h: m.node.h } : leafSize(m.node)) : { w: m.cluster!.zone!.w, h: m.cluster!.zone!.h };
         // A lock holds the frame where it is and the size it is. What's inside isn't
         // locked by that, and left alone it would stay piled wherever it was.
-        if (m.cluster) children.set(m.id, layCluster(m.cluster, pull, ports, cluster.kind === "root" ? flow : innerFlow));
+        const held = m.cluster ? layCluster(m.cluster, pull, ports, cluster.kind === "root" ? flow : innerFlow) : undefined;
+        if (held) children.set(m.id, held);
+        // A frame that isn't locked itself, only kept in place by something locked
+        // inside it, still grows to hold the rest of what's in it.
+        const grows = !!held && !lockedItself(m) && !(m.node && chips.has(m.node.id));
+        const size = grows ? { w: Math.max(own.w, held!.width), h: Math.max(own.h, held!.height) } : own;
+        pinned.push({ id: m.id, x: 0, y: 0, ...size });
         continue;
       }
       if (m.cluster) {
@@ -451,20 +483,20 @@ function composeCanvas(
         children.set(m.id, laid);
         if (m.node && chips.has(m.node.id)) {
           items.push({ id: m.id, ...COLLAPSED_SIZE });
+        } else if (isEmptyZone(m)) {
+          // A zone with nothing in it keeps the size it was drawn, so that's the
+          // room it's given: spaced as anything smaller, it lands on its neighbours.
+          items.push({ id: m.id, w: m.cluster.zone!.w, h: m.cluster.zone!.h });
         } else {
           items.push({ id: m.id, w: laid.width, h: laid.height });
         }
       } else if (m.node) {
         items.push({ id: m.id, ...leafSize(m.node) });
-      } else {
-        items.push({ id: m.id, w: Math.max(160, template.zones!.find((z) => `${ZONE_ITEM}${z.id}` === m.id)!.w), h: Math.max(120, template.zones!.find((z) => `${ZONE_ITEM}${z.id}` === m.id)!.h) });
       }
     }
 
-    const isHorizontalFlowOf = (_item: string) => {
-      const own = cluster.kind === "root" ? flow : innerFlow;
-      return own === "down" || own === "up";
-    };
+    const flowHere = cluster.kind === "root" ? flow : innerFlow;
+    const flowsVertically = flowHere === "down" || flowHere === "up";
     // Lines lifted onto the boxes placed at this level.
     const placeLinks: PlaceLink[] = [];
     const pairWeight = new Map<string, number>();
@@ -484,7 +516,7 @@ function composeCanvas(
       // middle of that room, and that's where its lines arrive.
       const tabOffset = (nodeId: string, item: string) => {
         const n = item === nodeId ? nodeById.get(nodeId) : undefined;
-        return n && hasAssigneeStrip(n) && !isHorizontalFlowOf(item) ? { x: 0, y: -ASSIGNEE_STRIP_HEIGHT / 2 } : undefined;
+        return n && hasAssigneeStrip(n) && !flowsVertically ? { x: 0, y: -ASSIGNEE_STRIP_HEIGHT / 2 } : undefined;
       };
       const sourcePort = rowOffset(e.source, e.startField, a) ?? tabOffset(e.source, a) ?? ports?.(a, e.source);
       const targetPort = rowOffset(e.target, e.endField, b) ?? tabOffset(e.target, b) ?? ports?.(b, e.target);
@@ -559,6 +591,7 @@ function composeCanvas(
         if (!children.has(p.id)) continue;
         const member = cluster.members.find((m) => m.id === p.id);
         if (member?.node && chips.has(member.node.id)) continue;
+        if (member && isEmptyZone(member)) continue;
         const key = Math.round((vertical ? p.y : p.x + p.w / 2) / 8);
         const rank = ranks.get(key);
         if (rank) rank.push(p);
@@ -640,14 +673,16 @@ function composeCanvas(
       inset.x += titleSlack;
     }
     if (pinned.length) {
+      // Where this container's own (0,0) falls, in the coordinates its members are
+      // stored in: a zone's are on the canvas, a group's are relative to the group,
+      // and a drilled canvas starts a little in from its corner. A zone held here
+      // is stored on the canvas like any box in a zone.
+      const originX = cluster.kind === "zone" ? cluster.zone!.x + inset.x : cluster.kind === "group" ? inset.x : rootOrigin.x;
+      const originY = cluster.kind === "zone" ? cluster.zone!.y + inset.y : cluster.kind === "group" ? inset.y : rootOrigin.y;
       const anchored: PlacedBox[] = pinned.map((p) => {
         const m = cluster.members.find((x) => x.id === p.id)!;
-        if (m.node) {
-          const originX = cluster.kind === "zone" ? cluster.zone!.x + inset.x : cluster.kind === "group" ? inset.x : 0;
-          const originY = cluster.kind === "zone" ? cluster.zone!.y + inset.y : cluster.kind === "group" ? inset.y : 0;
-          return { ...p, x: m.node.x - originX, y: m.node.y - originY };
-        }
-        return { ...p, x: m.cluster!.zone!.x - inset.x * 0, y: m.cluster!.zone!.y };
+        const at = m.node ?? m.cluster!.zone!;
+        return { ...p, x: at.x - originX, y: at.y - originY };
       });
       if (cluster.kind === "root" && frame === null) {
         // Start where the pinned boxes are, so the rest gathers around them.
@@ -658,8 +693,19 @@ function composeCanvas(
           p.y += minY;
         }
       }
-      const everything = [...anchored, ...placed];
-      separateBoxes(everything, prefs.nodeGap, new Set(anchored.map((a) => a.id)));
+      // Inside a frame, making way for what's held must not mean leaving by the top
+      // or the left: the frame can grow down and to the right, and that's all. Two
+      // walls nothing can be pushed through stand where those edges are.
+      const far = 1e6;
+      const walls: PlacedBox[] =
+        cluster.kind === "root"
+          ? []
+          : [
+              { id: "\u0001wall-left", x: -far - prefs.nodeGap, y: -far, w: far, h: far * 2 },
+              { id: "\u0001wall-top", x: -far, y: -far - prefs.nodeGap, w: far * 2, h: far },
+            ];
+      const everything = [...anchored, ...walls, ...placed];
+      separateBoxes(everything, prefs.nodeGap, new Set([...anchored, ...walls].map((a) => a.id)));
       for (const p of placed) {
         p.x = Math.round(p.x);
         p.y = Math.round(p.y);
@@ -703,7 +749,13 @@ function composeCanvas(
       if (m.pinned) {
         absolute.set(m.id, abs);
         const held = laid.children.get(m.id);
-        if (m.cluster && held) emit(m.cluster, held, { x: abs.x + held.inset.x, y: abs.y + held.inset.y }, absolute);
+        if (m.cluster && held) {
+          // Held where it is, and grown if it had to: see `layCluster`.
+          if (m.node && (p.w !== m.node.w || p.h !== m.node.h)) out.sizes.set(m.node.id, { w: p.w, h: p.h });
+          const zone = m.node ? undefined : m.cluster.zone;
+          if (zone && (p.w !== zone.w || p.h !== zone.h)) out.zones.set(zone.id, { x: zone.x, y: zone.y, w: p.w, h: p.h });
+          emit(m.cluster, held, { x: abs.x + held.inset.x, y: abs.y + held.inset.y }, absolute);
+        }
         continue;
       }
       if (m.node) {
@@ -733,8 +785,6 @@ function composeCanvas(
       }
     }
   };
-
-  const rootOrigin = frame === null ? { x: 0, y: 0 } : { x: prefs.padding, y: prefs.headerGap };
 
   // First pass: where everything would go, knowing nothing about the outside.
   let laid = layCluster(model.root, undefined);
@@ -906,11 +956,40 @@ function composeDocument(
   });
 
   // Hand-placed routes described where the boxes used to be, and a side the last
-  // layout chose was its opinion about boxes that have now moved.
+  // layout chose was its opinion about boxes that have now moved. A route a
+  // person drew between two boxes that are both still where they were, and the
+  // size they were, describes the picture as well as it ever did: it stays.
   const touched = (id: string) => inScope.has(frameOf(id));
+  const boxOn = (nodes: readonly DiagramNode[]) => {
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    return (id: string): string | undefined => {
+      const n = byId.get(id);
+      if (!n) return undefined;
+      let { x, y } = n;
+      const guard = new Set<string>([id]);
+      // Up through the groups it's in, as far as the canvas it's drawn on.
+      for (let p = n.parentId; p && !guard.has(p) && !cardParents.has(p); ) {
+        guard.add(p);
+        const parent = byId.get(p);
+        if (!parent) break;
+        x += parent.x;
+        y += parent.y;
+        p = parent.parentId;
+      }
+      return `${x},${y},${n.w},${n.h}`;
+    };
+  };
+  const boxBefore = boxOn(template.nodes);
+  const boxAfter = boxOn(placedNodes);
+  const stayed = (id: string) => boxBefore(id) === boxAfter(id);
+  const keptRoutes = new Set<string>();
   const edges = sized.edges.map((e) => {
     if (!touched(e.source) && !touched(e.target)) return e;
     if (!e.points && !e.start?.auto && !e.end?.auto) return e;
+    if (e.points && !e.start?.auto && !e.end?.auto && stayed(e.source) && stayed(e.target)) {
+      keptRoutes.add(e.id);
+      return e;
+    }
     const { points: _stale, ...rest } = e;
     if (rest.start?.auto) delete rest.start;
     if (rest.end?.auto) delete rest.end;
@@ -923,7 +1002,21 @@ function composeDocument(
     edges,
     ...(placedZones.length ? { zones: placedZones } : {}),
   };
-  return pinFlowSides(levelAcrossContainers(placedDoc, canvases, flow, containerKinds, prefs.nodeGap), canvases, flow, inner, free, rings, containerKinds);
+  let levelled = levelAcrossContainers(placedDoc, canvases, flow, containerKinds, prefs.nodeGap);
+  if (keptRoutes.size && levelled !== placedDoc) {
+    // Levelling slid a box after all: a route kept for it has gone stale like any other.
+    const boxLevelled = boxOn(levelled.nodes);
+    const still = (id: string) => boxBefore(id) === boxLevelled(id);
+    levelled = {
+      ...levelled,
+      edges: levelled.edges.map((e) => {
+        if (!keptRoutes.has(e.id) || (still(e.source) && still(e.target))) return e;
+        const { points: _stale, ...rest } = e;
+        return rest;
+      }),
+    };
+  }
+  return pinFlowSides(levelled, canvases, flow, inner, free, rings, containerKinds);
 }
 
 /** How far a whole container or box slides so a line that crosses a frame runs level. */
@@ -967,7 +1060,7 @@ function levelAcrossContainers(
       for (const item of tops) {
         const rect = rectOf(item);
         if (!rect) continue;
-        if (item.startsWith(ZONE_ITEM) ? (rect as DiagramZone).locked : (rect as { node?: DiagramNode }).node?.locked) continue;
+        if (carriesLock(current, item)) continue;
         const votes = new Map<number, number>();
         for (const line of scene.lines) {
           const a = owner(line.source);
@@ -1006,12 +1099,8 @@ function levelAcrossContainers(
   return current;
 }
 
-/** Move a top-level box, group or zone, with whatever a zone holds. */
-function shiftTopItem(doc: DiagramTemplate, item: string, axis: "x" | "y", delta: number): DiagramTemplate {
-  if (!item.startsWith(ZONE_ITEM)) {
-    return { ...doc, nodes: doc.nodes.map((n) => (n.id === item ? { ...n, [axis]: n[axis] + delta } : n)) };
-  }
-  const zoneId = item.slice(ZONE_ITEM.length);
+/** A zone and every zone drawn on it, which all move together. */
+function zonesMovingWith(doc: DiagramTemplate, zoneId: string): Set<string> {
   const hosts = hostsOf(doc.zones ?? []);
   const moving = new Set([zoneId]);
   for (let grew = true; grew; ) {
@@ -1023,6 +1112,41 @@ function shiftTopItem(doc: DiagramTemplate, item: string, axis: "x" | "y", delta
       }
     }
   }
+  return moving;
+}
+
+/**
+ * Whether moving a top-level box, group or zone would move something locked: the
+ * thing itself, a zone drawn on it, or any box it holds, however deep. A lock is
+ * a place on the canvas, so whatever carries one stays where it is too.
+ */
+function carriesLock(doc: DiagramTemplate, item: string): boolean {
+  const carried = new Set<string>();
+  if (item.startsWith(ZONE_ITEM)) {
+    const moving = zonesMovingWith(doc, item.slice(ZONE_ITEM.length));
+    if ((doc.zones ?? []).some((z) => moving.has(z.id) && z.locked)) return true;
+    for (const n of doc.nodes) if (!n.parentId && n.zoneId && moving.has(n.zoneId)) carried.add(n.id);
+  } else {
+    carried.add(item);
+  }
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const n of doc.nodes) {
+      if (n.parentId && carried.has(n.parentId) && !carried.has(n.id)) {
+        carried.add(n.id);
+        grew = true;
+      }
+    }
+  }
+  return doc.nodes.some((n) => carried.has(n.id) && n.locked);
+}
+
+/** Move a top-level box, group or zone, with whatever a zone holds. */
+function shiftTopItem(doc: DiagramTemplate, item: string, axis: "x" | "y", delta: number): DiagramTemplate {
+  if (!item.startsWith(ZONE_ITEM)) {
+    return { ...doc, nodes: doc.nodes.map((n) => (n.id === item ? { ...n, [axis]: n[axis] + delta } : n)) };
+  }
+  const moving = zonesMovingWith(doc, item.slice(ZONE_ITEM.length));
   return {
     ...doc,
     zones: (doc.zones ?? []).map((z) => (moving.has(z.id) ? { ...z, [axis]: z[axis] + delta } : z)),
@@ -1087,7 +1211,8 @@ function pinFlowSides(
     };
     for (const line of scene.lines) {
       const { edge, source: s, target: t } = line;
-      if (s.id === t.id || edge.start || edge.end || edge.startField || edge.endField) continue;
+      // A route a person drew, kept because neither end moved, already says how its line runs.
+      if (s.id === t.id || edge.start || edge.end || edge.startField || edge.endField || edge.points?.length) continue;
       // Around a ring or a hub, a line that leaves and arrives on the same axis
       // wiggles. Leaving on one axis and arriving on the other arcs, and the arc
       // should bulge away from the middle, so it follows the picture's shape.
@@ -1697,9 +1822,8 @@ export interface LayoutCandidate {
  */
 export function layoutCandidates(template: DiagramTemplate, options: ArrangeOptions = {}): LayoutCandidate[] {
   const lintOptions = { containerKinds: options.containerKinds, frames: options.frames ?? ("root" as const) };
-  const sideways =
-    template.edges.some((e) => e.startField || e.endField) ||
-    template.nodes.some((n) => !!n.fields?.length);
+  // The same documents Tidy only ever lays left to right: see `candidateFlows`.
+  const sideways = candidateFlows(template).length === 1;
   const specs: Array<{ id: string; label: string; algorithm: LayoutAlgorithm; direction: LayoutDirection }> = [
     { id: "auto", label: "Best fit", algorithm: "auto", direction: "auto" },
     { id: "layered-right", label: "Left to right", algorithm: "layered", direction: "right" },
@@ -1719,8 +1843,8 @@ export function layoutCandidates(template: DiagramTemplate, options: ArrangeOpti
     seen.add(key);
     out.push({ ...spec, template: doc, report: lintLayout(doc, lintOptions) });
   }
-  // Best fit is what Tidy would do, so it leads whatever the others measure: it
-  // also weighs how legible a big diagram stays, which the bare score doesn't.
+  // Best fit is what Tidy would do, so it leads whatever the others measure: a
+  // real difference in cost is what it takes to turn Tidy from its first choice.
   const lead = out.filter((c) => c.id === "auto");
   const rest = out.filter((c) => c.id !== "auto").sort((a, b) => a.report.cost - b.report.cost);
   return [...lead, ...rest];
@@ -1732,7 +1856,9 @@ export function layoutCandidates(template: DiagramTemplate, options: ArrangeOpti
  * Arrange just the selected boxes, around where they already are, leaving
  * everything else alone. The set keeps its centre so it doesn't fly across the
  * canvas, and only boxes that share a container move: a box's coordinates mean
- * nothing next to those of a box in another group.
+ * nothing next to those of a box in another group, and a box in one zone has no
+ * business being arranged into another. What's arranged stays inside the group
+ * or zone it's in, which grows down and to the right if it has to.
  */
 export function arrangeSelection(
   template: DiagramTemplate,
@@ -1741,15 +1867,21 @@ export function arrangeSelection(
 ): DiagramTemplate {
   const prefs = resolvePrefs(template, options);
   const wanted = new Set(ids);
+  const nodeById = new Map(template.nodes.map((n) => [n.id, n]));
+  const zoneById = new Map((template.zones ?? []).map((z) => [z.id, z]));
+  const cardParents = cardParentIdsOf(template, options.containerKinds ?? CONTAINER_KINDS);
   const byParent = new Map<string, DiagramNode[]>();
   for (const n of template.nodes) {
     if (!wanted.has(n.id) || n.locked) continue;
-    const key = n.parentId ?? "";
+    const key = n.parentId ? `group\u0000${n.parentId}` : n.zoneId && zoneById.has(n.zoneId) ? `zone\u0000${n.zoneId}` : "";
     const group = byParent.get(key);
     if (group) group.push(n);
     else byParent.set(key, [n]);
   }
   const positions = new Map<string, { x: number; y: number }>();
+  /** Frames that had to grow to hold what was arranged in them. */
+  const grownNodes = new Map<string, { w: number; h: number }>();
+  const grownZones = new Map<string, { w: number; h: number }>();
   for (const members of byParent.values()) {
     if (members.length < 2) continue;
     const memberIds = new Set(members.map((n) => n.id));
@@ -1766,8 +1898,50 @@ export function arrangeSelection(
     const minY = Math.min(...members.map((n) => n.y));
     const maxX = Math.max(...members.map((n) => n.x + n.w));
     const maxY = Math.max(...members.map((n) => n.y + n.h));
-    const originX = Math.round((minX + maxX) / 2 - placement.width / 2);
-    const originY = Math.round((minY + maxY) / 2 - placement.height / 2);
+    let originX = Math.round((minX + maxX) / 2 - placement.width / 2);
+    let originY = Math.round((minY + maxY) / 2 - placement.height / 2);
+
+    // Inside a frame, the set stays inside it: no further up or left than the
+    // frame's own inner edge (or than the set already reached), and where it now
+    // runs past the right or the bottom, the frame grows to hold it. A card's
+    // children are a canvas of their own, with no edge to keep to.
+    const first = members[0]!;
+    const group = first.parentId && !cardParents.has(first.parentId) ? nodeById.get(first.parentId) : undefined;
+    const zone = !first.parentId && first.zoneId ? zoneById.get(first.zoneId) : undefined;
+    if (group || zone) {
+      const left = zone ? zone.x : 0;
+      const top = zone ? zone.y : 0;
+      originX = Math.max(originX, left + Math.max(0, Math.min(prefs.padding, minX - left)));
+      originY = Math.max(originY, top + Math.max(0, Math.min(prefs.headerGap, minY - top)));
+      const right = originX + placement.width + prefs.padding;
+      const bottom = originY + placement.height + prefs.padding;
+      if (zone && !zone.locked) {
+        const was = grownZones.get(zone.id) ?? { w: zone.w, h: zone.h };
+        grownZones.set(zone.id, { w: Math.max(was.w, right - zone.x), h: Math.max(was.h, bottom - zone.y) });
+      }
+      // A group grows, and so does each frame around it that it now reaches past.
+      let reachX = right;
+      let reachY = bottom;
+      const guard = new Set<string>();
+      for (let frame = group; frame && !frame.locked && !guard.has(frame.id); ) {
+        guard.add(frame.id);
+        const was = grownNodes.get(frame.id) ?? { w: frame.w, h: frame.h };
+        const now = { w: Math.max(was.w, reachX), h: Math.max(was.h, reachY) };
+        if (now.w === was.w && now.h === was.h) break;
+        grownNodes.set(frame.id, now);
+        reachX = frame.x + now.w + prefs.padding;
+        reachY = frame.y + now.h + prefs.padding;
+        const outer: DiagramNode | undefined = frame.parentId && !cardParents.has(frame.parentId) ? nodeById.get(frame.parentId) : undefined;
+        if (!outer) {
+          const around = !frame.parentId && frame.zoneId ? zoneById.get(frame.zoneId) : undefined;
+          if (around && !around.locked) {
+            const zoneWas = grownZones.get(around.id) ?? { w: around.w, h: around.h };
+            grownZones.set(around.id, { w: Math.max(zoneWas.w, reachX - around.x), h: Math.max(zoneWas.h, reachY - around.y) });
+          }
+        }
+        frame = outer;
+      }
+    }
     for (const p of placement.placed) positions.set(p.id, { x: originX + p.x, y: originY + p.y });
   }
   if (!positions.size) return template;
@@ -1780,9 +1954,11 @@ export function arrangeSelection(
     ...template,
     nodes: template.nodes.map((n) => {
       const p = positions.get(n.id);
-      return p ? { ...n, ...p } : n;
+      const size = grownNodes.get(n.id);
+      return p || size ? { ...n, ...p, ...size } : n;
     }),
     edges,
+    ...(grownZones.size ? { zones: (template.zones ?? []).map((z) => (grownZones.has(z.id) ? { ...z, ...grownZones.get(z.id)! } : z)) } : {}),
   };
   return settleLines(placed, { containerKinds: options.containerKinds, frames: options.frames, keepWords: false });
 }

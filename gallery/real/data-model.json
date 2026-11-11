@@ -422,8 +422,8 @@
       "tech": "dibuha",
       "startLabel": "*",
       "endLabel": "0..1",
-      "startField": "Dalo_Egufehibit__u",
-      "endField": "Ug"
+      "startField": "f4",
+      "endField": "f1"
     },
     {
       "id": "e2",
@@ -437,8 +437,8 @@
       "startHead": "diamond",
       "startLabel": "*",
       "endLabel": "1",
-      "startField": "Gasiba__f",
-      "endField": "Uh"
+      "startField": "f3",
+      "endField": "f1"
     },
     {
       "id": "e3",
@@ -451,8 +451,8 @@
       "tech": "tacido",
       "startLabel": "*",
       "endLabel": "0..1",
-      "startField": "Zuhutobu__r",
-      "endField": "Uc"
+      "startField": "f4",
+      "endField": "f1"
     },
     {
       "id": "e4",
@@ -465,8 +465,8 @@
       "tech": "osilir",
       "startLabel": "*",
       "endLabel": "0..1",
-      "startField": "Icavoze__r",
-      "endField": "Ev"
+      "startField": "f3",
+      "endField": "f1"
     },
     {
       "id": "e5",
@@ -479,8 +479,8 @@
       "tech": "sukuro",
       "startLabel": "*",
       "endLabel": "0..1",
-      "startField": "Omisev__a",
-      "endField": "On"
+      "startField": "f3",
+      "endField": "f1"
     },
     {
       "id": "e6",
@@ -493,8 +493,8 @@
       "tech": "nikesa",
       "startLabel": "*",
       "endLabel": "0..1",
-      "startField": "Okadocun__c",
-      "endField": "Am"
+      "startField": "f3",
+      "endField": "f1"
     },
     {
       "id": "e7",
@@ -507,8 +507,8 @@
       "tech": "odupel",
       "startLabel": "*",
       "endLabel": "0..1",
-      "startField": "Sehikeko__e",
-      "endField": "Am"
+      "startField": "f3",
+      "endField": "f1"
     },
     {
       "id": "e8",
@@ -521,8 +521,8 @@
       "tech": "eboran",
       "startLabel": "*",
       "endLabel": "0..1",
-      "startField": "Demok__o",
-      "endField": "Co"
+      "startField": "f3",
+      "endField": "f1"
     },
     {
       "id": "e9",
@@ -535,8 +535,8 @@
       "tech": "ugolov",
       "startLabel": "*",
       "endLabel": "0..1",
-      "startField": "Uluc__a",
-      "endField": "On"
+      "startField": "f3",
+      "endField": "f1"
     },
     {
       "id": "e10",

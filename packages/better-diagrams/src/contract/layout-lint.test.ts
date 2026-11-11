@@ -113,6 +113,27 @@ describe("what readers notice that the first rules missed", () => {
     expect(count(meet([0.2, 0.5, 0.8]), "crowded-ends")).toBe(0);
   });
 
+  it("ends that share a side as they are drawn by default, side by side, aren't crowded", () => {
+    // Nothing placed: arrowheads into one box, and bare tails out of another, are bundled a pixel apart.
+    const fanIn = doc(
+      [service("t", 500, 200), service("s0", 0, 0), service("s1", 0, 200), service("s2", 0, 400)],
+      [line("s0", "t"), line("s1", "t"), line("s2", "t")],
+    );
+    const fanOut = doc(
+      [service("s", 0, 200), service("t0", 500, 0), service("t1", 500, 200), service("t2", 500, 400)],
+      [line("s", "t0"), line("s", "t1"), line("s", "t2")],
+    );
+    for (const y of [200, 203.3, 207.7]) {
+      const moved = doc(
+        [service("t", 500, y, { h: 83 }), service("s0", 0, 0), service("s1", 0, 200), service("s2", 0, 400)],
+        [line("s0", "t"), line("s1", "t"), line("s2", "t")],
+      );
+      expect(count(moved, "crowded-ends")).toBe(0);
+    }
+    expect(count(fanIn, "crowded-ends")).toBe(0);
+    expect(count(fanOut, "crowded-ends")).toBe(0);
+  });
+
   it("a picture too dense for one view, once, and not a long one with few lines", () => {
     const row = (lines: number) =>
       doc(
@@ -121,6 +142,30 @@ describe("what readers notice that the first rules missed", () => {
       );
     expect(count(row(40), "too-dense")).toBe(1);
     expect(count(row(12), "too-dense")).toBe(0);
+  });
+
+  it("a long route's corner isn't cut: a box just inside it is not run through", () => {
+    // Wherever the samples happen to fall around the corner.
+    for (const down of [1300, 1350, 1400, 1450]) {
+      const around = doc(
+        [service("a", 0, 0), service("b", 2875, down), service("clear", 2784, 44)],
+        [line("a", "b", { routing: "straight", points: [[2960, 38]] })],
+      );
+      expect(count(around, "line-through-box")).toBe(0);
+    }
+  });
+
+  it("a zone holding a full group isn't called empty", () => {
+    const zoned = doc(
+      [
+        service("g", 150, 60, { kind: "group", w: 800, h: 500, zoneId: "z" }),
+        service("loose", 960, 60, { w: 120, h: 60, zoneId: "z" }),
+        ...Array.from({ length: 12 }, (_, i) => service(`in${i}`, 20 + (i % 4) * 190, 50 + Math.floor(i / 4) * 140, { parentId: "g" })),
+      ],
+      [],
+      { zones: [{ id: "z", label: "Z", shape: "rect", x: 0, y: 0, w: 1100, h: 620 }] },
+    );
+    expect(lintLayout(zoned).findings.filter((f) => f.rule === "loose-container" && /Zone/.test(f.message))).toEqual([]);
   });
 });
 
@@ -244,6 +289,24 @@ describe("no rule has an opinion about shape", () => {
     expect(lintLayout(chain(40, 0, 176)).score).toBe(100);
   });
 
+  it("a picture with many lines scores the same spread wide as it does close, though it is told when it is too small to read", () => {
+    const ladder = (step: number) =>
+      doc(
+        Array.from({ length: 28 }, (_, i) => service(`n${i}`, Math.floor(i / 2) * step, (i % 2) * 300)),
+        [
+          ...Array.from({ length: 14 }, (_, i) => line(`n${i * 2}`, `n${i * 2 + 1}`)),
+          ...Array.from({ length: 13 }, (_, i) => line(`n${i * 2}`, `n${i * 2 + 2}`)),
+          ...Array.from({ length: 13 }, (_, i) => line(`n${i * 2 + 1}`, `n${i * 2 + 3}`)),
+        ],
+      );
+    const close = lintLayout(ladder(215));
+    const wide = lintLayout(ladder(250));
+    expect(wide.counts["too-dense"]).toBe(1);
+    expect(close.counts["too-dense"]).toBeUndefined();
+    expect(wide.score).toBe(close.score);
+    expect(wide.cost).toBeGreaterThan(close.cost);
+  });
+
   it("no rule mentions aspect, ratio or a size limit", () => {
     for (const rule of LAYOUT_RULE_IDS) {
       expect(LAYOUT_RULES[rule].description).not.toMatch(/aspect|ratio|too wide|too tall|too many/i);
@@ -304,6 +367,10 @@ describe("the score", () => {
     expect(all.counts["box-overlap"]).toBe(1);
     expect(all.findings.find((f) => f.rule === "box-overlap")?.frame).toBe("card");
     expect(lintLayout(t, { frames: { drill: "card" } }).counts["box-overlap"]).toBe(1);
+    // The size reported is of the canvas that was asked about, not of the root it wasn't.
+    const drilled = lintLayout(t, { frames: { drill: "card" } }).metrics;
+    expect(drilled.width).toBeGreaterThan(0);
+    expect(drilled.height).toBeGreaterThan(0);
   });
 });
 
@@ -374,6 +441,20 @@ describe("as lint rules", () => {
     expect(lintTemplate(t).some((f) => f.rule.startsWith("layout/"))).toBe(false);
     const findings = lintTemplate(t, { ...BUILTIN_LINT_RULES, ...LAYOUT_LINT_RULES });
     expect(findings.some((f) => f.rule === "layout/box-overlap")).toBe(true);
+  });
+
+  it("measure a document once, however many of them are switched on", () => {
+    const n = 120;
+    const t = doc(
+      Array.from({ length: n }, (_, i) => service(`n${i}`, (i % 12) * 240, Math.floor(i / 12) * 130)),
+      Array.from({ length: n * 2 }, (_, i) => line(`n${i % n}`, `n${(i * 7 + 5) % n}`, { id: `e${i}` })),
+    );
+    let started = performance.now();
+    lintLayout(t);
+    const once = performance.now() - started;
+    started = performance.now();
+    lintTemplate(t, LAYOUT_LINT_RULES);
+    expect(performance.now() - started).toBeLessThan(once * 6 + 50);
   });
 
   it("stay quick on a big model", () => {

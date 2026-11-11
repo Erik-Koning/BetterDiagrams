@@ -12,22 +12,27 @@
  *   npm run gallery -- pairs <run> [--per 3] [--max 80] [--seed 1]
  *       Blind A/B pictures from a run, for reviewers; the key stays in the run.
  *   npm run gallery -- pick <run> <picks.txt> [--by reviewer]
- *       Record picks ("<pair> A|B|tie [reason,reason]" per line) in gallery/picks.jsonl.
+ *       Record picks ("<pair> A|B|tie reason,reason" per line, the reasons optional) in
+ *       gallery/picks.jsonl. One reviewer's pick of one pair is recorded once: give each
+ *       reviewer their own --by, and recording a file again adds nothing.
  *   npm run gallery -- fit [--by name-prefix] [--write]
  *       Fit the linter's rule costs to the recorded picks (those of reviewers whose
  *       name starts with --by, if given) and report how often the linter agrees with
  *       readers, before and after, on picks it wasn't fitted to.
  *
  * Runs go to gallery/out/<name>/ (ignored by git). Nothing here touches the
- * repo's templates, a running dev server, or the network.
+ * repo's templates, a running dev server, or the network. The worktree and the
+ * scratch folder a run makes are removed however it ends, an error or ctrl-C
+ * included.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import { loadCorpus } from "./corpus.mjs";
 import { loadEngine, REPO } from "./engine.mjs";
+import { choosePairs, countFlag, escapeHtml, flagValue, newPicks, parsePicks, runName } from "./pairing.mjs";
 import { withStudio } from "./render.mjs";
 
 const OUT = join(REPO, "gallery/out");
@@ -40,12 +45,8 @@ const SHOT_WIDTH = 1500;
 
 const args = process.argv.slice(2);
 const command = args[0];
-const flag = (name, fallback) => {
-  const at = args.indexOf(`--${name}`);
-  return at > 0 ? args[at + 1] : fallback;
-};
+const flag = (name, fallback) => flagValue(args, name, fallback);
 const has = (name) => args.includes(`--${name}`);
-const only = (flag("only", "") || "").split(",").filter(Boolean);
 const stamp = () => new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 
 const git = (...cmd) => spawnSync("git", cmd, { cwd: REPO, encoding: "utf8" });
@@ -60,29 +61,64 @@ function summary(report) {
   return { score: report.score, cost: Math.round(report.cost * 10) / 10, counts: report.counts, top, width: Math.round(report.metrics.width), height: Math.round(report.metrics.height) };
 }
 
+/**
+ * What a run has made outside gallery/out and has to take away again: a
+ * scratch folder, a worktree. Undone last-made first when the run ends, and
+ * when it is interrupted, since a `finally` never runs on ctrl-C.
+ */
+const leftovers = [];
+function tidyUp() {
+  while (leftovers.length) {
+    try {
+      leftovers.pop()();
+    } catch {
+      // One thing that won't go mustn't keep the rest.
+    }
+  }
+}
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.once(signal, () => {
+    tidyUp();
+    process.exit(signal === "SIGINT" ? 130 : 143);
+  });
+}
+
+/** A scratch folder that goes when the run does. */
+function scratchDir() {
+  const dir = mkdtempSync(join(tmpdir(), "bd-gallery-"));
+  leftovers.push(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 /** A worktree at `ref` that shares this checkout's installed packages. */
 function checkoutAt(ref, scratch) {
   const sha = git("rev-parse", "--verify", `${ref}^{commit}`).stdout.trim();
   if (!sha) throw new Error(`no commit called ${ref}`);
   const dir = join(scratch, `checkout-${sha.slice(0, 8)}`);
+  // Registered before it is made: git may have put some of it down before failing.
+  leftovers.push(() => {
+    git("worktree", "remove", "--force", dir);
+    git("worktree", "prune");
+  });
   const made = git("worktree", "add", "--detach", "--quiet", dir, sha);
   if (made.status !== 0) throw new Error(made.stderr);
   for (const sub of ["node_modules", "packages/better-diagrams/node_modules", "packages/vscode/node_modules", "example/node_modules"]) {
     if (existsSync(join(REPO, sub)) && !existsSync(join(dir, sub))) symlinkSync(join(REPO, sub), join(dir, sub));
   }
-  return { dir, sha, remove: () => git("worktree", "remove", "--force", dir) };
+  return { dir, sha };
 }
 
 function sheet(run, title, rows, name = "sheet.html") {
   const cell = (c) =>
     c
-      ? `<td><img src="${c.shot}"><div class="m"><b>${c.label}</b> · score ${c.metrics.score} · cost ${c.metrics.cost} · ${c.metrics.width}×${c.metrics.height}<br>${c.metrics.top || "nothing found"}</div></td>`
+      ? `<td><img src="${escapeHtml(c.shot)}"><div class="m"><b>${escapeHtml(c.label)}</b> · score ${c.metrics.score} · cost ${c.metrics.cost} · ${c.metrics.width}×${c.metrics.height}<br>${escapeHtml(c.metrics.top || "nothing found")}</div></td>`
       : "<td></td>";
-  const html = `<!doctype html><meta charset="utf-8"><title>${title}</title>
+  // A ref, a document's name and a label are whatever someone called them.
+  const html = `<!doctype html><meta charset="utf-8"><title>${escapeHtml(title)}</title>
 <style>body{font:13px system-ui;margin:16px;background:#fff}table{border-collapse:collapse;width:100%}td{vertical-align:top;padding:6px;border-top:1px solid #ddd;width:50%}
 img{width:100%;border:1px solid #eee}h2{font-size:15px;margin:18px 0 4px}.m{color:#444;margin-top:4px}</style>
-<h1 style="font-size:18px">${title}</h1>
-${rows.map((r) => `<h2>${r.name}</h2><table><tr>${r.cells.map(cell).join("")}</tr></table>`).join("\n")}`;
+<h1 style="font-size:18px">${escapeHtml(title)}</h1>
+${rows.map((r) => `<h2>${escapeHtml(r.name)}</h2><table><tr>${r.cells.map(cell).join("")}</tr></table>`).join("\n")}`;
   const file = join(run, name);
   writeFileSync(file, html);
   return file;
@@ -90,14 +126,15 @@ ${rows.map((r) => `<h2>${r.name}</h2><table><tr>${r.cells.map(cell).join("")}</t
 
 async function compare() {
   const base = flag("base", "main");
-  const run = join(OUT, flag("out", `compare-${stamp()}`));
-  const scratch = mkdtempSync(join(tmpdir(), "bd-gallery-"));
-  mkdirSync(join(run, "shots"), { recursive: true });
-  mkdirSync(join(run, "docs"), { recursive: true });
-  const head = await loadEngine(REPO, join(scratch, "engine-head"));
-  const corpus = loadCorpus(head, only);
-  const ref = checkoutAt(base, scratch);
+  const only = flag("only", "").split(",").filter(Boolean);
+  const run = join(OUT, runName(flag("out", `compare-${stamp()}`)));
+  const scratch = scratchDir();
   try {
+    mkdirSync(join(run, "shots"), { recursive: true });
+    mkdirSync(join(run, "docs"), { recursive: true });
+    const head = await loadEngine(REPO, join(scratch, "engine-head"));
+    const corpus = loadCorpus(head, only);
+    const ref = checkoutAt(base, scratch);
     const sides = [
       { key: "base", label: `${base} (${ref.sha.slice(0, 7)})`, checkout: ref.dir, engine: await loadEngine(ref.dir, join(scratch, "engine-base")) },
       { key: "head", label: "working tree", checkout: REPO, engine: head },
@@ -122,17 +159,17 @@ async function compare() {
     report(rows);
     console.log(`\n${relative(REPO, html)}`);
   } finally {
-    ref.remove();
-    rmSync(scratch, { recursive: true, force: true });
+    tidyUp();
   }
 }
 
 async function variants() {
-  const run = join(OUT, flag("out", `variants-${stamp()}`));
-  const scratch = mkdtempSync(join(tmpdir(), "bd-gallery-"));
-  mkdirSync(join(run, "shots"), { recursive: true });
-  mkdirSync(join(run, "docs"), { recursive: true });
+  const only = flag("only", "").split(",").filter(Boolean);
+  const run = join(OUT, runName(flag("out", `variants-${stamp()}`)));
+  const scratch = scratchDir();
   try {
+    mkdirSync(join(run, "shots"), { recursive: true });
+    mkdirSync(join(run, "docs"), { recursive: true });
     const head = await loadEngine(REPO, join(scratch, "engine-head"));
     const corpus = loadCorpus(head, only);
     const rows = [];
@@ -157,7 +194,7 @@ async function variants() {
     writeFileSync(join(run, "manifest.json"), JSON.stringify({ kind: "variants", rows }, null, 1));
     console.log(`\n${relative(REPO, sheet(run, "Gallery: every arrangement", rows))}`);
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    tidyUp();
   }
 }
 
@@ -184,55 +221,32 @@ function report(rows) {
   }
 }
 
-function rng(seed) {
-  let s = seed >>> 0 || 1;
-  return () => {
-    s ^= s << 13;
-    s ^= s >>> 17;
-    s ^= s << 5;
-    return (s >>> 0) / 4294967296;
-  };
-}
-
 async function pairs() {
-  const run = join(OUT, args[1] ?? "");
-  if (!args[1] || !existsSync(join(run, "manifest.json"))) throw new Error("usage: gallery pairs <run>");
+  if (!args[1] || args[1].startsWith("--")) throw new Error("usage: gallery pairs <run> [--per 3] [--max 80] [--seed 1]");
+  const run = join(OUT, runName(args[1]));
+  if (!existsSync(join(run, "manifest.json"))) throw new Error(`no run called ${args[1]} in ${relative(REPO, OUT)}`);
   const manifest = JSON.parse(readFileSync(join(run, "manifest.json"), "utf8"));
-  const per = Number(flag("per", 3));
-  const max = Number(flag("max", 80));
-  const random = rng(Number(flag("seed", 1)));
-  const shuffle = (list) => {
-    for (let i = list.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(random() * (i + 1));
-      [list[i], list[j]] = [list[j], list[i]];
-    }
-    return list;
-  };
+  const rows = manifest.rows.map((row) => ({
+    name: row.name,
+    cells: row.cells.map((c) => ({ ...c, text: readFileSync(join(run, c.doc), "utf8") })),
+  }));
+  // Chosen, and cut to --max, before anything is stored: gallery/docs is kept
+  // in git, and a document no pair shows has no business there.
+  const chosen = choosePairs(rows, { per: countFlag(args, "per", 3), max: countFlag(args, "max", 80), seed: countFlag(args, "seed", 1) });
   mkdirSync(join(run, "pairs"), { recursive: true });
   mkdirSync(DOCS, { recursive: true });
-  const key = [];
-  for (const row of manifest.rows) {
-    const cells = row.cells.map((c) => ({ ...c, text: readFileSync(join(run, c.doc), "utf8") }));
-    const options = [];
-    for (let i = 0; i < cells.length; i += 1) {
-      for (let j = i + 1; j < cells.length; j += 1) {
-        const place = (t) => JSON.parse(t).nodes.map((n) => `${n.id}:${Math.round(n.x)},${Math.round(n.y)}`).join("|");
-        if (place(cells[i].text) !== place(cells[j].text)) options.push([cells[i], cells[j]]);
-      }
-    }
-    for (const [x, y] of shuffle(options).slice(0, per)) {
-      const [a, b] = random() < 0.5 ? [x, y] : [y, x];
-      const id = `p${String(key.length + 1).padStart(3, "0")}`;
-      const store = (cell) => {
-        const hash = hashOf(cell.text);
-        if (cell.text.length <= STORE_LIMIT) writeFileSync(join(DOCS, `${hash}.json`), cell.text);
-        return hash;
-      };
-      key.push({ id, doc: row.name, a: { variant: a.variant ?? a.label, hash: store(a), shot: a.shot }, b: { variant: b.variant ?? b.label, hash: store(b), shot: b.shot } });
-    }
-  }
-  key.splice(max);
-  const scratch = mkdtempSync(join(tmpdir(), "bd-gallery-"));
+  const store = (cell) => {
+    const hash = hashOf(cell.text);
+    if (cell.text.length <= STORE_LIMIT) writeFileSync(join(DOCS, `${hash}.json`), cell.text);
+    return hash;
+  };
+  const key = chosen.map((p) => ({
+    id: p.id,
+    doc: p.doc,
+    a: { variant: p.a.variant ?? p.a.label, hash: store(p.a), shot: p.a.shot },
+    b: { variant: p.b.variant ?? p.b.label, hash: store(p.b), shot: p.b.shot },
+  }));
+  const scratch = scratchDir();
   try {
     await withStudio(REPO, join(scratch, "studio"), async (studio) => {
       for (const p of key) {
@@ -244,39 +258,34 @@ async function pairs() {
           html,
           `<!doctype html><meta charset="utf-8"><style>body{margin:0;font:600 22px system-ui;background:#fff}
 .c{padding:8px 12px}.c img{display:block;width:${SHOT_WIDTH}px;border:2px solid #ccc}</style>
-<div class="c">A<img src="../${p.a.shot}"></div><div class="c">B<img src="../${p.b.shot}"></div>`,
+<div class="c">A<img src="../${escapeHtml(p.a.shot)}"></div><div class="c">B<img src="../${escapeHtml(p.b.shot)}"></div>`,
         );
         await studio.page(html, join(run, "pairs", `${p.id}.png`), SHOT_WIDTH + 28);
       }
     });
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    tidyUp();
   }
   writeFileSync(join(run, "pairs", "key.json"), JSON.stringify(key, null, 1));
   console.log(`${key.length} pairs in ${relative(REPO, join(run, "pairs"))}`);
 }
 
 function pick() {
-  const run = join(OUT, args[1] ?? "");
-  const file = args[2];
-  if (!file || !existsSync(join(run, "pairs/key.json"))) throw new Error("usage: gallery pick <run> <picks.txt> [--by name]");
+  const usage = "usage: gallery pick <run> <picks.txt> [--by name]";
+  if (!args[1] || args[1].startsWith("--") || !args[2] || args[2].startsWith("--")) throw new Error(usage);
+  const name = runName(args[1]);
+  const run = join(OUT, name);
+  if (!existsSync(join(run, "pairs/key.json"))) throw new Error(`no pairs in a run called ${name}: make them with \`gallery pairs ${name}\``);
   const key = new Map(JSON.parse(readFileSync(join(run, "pairs/key.json"), "utf8")).map((p) => [p.id, p]));
   const by = flag("by", "reviewer");
-  let n = 0;
-  for (const raw of readFileSync(file, "utf8").split("\n")) {
-    const line = raw.replace(/#.*/, "").trim();
-    if (!line) continue;
-    const [id, choice, reasons = ""] = line.split(/\s+/);
-    const p = key.get(id);
-    const verdict = choice?.toLowerCase();
-    if (!p || !["a", "b", "tie"].includes(verdict)) throw new Error(`can't read "${raw}"`);
-    appendFileSync(
-      PICKS,
-      `${JSON.stringify({ pair: id, run: basename(run), doc: p.doc, a: p.a.hash, b: p.b.hash, aVariant: p.a.variant, bVariant: p.b.variant, pick: verdict, reasons: reasons.split(",").filter(Boolean), by, at: new Date().toISOString() })}\n`,
-    );
-    n += 1;
-  }
-  console.log(`${n} picks recorded in ${relative(REPO, PICKS)}`);
+  // Every line is read before any is recorded, and what the record already has
+  // is left out, so a file can be corrected and recorded again.
+  const said = parsePicks(readFileSync(args[2], "utf8"), key, { run: name, by, at: new Date().toISOString() });
+  const recorded = existsSync(PICKS) ? readFileSync(PICKS, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+  const fresh = newPicks(said, recorded);
+  if (fresh.length) appendFileSync(PICKS, fresh.map((p) => `${JSON.stringify(p)}\n`).join(""));
+  const skipped = said.length - fresh.length;
+  console.log(`${fresh.length} picks recorded in ${relative(REPO, PICKS)}${skipped ? `, ${skipped} left out (${by} had already picked those pairs)` : ""}`);
 }
 
 async function fit() {
@@ -289,4 +298,12 @@ if (!commands[command]) {
   console.error("usage: npm run gallery -- compare|variants|pairs|pick|fit  (see scripts/gallery/cli.mjs)");
   process.exit(2);
 }
-await commands[command]();
+try {
+  await commands[command]();
+} catch (error) {
+  // What went wrong, without a stack: these are mistakes in how it was asked.
+  console.error(`gallery: ${error.message}`);
+  process.exitCode = 1;
+} finally {
+  tidyUp();
+}

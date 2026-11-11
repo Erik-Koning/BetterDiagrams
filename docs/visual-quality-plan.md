@@ -10,7 +10,9 @@ explorer), the schema and the AI prompt.
 **Phase 1 (measuring)** shipped:
 - `npm run gallery` (`scripts/gallery/`) with `compare`, `variants`, `pairs`, `pick` and `fit`.
 - The gallery itself: 23 documents, which are the 15 fixtures, 4 anonymised real documents
-  (`gallery/real/`) and 4 seeded stress graphs.
+  (`gallery/real/`) and 4 seeded stress graphs. `gallery/real/data-model.json` lost its row
+  anchors when it was anonymised and had them restored on 2026-11-09, after both rounds: its 10
+  recorded picks were made on pictures drawn box to box.
 - Recorded picks in `gallery/picks.jsonl`, with the arranged documents they compare in
   `gallery/docs/`, so any later linter can be re-fitted to them.
 - Seven new rules (`shallow-crossing`, `close-lines`, `line-hook`, `curve-bulge`,
@@ -128,7 +130,7 @@ ratings are noisy, and the screenshot harness lives in a session scratchpad.
    - It writes PNGs, a metrics JSON and an HTML contact sheet, with no Python.
    - It uses an isolated dev server: a spare port, `BD_TEMPLATES_DIR` in a temp folder, an
      empty `BD_LINKED_DIRS` and a fresh `TMPDIR`.
-   - Run it with `npm run gallery -- --base main`.
+   - Run it with `npm run gallery -- compare --base main`.
 2. **The gallery documents:**
    - the 15 fixtures in `arrange.fixtures.ts`
    - real documents (D1)

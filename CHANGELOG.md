@@ -22,9 +22,11 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 - The Layout panel, from Arrange: a score and what's behind it, Polish, Arrange selection, Straighten,
   the layout settings, and thumbnails of the other arrangements. Pointing at a finding picks it out on
   the canvas. Arrange also gains Polish, Arrange selection and Best fit. The edge inspector gains "Doesn't shape the layout".
-- `bd-layout`, a command for the same: `lint`, `fix`, `place` and `best`.
+- `bd-layout`, a command for the same: `lint`, `fix`, `place` and `best`. `--kinds` and
+  `--container-kinds` name kinds of your own; an unknown flag or a file that isn't a diagram exits 2.
 - Seven more layout rules, for what readers noticed that the first ones missed: `shallow-crossing`,
-  `close-lines`, `line-hook`, `curve-bulge`, `ambiguous-words`, `crowded-ends` and `too-dense`.
+  `close-lines`, `line-hook`, `curve-bulge`, `ambiguous-words`, `crowded-ends` and `too-dense` (reported and counted in the cost, but not in
+  the score, since it depends on how big the picture is).
   `lintLayout`'s cost now counts how small the words come out when the picture is fitted
   to a window, which the auto-placer used to add on its own, and `LayoutReport.metrics.zoom` says how
   far it's scaled.
