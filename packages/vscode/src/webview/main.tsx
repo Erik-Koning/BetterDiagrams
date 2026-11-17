@@ -89,6 +89,23 @@ function dropHeld(): void {
   held = null;
 }
 
+/**
+ * A shortcut for VS Code takes the typing with it, before VS Code acts on the
+ * key: ⌘S straight after typing saved the file without its last letters,
+ * which were still waiting here. On the document, in the capture phase, so it
+ * runs before VS Code's own listener on the window. ⌘Z, ⌘Y and ⌘A are left to
+ * the field (shims.ts), and a modifier pressed on its own is not a shortcut.
+ */
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (!held || !(event.metaKey || event.ctrlKey)) return;
+    const key = event.key.toLowerCase();
+    if (["meta", "control", "shift", "alt", "z", "y", "a"].includes(key)) return;
+    sendHeld();
+  },
+  true,
+);
 document.addEventListener("focusout", sendHeld, true);
 window.addEventListener("blur", sendHeld);
 window.addEventListener("pagehide", sendHeld);

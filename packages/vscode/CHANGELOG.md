@@ -9,7 +9,8 @@
   layout choice, Reset, and thumbnails of the other arrangements). Each arrangement is one ⌘Z.
 - ⌘Z, ⇧⌘Z and ⌘Y in a text field in the diagram editor (a label, the AI prompt, Edit JSON) undo and
   redo the typing, where they stepped the diagram back; ⌘A selects the field's text.
-- A word typed into a label or field is one undo step, not one per letter.
+- A word typed into a label or field is one undo step, not one per letter, and ⌘S straight after
+  typing saves the typing too.
 - An undo that lands while an edit is still being written to the file is no longer overwritten: the
   newer text wins, and the toolbar's Undo waits for edits already sent.
 - ⌘Y redoes on macOS, Ctrl+G groups without opening Go to Line, and ⌘A on the canvas selects the

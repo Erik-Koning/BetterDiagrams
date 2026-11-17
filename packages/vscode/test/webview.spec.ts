@@ -197,6 +197,26 @@ test.describe("the VS Code webview", () => {
     expect(await webview.posted("edit")).toHaveLength(before + 1);
   });
 
+  test("⌘S straight after typing takes the typing with it, before VS Code hears the key", async ({ webview, page }) => {
+    await webview.open();
+    await webview.init(json(ARCHITECTURE));
+    await webview.fromMenu("Insert", /^Node /);
+    await expect.poll(async () => (await webview.posted("edit")).length).toBeGreaterThan(0);
+    const label = webview.root.locator(".as-inspector").getByLabel("Node label", { exact: true });
+    await label.click();
+    await label.press("End");
+    const before = (await webview.posted("edit")).length;
+    await page.keyboard.type(" Payments");
+    expect((await webview.posted("edit")).length).toBe(before);
+    await page.keyboard.press("ControlOrMeta+s");
+    // At once, not after the pause: the save that key starts is of the text with the typing in.
+    const edits = await webview.posted("edit");
+    expect(edits).toHaveLength(before + 1);
+    expect((edits.at(-1)!.doc as typeof ARCHITECTURE).nodes.map((node) => node.label)).toContain("New Service Payments");
+    const forwarded = await page.evaluate(() => (window as unknown as { __forwarded: Array<{ key: string; mod: boolean }> }).__forwarded);
+    expect(forwarded.some((k) => k.key === "s" && k.mod)).toBe(true);
+  });
+
   test("typing waiting to be sent goes first: when focus leaves, and before an undo", async ({ webview, page }) => {
     await webview.open();
     await webview.init(json(ARCHITECTURE));
