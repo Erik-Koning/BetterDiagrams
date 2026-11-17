@@ -322,10 +322,12 @@ describe("save as", () => {
       const answer = await post(`${base}/__templates/save-as`, { path: join(repo, "docs", "New.json"), doc: plan("New") });
       expect((await answer.json()).entry).toMatchObject({ folder: store.listing().linked[0].folder, file: "docs/New.json" });
       expect(readdirSync(join(home, "symlinks"))).toEqual([]);
-      // The store's own write is news to other pages, as a save — never as an outside edit, which wins over anything.
+      // The store's own write is news to other pages only as a save, never as an outside edit, which
+      // wins over anything. A file it has just made may not be announced at all: watching folder by
+      // folder (Linux), the store starts watching it once it is written. No other page has it open.
       const at = { folder: store.listing().linked[0].folder, file: "docs/New.json" };
-      await expect.poll(() => events, { timeout: 5000 }).toContainEqual({ event: "better-diagrams:template", data: { ...at, saved: true } });
-      await new Promise((done) => setTimeout(done, 300));
+      await new Promise((done) => setTimeout(done, 600));
+      expect(events.every((e) => (e as { data: { saved?: boolean } }).data.saved === true)).toBe(true);
       expect(events).not.toContainEqual({ event: "better-diagrams:template", data: at });
       // An edit made there is an outside edit.
       writeFileSync(join(repo, "docs", "New.json"), JSON.stringify(plan("New, edited there")));
