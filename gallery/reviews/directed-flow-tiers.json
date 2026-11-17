@@ -1,0 +1,56 @@
+{
+ "about": "Blind reviews behind how Directed flow lays out frames and tables, 2026-11-10 and 11. Three reviewers a round, each scoring every picture 1 to 10 overall from shuffled, renamed copies, not told which pictures show the same document. scores are the three reviewers'; median is what the plan quotes.",
+ "rounds": [
+  {
+   "round": 1,
+   "what": "The eight lowest-scoring documents as Directed flow (best) drew them before any of this, each reviewer also naming the three defects that cost most and the one change that would raise the score most. The two real documents were drawn here with their `region` frames as single boxes, which is what the gallery did until this round.",
+   "documents": {
+    "largeSystem": [{ "what": "before", "median": 5, "scores": [5, 5, 5], "asked for": "the Data stores frame beside the services that use it, not parked in a far corner (all three)" }],
+    "stress-dag": [{ "what": "before", "median": 5, "scores": [5, 5, 5], "asked for": "lines that share a lane near one box given lanes of their own; an unconnected box brought into the picture" }],
+    "stress-mesh": [{ "what": "before", "median": 4, "scores": [4, 4, 3], "asked for": "three boxes beside the spine stood in a column of their own, so two lines stop snaking round them (all three)" }],
+    "real-services": [{ "what": "before, a frame drawn as one empty box", "median": 3, "scores": [3, 3, 3], "asked for": "the empty box shrunk (all three)" }],
+    "stress-groups": [{ "what": "before", "median": 2, "scores": [2, 3, 2], "asked for": "the three tiers stacked as rows, each box under what feeds it (all three)" }],
+    "real-data-model": [{ "what": "before", "median": 6, "scores": [6, 7, 6], "asked for": "the chain of six tables on one level row (two); wider gaps for the words on the lines (one)" }],
+    "real-platform": [{ "what": "before, a frame drawn as one empty box", "median": 3, "scores": [3, 3, 3], "asked for": "the empty box shrunk, or what is inside it shown (all three)" }],
+    "stress-hub": [{ "what": "before", "median": 7, "scores": [8, 7, 7], "asked for": "an unconnected box brought into the picture; one dog-legged line drawn level" }]
+   }
+  },
+  {
+   "round": 2,
+   "what": "Four documents with frames, each drawn with a frame's boxes on the ranks of the canvas as a whole and on the ranks the frame's own lines need. The two real documents are drawn with their frames as frames from here on.",
+   "documents": {
+    "largeSystem": [
+     { "what": "canvas ranks: frames across the page, the data stores a column in the far corner", "median": 5, "scores": [5, 6, 5] },
+     { "what": "the frame's own ranks: tiers down the page, the data stores a row under the services", "median": 7, "scores": [7, 7, 7] }
+    ],
+    "stress-groups": [
+     { "what": "canvas ranks", "median": 3, "scores": [3, 4, 3] },
+     { "what": "the frame's own ranks", "median": 4, "scores": [4, 4, 4] }
+    ],
+    "real-platform": [
+     { "what": "canvas ranks", "median": 3, "scores": [3, 4, 3] },
+     { "what": "the frame's own ranks", "median": 3, "scores": [3, 3, 3] }
+    ],
+    "real-services": [
+     { "what": "canvas ranks: frames as rows down the page", "median": 6, "scores": [6, 7, 6] },
+     { "what": "the frame's own ranks: one narrow column", "median": 5, "scores": [5, 5, 5] }
+    ]
+   },
+   "what shipped": "The frame's own ranks where frames flow the way the canvas does, and the canvas's ranks where they flow across it. With that, largeSystem draws as its second picture and the other three as their first."
+  },
+  {
+   "round": 3,
+   "what": "Two documents of tables joined row to row, levelled by the rows their lines join and by the tables' heads.",
+   "documents": {
+    "real-data-model": [
+     { "what": "rows level: a chain of six tables each a step lower than the last", "median": 6, "scores": [6, 6, 6] },
+     { "what": "heads level: the six on one row", "median": 7, "scores": [7, 7, 7] }
+    ],
+    "dataModel": [
+     { "what": "rows level", "median": 7, "scores": [7, 7, 8] },
+     { "what": "heads level", "median": 8, "scores": [8, 8, 7] }
+    ]
+   }
+  }
+ ]
+}

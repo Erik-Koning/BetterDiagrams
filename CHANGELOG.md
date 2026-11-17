@@ -42,7 +42,14 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   follow one another line up where the most lines between them run straight, at one width, in place
   of stepping sideways down the page. A box isn't moved into a column of its own to save a crossing
   or two: a rank more than the flow needs has a price, which *Crossings above all* still pays.
+  Where frames flow the way the page does, a frame's boxes stand on the ranks its own lines need,
+  so each frame is a tier of the page and not a staircase; a box nothing leads to goes before the
+  frame it points at; a frame is as wide as what it holds, however long its name; and tables joined
+  row to row stand in rows by their heads, with a line that has to pass one going round its corners.
   `directedCost` and `directedWeights` are how it tells one picture from another.
+- `settleLines` takes `tight` (`SettleOptions`), which Directed flow sets: a line between table rows
+  that has to pass a table goes round its corners, where the one bend it would otherwise take has
+  to swing far out to clear it.
 - `measureFlow` (`FlowMetrics`): how a drawn picture reads as a flow, in numbers a reader would
   recognise: crossings and their angle, lines running backward and how many must, travel with the
   flow, ports, bends, the straightness of the main path, stress, how many ranks and how even,

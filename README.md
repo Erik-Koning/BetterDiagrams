@@ -2345,12 +2345,16 @@ line turned round costs more than a return line running back, so a loop still st
 document starts it. A rank more than the flow needs costs too, about six crossings by default: a rank
 is a stage to a reader, so a box isn't moved into a column of its own to save a crossing or two
 (at `crossings` it is, when that clears enough of them). A line that skips ranks, with something in its way, runs level through the
-channel the layout kept for it and turns only in the gaps. Groups, zones, locks, text that fits and
-routed lines work as in every other arrangement, and direction, spacing and gaps still come from
-`settings.layout`. On the gallery's twelve flows it draws 16 crossings where Best fit draws 17
-(it would draw 11, and readers preferred the columns), and no line on top of another where Best fit
-has 3; over all 35 documents, 17% fewer crossings and a third fewer lines on lines. It only ranks, so a ring or a mesh with no direction to it is still Best fit's
-to draw.
+channel the layout kept for it and turns only in the gaps. Where frames flow the way the page does,
+a frame's boxes stand on the ranks the frame's own lines need and no more, so each frame is a tier
+of the page; a box nothing leads to goes before the frame it points at, and a frame is as wide as
+what it holds however long its name. Tables joined row to row stand in rows by their heads: levelled
+by the rows their lines join, each table in a chain stands a step lower than the last. Groups, zones,
+locks, text that fits and routed lines work as in every other arrangement, and direction, spacing
+and gaps still come from `settings.layout`. On the gallery's twelve flows it draws 16 crossings
+where Best fit draws 17 (it would draw 11, and readers preferred the columns), and no line on top of
+another where Best fit has 3; over all 35 documents, a tenth fewer crossings and a third fewer lines
+on lines. It only ranks, so a ring or a mesh with no direction to it is still Best fit's to draw.
 
 **How any ranked layout draws the lines that can't run straight** (Best fit's, a named family's,
 Directed flow's): lines that skip ahead down a column, or run back against the flow, are given their
