@@ -597,7 +597,7 @@ export interface DiagramNode {
     outline?: NodeOutline;
     parentId: string | null;
     plain?: boolean;
-    priority?: TaskPriority;
+    priority?: TaskPriority_2;
     providers?: string[];
     stage?: TaskStage;
     startDate?: DiagramDate;
@@ -634,7 +634,7 @@ export type DiagramNodeData = {
     storyPoints?: number;
     done?: boolean;
     stage?: TaskStage;
-    priority?: TaskPriority;
+    priority?: TaskPriority_2;
     capacity?: number;
     status?: NodeStatus;
     plain?: boolean;
