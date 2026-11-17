@@ -14,6 +14,77 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
+const USAGE = [
+  "usage:",
+  "  bd-folder import <dir> [--out template.json] [--fields keys|visible|all] [--edges business|all] [--poly collapse|in-model|none] [--dialect id]",
+  "  bd-folder export <template.json> <dir> [--mode sidecar|full] [--write-entity-yaml]",
+  "  bd-folder check <dir>",
+].join("\n");
+
+/** Asked for: the usage, and a clean exit. */
+const help = () => {
+  console.log(USAGE);
+  process.exit(0);
+};
+/** Misused: the usage, and a failing exit. */
+const usage = (problem) => {
+  if (problem) console.error(`bd-folder: ${problem}`);
+  console.error(USAGE);
+  process.exit(2);
+};
+
+/** Each command's flags: true takes a value, false is a switch (which never swallows the argument after it). */
+const FLAGS = {
+  import: { out: true, fields: true, edges: true, poly: true, dialect: true },
+  export: { mode: true, "write-entity-yaml": false },
+  check: {},
+};
+
+function parseArgs(argv) {
+  const positional = [];
+  const named = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "-h" || a === "--help") help();
+    else if (a.startsWith("--")) {
+      const eq = a.indexOf("=");
+      named.push(eq === -1 ? { key: a.slice(2), at: i } : { key: a.slice(2, eq), value: a.slice(eq + 1), at: i });
+    } else if (a.startsWith("-") && a !== "-") usage(`unknown option ${a}`);
+    else positional.push({ arg: a, at: i });
+  }
+  // Which flags take a value depends on the command — known only once the first positional is.
+  const known = Object.hasOwn(FLAGS, positional[0]?.arg ?? "") ? FLAGS[positional[0].arg] : null;
+  if (!known) return { positional: positional.map((p) => p.arg), flags: {} };
+  const flags = {};
+  const taken = new Set();
+  for (const { key, value, at } of named) {
+    if (!Object.hasOwn(known, key)) usage(`${positional[0].arg} has no --${key}`);
+    if (!known[key]) {
+      if (value !== undefined) usage(`--${key} takes no value`);
+      flags[key] = true;
+      continue;
+    }
+    if (value !== undefined) {
+      flags[key] = value;
+      continue;
+    }
+    const next = argv[at + 1];
+    if (next === undefined || next.startsWith("-")) usage(`--${key} wants a value`);
+    flags[key] = next;
+    taken.add(at + 1);
+  }
+  return { positional: positional.filter((p) => !taken.has(p.at)).map((p) => p.arg), flags };
+}
+
+function printWarnings(warnings) {
+  for (const w of warnings) console.error(`  ! ${w.code}${w.path ? ` (${w.path})` : ""}: ${w.message}`);
+}
+
+// Before the build is looked for: help and misuse are answered whether or not it is.
+const { positional, flags } = parseArgs(process.argv.slice(2));
+const [command] = positional;
+if (!Object.hasOwn(FLAGS, command ?? "")) usage(command === undefined ? undefined : `unknown command ${command}`);
+
 const contract = await import(new URL("../dist/contract.js", import.meta.url).href).catch(() => null);
 const node = await import(new URL("../dist/contract-folder-node.js", import.meta.url).href).catch(() => null);
 if (!contract || !node) {
@@ -22,46 +93,6 @@ if (!contract || !node) {
 }
 const { importFolder, exportFolder, buildFolderTree, SIDECAR_DIR } = contract;
 const { readFolderToFileMap, writeFileMap } = node;
-
-function parseArgs(argv) {
-  const positional = [];
-  const flags = {};
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a.startsWith("--")) {
-      const key = a.slice(2);
-      const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith("--")) {
-        flags[key] = next;
-        i++;
-      } else {
-        flags[key] = true;
-      }
-    } else {
-      positional.push(a);
-    }
-  }
-  return { positional, flags };
-}
-
-function printWarnings(warnings) {
-  for (const w of warnings) console.error(`  ! ${w.code}${w.path ? ` (${w.path})` : ""}: ${w.message}`);
-}
-
-const usage = () => {
-  console.error(
-    [
-      "usage:",
-      "  bd-folder import <dir> [--out template.json] [--fields keys|visible|all] [--edges business|all] [--poly collapse|in-model|none] [--dialect id]",
-      "  bd-folder export <template.json> <dir> [--mode sidecar|full] [--write-entity-yaml]",
-      "  bd-folder check <dir>",
-    ].join("\n"),
-  );
-  process.exit(2);
-};
-
-const { positional, flags } = parseArgs(process.argv.slice(2));
-const [command] = positional;
 
 async function importDir(dir, opts = {}) {
   const files = await readFolderToFileMap(resolve(dir));

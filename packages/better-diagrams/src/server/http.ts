@@ -4,7 +4,8 @@
  * (Next.js route handlers, Hono, Bun, Deno).
  *
  *   GET  /api/ai       → which model answers, for the AI panel to say so
- *   POST /api/diagram  → a GenerateRequest in, the model's reply out
+ *   POST /api/diagram  → a GenerateRequest in (as application/json; anything
+ *                        else is 415), the model's reply out
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDiagramRoute, RouteError, type DiagramRoute } from "./ai-route";
@@ -82,6 +83,19 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
 }
 
 /**
+ * Is the body declared as JSON? Required of every generate request, not
+ * just tolerated: a page on any site can POST `text/plain` (or a form, or no
+ * type at all) to this route with no CORS preflight, and a body that parsed
+ * anyway would run a model call on the prompt it chose, with the key this
+ * server holds. `application/json` forces the preflight, which the route
+ * never answers for another origin — and the editor's own client
+ * (`createProxyGenerator`) sends it.
+ */
+const isJsonType = (type: string | null | undefined): boolean => /^application\/json\s*(;|$)/i.test(type ?? "");
+
+const NOT_JSON = "Send the GenerateRequest as application/json.";
+
+/**
  * Serve one node:http request if it is for the route; resolves false when it
  * is not, so the caller can pass it on (`next()` in a middleware). A browser
  * that goes away mid-request — the panel's Stop, a closed tab — aborts the
@@ -102,6 +116,11 @@ export async function serveAiRequest(
   if (path !== generatePath) return false;
   if (req.method !== "POST") {
     sendJson(res, 405, { error: "POST a GenerateRequest." });
+    return true;
+  }
+  // Refused unread; node:http drains what is left of the body.
+  if (!isJsonType(req.headers["content-type"])) {
+    sendJson(res, 415, { error: NOT_JSON });
     return true;
   }
   let body: unknown;
@@ -142,6 +161,7 @@ export function createFetchHandler(
   return async (request) => {
     if (request.method === "GET") return json(route.status());
     if (request.method !== "POST") return json({ error: "POST a GenerateRequest." }, 405);
+    if (!isJsonType(request.headers.get("content-type"))) return json({ error: NOT_JSON }, 415);
     const tooLarge = () => json({ error: "Request body too large." }, 413);
     if (Number(request.headers.get("content-length") ?? 0) > bodyLimit) return tooLarge();
     let text: string | null;

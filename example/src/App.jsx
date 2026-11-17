@@ -65,6 +65,25 @@ const LEGACY_WORKSPACE_KEY = "architecture-studio:workspace";
 const LEGACY_ARCH_KEY = "architecture-studio:example";
 const LEGACY_SEQ_KEY = "architecture-studio:example-sequence";
 
+/**
+ * How long the workspace waits after an edit before it is written to
+ * localStorage. Shorter than auto-save's wait (900 ms), so another tab has a
+ * file's new copy before the disk write it makes is announced.
+ */
+const PERSIST_MS = 500;
+
+/**
+ * What a tab knows is in localStorage: each file's document (id → its JSON),
+ * and the workspace's content — its files and its trash, not which file is
+ * open, which is each tab's own. A file whose document differs from its entry
+ * here has edits this tab hasn't stored yet.
+ */
+const storedOf = (ws) => ({
+  docs: new Map(ws.files.map((f) => [f.id, JSON.stringify(f.doc)])),
+  content: JSON.stringify({ files: ws.files, removed: ws.removed }),
+});
+const contentOf = (ws) => JSON.stringify({ files: ws.files, removed: ws.removed });
+
 let fileCounter = 0;
 const nextFileId = () => `f_${Date.now().toString(36)}${(fileCounter++).toString(36)}`;
 
@@ -358,9 +377,44 @@ export default function App() {
 
   const { files, removed } = workspace;
   const active = files.find((f) => f.id === workspace.activeId) ?? files[0];
+  /** The workspace as of the last render — for the async paths below. */
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
 
+  /** What this tab last wrote to localStorage, or read there from another tab (see `storedOf`). */
+  const storedRef = useRef(null);
+  if (storedRef.current === null) storedRef.current = storedOf(workspace);
+  /** localStorage refused a write — full, or off — and the person has been told; until a write goes through. */
+  const storageFailedRef = useRef(false);
+
+  /**
+   * Write the workspace to localStorage. Never throws: it runs inside state
+   * updates, where a throw (a full quota, storage off in a private window)
+   * would take the whole app down. A refusal is said once instead.
+   */
   const persist = useCallback((ws) => {
-    localStorage.setItem(WORKSPACE_KEY, JSON.stringify(ws));
+    try {
+      localStorage.setItem(WORKSPACE_KEY, JSON.stringify(ws));
+    } catch (err) {
+      if (!storageFailedRef.current) {
+        storageFailedRef.current = true;
+        console.warn("Couldn't keep the workspace in this browser:", err);
+        // Not from inside a state update.
+        setTimeout(() =>
+          toast.warning("This browser isn't keeping your edits", {
+            id: "storage-failed",
+            description: `Its storage refused them${err?.name === "QuotaExceededError" ? " (it's full)" : ""}. They last until this tab closes — export or save the files you need.`,
+            duration: Infinity,
+          }),
+        );
+      }
+      return;
+    }
+    storedRef.current = storedOf(ws);
+    if (storageFailedRef.current) {
+      storageFailedRef.current = false;
+      setTimeout(() => toast.dismiss("storage-failed"));
+    }
   }, []);
 
   /** Structure ops (create/rename/delete/switch/convert) persist immediately. */
@@ -375,7 +429,7 @@ export default function App() {
     [persist],
   );
 
-  /** Live document edits stay in memory; Save writes them through. */
+  /** Live document edits are stored a beat after they stop (see below); Save writes them through at once. */
   const setActiveDoc = useCallback((doc) => {
     setWorkspace((ws) => ({
       ...ws,
@@ -385,12 +439,16 @@ export default function App() {
 
   const handleSave = useCallback(
     async (doc) => {
+      // The file being saved is the one open NOW: a switch made while the
+      // save is in flight must not land this document in the file switched to.
+      const { files: now, activeId } = workspaceRef.current;
+      const id = (now.find((f) => f.id === activeId) ?? now[0])?.id;
       // Simulate network latency so the Saving… state is visible.
       await new Promise((resolve) => setTimeout(resolve, 350));
       setWorkspace((ws) => {
         const next = {
           ...ws,
-          files: ws.files.map((f) => (f.id === ws.activeId ? { ...f, doc } : f)),
+          files: ws.files.map((f) => (f.id === id ? { ...f, doc } : f)),
         };
         persist(next);
         return next;
@@ -674,9 +732,14 @@ export default function App() {
    * editor's.
    */
   const lossRef = useRef(new Map());
-  /** The workspace as of the last render — for the async sync paths below. */
-  const workspaceRef = useRef(workspace);
-  workspaceRef.current = workspace;
+  /**
+   * id → `folder/file` of a disk copy that is there but couldn't be read —
+   * hand-broken mid-edit, or not a diagram this editor reads. Never written
+   * over from here: whatever was done to the file is newer than the copy
+   * this app holds. The hold lifts when the file reads again (its fix is
+   * announced, and reloads), or when it is listed no more.
+   */
+  const unreadableRef = useRef(new Map());
 
   /** Take in a listing from the server — the probe's, or a link's answer. */
   const applyListing = useCallback((listing) => {
@@ -816,6 +879,31 @@ export default function App() {
   };
 
   const isHeld = (path) => holdsRef.current.has(`${path.folder}/`) || holdsRef.current.has(`${path.folder}/${path.file}`);
+
+  /** Hold a file's saves while its disk copy can't be read (see `unreadableRef`), and say so once. */
+  const holdUnreadable = (id, path, reason) => {
+    const key = `${path.folder}/${path.file}`;
+    if (unreadableRef.current.get(id) === key) return;
+    unreadableRef.current.set(id, key);
+    const f = workspaceRef.current.files.find((x) => x.id === id);
+    toast.warning(`Couldn't read ${whereIs(linkedRef.current, path.folder, path.file, savedTemplatesRef.current)}`, {
+      id: `unreadable:${id}`,
+      description: `${reason ? `It is ${reason}. ` : ""}${f?.name ?? "This file"} isn't saved over it until it reads again — fix the file and it reloads here. Edits made here stay in this browser.`,
+      duration: Infinity,
+    });
+  };
+  const releaseUnreadable = (id) => {
+    if (unreadableRef.current.delete(id)) toast.dismiss(`unreadable:${id}`);
+  };
+  /** Are a file's saves to `path` held because its disk copy can't be read? A file bound elsewhere now, or gone from the listing, is not. */
+  const isUnreadable = (id, path) => {
+    const key = unreadableRef.current.get(id);
+    if (key === undefined) return false;
+    if (key === `${path.folder}/${path.file}` && savedTemplatesRef.current.some((t) => t.folder === path.folder && t.file === path.file)) return true;
+    releaseUnreadable(id);
+    return false;
+  };
+
   /** Hold saves to `key` (see `holdsRef`); the returned function lifts this hold. */
   const holdSaves = useCallback((key) => {
     const holds = holdsRef.current;
@@ -875,13 +963,23 @@ export default function App() {
           continue;
         }
         const raw = result?.doc;
-        if (!raw) continue;
+        if (!raw) {
+          // Not there yet is auto-save's to write. There but unreadable — the
+          // store lists it so — is someone's file mid-edit, or broken: keep
+          // what the app has, and never write it over the file.
+          const listed = savedTemplatesRef.current.find((t) => t.folder === path.folder && t.file === path.file);
+          if (listed?.kind === "unreadable") holdUnreadable(file.id, path, listed.reason);
+          continue;
+        }
         let doc;
         try {
           doc = validateDoc(file.kind, raw);
         } catch {
-          continue; // mid-save or hand-broken JSON: keep what the app has
+          // Mid-save or hand-broken JSON: keep what the app has, and the same.
+          holdUnreadable(file.id, path, "not a diagram this editor reads");
+          continue;
         }
+        releaseUnreadable(file.id);
         const json = JSON.stringify(doc);
         // Compared against the LIVE document, not the one this pass started
         // from: an edit made while the read was in flight is newer than the
@@ -951,17 +1049,31 @@ export default function App() {
   }, [reconcile, applyListing, updateWorkspace]);
 
   // Another program changed a template on disk: reload whichever open file
-  // is synced with it. The server never announces its own writes, and a file
-  // whose disk copy already matches is left alone, so the app's saves don't
-  // bounce back as reloads.
+  // is synced with it — the file on disk wins. A file whose disk copy
+  // already matches is left alone, so the app's saves don't bounce back as
+  // reloads.
+  //
+  // A save made through the store — this tab's, another tab's, another
+  // browser's — is announced too, marked `saved`. It is news only to a copy
+  // that hasn't moved on since it last synced with the file: a copy with
+  // edits of its own is newer, and its save is due; this tab's own save
+  // finds the file holding what it wrote. Without it, a second window kept
+  // its stale copy and saved it back over the first one's edits.
   useEffect(() => {
     if (!templatesDir) return undefined;
-    return onTemplateChange(async ({ folder, file: name }) => {
-      void refreshTemplates();
+    /** Does this copy still say what it last synced with the file at `path`? */
+    const inSync = (f, path) => {
+      const record = writtenRef.current.get(f.id);
+      return Boolean(record && boundTo({ disk: record }, path) && record.json === JSON.stringify(f.doc));
+    };
+    return onTemplateChange(async ({ folder, file: name, saved }) => {
+      // A save in place changes nothing the menu lists that matters; an outside edit may.
+      if (!saved) void refreshTemplates();
       const { files: current } = workspaceRef.current;
       const paths = diskPaths(current);
       const targets = current
         .filter((f) => paths.get(f.id)?.folder === folder && paths.get(f.id)?.file === name)
+        .filter((f) => !saved || inSync(f, paths.get(f.id)) || unreadableRef.current.has(f.id))
         .map((f) => ({ file: f, path: paths.get(f.id) }));
       if (!targets.length) return;
       const adopted = await reconcile(targets);
@@ -1051,6 +1163,8 @@ export default function App() {
         if (before && !moved && before.json === json) continue;
         // Mid re-link: written once the hold lifts, if the answer still says to.
         if (isHeld(path)) continue;
+        // Its disk copy couldn't be read: never written over until it reads again.
+        if (isUnreadable(file.id, path)) continue;
         // Would drop something from the file: written once the person says so.
         const loss = lossRef.current.get(file.id);
         if (loss && !loss.acknowledged && loss.key === `${path.folder}/${path.file}`) {
@@ -1114,7 +1228,7 @@ export default function App() {
         const before = writtenRef.current.get(file.id);
         const json = JSON.stringify(file.doc);
         if (before && before.folder === path.folder && before.file === path.file && before.json === json) continue;
-        if (isHeld(path)) continue;
+        if (isHeld(path) || isUnreadable(file.id, path)) continue;
         const loss = lossRef.current.get(file.id);
         if (loss && !loss.acknowledged && loss.key === `${path.folder}/${path.file}`) continue;
         flushTemplate(path, file.doc);
@@ -1731,26 +1845,79 @@ export default function App() {
     }
   }, [applyListing, bindTo, unbindFile]);
 
-  // Guard against a stale-looking UI if another tab saves the workspace.
+  // ── Keeping the workspace in this browser ─────────────────────────────────
+  //
+  // Live edits reach localStorage a beat after they stop, not only on Save
+  // and structure ops — so a reload, a crash, or a disk save that failed
+  // loses nothing — and once more as the page goes away. Only when this tab
+  // changed something since it last stored or read the workspace: a tab that
+  // merely took another tab's copy writes nothing back.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (contentOf(workspace) !== storedRef.current.content) persist(workspace);
+    }, PERSIST_MS);
+    return () => clearTimeout(timer);
+  }, [workspace, persist]);
+
+  useEffect(() => {
+    const flush = () => {
+      const ws = workspaceRef.current;
+      if (contentOf(ws) !== storedRef.current.content) persist(ws);
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, [persist]);
+
+  // Another tab stored the workspace: take its files, their order and its
+  // trash — but not a document this tab has edits to that it hasn't stored
+  // yet (those are newer, are stored next, and reach that tab the same way),
+  // nor which file is open here. Taking that tab's copy of a document edited
+  // here was how a second tab reverted the first one's edits, and auto-save
+  // then wrote the stale copy over the file.
+  //
+  // A document taken from that tab is that tab's to save to disk — it has
+  // already, or will — so it is recorded here as synced rather than written
+  // again: a second write of the same copy, racing that tab's next one, could
+  // land last and put the older copy back on disk.
   useEffect(() => {
     const onStorage = (event) => {
-      if (event.key === WORKSPACE_KEY && event.newValue) {
-        try {
-          const parsed = JSON.parse(event.newValue);
-          // Same rule as seedWorkspace: an empty array is a real state.
-          if (Array.isArray(parsed.files)) {
-            setWorkspace({
-              files: parsed.files.map((f) => ({ ...f, doc: validateDoc(f.kind, f.doc) })),
-              activeId: parsed.activeId ?? null,
-              removed: Array.isArray(parsed.removed)
-                ? parsed.removed.map((f) => ({ ...f, doc: validateDoc(f.kind, f.doc) }))
-                : [],
-            });
-          }
-        } catch (err) {
-          console.warn("Ignoring unreadable workspace update:", err);
-        }
+      if (event.key !== WORKSPACE_KEY || !event.newValue) return;
+      let incoming;
+      let theirActive;
+      try {
+        const parsed = JSON.parse(event.newValue);
+        // Same rule as seedWorkspace: an empty array is a real state.
+        if (!Array.isArray(parsed?.files)) return;
+        incoming = {
+          files: parsed.files.map((f) => ({ ...f, doc: validateDoc(f.kind, f.doc) })),
+          removed: Array.isArray(parsed.removed) ? parsed.removed.map((f) => ({ ...f, doc: validateDoc(f.kind, f.doc) })) : [],
+        };
+        theirActive = parsed.activeId;
+      } catch (err) {
+        console.warn("Ignoring unreadable workspace update:", err);
+        return;
       }
+      // Read now, not in the update: React may run an update twice.
+      const stored = storedRef.current;
+      storedRef.current = storedOf(incoming);
+      setWorkspace((ws) => {
+        const mine = new Map(ws.files.map((f) => [f.id, f]));
+        const files = incoming.files.map((f) => {
+          const here = mine.get(f.id);
+          return here && JSON.stringify(here.doc) !== stored.docs.get(f.id) ? { ...f, doc: here.doc } : f;
+        });
+        const paths = diskPaths(files);
+        for (const f of files) {
+          const here = mine.get(f.id);
+          if (here?.doc === f.doc) continue; // kept: this tab's own edits, saved from here
+          const json = JSON.stringify(f.doc);
+          if (here && JSON.stringify(here.doc) === json) continue; // nothing new
+          writtenRef.current.set(f.id, { ...paths.get(f.id), json });
+        }
+        const has = (id) => files.some((f) => f.id === id);
+        const activeId = has(ws.activeId) ? ws.activeId : has(theirActive) ? theirActive : (files[0]?.id ?? null);
+        return { files, activeId, removed: incoming.removed };
+      });
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
