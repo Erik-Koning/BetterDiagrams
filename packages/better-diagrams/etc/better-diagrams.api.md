@@ -7,7 +7,7 @@
 import { CSSProperties } from 'react';
 import { ForwardRefExoticComponent } from 'react';
 import { JSX as JSX_2 } from 'react';
-import { NamedExoticComponent } from 'react';
+import { MemoExoticComponent } from 'react';
 import { ReactNode } from 'react';
 import { RefAttributes } from 'react';
 
@@ -758,7 +758,7 @@ export interface DiagramNode {
     outline?: NodeOutline;
     parentId: string | null;
     plain?: boolean;
-    priority?: TaskPriority;
+    priority?: TaskPriority_2;
     providers?: string[];
     stage?: TaskStage;
     startDate?: DiagramDate;
@@ -795,7 +795,7 @@ export type DiagramNodeData = {
     storyPoints?: number;
     done?: boolean;
     stage?: TaskStage;
-    priority?: TaskPriority;
+    priority?: TaskPriority_2;
     capacity?: number;
     status?: NodeStatus;
     plain?: boolean;
@@ -983,11 +983,11 @@ export interface DictionaryTable {
 }
 
 // @public (undocumented)
-export const DiffCanvas: NamedExoticComponent<{
+export const DiffCanvas: MemoExoticComponent<(input: {
     base: DiagramTemplate;
     current: DiagramTemplate;
     diff: TemplateDiff;
-}>;
+}) => JSX_2.Element>;
 
 // @public
 export function diffSequences(base: SequenceTemplate, current: SequenceTemplate, opts?: {
