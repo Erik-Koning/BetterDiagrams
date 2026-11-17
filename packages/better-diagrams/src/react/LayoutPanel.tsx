@@ -134,14 +134,22 @@ const METHOD_LABEL: Record<DirectedMethod, { label: string; title: string }> = {
  * What a directed flow gives up for what, and how it looks for its arrangement.
  * Used in the Layout panel and under the mode's entry in the Arrange menu. The
  * slider applies when it is let go: each stop is a whole layout and one undo step.
+ *
+ * `direction` and `onDirection` add the way the flow runs, for the menu: the
+ * panel has a Direction row of its own below these, so it leaves them off.
  */
 export function DirectedControls({
   value,
   onChange,
+  direction,
+  onDirection,
   className,
 }: {
   value: DirectedPreferences | undefined;
   onChange: (patch: DirectedPreferences) => void;
+  /** The document's `settings.layout.direction`; absent is Auto. */
+  direction?: LayoutDirection;
+  onDirection?: (direction: LayoutDirection) => void;
   className?: string;
 }) {
   const priority = value?.priority ?? "mostly-crossings";
@@ -192,6 +200,29 @@ export function DirectedControls({
           ))}
         </select>
       </label>
+      {onDirection ? (
+        <label className="as-directed__row" title="Which way the flow runs">
+          <span className="as-paths__caption">Direction</span>
+          <select
+            className="as-select"
+            value={direction ?? "auto"}
+            aria-label="Direction"
+            onChange={(event) => onDirection(event.target.value as LayoutDirection)}
+          >
+            {LAYOUT_DIRECTIONS.map((d) => (
+              // Words here: a menu's select has no room for the panel's arrows and their tooltips.
+              // Left to itself a directed flow reads across, and turns only for a plainly better picture.
+              <option
+                key={d}
+                value={d}
+                title={d === "auto" ? "Left to right (down the page for a flowchart), unless the other way is plainly the better picture" : DIRECTION_LABEL[d].title}
+              >
+                {d === "auto" ? "Auto" : DIRECTION_LABEL[d].title}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
     </div>
   );
 }
@@ -211,6 +242,8 @@ export interface LayoutPanelProps {
   onPrefs: (patch: LayoutPatch) => void;
   /** Arrange as a directed flow, with these of its choices changed. */
   onDirected: (patch: DirectedPreferences) => void;
+  /** Forget every layout and directed-flow choice, keeping how it is arranged, and arrange again. */
+  onReset: () => void;
   onArrange: () => void;
   onPolish: () => void;
   onArrangeSelection: () => void;
@@ -248,6 +281,7 @@ export function LayoutPanel({
   selectedLines,
   onPrefs,
   onDirected,
+  onReset,
   onArrange,
   onPolish,
   onArrangeSelection,
@@ -265,6 +299,8 @@ export function LayoutPanel({
   const mode = template.settings?.arrange ?? "auto";
   // The sliders start where an arrangement would put the gaps, so a nudge is a nudge from there.
   const gaps = layoutGaps(template, options);
+  // Reset has something to take back only once a choice has been stored.
+  const chosen = !!template.settings?.layout || !!template.settings?.directed;
 
   return (
     <div className="as-panel as-panel--paths as-layout" role="region" aria-label="Layout">
@@ -385,6 +421,21 @@ export function LayoutPanel({
             value={gaps.nodeGap}
             onCommit={(nodeGap) => onPrefs({ nodeGap })}
           />
+          <div className="as-layout__actions">
+            <button
+              type="button"
+              className="as-btn"
+              disabled={!chosen}
+              onClick={onReset}
+              title={
+                chosen
+                  ? "Put every choice here back to its default and arrange again. How the diagram is arranged stays as it is"
+                  : "Every choice here is already at its default"
+              }
+            >
+              Reset
+            </button>
+          </div>
         </>
       ) : null}
 

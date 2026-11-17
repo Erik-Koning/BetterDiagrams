@@ -30,3 +30,13 @@ export function isNodeLocked(node: { data?: unknown } | undefined | null): boole
  */
 export type NodePatch = Partial<DiagramNodeData> | ((data: DiagramNodeData) => Partial<DiagramNodeData>);
 export type EdgePatch = Partial<DiagramEdgeData> | ((data: DiagramEdgeData) => Partial<DiagramEdgeData>);
+
+/**
+ * How an inspector write lands in undo. `continuous` marks one frame of a
+ * drag — a slider, a colour picker swept across — so the frames of one drag
+ * undo as the one change they were, the way a run of typing does. A click on
+ * a swatch is a choice of its own and leaves it off.
+ */
+export interface PatchOptions {
+  continuous?: boolean;
+}

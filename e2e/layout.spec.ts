@@ -63,6 +63,43 @@ test.describe("arranging", () => {
     expect(overlapping(tidied, "a", "b")).toBe(false);
   });
 
+  test("Directed flow from the Arrange menu reads left to right, takes a direction, and ⌘Z puts each step back", async ({ page, studio }) => {
+    const before = (await studio.liveDoc()) as unknown as Doc;
+    const menu = await studio.openMenu("Arrange");
+    await menu.getByRole("radio", { name: "Directed flow" }).click();
+    await expect(studio.toast).toContainText("Arranged as a flow");
+    const flowed = (await studio.liveDoc()) as unknown as Doc;
+    expect(flowed.settings?.arrange).toBe("directed");
+    expect(overlapping(flowed, "a", "b")).toBe(false);
+    const at = (doc: Doc, id: string) => doc.nodes.find((n) => n.id === id)!;
+    // Alpha and Bravo feed Charlie, which feeds Delta: three stages, across the page.
+    expect(at(flowed, "a").x).toBeLessThan(at(flowed, "c").x);
+    expect(at(flowed, "c").x).toBeLessThan(at(flowed, "d").x);
+
+    // Open again, the menu has the mode's own choices under it; Direction turns it down the page, one more step.
+    const open = await studio.openMenu("Arrange");
+    await expect(open.getByLabel("Priority")).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath("directed-menu.png") });
+    await open.getByLabel("Direction").selectOption("down");
+    await expect.poll(async () => ((await studio.liveDoc()) as unknown as Doc).settings?.layout?.direction).toBe("down");
+    const down = (await studio.liveDoc()) as unknown as Doc;
+    expect(down.settings?.arrange).toBe("directed");
+    expect(at(down, "c").y).toBeLessThan(at(down, "d").y);
+
+    // ⌘Z: back across the page; again: back to the rough arrangement and Best fit.
+    await page.keyboard.press("Escape");
+    await studio.focusEditor();
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect.poll(async () => ((await studio.liveDoc()) as unknown as Doc).settings?.layout?.direction).toBeUndefined();
+    expect(at((await studio.liveDoc()) as unknown as Doc, "c").x).toBe(at(flowed, "c").x);
+    // Reading the JSON went through the app's own menu: the keyboard goes back to the editor first.
+    await studio.focusEditor();
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect.poll(async () => ((await studio.liveDoc()) as unknown as Doc).settings?.arrange ?? "auto").toBe(before.settings?.arrange ?? "auto");
+    const back = (await studio.liveDoc()) as unknown as Doc;
+    expect(overlapping(back, "a", "b")).toBe(true);
+  });
+
   test("the panel scores the picture, and a choice arranges and is kept", async ({ page, studio }) => {
     await studio.fromMenu("Arrange", /Layout panel/);
     const panel = page.getByRole("region", { name: "Layout" });
