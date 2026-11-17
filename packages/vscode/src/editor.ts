@@ -13,7 +13,7 @@ import { createDiagramFile, fileName } from "./files";
 import { webviewHtml } from "./html";
 import { VIEW_TYPE, type HostMessage, type ViewSettings, type WebviewMessage } from "./protocol";
 import { selectedSpans } from "./json-ranges";
-import { DocumentSync, SNIFF_LIMIT, readText } from "./sync";
+import { DocumentSync, SNIFF_LIMIT, changedSpan, readText } from "./sync";
 import { VIEW_KEYS, viewChange, viewFrom } from "./view-settings";
 
 /** What's selected on the canvas, lit in the JSON beside it. */
@@ -136,19 +136,29 @@ export class DiagramEditorProvider implements vscode.CustomTextEditorProvider {
     // file system) is shown, never edited.
     const readOnly = vscode.workspace.fs.isWritableFileSystem(document.uri.scheme) === false;
     const post = (message: HostMessage) => void webview.postMessage(message);
+    const name = fileName(document.uri);
     const sync = new DocumentSync({
       getText: () => document.getText(),
       replaceText: (text) => {
+        // In the document's own line endings, as VS Code would write it, so
+        // only what changed is replaced.
+        const next = document.eol === vscode.EndOfLine.CRLF ? text.replace(/\r?\n/g, "\r\n") : text;
+        const span = changedSpan(document.getText(), next);
+        if (span.start === span.end && !span.text) return Promise.resolve(true);
         const edit = new vscode.WorkspaceEdit();
-        edit.replace(document.uri, document.validateRange(new vscode.Range(0, 0, document.lineCount, 0)), text);
+        edit.replace(document.uri, new vscode.Range(document.positionAt(span.start), document.positionAt(span.end)), span.text);
         return Promise.resolve(vscode.workspace.applyEdit(edit));
       },
       format: (doc) => this.format(document, doc),
       post,
       confirmLoss: (lines) => this.confirmLoss(document, lines),
+      writeFailed: (reason) => {
+        const why = reason.trim().replace(/[.!]?$/, ".");
+        this.log.warn(`Couldn't write an edit to ${name}: ${why}`);
+        void vscode.window.showWarningMessage(`Couldn't write your edit to ${name}: ${why} The diagram shows the file as it is.`);
+      },
     });
 
-    const name = fileName(document.uri);
     const report = (what: string) => (error: unknown) => this.log.error(`${what} (${name}): ${(error as Error)?.message ?? error}`);
     /** The AI panel's requests in flight, to stop when it gives up or the editor closes. */
     const asking = new Map<number, vscode.CancellationTokenSource>();
@@ -197,10 +207,17 @@ export class DiagramEditorProvider implements vscode.CustomTextEditorProvider {
           openLink(message.url).catch(report(`Couldn't open ${message.url}`));
           return;
         case "undo":
-        case "redo":
-          // VS Code steps whatever editor is in front, so only while this one is.
-          if (panel.active) Promise.resolve(vscode.commands.executeCommand(message.type)).catch(report(`Couldn't ${message.type}`));
+        case "redo": {
+          const step = message.type;
+          // After the edits sent before it are in the text, so it steps back
+          // the newest of them, not the one before. VS Code steps whatever
+          // editor is in front, so only while this one is.
+          sync
+            .settled()
+            .then(() => (panel.active ? vscode.commands.executeCommand(step) : undefined))
+            .then(undefined, report(`Couldn't ${step}`));
           return;
+        }
         case "setView":
           writeView(message.view).catch((error: unknown) => {
             report("Couldn't change a setting")(error);

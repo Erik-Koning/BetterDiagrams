@@ -12,15 +12,83 @@ export function removeVsCodeDefaultStyles(): void {
   document.getElementById("_defaultStyles")?.remove();
 }
 
+/** `<input>` types nobody types text into, as the studio counts them (`isTypingTarget`). */
+const UNTYPED_INPUTS = new Set(["checkbox", "radio", "range", "color", "button", "submit", "reset", "file", "image", "hidden"]);
+
 /**
- * ⌘Z, ⇧⌘Z and ⌘Y belong to VS Code: it undoes the document's text, the one
- * history every view of the file shares, and the webview hears of the result
- * like any other change. VS Code's listener sees the key first (it's
- * registered before this page loads); this stops it there, before the
- * studio would ask for the same step a second time (its toolbar buttons ask
- * the extension: `hostHistory` in main.tsx).
+ * Whether `target` is a place a person types text: a text box, a text area,
+ * an editable region (the Edit JSON modal's editor is one). Not a slider, a
+ * tick box or a select: ⌘Z on those is the diagram's.
  */
-export function leaveHistoryToVsCode(): void {
+export function isTextField(target: EventTarget | null): boolean {
+  if (target instanceof HTMLTextAreaElement) return !target.readOnly && !target.disabled;
+  if (target instanceof HTMLInputElement) return !UNTYPED_INPUTS.has(target.type) && !target.readOnly && !target.disabled;
+  return target instanceof HTMLElement && target.isContentEditable;
+}
+
+const IS_MAC = /Mac|iP(hone|ad|od)/.test(navigator.platform || navigator.userAgent);
+
+/** ⌘ on a Mac, Ctrl elsewhere, and no other modifier but Shift. */
+const commandKey = (event: KeyboardEvent) =>
+  !event.altKey && (IS_MAC ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey);
+
+/**
+ * Whether the key is the letter `char`: by what it types, or by its key
+ * code, as VS Code's listener tells Z and Y — so a layout that types another
+ * letter there is still caught before VS Code catches it.
+ */
+const isLetter = (event: KeyboardEvent, char: string) =>
+  event.key.toLowerCase() === char || event.keyCode === char.toUpperCase().charCodeAt(0);
+
+/** The step ⌘Z, ⇧⌘Z or ⌘Y asks for (Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y off a Mac); null for any other key. */
+function historyStep(event: KeyboardEvent): "undo" | "redo" | null {
+  if (!commandKey(event)) return null;
+  if (isLetter(event, "z")) return event.shiftKey ? "redo" : "undo";
+  if (isLetter(event, "y") && !event.shiftKey) return "redo";
+  return null;
+}
+
+/**
+ * ⌘Z, ⇧⌘Z and ⌘Y on the diagram belong to VS Code: it undoes the document's
+ * text, the one history every view of the file shares, and the webview
+ * hears of the result like any other change. VS Code's listener on this
+ * window hears the key first (it's registered before this page loads), and
+ * the window listener here stops it there, before the studio would ask for
+ * the same step a second time (its toolbar buttons ask the extension:
+ * `hostHistory` in main.tsx).
+ *
+ * In a text field they're the field's: they undo the typing, not the
+ * diagram. VS Code's listener would take them from a field too, and its
+ * Undo steps the file in front, whatever has focus in it. So a key aimed at
+ * a field is stopped on the document — after the field, and an editor with
+ * a history of its own such as the Edit JSON modal's, have had it; before it
+ * reaches the window — and the field's step is taken here, as VS Code takes
+ * it for a webview of its own: macOS leaves ⌘Z in a field to the app's Edit
+ * menu, which VS Code keeps from a focused webview. ⌘A, likewise, selects
+ * the field's text: VS Code's Select All is the canvas's (package.json).
+ *
+ * `divert` is asked first about a step aimed at the diagram; true takes it
+ * from VS Code (main.tsx sends it the extension's way, after an edit still
+ * waiting to be sent).
+ */
+export function leaveHistoryToVsCode(divert: (step: "undo" | "redo") => boolean = () => false): void {
+  document.addEventListener("keydown", (event) => {
+    const step = historyStep(event);
+    const selectAll = !step && commandKey(event) && !event.shiftKey && isLetter(event, "a");
+    if (!step && !selectAll) return;
+    if (isTextField(event.target)) {
+      event.stopPropagation();
+      // The field answered it itself (CodeMirror's history, its Select All).
+      if (event.defaultPrevented) return;
+      event.preventDefault();
+      document.execCommand(step ?? "selectAll");
+      return;
+    }
+    if (step && divert(step)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  });
   window.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
     if ((event.metaKey || event.ctrlKey) && (key === "z" || key === "y")) event.stopImmediatePropagation();
@@ -77,7 +145,8 @@ export function sendLinksToHost(open: (url: string) => void): void {
  * Whether the person has done anything here yet. The studio can report a
  * change on its own as it opens a document (laying out one that has no
  * positions, say); opening a file must not change it, so only changes that
- * follow a person's input are written.
+ * follow a person's input are written. Heard on the way down, so a key
+ * stopped on its way back up (leaveHistoryToVsCode) still counts.
  */
 export function watchForInput(): () => boolean {
   let touched = false;
