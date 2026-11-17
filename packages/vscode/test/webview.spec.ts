@@ -124,6 +124,158 @@ test.describe("the VS Code webview", () => {
     expect(await webview.posted("edit")).toEqual([]);
   });
 
+  test("⌘Z in a text field undoes the typing, not the diagram, and VS Code never hears it", async ({ webview, page }) => {
+    await webview.open();
+    await webview.init(json(ARCHITECTURE));
+    await webview.fromMenu("Insert", /^Node /);
+    const label = webview.root.locator(".as-inspector").getByLabel("Node label", { exact: true });
+    await expect(label).toHaveValue("New Service");
+    await label.click();
+    await label.press("End");
+    await page.keyboard.type(" Payments");
+    await expect(label).toHaveValue("New Service Payments");
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect(label).toHaveValue("New Service");
+    await page.keyboard.press("ControlOrMeta+Shift+z");
+    await expect(label).toHaveValue("New Service Payments");
+    await expect(webview.nodeTitled("New Service Payments")).toBeVisible();
+    expect(await webview.forwardedChords()).toEqual([]);
+    // On the canvas, ⌘Z is VS Code's again.
+    await page.locator(".react-flow__pane").click({ position: { x: 40, y: 400 } });
+    await page.keyboard.press("ControlOrMeta+z");
+    expect(await webview.forwardedChords()).toEqual(["z"]);
+  });
+
+  test("⌘Z in the Edit JSON editor is the editor's own", async ({ webview, page }) => {
+    await webview.open();
+    await webview.init(json(ARCHITECTURE));
+    const menu = await webview.settings();
+    await menu.getByRole("menuitem", { name: /Edit JSON/ }).click();
+    const editor = page.locator(".cm-content");
+    await editor.click();
+    await page.keyboard.type("xyz");
+    await expect(editor).toContainText("xyz");
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect(editor).not.toContainText("xyz");
+    expect(await webview.forwardedChords()).toEqual([]);
+    expect(await webview.posted("edit")).toEqual([]);
+  });
+
+  test("⌘A in a text field selects its text; on the canvas it selects the diagram", async ({ webview, page }) => {
+    await webview.open();
+    await webview.init(json(ARCHITECTURE));
+    await webview.fromMenu("Insert", /^Node /);
+    const label = webview.root.locator(".as-inspector").getByLabel("Node label", { exact: true });
+    await label.click();
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.type("Payments");
+    await expect(label).toHaveValue("Payments");
+    expect(await webview.forwardedChords()).toEqual([]);
+    await page.locator(".react-flow__pane").click({ position: { x: 40, y: 400 } });
+    await page.keyboard.press("ControlOrMeta+a");
+    await expect(page.locator(".react-flow__node.selected")).toHaveCount(4);
+    expect(await webview.forwardedChords()).toEqual(["a"]);
+  });
+
+  test("typing in a field reaches VS Code as one edit per pause", async ({ webview, page }) => {
+    await webview.open();
+    await webview.init(json(ARCHITECTURE));
+    await webview.fromMenu("Insert", /^Node /);
+    await expect.poll(async () => (await webview.posted("edit")).length).toBeGreaterThan(0);
+    const label = webview.root.locator(".as-inspector").getByLabel("Node label", { exact: true });
+    await label.click();
+    await label.press("End");
+    const before = (await webview.posted("edit")).length;
+    await page.keyboard.type(" Payments");
+    // Held while the typing goes on…
+    expect((await webview.posted("edit")).length).toBe(before);
+    // …and sent once, when it rests.
+    await expect.poll(async () => (await webview.posted("edit")).length).toBe(before + 1);
+    const edits = await webview.posted("edit");
+    expect((edits.at(-1)!.doc as typeof ARCHITECTURE).nodes.map((node) => node.label)).toContain("New Service Payments");
+    await page.waitForTimeout(600);
+    expect(await webview.posted("edit")).toHaveLength(before + 1);
+  });
+
+  test("⌘S straight after typing takes the typing with it, before VS Code hears the key", async ({ webview, page }) => {
+    await webview.open();
+    await webview.init(json(ARCHITECTURE));
+    await webview.fromMenu("Insert", /^Node /);
+    await expect.poll(async () => (await webview.posted("edit")).length).toBeGreaterThan(0);
+    const label = webview.root.locator(".as-inspector").getByLabel("Node label", { exact: true });
+    await label.click();
+    await label.press("End");
+    const before = (await webview.posted("edit")).length;
+    await page.keyboard.type(" Payments");
+    expect((await webview.posted("edit")).length).toBe(before);
+    await page.keyboard.press("ControlOrMeta+s");
+    // At once, not after the pause: the save that key starts is of the text with the typing in.
+    const edits = await webview.posted("edit");
+    expect(edits).toHaveLength(before + 1);
+    expect((edits.at(-1)!.doc as typeof ARCHITECTURE).nodes.map((node) => node.label)).toContain("New Service Payments");
+    const forwarded = await page.evaluate(() => (window as unknown as { __forwarded: Array<{ key: string; mod: boolean }> }).__forwarded);
+    expect(forwarded.some((k) => k.key === "s" && k.mod)).toBe(true);
+  });
+
+  test("typing waiting to be sent goes first: when focus leaves, and before an undo", async ({ webview, page }) => {
+    await webview.open();
+    await webview.init(json(ARCHITECTURE));
+    await webview.fromMenu("Insert", /^Node /);
+    const label = webview.root.locator(".as-inspector").getByLabel("Node label", { exact: true });
+    await label.click();
+    await label.press("End");
+    await page.keyboard.type(" A");
+    const sentOnLeaving = await label.evaluate((input: HTMLInputElement) => {
+      const posted = (window as unknown as { __posted: Array<{ type: string }> }).__posted;
+      const from = posted.length;
+      input.blur();
+      return posted.slice(from).map((message) => message.type);
+    });
+    expect(sentOnLeaving).toEqual(["edit"]);
+
+    await label.click();
+    await page.keyboard.type("B");
+    // The toolbar's Undo, pressed without focus leaving the field first.
+    const sentForUndo = await page.getByRole("button", { name: "Undo", exact: true }).evaluate((button: HTMLButtonElement) => {
+      const posted = (window as unknown as { __posted: Array<{ type: string }> }).__posted;
+      const from = posted.length;
+      button.click();
+      return posted.slice(from).map((message) => message.type);
+    });
+    expect(sentForUndo).toEqual(["edit", "undo"]);
+
+    await label.click();
+    await page.keyboard.type("C");
+    // ⌘Z aimed at the canvas while typing still waits (a rename just
+    // committed): the typing, then the undo, both through the extension.
+    const sentForKey = await page.evaluate(() => {
+      const posted = (window as unknown as { __posted: Array<{ type: string }> }).__posted;
+      const from = posted.length;
+      const mac = /Mac/.test(navigator.platform);
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "z", metaKey: mac, ctrlKey: !mac, bubbles: true, cancelable: true }));
+      return posted.slice(from).map((message) => message.type);
+    });
+    expect(sentForKey).toEqual(["edit", "undo"]);
+    expect(await webview.forwardedChords()).toEqual([]);
+  });
+
+  test("typing waiting to be sent gives way to a change made in VS Code", async ({ webview, page }) => {
+    await webview.open();
+    await webview.init(json(ARCHITECTURE));
+    await webview.fromMenu("Insert", /^Node /);
+    await expect.poll(async () => (await webview.posted("edit")).length).toBeGreaterThan(0);
+    const label = webview.root.locator(".as-inspector").getByLabel("Node label", { exact: true });
+    await label.click();
+    await label.press("End");
+    const before = (await webview.posted("edit")).length;
+    await page.keyboard.type(" Payments");
+    const renamed = { ...ARCHITECTURE, nodes: ARCHITECTURE.nodes.map((n) => (n.id === "api" ? { ...n, label: "Checkout API" } : n)) };
+    await webview.send({ type: "text", text: json(renamed), read: { state: "diagram" } });
+    await expect(webview.nodeTitled("Checkout API")).toBeVisible();
+    await page.waitForTimeout(600);
+    expect(await webview.posted("edit")).toHaveLength(before);
+  });
+
   test("an export reaches the extension instead of downloading", async ({ webview, page }) => {
     await webview.open();
     await webview.init(json(ARCHITECTURE));

@@ -36,7 +36,7 @@ import "@mosphere/better-diagrams/styles.css";
 import { completeTheme, kindOf, lossOf, registry, studioTheme, validateDoc, type DocumentKind, type ViewMode } from "@app/documents.js";
 import { VIEW_DEFAULTS, type AiChoice, type HostMessage, type TextRead, type ViewSettings, type WebviewMessage } from "../protocol";
 import { HostTools } from "./host-tools";
-import { leaveHistoryToVsCode, removeVsCodeDefaultStyles, sendDownloadsToHost, sendLinksToHost, watchForInput } from "./shims";
+import { isTextField, leaveHistoryToVsCode, removeVsCodeDefaultStyles, sendDownloadsToHost, sendLinksToHost, watchForInput } from "./shims";
 import "./webview.css";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
@@ -44,11 +44,80 @@ declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 const vscode = acquireVsCodeApi();
 const send = (message: WebviewMessage) => vscode.postMessage(message);
 
-removeVsCodeDefaultStyles();
-leaveHistoryToVsCode();
-sendDownloadsToHost((filename, data) => send({ type: "export", filename, data }));
-sendLinksToHost((url) => send({ type: "open", url }));
-const touched = watchForInput();
+/**
+ * Typing goes to VS Code as one edit per pause, not one per key: every edit
+ * is a step of its undo, and a label typed letter by letter took a ⌘Z per
+ * letter to take back. While a text field has focus, the newest document
+ * waits here, and goes once typing rests, focus leaves the field, the
+ * selection changes, or before anything sent after it: another edit, an
+ * undo, the editor going away.
+ */
+const TYPING_REST_MS = 400;
+let held: { doc: unknown } | null = null;
+let resting: ReturnType<typeof setTimeout> | undefined;
+
+/** Send the edit typing left waiting, if there is one. */
+function sendHeld(): void {
+  clearTimeout(resting);
+  resting = undefined;
+  if (!held) return;
+  const { doc } = held;
+  held = null;
+  send({ type: "edit", doc });
+}
+
+/** A person's edit: held while they type in a field (unless `now`), else sent, after one that was. */
+function sendEdit(doc: unknown, { now = false } = {}): void {
+  if (!now && isTextField(document.activeElement)) {
+    held = { doc };
+    clearTimeout(resting);
+    resting = setTimeout(sendHeld, TYPING_REST_MS);
+    return;
+  }
+  sendHeld();
+  send({ type: "edit", doc });
+}
+
+/**
+ * The text changed in VS Code under an edit still waiting: it was typed into
+ * a document that's no longer there, and sent it would write over the
+ * change. The text wins, as it does for an edit already sent (sync.ts).
+ */
+function dropHeld(): void {
+  clearTimeout(resting);
+  resting = undefined;
+  held = null;
+}
+
+/**
+ * A shortcut for VS Code takes the typing with it, before VS Code acts on the
+ * key: ⌘S straight after typing saved the file without its last letters,
+ * which were still waiting here. On the document, in the capture phase, so it
+ * runs before VS Code's own listener on the window. ⌘Z, ⌘Y and ⌘A are left to
+ * the field (shims.ts), and a modifier pressed on its own is not a shortcut.
+ */
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (!held || !(event.metaKey || event.ctrlKey)) return;
+    const key = event.key.toLowerCase();
+    if (["meta", "control", "shift", "alt", "z", "y", "a"].includes(key)) return;
+    sendHeld();
+  },
+  true,
+);
+document.addEventListener("focusout", sendHeld, true);
+window.addEventListener("blur", sendHeld);
+window.addEventListener("pagehide", sendHeld);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") sendHeld();
+});
+
+/** Undo or Redo through the extension, which steps VS Code's history once the edits sent before it are in. */
+const step = (which: "undo" | "redo") => {
+  sendHeld();
+  send({ type: which });
+};
 
 /**
  * The toolbar's Undo and Redo, as ⌘Z and ⇧⌘Z already are: VS Code's history
@@ -56,9 +125,22 @@ const touched = watchForInput();
  * Code can't say whether there's anything to step, so the buttons stay on.
  */
 const VS_CODE_HISTORY: HostHistory = {
-  undo: () => send({ type: "undo" }),
-  redo: () => send({ type: "redo" }),
+  undo: () => step("undo"),
+  redo: () => step("redo"),
 };
+
+removeVsCodeDefaultStyles();
+// ⌘Z with typing still waiting (a rename just committed) goes the toolbar's
+// way, so the typing is in the text before the step: VS Code's own ⌘Z would
+// step back what came before it.
+leaveHistoryToVsCode((which) => {
+  if (!held) return false;
+  step(which);
+  return true;
+});
+sendDownloadsToHost((filename, data) => send({ type: "export", filename, data }));
+sendLinksToHost((url) => send({ type: "open", url }));
+const touched = watchForInput();
 
 /** Requests the extension answers later, by id: the AI panel's, and Open file…'s. */
 let nextRequest = 1;
@@ -181,12 +263,14 @@ function Editor() {
       const message = event.data;
       switch (message.type) {
         case "init":
+          dropHeld();
           setFileReadOnly(message.readOnly);
           setFilename(message.filename);
           setView(message.view);
           show(message.text, message.read);
           return;
         case "text":
+          dropHeld();
           show(message.text, message.read);
           return;
         case "view":
@@ -215,18 +299,22 @@ function Editor() {
     };
     window.addEventListener("message", onMessage);
     send({ type: "ready" });
-    return () => window.removeEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      sendHeld();
+    };
   }, []);
 
   const onChange = useCallback((doc: DiagramTemplate | SequenceTemplate) => {
     if (!touched()) return;
+    // Shown at once, held or not: the studio's fields read the document back.
     setShown((current) => (current ? ({ ...current, doc } as Shown) : current));
-    send({ type: "edit", doc });
+    sendEdit(doc);
   }, []);
   /** A whole new document from the menu — an example, an edited JSON — as one edit. */
   const replace = useCallback((next: Shown) => {
     setShown(next);
-    send({ type: "edit", doc: next.doc });
+    sendEdit(next.doc, { now: true });
   }, []);
   const onNavigateFile = useCallback((ref: string) => send({ type: "navigate", ref }), []);
   /**
@@ -241,6 +329,8 @@ function Editor() {
   const onNewFileOnDisk = useCallback(() => send({ type: "newFile" }), []);
   /** The selection, for the extension to light in the JSON beside the canvas, as the web app's panel does. */
   const onSelectionChange = useCallback((selection: object) => {
+    // What was typed into the last thing selected is its own step.
+    sendHeld();
     send({ type: "selection", selection: selection as Record<string, string[]> });
   }, []);
 

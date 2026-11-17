@@ -121,7 +121,7 @@ import {
   type StudioFileInit,
 } from "../chrome";
 import { UiIcon } from "../ui-icons";
-import { isTypingTarget } from "../keys";
+import { claimKeyboard, controlOwnsKey, isTypingTarget, ownsKeyboard as ownsKeyboardOf, releaseKeyboard } from "../keys";
 import {
   WelcomeModal,
   clearWelcomeSuppression,
@@ -197,9 +197,9 @@ export interface SequenceStudioHandle {
    * `moveMessage` and `moveParticipant` fit). Returns it as applied.
    */
   update: (edit: SequenceTemplate | ((current: SequenceTemplate) => SequenceTemplate)) => SequenceTemplate;
-  /** Step back through the undo history; false when there was nothing to undo. */
+  /** Step back through the undo history; false when there was nothing to undo, or the editor is read-only. */
   undo: () => boolean;
-  /** Step forward again; false when there was nothing to redo. */
+  /** Step forward again; false when there was nothing to redo, or the editor is read-only. */
   redo: () => boolean;
   canUndo: () => boolean;
   canRedo: () => boolean;
@@ -283,6 +283,20 @@ export interface SequenceStudioProps {
   inspectorExtras?: ReactNode;
   className?: string;
   style?: CSSProperties;
+}
+
+/**
+ * Inspector fields a person edits by TYPING: the architecture editor's
+ * TYPED_FIELDS rule. Each keystroke commits, so a controlled host stays live,
+ * but a run of them in one field undoes as one step; a pick from a list, a
+ * swap, a branch added, stays a step of its own.
+ */
+const TYPED_FIELDS = new Set(["label", "description", "team", "tech", "text"]);
+
+/** The coalescing key for an inspector patch of element `id`, or nothing when it is not a typing run. */
+function typingRunKey(id: string, patch: object): string | undefined {
+  const keys = Object.keys(patch);
+  return keys.length === 1 && TYPED_FIELDS.has(keys[0]!) ? `${id}:${keys[0]}` : undefined;
 }
 
 let idCounter = 0;
@@ -430,6 +444,7 @@ function SequenceInner({
     reset: resetHistory,
     undo: undoHistory,
     redo: redoHistory,
+    endRun: endHistoryRun,
     hasUndo,
     hasRedo,
   } = history;
@@ -448,7 +463,7 @@ function SequenceInner({
 
   /** Re-materialize the canvas from a validated document. The one write path. */
   const adopt = useCallback(
-    (validated: SequenceTemplate, opts: { record?: boolean; emit?: boolean; reset?: boolean }) => {
+    (validated: SequenceTemplate, opts: { record?: boolean; emit?: boolean; reset?: boolean; coalesce?: string }) => {
       templateRef.current = validated;
       metaRef.current = validated.meta;
       const rf = toSequenceFlow(validated);
@@ -460,35 +475,51 @@ function SequenceInner({
       setEdges(ne);
       const snapshot: Snapshot = { nodes: nn, edges: ne, template: validated };
       if (opts.reset) resetHistory(snapshot);
-      else if (opts.record) commitHistory(snapshot);
+      else if (opts.record) commitHistory(snapshot, { coalesce: opts.coalesce });
       lastEmitted.current = JSON.stringify(validated);
       if (opts.emit) onChange?.(validated);
     },
     [flow, setNodes, setEdges, commitHistory, resetHistory, onChange],
   );
 
-  /** Derive the document from the live canvas and adopt it (undo + onChange). */
-  const commit = useCallback(() => {
+  /**
+   * Derive the document from the live canvas and adopt it (undo + onChange).
+   * `coalesce` names the field a run of typing is in, so the run undoes as
+   * one step — see CommitOptions in history.ts.
+   */
+  const commit = useCallback((coalesce?: string) => {
     const next = fromSequenceFlow(
       flow.getNodes() as unknown as SeqRFNode[],
       flow.getEdges() as unknown as SeqRFEdge[],
       { meta: metaRef.current },
     );
-    adopt(next, { record: true, emit: true });
+    adopt(next, { record: true, emit: true, coalesce });
   }, [flow, adopt]);
 
   // Latest-closure trampoline so a queued microtask never runs a stale commit.
   const commitRef = useRef(commit);
   commitRef.current = commit;
   const commitQueued = useRef(false);
-  const commitLater = useCallback(() => {
-    if (commitQueued.current) return;
+  /** The run the queued commit belongs to; edits that disagree make it nobody's. */
+  const queuedRun = useRef<string | undefined>(undefined);
+  const commitLater = useCallback((coalesce?: string) => {
+    if (commitQueued.current) {
+      // Two edits in one tick land as one commit, which only continues a
+      // run of typing when both were that run.
+      if (queuedRun.current !== coalesce) queuedRun.current = undefined;
+      return;
+    }
     commitQueued.current = true;
+    queuedRun.current = coalesce;
     queueMicrotask(() => {
       commitQueued.current = false;
-      commitRef.current();
+      const run = queuedRun.current;
+      queuedRun.current = undefined;
+      commitRef.current(run);
     });
   }, []);
+  /** For the canvas's own gestures, which are never a run. */
+  const requestCommit = useCallback(() => commitLater(), [commitLater]);
 
   const applyTemplate = useCallback(
     (incoming: unknown) => {
@@ -696,12 +727,19 @@ function SequenceInner({
     [readOnly, applyTemplate],
   );
 
+  /** The selection as last reported, to tell a change from a repeat. */
+  const selectionKey = useRef("");
   const onSelectionChange = useCallback(
     ({ nodes: selNodes, edges: selEdges }: { nodes: Node[]; edges: Edge[] }) => {
+      const key = JSON.stringify([selNodes.map((n) => n.id), selEdges.map((e) => e.id)]);
+      // Selecting something else ends any run of typing: the next keystroke
+      // is a different edit and must undo on its own.
+      if (key !== selectionKey.current) endHistoryRun();
+      selectionKey.current = key;
       setSelectedNodeIds(selNodes.map((n) => n.id));
       setSelectedEdgeIds(selEdges.map((e) => e.id));
     },
-    [],
+    [endHistoryRun],
   );
 
   // Report the selection to the host in document terms — canvas node ids
@@ -1146,23 +1184,36 @@ function SequenceInner({
     [setNodes, setEdges, onChange],
   );
 
+  // A read-only editor steps nowhere: the architecture editor's rule. Its
+  // history holds only the host's changes, and undoing one would send the
+  // old document out through onChange.
   const doUndo = useCallback(() => {
+    if (readOnly) return false;
     const snapshot = undoHistory();
     applySnapshot(snapshot);
     return !!snapshot;
-  }, [applySnapshot, undoHistory]);
+  }, [readOnly, applySnapshot, undoHistory]);
   const doRedo = useCallback(() => {
+    if (readOnly) return false;
     const snapshot = redoHistory();
     applySnapshot(snapshot);
     return !!snapshot;
-  }, [applySnapshot, redoHistory]);
+  }, [readOnly, applySnapshot, redoHistory]);
 
   // What the toolbar's Undo and Redo and the history keys do: the host's
-  // history when it keeps one, else this editor's.
-  const undoStep = useCallback(() => (hostHistory ? hostHistory.undo() : void doUndo()), [hostHistory, doUndo]);
-  const redoStep = useCallback(() => (hostHistory ? hostHistory.redo() : void doRedo()), [hostHistory, doRedo]);
-  const undoDisabled = hostHistory ? hostHistory.canUndo === false : !history.canUndo;
-  const redoDisabled = hostHistory ? hostHistory.canRedo === false : !history.canRedo;
+  // history when it keeps one, else this editor's. Neither while read-only.
+  const undoStep = useCallback(() => {
+    if (readOnly) return;
+    if (hostHistory) hostHistory.undo();
+    else doUndo();
+  }, [readOnly, hostHistory, doUndo]);
+  const redoStep = useCallback(() => {
+    if (readOnly) return;
+    if (hostHistory) hostHistory.redo();
+    else doRedo();
+  }, [readOnly, hostHistory, doRedo]);
+  const undoDisabled = readOnly || (hostHistory ? hostHistory.canUndo === false : !history.canUndo);
+  const redoDisabled = readOnly || (hostHistory ? hostHistory.canRedo === false : !history.canRedo);
 
   useImperativeHandle(
     handleRef,
@@ -1191,10 +1242,45 @@ function SequenceInner({
     }
   }, [onSave, showToast]);
 
+  /** The component's outermost element — how it tells its own keys from the host's. */
+  const rootRef = useRef<HTMLDivElement>(null);
+  /** Identity for the keyboard claim, shared with the architecture editor (keys.ts). */
+  const studioId = useMemo(() => Symbol("sequence-studio"), []);
+  // The first editor on the page claims the keyboard, so a lone one works
+  // before it has been touched.
+  useEffect(() => {
+    claimKeyboard(studioId, { ifFree: true });
+    return () => releaseKeyboard(studioId);
+  }, [studioId]);
+
+  /** A dialog is up, so the canvas is not what the keyboard is aimed at. */
+  const modalOpen = welcomeOpen || !!pendingExport || !!pendingDelete;
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
-      if (isTypingTarget(event.target)) return;
+      // The architecture editor's guards, in its order — see its handler for
+      // the reasoning behind each. Without them N, M and T inserted on the
+      // canvas behind the delete-participant dialog, a second editor on the
+      // page answered every key, and ⌘S from the field a message had just
+      // been renamed in went to the browser's Save Page dialog.
+      if (event.defaultPrevented && !mod) return;
+      if (modalOpen) return;
+      // Save belongs to the application, not to whatever has focus, so it
+      // comes before the typing guard: see isGlobalChord in keys.ts.
+      if (mod && event.shiftKey && event.key.toLowerCase() === "s" && onSaveFileAs) {
+        event.preventDefault();
+        onSaveFileAs();
+        return;
+      }
+      if (mod && event.key.toLowerCase() === "s" && onSave) {
+        event.preventDefault();
+        void handleSave();
+        return;
+      }
+      if (isTypingTarget(event.target, event)) return;
+      if (!ownsKeyboardOf(rootRef.current, studioId)) return;
+      if (controlOwnsKey(event.target, event)) return;
       // Arrows walk the plan stop to stop — but only with nothing selected, so
       // they stay available to whatever the user is editing.
       if (
@@ -1207,25 +1293,18 @@ function SequenceInner({
         stepTimelineStop(event.key === "ArrowRight" ? 1 : -1);
         return;
       }
+      // Not while read-only: see doUndo.
       if (mod && event.key.toLowerCase() === "z") {
         event.preventDefault();
+        if (readOnly) return;
         if (event.shiftKey) redoStep();
         else undoStep();
         return;
       }
       if (mod && event.key.toLowerCase() === "y") {
         event.preventDefault();
+        if (readOnly) return;
         redoStep();
-        return;
-      }
-      if (mod && event.shiftKey && event.key.toLowerCase() === "s" && onSaveFileAs) {
-        event.preventDefault();
-        onSaveFileAs();
-        return;
-      }
-      if (mod && event.key.toLowerCase() === "s" && onSave) {
-        event.preventDefault();
-        void handleSave();
         return;
       }
 
@@ -1300,7 +1379,7 @@ function SequenceInner({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [undoStep, redoStep, deleteSelection, duplicateSelection, handleSave, onSave, onSaveFileAs, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, readOnly, flow, setNodes, setEdges, addParticipant, addMessage, addNote]);
+  }, [undoStep, redoStep, deleteSelection, duplicateSelection, handleSave, onSave, onSaveFileAs, timelineActive, stepTimelineStop, selectedNodeIds, selectedEdgeIds, readOnly, flow, setNodes, setEdges, addParticipant, addMessage, addNote, modalOpen, studioId]);
 
   useEffect(() => {
     if (!openMenu) return;
@@ -1558,21 +1637,22 @@ function SequenceInner({
     () => ({
       readOnly,
       autonumber,
-      requestCommit: commitLater,
+      requestCommit,
       commitSpanGeometry,
       commitMessageOrder,
     }),
-    [readOnly, autonumber, commitLater, commitSpanGeometry, commitMessageOrder],
+    [readOnly, autonumber, requestCommit, commitSpanGeometry, commitMessageOrder],
   );
 
   // ── Inspector helpers ─────────────────────────────────────────────────────
 
+  /** `coalesce` is the typing run this edit is part of (typingRunKey), if any. */
   const patchNodeData = useCallback(
-    (nodeId: string, dataPatch: Record<string, unknown>) => {
+    (nodeId: string, dataPatch: Record<string, unknown>, coalesce?: string) => {
       setNodes((cur) =>
         cur.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, ...dataPatch } } : n)),
       );
-      commitLater();
+      commitLater(coalesce);
     },
     [setNodes, commitLater],
   );
@@ -1586,7 +1666,7 @@ function SequenceInner({
             : e,
         ),
       );
-      commitLater();
+      commitLater(typingRunKey(edgeId, patch));
     },
     [setEdges, commitLater],
   );
@@ -1607,10 +1687,12 @@ function SequenceInner({
   return (
     <SequenceContext.Provider value={context}>
       <div
+        ref={rootRef}
         className={`as-root${modeClass ? ` ${modeClass}` : ""}${className ? ` ${className}` : ""}`}
         data-mode={studioMode}
         data-color-scheme={colorSchemeOf(rootStyle)}
         style={rootStyle}
+        onPointerDownCapture={() => claimKeyboard(studioId)}
       >
         <div className="as-toolbar">
           {files?.length ? (
@@ -1996,12 +2078,16 @@ function SequenceInner({
                 <ParticipantInspector
                   node={singleNode}
                   onPatch={(patch) =>
-                    patchNodeData(singleNode.id, {
-                      participant: {
-                        ...(singleNode.data as { participant: SeqParticipant }).participant,
-                        ...patch,
+                    patchNodeData(
+                      singleNode.id,
+                      {
+                        participant: {
+                          ...(singleNode.data as { participant: SeqParticipant }).participant,
+                          ...patch,
+                        },
                       },
-                    })
+                      typingRunKey(singleNode.id, patch),
+                    )
                   }
                 />
               ) : null}
@@ -2009,13 +2095,17 @@ function SequenceInner({
                 <FragmentInspector
                   node={singleNode}
                   messages={template.messages}
-                  onPatch={(patch) =>
-                    patchNodeData(singleNode.id, {
-                      fragment: {
-                        ...(singleNode.data as { fragment: SeqFragment }).fragment,
-                        ...patch,
+                  onPatch={(patch, run) =>
+                    patchNodeData(
+                      singleNode.id,
+                      {
+                        fragment: {
+                          ...(singleNode.data as { fragment: SeqFragment }).fragment,
+                          ...patch,
+                        },
                       },
-                    })
+                      run ? `${singleNode.id}:${run}` : typingRunKey(singleNode.id, patch),
+                    )
                   }
                 />
               ) : null}
@@ -2023,9 +2113,11 @@ function SequenceInner({
                 <NoteInspector
                   node={singleNode}
                   onPatch={(patch) =>
-                    patchNodeData(singleNode.id, {
-                      note: { ...(singleNode.data as { note: SeqNote }).note, ...patch },
-                    })
+                    patchNodeData(
+                      singleNode.id,
+                      { note: { ...(singleNode.data as { note: SeqNote }).note, ...patch } },
+                      typingRunKey(singleNode.id, patch),
+                    )
                   }
                 />
               ) : null}
@@ -2423,7 +2515,8 @@ function FragmentInspector({
 }: {
   node: Node;
   messages: SeqMessage[];
-  onPatch: (patch: Partial<SeqFragment>) => void;
+  /** `run` names a typing run the patch's own fields can't: one branch's guard, inside `elses`. */
+  onPatch: (patch: Partial<SeqFragment>, run?: string) => void;
 }) {
   const f = (node.data as { fragment: SeqFragment }).fragment;
   const branches = f.elses ?? [];
@@ -2485,11 +2578,14 @@ function FragmentInspector({
                 value={branch.label}
                 placeholder={f.kind === "par" ? "and…" : "else…"}
                 onChange={(e) =>
-                  onPatch({
-                    elses: branches.map((b, j) =>
-                      j === i ? { ...b, label: e.target.value } : b,
-                    ),
-                  })
+                  onPatch(
+                    {
+                      elses: branches.map((b, j) =>
+                        j === i ? { ...b, label: e.target.value } : b,
+                      ),
+                    },
+                    `else:${branch.at}`,
+                  )
                 }
                 aria-label={`Branch ${i + 1} guard`}
               />

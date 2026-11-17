@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { anonymise, pseudo } from "./anonymise.mjs";
 import { agreement, crossValidate, distinctPicks, fitWeights, reviewerAgreement, rowsFrom, withFittedCosts } from "./fit.mjs";
-import { flowDocs } from "./corpus.mjs";
+import { flowDocs, withBuiltInContainers } from "./corpus.mjs";
 import { flowSummary, flowTable } from "./flow.mjs";
 import { choosePairs, countFlag, escapeHtml, flagValue, newPicks, parsePicks, runName } from "./pairing.mjs";
 
@@ -300,6 +300,18 @@ test("the flow documents are the same every time, each one piece, each with the 
   assert.ok(edgesOf("flow-retry").includes("n3>n1"), "a line back to an earlier stage");
   assert.ok(edgesOf("flow-two-way").includes("n1>n0") && edgesOf("flow-two-way").includes("n0>n1"), "traffic both ways");
   assert.equal(docs.find((d) => d.name === "flow-tiers").doc.nodes.filter((n) => n.kind === "group").length, 3);
+});
+
+test("a frame of a kind its own project registered is drawn as a frame, and a box with detail to drill into is left one", () => {
+  const node = (id, kind, parentId = null) => ({ id, kind, parentId, x: 0, y: 0, w: 170, h: 76 });
+  const doc = { version: 1, edges: [], nodes: [node("r", "region"), node("in", "service", "r"), node("card", "service"), node("detail", "service", "card"), node("empty", "region")] };
+  const out = withBuiltInContainers(doc);
+  assert.deepEqual(out.nodes.map((n) => n.kind), ["group", "service", "service", "service", "region"]);
+  // Nothing else about the document changes, and one with nothing to change is handed back as it was.
+  assert.deepEqual(out.nodes.map(({ kind, ...rest }) => rest), doc.nodes.map(({ kind, ...rest }) => rest));
+  assert.equal(doc.nodes[0].kind, "region");
+  const plain = { version: 1, edges: [], nodes: [node("card", "service"), node("detail", "service", "card")] };
+  assert.equal(withBuiltInContainers(plain), plain);
 });
 
 test("a summary adds what is counted and averages what is a share, over the documents an arrangement covers", () => {

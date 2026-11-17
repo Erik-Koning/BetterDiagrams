@@ -306,7 +306,7 @@ describe("save as", () => {
     }
   });
 
-  it("finds the linked folder a new file lands in through a symlinked path, and doesn't announce its own write", async () => {
+  it("finds the linked folder a new file lands in through a symlinked path, and announces its own write only as a save", async () => {
     // How macOS's /var is /private/var: the folder is linked by one path, the file saved by the other.
     const alias = join(root, "alias");
     symlinkSync(repo, alias);
@@ -322,12 +322,16 @@ describe("save as", () => {
       const answer = await post(`${base}/__templates/save-as`, { path: join(repo, "docs", "New.json"), doc: plan("New") });
       expect((await answer.json()).entry).toMatchObject({ folder: store.listing().linked[0].folder, file: "docs/New.json" });
       expect(readdirSync(join(home, "symlinks"))).toEqual([]);
-      // Past the watcher's settling: the store's own write was never news.
+      // The store's own write is news to other pages only as a save, never as an outside edit, which
+      // wins over anything. A file it has just made may not be announced at all: watching folder by
+      // folder (Linux), the store starts watching it once it is written. No other page has it open.
+      const at = { folder: store.listing().linked[0].folder, file: "docs/New.json" };
       await new Promise((done) => setTimeout(done, 600));
-      expect(events).toEqual([]);
-      // An edit made there is.
+      expect(events.every((e) => (e as { data: { saved?: boolean } }).data.saved === true)).toBe(true);
+      expect(events).not.toContainEqual({ event: "better-diagrams:template", data: at });
+      // An edit made there is an outside edit.
       writeFileSync(join(repo, "docs", "New.json"), JSON.stringify(plan("New, edited there")));
-      await expect.poll(() => events, { timeout: 5000 }).toContainEqual({ event: "better-diagrams:template", data: { folder: store.listing().linked[0].folder, file: "docs/New.json" } });
+      await expect.poll(() => events, { timeout: 5000 }).toContainEqual({ event: "better-diagrams:template", data: at });
     } finally {
       await close();
     }
@@ -428,6 +432,170 @@ describe("new files", () => {
   });
 });
 
+/**
+ * A request as a browser sends one — `Origin`, `Sec-Fetch-Site`, the `Host`
+ * it addressed — which fetch() here leaves out or fills in itself.
+ */
+function send(base: string, method: string, path: string, headers: Record<string, string>, body?: unknown) {
+  const { port } = new URL(base);
+  return new Promise<{ status: number; headers: Record<string, unknown>; body: string }>((done, fail) => {
+    const req = request(
+      { host: "127.0.0.1", port, path, method, headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...headers } },
+      (res) => {
+        let text = "";
+        res.on("data", (chunk) => (text += chunk));
+        res.on("end", () => done({ status: res.statusCode ?? 0, headers: res.headers, body: text }));
+      },
+    );
+    req.on("error", fail);
+    req.end(body === undefined ? undefined : JSON.stringify(body));
+  });
+}
+
+describe("other origins", () => {
+  it("are refused before anything is read, linked or written; the page the store serves is answered", async () => {
+    const secret = join(outside, "secret.txt");
+    writeFileSync(secret, "the secret");
+    const { base, close } = await serve(makeStore());
+    const { host } = new URL(base);
+    try {
+      // The app's own requests: same-origin writes name the origin; a typed URL or a script names none.
+      const own = { origin: base, "sec-fetch-site": "same-origin" };
+      expect((await send(base, "GET", "/__templates", {})).status).toBe(200);
+      expect((await send(base, "GET", "/__templates", { "sec-fetch-site": "none" })).status).toBe(200);
+      expect((await send(base, "GET", "/__templates", { "sec-fetch-site": "same-origin" })).status).toBe(200);
+      const opened = await send(base, "POST", "/__templates/symlinks", own, { open: true, path: secret });
+      expect(opened.status).toBe(200);
+      expect(JSON.parse(opened.body).copy.text).toBe("the secret");
+      expect((await send(base, "PUT", "/__templates/scratch/mine.json", own, plan("Mine"))).status).toBe(200);
+
+      // A page on another port of localhost — "same-site", not same-origin —
+      // which a dev server's CORS lets in; and one on another site.
+      const others: Array<Record<string, string>> = [
+        { host: `localhost:${new URL(base).port}`, origin: "http://localhost:3000", "sec-fetch-site": "same-site" },
+        { origin: "http://localhost:3000" },
+        { origin: `http://${host.replace("127.0.0.1", "localhost")}` },
+        { origin: "https://evil.example", "sec-fetch-site": "cross-site" },
+        { origin: "null" },
+        { "sec-fetch-site": "cross-site" },
+        { "sec-fetch-site": "same-site" },
+      ];
+      for (const headers of others) {
+        const label = JSON.stringify(headers);
+        const read = await send(base, "POST", "/__templates/symlinks", headers, { open: true, path: secret });
+        expect(read.status, label).toBe(403);
+        expect(read.body, label).not.toContain("the secret");
+        expect(read.headers["access-control-allow-origin"], label).toBeUndefined();
+        const saved = await send(base, "POST", "/__templates/save-as", headers, { path: join(outside, "planted.json"), doc: plan("Planted") });
+        expect(saved.status, label).toBe(403);
+        expect((await send(base, "GET", "/__templates", headers)).status, label).toBe(403);
+        expect((await send(base, "PUT", "/__templates/scratch/planted.json", headers, plan("Planted"))).status, label).toBe(403);
+        expect((await send(base, "POST", "/__templates/links", headers, { dir: outside })).status, label).toBe(403);
+        // The preflight a JSON request needs is refused too.
+        const preflight = await send(base, "OPTIONS", "/__templates/symlinks", { ...headers, "access-control-request-method": "POST" });
+        expect(preflight.status, label).toBe(403);
+        expect(preflight.headers["access-control-allow-origin"], label).toBeUndefined();
+      }
+      expect(readdirSync(outside)).toEqual(["secret.txt"]);
+      expect(readdirSync(join(home, "scratch"))).toEqual(["mine.json"]);
+      expect(readdirSync(join(home, "symlinks"))).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("guards", () => {
+  it("never write over a file that doesn't read as a diagram, in any folder — repo folders included", async () => {
+    const dirs = { scratch: join(home, "scratch"), examples: join(home, "examples"), symlinks: join(home, "symlinks") };
+    const store = createDiskStore({ dirs, linked: [repo], logger: quiet });
+    const { base, close } = await serve(store);
+    try {
+      // Mid hand-edit, empty, and JSON that isn't a diagram.
+      const kept = {
+        "examples/broken.json": '{ "nodes": [ {"id":"a","label":"hand edit in progress"}, ',
+        "examples/empty.json": "",
+        "examples/package.json": JSON.stringify({ name: "x" }),
+        "scratch/broken.json": '{ "nodes": [ ',
+      };
+      for (const [path, text] of Object.entries(kept)) writeFileSync(join(home, path), text);
+      for (const [path, text] of Object.entries(kept)) {
+        const [folder, file] = path.split("/");
+        const answer = await put(route(base, folder, file), plan("A stale copy"));
+        expect(answer.status, path).toBe(409);
+        expect((await answer.json()).error, path).toMatch(/not a diagram/);
+        expect(readFileSync(join(home, path), "utf8"), path).toBe(text);
+      }
+      const id = store.listing().linked[0].folder;
+      expect((await put(route(base, id, "broken.json"), plan("A stale copy"))).status).toBe(409);
+      expect(readFileSync(join(repo, "broken.json"), "utf8")).toBe('{ "nodes": [ ');
+      // A diagram is written over, and a file that isn't there yet is made.
+      writeFileSync(join(home, "examples", "plan.json"), JSON.stringify(plan("Plan")));
+      expect((await put(route(base, "examples", "plan.json"), plan("Plan, edited"))).status).toBe(200);
+      expect(JSON.parse(readFileSync(join(home, "examples", "plan.json"), "utf8")).meta.title).toBe("Plan, edited");
+      expect((await put(route(base, "scratch", "new.json"), plan("New"))).status).toBe(200);
+      expect(JSON.parse(readFileSync(join(home, "scratch", "new.json"), "utf8")).meta.title).toBe("New");
+    } finally {
+      await close();
+    }
+  });
+
+  it("never write through a symlinked file to outside its folder; one pointing inside is written", async () => {
+    const dirs = { scratch: join(home, "scratch"), examples: join(home, "examples"), symlinks: join(home, "symlinks") };
+    const store = createDiskStore({ dirs, linked: [repo], logger: quiet });
+    const { base, close } = await serve(store);
+    try {
+      const target = join(outside, "other.json");
+      const before = JSON.stringify(plan("Keep me"));
+      writeFileSync(target, before);
+      symlinkSync(target, join(repo, "z.json"));
+      symlinkSync(target, join(home, "examples", "z.json"));
+      const id = store.listing().linked[0].folder;
+      expect((await put(route(base, id, "z.json"), plan("Through the link"))).status).toBe(403);
+      expect((await put(route(base, "examples", "z.json"), plan("Through the link"))).status).toBe(403);
+      expect(readFileSync(target, "utf8")).toBe(before);
+
+      // A link to a diagram inside the folder is the folder's own file.
+      symlinkSync(join(repo, "docs", "arch", "BetterDiagram.json"), join(repo, "alias.json"));
+      expect((await put(route(base, id, "alias.json"), plan("Through an inside link"))).status).toBe(200);
+      expect(JSON.parse(readFileSync(join(repo, "docs", "arch", "BetterDiagram.json"), "utf8")).meta.title).toBe("Through an inside link");
+      expect(lstatSync(join(repo, "alias.json")).isSymbolicLink()).toBe(true);
+    } finally {
+      await close();
+    }
+  });
+
+  it("name no folder by a key every object has", async () => {
+    const { base, close } = await serve(makeStore());
+    try {
+      for (const folder of ["constructor", "__proto__", "hasOwnProperty", "toString", "valueOf"]) {
+        const read = await fetch(route(base, folder, "a.json"));
+        expect(read.status, folder).toBe(400);
+        expect((await put(route(base, folder, "a.json"), plan("x"))).status, folder).toBe(400);
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  it("keep the folders linked from the app in the links file, written whole", async () => {
+    const linksFile = join(home, "linked.json");
+    const store = createDiskStore({ dirs: { scratch: join(home, "scratch") }, linksFile, logger: quiet });
+    const { base, close } = await serve(store);
+    try {
+      expect((await post(`${base}/__templates/links`, { dir: outside })).status).toBe(200);
+      expect(JSON.parse(readFileSync(linksFile, "utf8")).linked).toEqual([outside]);
+      // No temporary file left beside it.
+      expect(readdirSync(home).sort()).toEqual(["linked.json", "scratch"]);
+      const id = store.listing().linked[0].folder;
+      expect((await fetch(`${base}/__templates/links/${id}`, { method: "DELETE" })).status).toBe(200);
+      expect(JSON.parse(readFileSync(linksFile, "utf8")).linked).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("standalone", () => {
   let running: Standalone | null = null;
   afterEach(async () => {
@@ -466,7 +634,7 @@ describe("standalone", () => {
     expect((await raw(port, "/", `evil.example:${port}`)).status).toBe(403);
   });
 
-  it("streams an outside edit to the page, and not its own write", async () => {
+  it("streams an outside edit to the page, and its own write only as a save", async () => {
     running = await startStandalone({ appDir: app, home, linked: [repo], port: 0, logger: quiet });
     const { port, url } = running;
     const id = running.store.listing().linked[0].folder;
@@ -485,8 +653,11 @@ describe("standalone", () => {
         .toContain(`"folder":"${id}","file":"docs/arch/BetterDiagram.json"`);
       events.length = 0;
       expect((await put(route(url, id, "docs/arch/BetterDiagram.json"), plan("Edited here"))).status).toBe(200);
-      await new Promise((done) => setTimeout(done, 600));
-      expect(events.join("")).not.toContain("better-diagrams:template");
+      await expect.poll(() => events.join(""), { timeout: 5000 }).toContain(`"file":"docs/arch/BetterDiagram.json","saved":true`);
+      await new Promise((done) => setTimeout(done, 300));
+      const frames = events.join("").split("\n").filter((line) => line.startsWith("data: "));
+      expect(frames.length).toBeGreaterThan(0);
+      for (const frame of frames) expect(JSON.parse(frame.slice(6))).toMatchObject({ saved: true });
     } finally {
       stream.destroy();
     }

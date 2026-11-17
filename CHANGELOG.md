@@ -3,7 +3,21 @@
 All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 `packages/better-diagrams/etc/*.api.md`; a change there is listed here.
 
-## Unreleased
+## 0.2.0 — 2026-11-16
+
+### Security
+
+- The disk store (behind `npm run dev`'s live files and the `better-diagrams` command) refuses a
+  request from another origin, another port on localhost included, preflights too. A local web page
+  could read any file and write JSON anywhere through `npm run dev`, where Vite's own CORS answered
+  for it. A reverse proxy that rewrites `Host` is now refused as well. The example's dev server
+  turns Vite's CORS off.
+- The AI route (`serveAiRequest`, `createFetchHandler`) answers 415 unless the body is
+  `application/json`, so a page on another site can't post it as `text/plain` (no preflight) and
+  spend the key. The library's own generator always sent JSON. In the example app the route also
+  refuses other origins, and `example/server.mjs` listens on 127.0.0.1 unless `HOST` says otherwise.
+- A symlinked file inside a linked folder or `examples/` is no longer written through to a target
+  outside that folder.
 
 ### Added
 
@@ -42,7 +56,14 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   follow one another line up where the most lines between them run straight, at one width, in place
   of stepping sideways down the page. A box isn't moved into a column of its own to save a crossing
   or two: a rank more than the flow needs has a price, which *Crossings above all* still pays.
+  Where frames flow the way the page does, a frame's boxes stand on the ranks its own lines need,
+  so each frame is a tier of the page and not a staircase; a box nothing leads to goes before the
+  frame it points at; a frame is as wide as what it holds, however long its name; and tables joined
+  row to row stand in rows by their heads, with a line that has to pass one going round its corners.
   `directedCost` and `directedWeights` are how it tells one picture from another.
+- `settleLines` takes `tight` (`SettleOptions`), which Directed flow sets: a line between table rows
+  that has to pass a table goes round its corners, where the one bend it would otherwise take has
+  to swing far out to clear it.
 - `measureFlow` (`FlowMetrics`): how a drawn picture reads as a flow, in numbers a reader would
   recognise: crossings and their angle, lines running backward and how many must, travel with the
   flow, ports, bends, the straightness of the main path, stress, how many ranks and how even,
@@ -70,9 +91,31 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   same look and arrow keys as Insert, Arrange and Export. The VS Code extension's Settings menu
   is one.
 - `SchemaCopyModal` takes `copy`, the host's clipboard, for a page whose own is blocked.
+- Under Directed flow in the Arrange menu, a **Direction** choice; in the Layout panel, **Reset**,
+  which puts every layout and directed-flow choice back to its default and arranges again, keeping
+  the arrangement, in one undo step.
+- `bd-layout place --mode` takes every arrangement the Arrange menu offers (`auto`, `flow`,
+  `untangle`, `directed`, `roadmap`), and without it arranges the way the document says
+  (`settings.arrange`), as Tidy does. What it chose is written into the document's settings, so the
+  next Tidy in the editor arranges it the same way. `PlaceWith.lean` (for `autoPlaceWith`): how much
+  cheaper a picture running another way has to be to be chosen.
 
 ### Changed
 
+- **Directed flow reads left to right** unless the other way round is plainly the better picture
+  (about a third cheaper as drawn; down the page stays first for a flowchart, and `settings.layout.direction`
+  still decides when set). It used to turn whenever another direction measured 3% cheaper, which
+  stood 14 of the gallery's 35 documents on end. Now 31 of 35 read across; readers shown both,
+  blind, chose the left-to-right picture 24 times to 12. A loop laid across the page starts where
+  the document starts it. Best fit is unchanged.
+- **Directed flow is five to ten times quicker on large graphs**, and Best fit about twice as quick
+  over the gallery, with the same pictures: the candidate layouts share their ranking searches, a
+  graph of more than 160 boxes and lines together compares two of them rather than five, and the
+  router tests a step only against the boxes it could cross. 80 boxes and 120 lines took 11 seconds
+  on the editor's thread and take one; 200 and 300 took 21 and take under three.
+- `bd-layout fix`, `place` and `best` refuse to write a file that reading changed (an unknown key, a
+  line to a box that isn't there), listing what, unless `--force` is given; and write beside the file
+  and move it into place, so a run cut short leaves it as it was.
 - Best fit, and every ranked layout, draws the lines that can't run straight the way Directed flow
   does. Lines that skip ahead down a column or run back against the flow nest like brackets on both
   sides of it, where they used to pile up on one side at one distance; traffic both ways between
@@ -116,6 +159,29 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 
 ### Fixed
 
+- A read-only editor no longer undoes or redoes, by key, toolbar or handle, so it can't hand the
+  host an older document through `onChange`; with `hostHistory` the keys don't reach the host either.
+- Keys meant for a focused control stay with it: arrows step a slider, walk a menu or change a select
+  instead of nudging the selected box, Enter presses the focused button instead of renaming, and ⌘Z
+  works straight after a pick from a list. Compare mode no longer moves, locks or restacks the
+  hidden selection.
+- Dragging an opacity slider or sweeping a colour picker is one undo step, and so is a run of typing
+  in a sequence-diagram inspector field.
+- The sequence editor guards its keyboard like the architecture editor: only the editor in use
+  answers, nothing happens behind a dialog, and ⌘S saves from a text field.
+- A toolbar menu is as tall as the editor has room for below its button. It stopped at 340px
+  whatever the window, which hid most of the Arrange menu, Directed flow and its choices included,
+  behind a scroll; a short embed still gets a menu that fits it.
+- The AI chat keeps an arrangement chosen on a blank canvas and lays the new diagram out by it; an
+  arrangement picked while drilled into a group says it arranged that level.
+- The web app: a second tab no longer reverts edits on disk (tabs merge each other's workspace file
+  by file, and the store announces its own saves); a hand-broken or unreadable diagram file in any
+  folder is never written over by the browser's older copy; live edits reach the browser's storage
+  within half a second and on page close, so a reload or a failed disk save loses nothing; a save no
+  longer lands in a file switched to mid-save.
+- `better-diagrams -h` and `bd-folder --help` exit 0; `better-diagrams --port` without a number, and an
+  unknown `bd-folder` flag, exit 2. A request for `/__templates/constructor/…` is a 400, not a 500.
+  The linked-folders file is written whole.
 - The interactive HTML page no longer carries a data profile's column `min` and `max`, or anything
   else a profiler wrote beyond the counts it shows (row count, null rate, distinct, orphan rate):
   those are values out of the data, and the page is a file that gets shared.

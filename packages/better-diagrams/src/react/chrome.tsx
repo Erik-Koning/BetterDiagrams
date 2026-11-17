@@ -6,7 +6,7 @@
  * bar of captioned sections, and the corner version-tag chip. These live here
  * so the two stay pixel-identical without either importing the other.
  */
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { EDGE_DASH, VERSION_TAG_POSITIONS, type VersionTagPosition } from "../contract/schema";
 import { edgeHeadPath } from "../contract/geometry";
 import type { RelationKindDef } from "../contract/relations";
@@ -130,6 +130,27 @@ export function ToolbarMenu({
     menuRef.current?.querySelector<HTMLElement>(MENU_ITEM)?.focus({ preventScroll: true });
   }, [open]);
 
+  /**
+   * As tall as the editor has room for below the button, where the stylesheet
+   * alone can only guess (340px, so a short embed doesn't clip its last rows).
+   * In a full window that guess hid most of the Arrange menu, Directed flow
+   * and its choices included, behind a scroll nobody knew to try. Measured as
+   * the menu opens; with no layout to measure (a test's DOM) the guess stands.
+   */
+  const [room, setRoom] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!open) {
+      setRoom(null);
+      return;
+    }
+    const menu = menuRef.current;
+    const editor = menu?.closest(".as-root")?.getBoundingClientRect();
+    const top = menu?.getBoundingClientRect().top ?? 0;
+    if (!editor || editor.height <= 0) return;
+    const bottom = Math.min(editor.bottom, window.innerHeight);
+    setRoom(Math.max(160, Math.floor(bottom - top - 8)));
+  }, [open]);
+
   return (
     <div className="as-menu-wrap">
       <button
@@ -154,6 +175,7 @@ export function ToolbarMenu({
           ref={menuRef}
           className={`as-menu${menuClassName ? ` ${menuClassName}` : ""}`}
           role="menu"
+          style={room === null ? undefined : { maxHeight: room }}
           onKeyDown={onMenuKeyDown}
         >
           {children}
@@ -171,6 +193,13 @@ function menuKeyNav(
   menuRef: { current: HTMLDivElement | null },
   event: React.KeyboardEvent<HTMLDivElement>,
 ) {
+  // A control inside the menu that uses these keys keeps them: the arrows
+  // step the Arrange menu's Priority slider and change its Method, and
+  // walking to the next row from under them jumped focus out of the control
+  // mid-adjustment. The menu's own tick boxes and radios are rows, and walk.
+  const target = event.target as HTMLElement;
+  if (target.tagName === "SELECT" || target.tagName === "TEXTAREA") return;
+  if (target.tagName === "INPUT" && !["checkbox", "radio"].includes((target as HTMLInputElement).type)) return;
   const items = [...(menuRef.current?.querySelectorAll<HTMLElement>(MENU_ITEM) ?? [])].filter(
     (el) => !el.hasAttribute("disabled"),
   );

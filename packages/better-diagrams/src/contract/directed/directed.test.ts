@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { directedCost, directedLayout, directedWeights } from "./index";
 import { measureFlow } from "./metrics";
-import { autoPlace } from "../arrange";
+import { autoPlace, autoPlaceWith } from "../arrange";
 import { ARRANGE_FIXTURES } from "../arrange.fixtures";
 import { autoLayout } from "../layout";
 import { lintLayout } from "../layout-lint";
@@ -254,6 +254,80 @@ describe("what it draws", () => {
     // Which leaves the one crossing the graph can't be drawn without.
     expect(measureFlow(after).crossings).toBe(1);
   });
+
+  const frame = (id: string, label = id) => box(id, { kind: "group", label, w: 400, h: 300 });
+
+  it("a box nothing leads to goes before the frame it points at, however little its line weighs", () => {
+    // Three lines from `main` into the frame and one from `side`: the one decides
+    // nothing about where the frame goes, and still `side` is not parked beside it.
+    const fed = doc(
+      [box("main"), box("side"), frame("g"), ...["a", "b", "c"].map((id) => box(id, { parentId: "g" }))],
+      [line("main", "a"), line("main", "b"), line("main", "c"), line("side", "a")],
+    );
+    const after = directedLayout(fed, { method: "layered", direction: "right" });
+    expect(at(after, "side").x + at(after, "side").w).toBeLessThanOrEqual(at(after, "g").x);
+    expect(at(after, "main").x + at(after, "main").w).toBeLessThanOrEqual(at(after, "g").x);
+  });
+
+  it("a frame is as wide as what it holds: a name too long to step aside from is cut short at its edge", () => {
+    const named = (label: string) =>
+      doc(
+        [box("in"), frame("g", label), ...["a", "b", "c"].map((id) => box(id, { parentId: "g" }))],
+        [line("in", "a"), line("in", "b"), line("in", "c")],
+      );
+    const widthOf = (label: string) => at(directedLayout(named(label), { method: "layered", direction: "down" }), "g").w;
+    const long = "Ingest · everything that arrives from partners, queued, checked and written down before anything else sees it";
+    // A short name is stepped aside from, so that a line from above doesn't run through it.
+    expect(widthOf("Ingest queue")).toBeGreaterThan(widthOf(long));
+    expect(widthOf(long)).toBeLessThanOrEqual(3 * 170 + 2 * 60 + 2 * 40);
+  });
+
+  it("a frame's boxes stand on the ranks its own lines need: the first row, for one no other leads to", () => {
+    // On the canvas `late` comes four ranks after `early`. In the frame nothing
+    // leads to it, so it stands beside `early`, and the frame is two rows deep.
+    const spread = doc(
+      [box("start"), box("x"), box("y"), box("z"), frame("g"), ...["early", "next", "late"].map((id) => box(id, { parentId: "g" }))],
+      [line("start", "early"), line("early", "next"), line("early", "x"), line("x", "y"), line("y", "z"), line("z", "late")],
+    );
+    const after = directedLayout(spread, { method: "layered", direction: "down" });
+    expect(at(after, "late").y).toBe(at(after, "early").y);
+    expect(at(after, "next").y).toBeGreaterThan(at(after, "early").y);
+  });
+
+  const column = (id: string, key?: string) => ({ id, name: id, type: "uuid", ...(key ? { key } : {}) });
+  /** A table of `rows` rows: `id` first, then `f1`, `f2` and so on. */
+  const table = (id: string, rows: number) =>
+    box(id, { kind: "table", w: 230, h: 48 + rows * 19, fields: [column("id", "pk"), ...Array.from({ length: rows - 1 }, (_, i) => column(`f${i + 1}`))] });
+  const joined = (source: string, target: string, startField: string) => line(source, target, { startField, endField: "id" });
+
+  it("tables joined row to row stand in a row by their heads, whichever rows the lines join", () => {
+    // Each line leaves a row low in one table for the first row of the next.
+    // Levelled row to row, every table stands a step lower than the last.
+    const tables = doc(
+      [table("a", 5), table("b", 4), table("c", 6), table("d", 3)],
+      [joined("a", "b", "f4"), joined("b", "c", "f3"), joined("c", "d", "f5")],
+    );
+    const after = directedLayout(tables, { method: "layered" });
+    expect(new Set(["a", "b", "c", "d"].map((id) => at(after, id).y)).size).toBe(1);
+  });
+
+  it("a line from a row goes round the table beside it by its corners, not by a swing down the page", () => {
+    const tables = doc(
+      [table("order", 5), table("address", 4), table("customer", 4)],
+      [joined("order", "address", "f2"), joined("address", "customer", "f1"), joined("order", "customer", "f1")],
+    );
+    const after = directedLayout(tables, { method: "layered" });
+    const boxes = ["order", "address", "customer"].map((id) => at(after, id));
+    const top = Math.min(...boxes.map((b) => b.y));
+    const bottom = Math.max(...boxes.map((b) => b.y + b.h));
+    const round = after.edges.find((e) => e.id === "order-customer")!.points ?? [];
+    expect(round.length).toBeGreaterThan(0);
+    // Within a table's height of the row it goes round, above or below.
+    for (const [, y] of round) {
+      expect(y).toBeGreaterThan(top - 120);
+      expect(y).toBeLessThan(bottom + 120);
+    }
+  });
 });
 
 describe("what it trades", () => {
@@ -326,6 +400,88 @@ describe("what it trades", () => {
     expect(cost(back, "direction")).toBeGreaterThan(cost(back, "crossings"));
     expect(cost(crossed, "crossings")).toBeGreaterThan(cost(back, "crossings"));
     expect(cost(back, "direction")).toBeGreaterThan(cost(crossed, "direction"));
+  });
+});
+
+describe("which way it reads", () => {
+  const extent = (t: DiagramTemplate) => {
+    const xs = t.nodes.flatMap((n) => [n.x, n.x + n.w]);
+    const ys = t.nodes.flatMap((n) => [n.y, n.y + n.h]);
+    return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+  };
+  // A pipeline with a retry and a dead letter: drawn down the page it measures a
+  // few percent cheaper, which is no reason to turn a flow on its side.
+  const retry = doc(
+    ["request", "queue", "worker", "check", "publish", "dead"].map((id) => box(id)),
+    [line("request", "queue"), line("queue", "worker"), line("worker", "check"), line("check", "publish"), line("check", "queue", { label: "retry" }), line("check", "dead")],
+  );
+
+  it("left to right, when the other way round is only a little cheaper", () => {
+    const arranged = directedLayout(retry);
+    const { w, h } = extent(arranged);
+    expect(w).toBeGreaterThan(h);
+    expect(at(arranged, "request").x).toBeLessThan(at(arranged, "publish").x);
+  });
+
+  it("a loop laid across the page still starts where the document starts it", () => {
+    // Plan to Monitor, with a failed test back to Build, a stage back to Build, and Monitor back to Plan.
+    const names = ["plan", "build", "test", "stage", "release", "monitor"];
+    const loops = doc(names.map((id) => box(id)), [
+      ...names.slice(1).map((id, i) => line(names[i]!, id)),
+      line("test", "build", { label: "fails" }),
+      line("monitor", "plan", { label: "next" }),
+      line("stage", "build"),
+    ]);
+    for (const method of ["best", "layered"] as const) {
+      const arranged = directedLayout(loops, { method, direction: "right" });
+      const order = [...arranged.nodes].sort((a, b) => a.x - b.x).map((n) => n.id);
+      expect(order).toEqual(names);
+    }
+  });
+
+  it("down the page when the document asks for it, and for a flowchart, which reads that way", () => {
+    const down = directedLayout(doc(retry.nodes, retry.edges, { settings: { layout: { direction: "down" } } }));
+    expect(extent(down).h).toBeGreaterThan(extent(down).w);
+    expect(at(down, "request").y).toBeLessThan(at(down, "publish").y);
+    const flowchart = validateTemplate(ARRANGE_FIXTURES.flowchart!());
+    const drawn = directedLayout(flowchart);
+    expect(extent(drawn).h).toBeGreaterThan(extent(drawn).w);
+  });
+
+  it("the other way round, when that is plainly the better picture: about a third cheaper as drawn", () => {
+    const priced = (down: number) => (_settled: DiagramTemplate, flow: string) => (flow === "down" ? down : 100);
+    const wide = (t: DiagramTemplate) => extent(t).w > extent(t).h;
+    // Measured by a cost that knows only which way a picture reads: 35% cheaper turns it, 25% doesn't.
+    expect(wide(autoPlaceWith(retry, {}, { cost: priced(65), lean: 0.7 }))).toBe(false);
+    expect(wide(autoPlaceWith(retry, {}, { cost: priced(75), lean: 0.7 }))).toBe(true);
+    // Without a lean, as Best fit chooses, any plain difference turns it.
+    expect(wide(autoPlaceWith(retry, {}, { cost: priced(95) }))).toBe(false);
+  });
+});
+
+describe("how long it takes", () => {
+  const random = (n: number, m: number) => {
+    let seed = 7;
+    const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const lines = new Map<string, unknown>();
+    while (lines.size < m) {
+      const a = Math.floor(next() * n);
+      const b = Math.floor(next() * n);
+      if (a !== b) lines.set(`${Math.min(a, b)}-${Math.max(a, b)}`, line(`n${Math.min(a, b)}`, `n${Math.max(a, b)}`));
+    }
+    return doc(Array.from({ length: n }, (_, i) => box(`n${i}`)), [...lines.values()]);
+  };
+
+  // It runs on the editor's thread: 120 boxes and 160 lines took 19 seconds, and
+  // 80 and 120 took 11, before the searches were shared and the routes indexed.
+  // Locally both now take one to four seconds; the bound is loose for slow machines.
+  it("a large tangle in seconds, not tens of seconds", { timeout: 60_000 }, () => {
+    for (const [n, m] of [[80, 120], [120, 160]] as const) {
+      const started = performance.now();
+      const arranged = directedLayout(random(n, m), { frames: "all" });
+      expect(performance.now() - started).toBeLessThan(15_000);
+      expect(arranged.nodes).toHaveLength(n);
+    }
   });
 });
 

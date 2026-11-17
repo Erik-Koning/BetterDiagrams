@@ -2345,12 +2345,24 @@ line turned round costs more than a return line running back, so a loop still st
 document starts it. A rank more than the flow needs costs too, about six crossings by default: a rank
 is a stage to a reader, so a box isn't moved into a column of its own to save a crossing or two
 (at `crossings` it is, when that clears enough of them). A line that skips ranks, with something in its way, runs level through the
-channel the layout kept for it and turns only in the gaps. Groups, zones, locks, text that fits and
-routed lines work as in every other arrangement, and direction, spacing and gaps still come from
-`settings.layout`. On the gallery's twelve flows it draws 16 crossings where Best fit draws 17
-(it would draw 11, and readers preferred the columns), and no line on top of another where Best fit
-has 3; over all 35 documents, 17% fewer crossings and a third fewer lines on lines. It only ranks, so a ring or a mesh with no direction to it is still Best fit's
-to draw.
+channel the layout kept for it and turns only in the gaps. Where frames flow the way the page does,
+a frame's boxes stand on the ranks the frame's own lines need and no more, so each frame is a tier
+of the page; a box nothing leads to goes before the frame it points at, and a frame is as wide as
+what it holds however long its name. Tables joined row to row stand in rows by their heads: levelled
+by the rows their lines join, each table in a chain stands a step lower than the last. Groups, zones,
+locks, text that fits and routed lines work as in every other arrangement, and direction, spacing
+and gaps still come from `settings.layout` (Direction is under Directed flow in the Arrange menu
+too). Left to choose its own direction, it reads the way the document's kind does, left to right
+(down the page for a flowchart), and turns only when the other way is plainly the better picture,
+about a third cheaper as drawn: a picture a few percent cheaper on its side isn't worth the reading.
+On a large graph (more than 160 boxes and lines together) Best of all compares the reader's ranks
+with the searched ones only, so an 80-box tangle arranges in about a second and a 200-box one in
+three, on the editor's own thread. On the gallery's twelve flows it draws 16 crossings
+where Best fit draws 17 (it would draw 11, and readers preferred the columns), and no line on top of
+another where Best fit has 3; over all 35 documents it crosses a little less than Best fit (372
+against 381), never runs a line through a box (Best fit: 6), and reads left to right on 31 of them
+(Best fit: 20). Readers shown the fourteen documents its lean to left to right changed, both ways
+and blind, chose the left-to-right picture 24 times to 12. It only ranks, so a ring or a mesh with no direction to it is still Best fit's to draw.
 
 **How any ranked layout draws the lines that can't run straight** (Best fit's, a named family's,
 Directed flow's): lines that skip ahead down a column, or run back against the flow, are given their
@@ -2395,13 +2407,21 @@ The same thing from the command line, for a script, a CI job or a model checking
 bd-layout lint diagram.json --min-score 90   # A score and findings; exit 1 under the floor. --json for tools.
 bd-layout fix diagram.json --write           # Keep the arrangement, fix what lint finds.
 bd-layout place diagram.json --direction down --algorithm tree --out placed.json
+bd-layout place diagram.json --mode directed --priority balanced --write
 bd-layout best diagram.json --write          # What to run after a model writes a diagram.
 ```
 
-`lint` and `fix` look at the top canvas unless `--all-canvases` is given; `place` also takes
-`--shape` and `--spacing`, and `--mode directed` (with `--priority` and `--method`) to place a flow. A diagram with kinds of your own wants them named, `--kinds a,b` (and
+`lint` and `fix` look at the top canvas unless `--all-canvases` is given. `place` arranges the way
+the Arrange menu does: `--mode auto` (Best fit), `flow`, `untangle`, `directed` (with `--priority`
+and `--method`) or `roadmap`, and without `--mode` the way the document already says
+(`settings.arrange`), as Tidy does. It also takes `--shape` and `--spacing`, and what was chosen is
+written into the document's settings, so the next Tidy in the editor arranges it the same way. A
+diagram with kinds of your own wants them named, `--kinds a,b` (and
 `--container-kinds a,b` for those that hold other boxes): without that, a kind this package doesn't
-know reads as a service, so `fix`, `place` and `best` refuse to write the file. A flag it doesn't
+know reads as a service, so `fix`, `place` and `best` refuse to write the file. They also refuse to
+write over a file that reading changed (an unknown key, a line to a box that isn't there), and list
+what, unless `--force` is given; a file is written beside itself and moved into place, so a run cut
+short leaves it as it was. A flag it doesn't
 know, or a file that isn't a diagram, exits 2, so a misspelt `--min-score` can't pass a gate.
 
 ## Canvas tools
@@ -2567,8 +2587,9 @@ See `packages/vscode/README.md`.
 | `@mosphere/better-diagrams/styles.css` | The editor's styles, React Flow's included | — |
 | `@mosphere/better-diagrams/schema.json` | The document's JSON Schema | — |
 
-Two commands come with it: `better-diagrams` (the editor for a repo's diagrams, above) and
-`bd-folder` (the folder format from a shell). Each entry is ESM and CommonJS with its own types. The build keeps one file per source module, so a
+Three commands come with it: `better-diagrams` (the editor for a repo's diagrams, above),
+`bd-layout` (arrange and check a diagram from a shell, above) and `bd-folder` (the folder format
+from a shell). Each entry is ESM and CommonJS with its own types. The build keeps one file per source module, so a
 host's bundler drops what it never imports — a host using only the architecture editor doesn't
 ship the sequence editor — and two heavy, occasional pieces load on first use: the interactive
 HTML page builder and the JSON code editor (CodeMirror, which the welcome modal uses). React,

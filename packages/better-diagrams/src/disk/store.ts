@@ -40,19 +40,26 @@
  *
  * And all are WATCHED: a file changed by another program (an editor, a
  * script, an AI agent) is announced to the open app, and the app reloads it —
- * the file on disk wins. The store's own writes are not announced back, so a
- * save from the app never bounces into a reload of itself.
+ * the file on disk wins. The store's own writes are announced too, marked
+ * `saved: true`, so another page with the file open catches up; the page
+ * that made the write holds that copy (or a newer one) already, and leaves
+ * it be rather than bouncing into a reload of itself.
  *
  * Every write is atomic (files.ts) and formatted the way the repo it lands in
- * formats JSON (format.ts).
+ * formats JSON (format.ts). Nothing is written over a file that isn't a
+ * diagram — a package.json, or a diagram someone broke by hand — in any
+ * folder.
  *
  * A LOCAL tool, deliberately: it reads and writes files and shows dialogs on
- * the machine it runs on, for a page served from that machine. The Vite dev
- * server mounts it (`configureServer` runs for `vite dev` and nowhere else);
- * `better-diagrams` runs it on its own, on 127.0.0.1 only.
+ * the machine it runs on, for a page served from that machine — and from the
+ * origin it is served on only: a request a page on another origin sends
+ * (another site, or another port of localhost) is refused, whatever the host
+ * server does about CORS. The Vite dev server mounts it (`configureServer`
+ * runs for `vite dev` and nowhere else); `better-diagrams` runs it on its
+ * own, on 127.0.0.1 only.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { createEventHub, type EventHub } from "./events";
@@ -290,9 +297,35 @@ const json = (res: ServerResponse, status: number, payload: unknown) => {
  * JSON only, for anything that links, picks or saves: a page on another site
  * can send a text/plain POST without a CORS preflight, and must not get to
  * link folders, write files or open dialogs on this machine. JSON forces the
- * preflight, which nothing here answers for another origin.
+ * preflight — the second lock, behind `crossOrigin`.
  */
 const isJson = (req: IncomingMessage) => /^application\/json\b/.test(req.headers["content-type"] ?? "");
+
+/**
+ * Why a request comes from a page on another origin, or null when it
+ * doesn't. The app's own requests are same-origin: a browser names the page's
+ * origin in `Origin` on every write (and a cross-origin read), and says
+ * `Sec-Fetch-Site: same-origin`; a script or `curl` sends neither. Checked
+ * here rather than left to the host's CORS, because a host's CORS can let
+ * others in: Vite's dev server answers a preflight from any localhost origin,
+ * so a page on `localhost:3000` could otherwise read and write files through
+ * the store on `localhost:5173` — another port is "same-site", not
+ * same-origin.
+ */
+function crossOrigin(req: IncomingMessage): string | null {
+  const site = req.headers["sec-fetch-site"];
+  if (site === "cross-site" || site === "same-site") return `a page on another origin (${site})`;
+  const origin = req.headers.origin;
+  if (origin === undefined) return null;
+  let from: string;
+  try {
+    from = new URL(origin).host;
+  } catch {
+    return `a page with no origin of its own (${origin})`;
+  }
+  const host = (req.headers.host ?? "").toLowerCase();
+  return from.toLowerCase() === host ? null : `a page on ${origin}, not ${host || "this server"}`;
+}
 
 /** A tree as the `FileMap` the client hands to `importFolder`: relative path → text. */
 function readFolderMap(root: string): Record<string, string> {
@@ -329,8 +362,12 @@ export function createDiskStore(options: DiskStoreOptions): DiskStore {
   const inRepo = [WRITABLE, ...(repoDirs.examples ? ["examples"] : [])];
   /** id → linked folder. Links come and go while the store runs: Link a folder…, Re-link…, Unlink. */
   const links = new Map<string, LinkedFolder>();
-  /** Every folder the route can address, by the id it is addressed with. */
-  const folderDirs: Record<string, string> = Object.fromEntries(
+  /**
+   * Every folder the route can address, by the id it is addressed with. A
+   * Map, not an object: a request names the id, and `constructor` or
+   * `__proto__` must be no folder at all.
+   */
+  const folderDirs = new Map<string, string>(
     Object.entries(repoDirs).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
   );
   /** Folders the app may write a file it opened back to. */
@@ -358,21 +395,22 @@ export function createDiskStore(options: DiskStoreOptions): DiskStore {
       return known;
     }
     links.set(link.folder, link);
-    folderDirs[link.folder] = link.dir;
+    folderDirs.set(link.folder, link.dir);
     savable.add(link.folder);
     watch(link.dir);
     return link;
   };
   const removeLink = (id: string) => {
     links.delete(id);
-    delete folderDirs[id];
+    folderDirs.delete(id);
     savable.delete(id);
   };
   const saveLinks = () => {
     if (!linksFile) return;
     const saved = [...links.values()].filter((l) => l.source === "saved").map((l) => l.dir);
     const about = "Folders linked from Settings → Templates → Link a folder…; git-ignored. BD_LINKED_DIRS adds more.";
-    writeFileSync(linksFile, `${JSON.stringify({ about, linked: saved }, null, 2)}\n`, "utf8");
+    // Atomic, like every other write: a crash mid-write must not lose every saved link.
+    writeFileAtomic(linksFile, `${JSON.stringify({ about, linked: saved }, null, 2)}\n`);
   };
   for (const path of linkedPaths) addLink(path, linkedSource);
   if (linksFile) for (const path of readSavedLinks(linksFile)) addLink(path, "saved");
@@ -387,7 +425,7 @@ export function createDiskStore(options: DiskStoreOptions): DiskStore {
    * resolved path still inside that folder.
    */
   const safePath = (folder: string, name: string): string | null => {
-    const dir = folderDirs[folder];
+    const dir = folderDirs.get(folder);
     if (!dir) return null;
     const segments = name.split("/");
     if (segments.length > 1 && !folder.startsWith(LINKED_PREFIX)) return null;
@@ -444,7 +482,8 @@ export function createDiskStore(options: DiskStoreOptions): DiskStore {
 
   /** A repo folder, listed flat: every .json file in it, unreadable ones included — these folders hold diagrams only. */
   const listFolder = (folder: string): TemplateEntry[] => {
-    const dir = folderDirs[folder];
+    const dir = folderDirs.get(folder);
+    if (!dir) return [];
     let files: string[];
     try {
       files = readdirSync(dir).filter((f) => f.endsWith(".json"));
@@ -590,7 +629,7 @@ export function createDiskStore(options: DiskStoreOptions): DiskStore {
    * linked folder it sits anywhere under. Never symlinks/ or folders/.
    */
   const locate = (real: string): { folder: string; file: string } | null => {
-    for (const [folder, dir] of Object.entries(folderDirs)) {
+    for (const [folder, dir] of folderDirs) {
       if (folder === FOLDERS || folder === SYMLINKS) continue;
       const root = realOrResolved(dir);
       if (!real.startsWith(root + sep)) continue;
@@ -766,7 +805,7 @@ export function createDiskStore(options: DiskStoreOptions): DiskStore {
       [SYMLINKS, "holds links only"],
       [FOLDERS, "is read-only"],
     ] as const) {
-      const dir = folderDirs[folder];
+      const dir = folderDirs.get(folder);
       if (dir && (real === realOrResolved(dir) || real.startsWith(realOrResolved(dir) + sep))) return { status: 400, error: `${folder}/ ${reason}` };
     }
     const home = locate(real);
@@ -817,7 +856,7 @@ export function createDiskStore(options: DiskStoreOptions): DiskStore {
   /** Which savable folder a changed path belongs to, and its file there — only what the app could have open. */
   const folderOf = (full: string): { folder: string; file: string } | undefined => {
     for (const folder of savable) {
-      const dir = folderDirs[folder];
+      const dir = folderDirs.get(folder);
       if (!dir || !isInside(full, dir)) continue;
       const file = relative(dir, full).split(sep).join("/");
       if (!folder.startsWith(LINKED_PREFIX)) {
@@ -851,15 +890,20 @@ export function createDiskStore(options: DiskStoreOptions): DiskStore {
         } catch {
           return; // gone again (an editor's temp file, a delete) — nothing to load
         }
-        if (lastWritten.get(full) === text) return; // our own save
-        lastWritten.delete(full);
+        // Our own save is news to every OTHER page with the file open — a
+        // second tab, another browser — which would otherwise keep a stale
+        // copy and, on its next edit, save it back over this one. Marked as
+        // a save: the page that made it holds this copy (or a newer one) and
+        // leaves it be; an outside edit, unmarked, wins over anything.
+        const saved = lastWritten.get(full) === text;
+        if (!saved) lastWritten.delete(full);
         // Looked up again: the folder may have been unlinked meanwhile.
-        if (!folderDirs[at.folder]) return;
-        notify(CHANGE_EVENT, at);
+        if (!folderDirs.has(at.folder)) return;
+        notify(CHANGE_EVENT, saved ? { ...at, saved: true } : at);
       }, SETTLE_MS),
     );
   };
-  for (const folder of inRepo) watch(folderDirs[folder]);
+  for (const folder of inRepo) watch(folderDirs.get(folder) as string);
   if (repoDirs.symlinks) watch(repoDirs.symlinks);
   watcher.on("change", announce);
   watcher.on("add", announce);
@@ -898,6 +942,9 @@ export function createDiskStore(options: DiskStoreOptions): DiskStore {
     const query = url.indexOf("?");
     const pathname = query === -1 ? url : url.slice(0, query);
     if (pathname !== DISK_ROUTE && !pathname.startsWith(`${DISK_ROUTE}/`)) return false;
+    // Before anything is read, linked, picked or written — a preflight included.
+    const foreign = crossOrigin(req);
+    if (foreign) return json(res, 403, { error: `Refused: ${foreign}. The disk store answers only the page it serves.` });
     const params = new URLSearchParams(query === -1 ? "" : url.slice(query + 1));
     try {
       // Split BEFORE decoding: a nested file in a linked folder arrives as
@@ -1095,32 +1142,38 @@ export function createDiskStore(options: DiskStoreOptions): DiskStore {
         if (folder === SYMLINKS && !lstatOrNull(full)) {
           return json(res, 404, { error: "its link was removed — link the file again", missing: true });
         }
-        if (link || folder === SYMLINKS) {
+        const dir = folderDirs.get(folder) as string;
+        if (link) {
           // Outside the store, never recreate a folder that has gone (it
           // was moved, or a drive unmounted): the app offers a re-link.
-          if (link && !isDir(link.dir)) return json(res, 404, { error: `${link.display} is missing`, missing: true });
-          if (link && !isDir(dirname(full))) return json(res, 404, { error: `${displayOf(dirname(full))} is missing`, missing: true });
-          // Nor anywhere outside the linked folder — through a symlinked folder inside it, say.
-          const parent = realOrResolved(dirname(full));
-          const root = link ? realOrResolved(link.dir) : "";
-          if (link && parent !== root && !parent.startsWith(root + sep)) {
-            return json(res, 403, { error: `${name} is outside ${link.display}` });
-          }
-          // And write only over a diagram: never over a package.json, and
-          // never over a diagram caught half-saved by its editor (the app
-          // tries again; the finished save reloads).
-          let onDisk: unknown;
-          try {
-            onDisk = JSON.parse(readFileSync(full, "utf8"));
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") onDisk = null;
-          }
-          if (onDisk !== undefined && !isDiagram(onDisk)) return json(res, 409, { error: `${name} is not a diagram — not writing over it` });
-        } else {
+          if (!isDir(link.dir)) return json(res, 404, { error: `${link.display} is missing`, missing: true });
+          if (!isDir(dirname(full))) return json(res, 404, { error: `${displayOf(dirname(full))} is missing`, missing: true });
+        } else if (folder !== SYMLINKS) {
           // The folder can vanish under a running store (a `git clean`, a
           // stray `rm -rf`); recreate it rather than failing every write.
-          mkdirSync(folderDirs[folder], { recursive: true });
+          mkdirSync(dir, { recursive: true });
         }
+        // Never anywhere outside the folder — through a symlinked folder
+        // inside it, or a symlinked FILE, whose write would land on the file
+        // it points at. (symlinks/ holds links to elsewhere: that is its point.)
+        if (folder !== SYMLINKS) {
+          const real = lstatOrNull(full) ? realOrResolved(full) : join(realOrResolved(dirname(full)), basename(full));
+          if (!isInside(real, realOrResolved(dir))) return json(res, 403, { error: `${name} is outside ${link ? link.display : `${folder}/`}` });
+        }
+        // And, in every folder, write only over a diagram: never over a
+        // package.json, never over a file someone broke by hand (the copy
+        // the app holds is older than their edit — once it reads again, the
+        // app reloads it), and never over a diagram caught half-saved by its
+        // editor (the app tries again; the finished save reloads).
+        let onDisk: unknown;
+        let unreadable = false;
+        try {
+          onDisk = JSON.parse(readFileSync(full, "utf8"));
+        } catch (error) {
+          unreadable = (error as NodeJS.ErrnoException)?.code !== "ENOENT";
+        }
+        if (unreadable) return json(res, 409, { error: `${name} doesn't read as JSON, so it is not a diagram — not writing over it` });
+        if (onDisk !== undefined && !isDiagram(onDisk)) return json(res, 409, { error: `${name} is not a diagram — not writing over it` });
         // Parsed before writing: a malformed body fails loudly here rather
         // than landing a broken file on disk.
         const doc = JSON.parse(await readBody(req));

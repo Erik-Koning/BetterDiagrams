@@ -58,7 +58,14 @@ export function directedWeights(priority: DirectedPriority): DirectedWeights {
 const CROSSING_RULES: readonly LayoutRuleId[] = ["line-crossing", "shallow-crossing", "line-overlap", "close-lines"];
 /** A backward line costs what a crossing does, before the priority is applied: that is what "balanced" means. */
 const BACKWARD_COST = LAYOUT_RULES["line-crossing"].cost;
-/** A main line turned round costs this much again: a flow drawn inside out isn't worth one line fewer running backward. */
+/**
+ * A main line turned round costs this much again in the search: a flow drawn
+ * inside out isn't worth one line fewer running backward. Between whole
+ * pictures it costs twice this: a loop drawn across the page from its middle
+ * (Test, Stage, Release, Monitor, Plan, Build) turns one line to save two
+ * return lines, which the search's price allows, and readers shown it beside
+ * the loop from its start scored it 4 to 6 against 8, all three of them.
+ */
 const TURNED_COST = BACKWARD_COST;
 /** A forward line leaving by the wrong face, or arriving at it. */
 const PORT_COST = 2;
@@ -76,6 +83,23 @@ const SPAN_COST = 1.2;
  * five is still taken: crossings above all means what it says.
  */
 const RANK_COST = 96;
+/**
+ * A flow reads the way its kind of document does (left to right, or down the
+ * page for a flowchart) unless another way round costs at most this share of
+ * it as drawn (with the 3% any change of direction needs, about a third less). Measured over the gallery, the other way won by 4 to 15% on half
+ * the documents it won at all: a difference no reader would trade the reading
+ * for. Where it is the far better picture (a hub of spokes, frames stacked as
+ * tiers) it still wins.
+ */
+const LEAN = 0.7;
+/**
+ * Past this many boxes and lines together, "best" lays out the reader's ranks
+ * and the searched ones only. Each way is a whole layout with its lines routed,
+ * and on a graph this size five of them took 11 seconds on the editor's thread
+ * (80 boxes, 120 lines); every gallery document, the largest real one at 107,
+ * is under it.
+ */
+const LARGE = 160;
 
 /**
  * What a picture costs as a directed flow: the linter's cost, with its charge
@@ -89,7 +113,7 @@ export function directedCost(report: LayoutReport, flow: FlowMetrics, weights: D
   const forward = Math.max(0, flow.directed - flow.backward - flow.flat);
   const direction =
     BACKWARD_COST * flow.backward +
-    TURNED_COST * flow.turned +
+    2 * TURNED_COST * flow.turned +
     PORT_COST * (1 - flow.portDiscipline) * forward * 2 +
     AGAINST_COST * (1 - flow.flowConsistency) * flow.directed;
   const spare = fewestRanks === undefined ? 0 : Math.max(0, flow.ranks - fewestRanks);
@@ -120,66 +144,80 @@ const graphKey = (ids: readonly string[], links: readonly PlaceLink[]) =>
  */
 type Ranks = "reading" | "eager" | "strict" | "searched" | "annealed" | "stress";
 
-/** The rankings of a graph, found once however many times it is laid out. */
-function rankingsFor(weights: DirectedWeights, anneal: boolean) {
-  const rankWeights: RankWeights = {
-    crossing: BACKWARD_COST * weights.crossing,
-    backward: BACKWARD_COST * weights.direction,
-    turned: TURNED_COST * weights.direction,
+/** The rankings of a graph, each found once and only when asked for, however many ways and directions lay it out. */
+interface Rankings {
+  reading(): RankPlan;
+  eager(): RankPlan;
+  strict(): RankPlan;
+  searched(): RankPlan;
+  annealed(): RankPlan;
+}
+
+/**
+ * The rankings of every graph one arrangement lays out. Shared by all its ways
+ * of ranking, which ask for the same searches of the same graphs: a way that
+ * uses the reader's ranks searches nothing, and the searches the others start
+ * from are made once between them.
+ */
+function rankingsFor(weights: DirectedWeights, large: boolean) {
+  const priced = (w: DirectedWeights): RankWeights => ({
+    crossing: BACKWARD_COST * w.crossing,
+    backward: BACKWARD_COST * w.direction,
+    turned: TURNED_COST * w.direction,
     span: SPAN_COST,
     rank: RANK_COST,
-  };
-  const eager = directedWeights("crossings");
-  const eagerWeights: RankWeights = {
-    crossing: BACKWARD_COST * eager.crossing,
-    backward: BACKWARD_COST * eager.direction,
-    turned: TURNED_COST * eager.direction,
-    span: SPAN_COST,
-    rank: RANK_COST,
-  };
-  const strict = directedWeights("direction");
-  const strictWeights: RankWeights = {
-    crossing: BACKWARD_COST * strict.crossing,
-    backward: BACKWARD_COST * strict.direction,
-    turned: TURNED_COST * strict.direction,
-    span: SPAN_COST,
-    rank: RANK_COST,
-  };
-  const found = new Map<string, { reading: RankPlan; eager: RankPlan; strict: RankPlan; searched: RankPlan }>();
-  return (ids: readonly string[], links: readonly PlaceLink[]) => {
+  });
+  const rankWeights = priced(weights);
+  const eagerWeights = priced(directedWeights("crossings"));
+  const strictWeights = priced(directedWeights("direction"));
+  const found = new Map<string, Rankings>();
+  return (ids: readonly string[], links: readonly PlaceLink[]): Rankings => {
     const key = graphKey(ids, links);
-    let entry = found.get(key);
-    if (!entry) {
-      const reading = flatRanks(ids, links);
-      const fewestBack = ranksInOrder(ids, links, fewestBackOrder(ids, links));
-      const usable = links.filter((l) => !l.tether && l.source !== l.target);
-      const order = acyclicOrder(ids, usable);
-      // A search priced for crossings above all takes moves this one would turn
-      // down, and some of them lead where this one wants to be. What it finds is
-      // one more place to start from, judged at this priority's own prices.
-      const eager = searchRanks(ids, links, eagerWeights, [reading, fewestBack], { reading: order });
-      // And one priced for direction above all: the other end of the same road.
-      const strictest = searchRanks(ids, links, strictWeights, [reading, fewestBack], { reading: order });
-      const searched = searchRanks(ids, links, rankWeights, [reading, fewestBack, eager.rank, strictest.rank], { anneal, reading: order });
-      entry = {
-        reading: { rank: reading },
-        eager: { rank: eager.rank, across: eager.across },
-        strict: { rank: strictest.rank, across: strictest.across },
-        searched: { rank: searched.rank, across: searched.across },
-      };
-      found.set(key, entry);
-    }
+    const known = found.get(key);
+    if (known) return known;
+    const once = <T>(make: () => T): (() => T) => {
+      let value: T | undefined;
+      return () => (value ??= make());
+    };
+    const usable = links.filter((l) => !l.tether && l.source !== l.target);
+    const order = once(() => acyclicOrder(ids, usable));
+    const reading = once(() => flatRanks(ids, links));
+    const fewestBack = once(() => ranksInOrder(ids, links, fewestBackOrder(ids, links)));
+    // A search priced for crossings above all takes moves this one would turn
+    // down, and some of them lead where this one wants to be. What it finds is
+    // one more place to start from, judged at this priority's own prices.
+    const eager = once(() => searchRanks(ids, links, eagerWeights, [reading(), fewestBack()], { reading: order() }));
+    // And one priced for direction above all: the other end of the same road.
+    const strict = once(() => searchRanks(ids, links, strictWeights, [reading(), fewestBack()], { reading: order() }));
+    // A large graph starts from the two orders alone: the searches at either end cost as much again as this one.
+    const search = (anneal: boolean) =>
+      once(() =>
+        searchRanks(ids, links, rankWeights, large ? [reading(), fewestBack()] : [reading(), fewestBack(), eager().rank, strict().rank], {
+          anneal,
+          reading: order(),
+        }),
+      );
+    const searched = search(false);
+    const annealed = search(true);
+    const plan = (r: { rank: ReadonlyMap<string, number>; across: ReadonlyMap<string, number> }): RankPlan => ({ rank: r.rank, across: r.across });
+    const entry: Rankings = {
+      reading: () => ({ rank: reading() }),
+      eager: () => plan(eager()),
+      strict: () => plan(strict()),
+      searched: () => plan(searched()),
+      annealed: () => plan(annealed()),
+    };
+    found.set(key, entry);
     return entry;
   };
 }
 
 /** The ranked layout, on ranks chosen one of the ways above. */
-function rankedEngine(weights: DirectedWeights, ranks: Ranks): PlaceEngine {
-  const rankingsOf = rankingsFor(weights, ranks === "annealed");
+function rankedEngine(rankingsOf: ReturnType<typeof rankingsFor>, ranks: Ranks): PlaceEngine {
   const planOf = (ids: readonly string[], links: readonly PlaceLink[]): RankPlan => {
     const rankings = rankingsOf(ids, links);
     // Laid out by distance, a piece has no ranks of its own: what flows through a container keeps the reader's.
-    return ranks === "annealed" ? rankings.searched : ranks === "stress" ? rankings.reading : rankings[ranks];
+    return rankings[ranks === "stress" ? "reading" : ranks]();
   };
   return {
     place(items, links, opts) {
@@ -233,10 +271,13 @@ export function directedLayout(template: DiagramTemplate, options: DirectedOptio
   // document allows. What follows is laid out the way that won, since comparing
   // directions is a full layout each, and has to beat it to be chosen.
   let flows: { outer: Flow; inner: Flow } | undefined;
+  const large = template.nodes.length + template.edges.length > LARGE;
+  const rankingsOf = rankingsFor(weights, large);
   const ranked = (ranks: Ranks) => () =>
     autoPlaceWith(template, arrange, {
-      engine: rankedEngine(weights, ranks),
+      engine: rankedEngine(rankingsOf, ranks),
       cost,
+      lean: LEAN,
       ...(flows ? { flows } : { chose: (won: { outer: Flow; inner: Flow }) => (flows = won) }),
     });
   // The layout by distance is a different kind of picture, and comes back only
@@ -245,8 +286,11 @@ export function directedLayout(template: DiagramTemplate, options: DirectedOptio
   // crossings and lengths, and has no charge for boxes that share no row or
   // column, which is what readers mark a picture by distance down for).
   const ways: Array<() => DiagramTemplate> = method === "stress" ? [ranked("stress")] : [ranked("reading")];
-  if (method === "best" || method === "layered") ways.push(ranked("searched"), ranked("eager"), ranked("strict"));
-  if (method === "best" || method === "anneal") ways.push(ranked("annealed"));
+  if (method === "best" && large) ways.push(ranked("searched"));
+  else {
+    if (method === "best" || method === "layered") ways.push(ranked("searched"), ranked("eager"), ranked("strict"));
+    if (method === "best" || method === "anneal") ways.push(ranked("annealed"));
+  }
 
   let best: DiagramTemplate | null = null;
   let bestCost = Infinity;

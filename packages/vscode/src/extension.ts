@@ -215,8 +215,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("betterDiagrams.toggleTheme", toggleTheme),
     // VS Code hears every key pressed in a webview. The keys the canvas uses
     // that VS Code also binds (⌘K's chords, ⌘= zooming the window, ⇧⌘E the
-    // Explorer…) come here while the diagram has focus, and do nothing more
-    // than the canvas already did with them. See package.json's keybindings.
+    // Explorer, Ctrl+G Go to Line, ⌘A selecting the page's text…) come here
+    // while the diagram has focus, and do nothing more than the canvas
+    // already did with them. See package.json's keybindings; ⌘A in a text
+    // field is the field's (leaveHistoryToVsCode in src/webview/shims.ts).
     vscode.commands.registerCommand("betterDiagrams.canvasKey", () => undefined),
     registerAgentTools(),
     trackActiveDiagram(),

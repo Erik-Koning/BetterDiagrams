@@ -66,8 +66,7 @@ test.describe("editing an architecture", () => {
     await expect(studio.saveButton).toHaveText("Save •");
     await studio.save();
 
-    // Live edits stay in memory; only Save writes through — so what comes
-    // back after a reload is exactly what the host was handed.
+    // What comes back after a reload is exactly what the host was handed.
     await page.reload();
     await expect(studio.nodeTitled("Checkout API")).toBeVisible();
     await expect(studio.saveButton).toHaveText("Save");
