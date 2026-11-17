@@ -385,10 +385,25 @@ function shortestPath(
       if (p) nodes.push(p);
     }
   }
-  const clear = (a: Pt, b: Pt) =>
-    !inflated.some((r) => segmentCrossesOpenRect(a, b, r)) &&
-    !segmentCrossesOpenRect(a, b, source) &&
-    !segmentCrossesOpenRect(a, b, target);
+  // The boxes in order of their left edge, so a step need only be tested against
+  // those that reach across its own span: on a large canvas that is a handful of
+  // the hundred, and this is asked of every pair of corners.
+  const byLeft = [...inflated].sort((p, q) => p.x - q.x);
+  const lefts = byLeft.map((r) => r.x);
+  const widest = byLeft.reduce((most, r) => Math.max(most, r.w), 0);
+  const clear = (a: Pt, b: Pt) => {
+    const from = Math.min(a.x, b.x) - widest;
+    const to = Math.max(a.x, b.x);
+    let lo = 0;
+    let hi = lefts.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (lefts[mid]! < from) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < byLeft.length && lefts[i]! <= to; i += 1) if (segmentCrossesOpenRect(a, b, byLeft[i]!)) return false;
+    return !segmentCrossesOpenRect(a, b, source) && !segmentCrossesOpenRect(a, b, target);
+  };
 
   const dist = new Array<number>(nodes.length).fill(Infinity);
   const prev = new Array<number>(nodes.length).fill(-1);
@@ -455,17 +470,21 @@ const TIGHT_GAIN = 0.85;
 /** Whether a segment passes through a rectangle's interior; running along an edge doesn't count. */
 function segmentCrossesOpenRect(a: Pt, b: Pt, r: Rect): boolean {
   const inset = 0.5;
+  const left = r.x + inset;
+  const right = r.x + r.w - inset;
+  const top = r.y + inset;
+  const bottom = r.y + r.h - inset;
+  // Wholly to one side: the clipping below would find no length inside either.
+  // Asked of every pair of corners a route might join, so it is kept cheap.
+  if (Math.max(a.x, b.x) <= left || Math.min(a.x, b.x) >= right || Math.max(a.y, b.y) <= top || Math.min(a.y, b.y) >= bottom) return false;
   let lo = 0;
   let hi = 1;
   const dx = b.x - a.x;
   const dy = b.y - a.y;
-  const checks: Array<[number, number]> = [
-    [-dx, a.x - (r.x + inset)],
-    [dx, r.x + r.w - inset - a.x],
-    [-dy, a.y - (r.y + inset)],
-    [dy, r.y + r.h - inset - a.y],
-  ];
-  for (const [p, q] of checks) {
+  // Liang–Barsky, one face at a time: [p, q] for left, right, top, bottom.
+  for (let face = 0; face < 4; face += 1) {
+    const p = face === 0 ? -dx : face === 1 ? dx : face === 2 ? -dy : dy;
+    const q = face === 0 ? a.x - left : face === 1 ? right - a.x : face === 2 ? a.y - top : bottom - a.y;
     if (p === 0) {
       if (q <= 0) return false;
       continue;

@@ -1,0 +1,389 @@
+{
+ "about": "Blind paired review behind Directed flow leaning to left to right, 2026-11-16. The fourteen gallery documents whose direction the lean changed, each drawn both ways by the same studio, shown as shuffled A/B pairs to three reviewers who were told nothing of what differed. scores are the three reviewers, 1 to 10 overall; shipped is which picture each would ship. Picks: 24 for left to right first, 12 for as before, 6 ties. flow-loops lost because the left-to-right picture began the loop at Test; that was then fixed (a turned main line costs twice as much between whole pictures) and is not reflected in these scores.",
+ "rounds": [
+  {
+   "round": 1,
+   "what": "Before and after the lean, every document it changed.",
+   "documents": {
+    "ring": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 7,
+      "scores": [
+       8,
+       7,
+       7
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 8,
+      "scores": [
+       9,
+       8,
+       8
+      ]
+     },
+     {
+      "shipped": [
+       "left to right first",
+       "left to right first",
+       "left to right first"
+      ]
+     }
+    ],
+    "islands": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 7,
+      "scores": [
+       7,
+       7,
+       6
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 8,
+      "scores": [
+       8,
+       8,
+       7
+      ]
+     },
+     {
+      "shipped": [
+       "left to right first",
+       "left to right first",
+       "left to right first"
+      ]
+     }
+    ],
+    "bipartite": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 6,
+      "scores": [
+       6,
+       6,
+       6
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 5,
+      "scores": [
+       5,
+       5,
+       5
+      ]
+     },
+     {
+      "shipped": [
+       "as before",
+       "as before",
+       "as before"
+      ]
+     }
+    ],
+    "largeSystem": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 5,
+      "scores": [
+       5,
+       6,
+       5
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 3,
+      "scores": [
+       3,
+       3,
+       3
+      ]
+     },
+     {
+      "shipped": [
+       "as before",
+       "as before",
+       "as before"
+      ]
+     }
+    ],
+    "real-multi-cloud": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 7,
+      "scores": [
+       8,
+       7,
+       7
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 7,
+      "scores": [
+       8,
+       7,
+       7
+      ]
+     },
+     {
+      "shipped": [
+       "tie",
+       "tie",
+       "tie"
+      ]
+     }
+    ],
+    "real-platform": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 3,
+      "scores": [
+       3,
+       3,
+       3
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 4,
+      "scores": [
+       4,
+       4,
+       4
+      ]
+     },
+     {
+      "shipped": [
+       "left to right first",
+       "left to right first",
+       "left to right first"
+      ]
+     }
+    ],
+    "real-services": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 4,
+      "scores": [
+       4,
+       5,
+       4
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 6,
+      "scores": [
+       6,
+       6,
+       5
+      ]
+     },
+     {
+      "shipped": [
+       "left to right first",
+       "left to right first",
+       "left to right first"
+      ]
+     }
+    ],
+    "stress-mesh": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 4,
+      "scores": [
+       4,
+       4,
+       4
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 3,
+      "scores": [
+       5,
+       3,
+       3
+      ]
+     },
+     {
+      "shipped": [
+       "left to right first",
+       "as before",
+       "as before"
+      ]
+     }
+    ],
+    "stress-groups": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 3,
+      "scores": [
+       4,
+       3,
+       3
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 4,
+      "scores": [
+       3,
+       4,
+       4
+      ]
+     },
+     {
+      "shipped": [
+       "as before",
+       "left to right first",
+       "left to right first"
+      ]
+     }
+    ],
+    "flow-shortcuts": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 7,
+      "scores": [
+       7,
+       6,
+       7
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 8,
+      "scores": [
+       8,
+       7,
+       8
+      ]
+     },
+     {
+      "shipped": [
+       "left to right first",
+       "left to right first",
+       "left to right first"
+      ]
+     }
+    ],
+    "flow-retry": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 8,
+      "scores": [
+       8,
+       8,
+       8
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 9,
+      "scores": [
+       9,
+       8,
+       9
+      ]
+     },
+     {
+      "shipped": [
+       "left to right first",
+       "tie",
+       "left to right first"
+      ]
+     }
+    ],
+    "flow-loops": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 8,
+      "scores": [
+       8,
+       8,
+       8
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 4,
+      "scores": [
+       4,
+       6,
+       4
+      ]
+     },
+     {
+      "shipped": [
+       "as before",
+       "as before",
+       "as before"
+      ]
+     }
+    ],
+    "flow-tiers": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 8,
+      "scores": [
+       7,
+       8,
+       8
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 8,
+      "scores": [
+       8,
+       8,
+       8
+      ]
+     },
+     {
+      "shipped": [
+       "left to right first",
+       "tie",
+       "tie"
+      ]
+     }
+    ],
+    "flow-long-skip": [
+     {
+      "what": "as before: the direction that measured 3% cheaper",
+      "median": 6,
+      "scores": [
+       7,
+       6,
+       6
+      ]
+     },
+     {
+      "what": "left to right unless the other way is about a third cheaper",
+      "median": 7,
+      "scores": [
+       8,
+       7,
+       7
+      ]
+     },
+     {
+      "shipped": [
+       "left to right first",
+       "left to right first",
+       "left to right first"
+      ]
+     }
+    ]
+   }
+  }
+ ]
+}

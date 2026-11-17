@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { directedCost, directedLayout, directedWeights } from "./index";
 import { measureFlow } from "./metrics";
-import { autoPlace } from "../arrange";
+import { autoPlace, autoPlaceWith } from "../arrange";
 import { ARRANGE_FIXTURES } from "../arrange.fixtures";
 import { autoLayout } from "../layout";
 import { lintLayout } from "../layout-lint";
@@ -400,6 +400,88 @@ describe("what it trades", () => {
     expect(cost(back, "direction")).toBeGreaterThan(cost(back, "crossings"));
     expect(cost(crossed, "crossings")).toBeGreaterThan(cost(back, "crossings"));
     expect(cost(back, "direction")).toBeGreaterThan(cost(crossed, "direction"));
+  });
+});
+
+describe("which way it reads", () => {
+  const extent = (t: DiagramTemplate) => {
+    const xs = t.nodes.flatMap((n) => [n.x, n.x + n.w]);
+    const ys = t.nodes.flatMap((n) => [n.y, n.y + n.h]);
+    return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+  };
+  // A pipeline with a retry and a dead letter: drawn down the page it measures a
+  // few percent cheaper, which is no reason to turn a flow on its side.
+  const retry = doc(
+    ["request", "queue", "worker", "check", "publish", "dead"].map((id) => box(id)),
+    [line("request", "queue"), line("queue", "worker"), line("worker", "check"), line("check", "publish"), line("check", "queue", { label: "retry" }), line("check", "dead")],
+  );
+
+  it("left to right, when the other way round is only a little cheaper", () => {
+    const arranged = directedLayout(retry);
+    const { w, h } = extent(arranged);
+    expect(w).toBeGreaterThan(h);
+    expect(at(arranged, "request").x).toBeLessThan(at(arranged, "publish").x);
+  });
+
+  it("a loop laid across the page still starts where the document starts it", () => {
+    // Plan to Monitor, with a failed test back to Build, a stage back to Build, and Monitor back to Plan.
+    const names = ["plan", "build", "test", "stage", "release", "monitor"];
+    const loops = doc(names.map((id) => box(id)), [
+      ...names.slice(1).map((id, i) => line(names[i]!, id)),
+      line("test", "build", { label: "fails" }),
+      line("monitor", "plan", { label: "next" }),
+      line("stage", "build"),
+    ]);
+    for (const method of ["best", "layered"] as const) {
+      const arranged = directedLayout(loops, { method, direction: "right" });
+      const order = [...arranged.nodes].sort((a, b) => a.x - b.x).map((n) => n.id);
+      expect(order).toEqual(names);
+    }
+  });
+
+  it("down the page when the document asks for it, and for a flowchart, which reads that way", () => {
+    const down = directedLayout(doc(retry.nodes, retry.edges, { settings: { layout: { direction: "down" } } }));
+    expect(extent(down).h).toBeGreaterThan(extent(down).w);
+    expect(at(down, "request").y).toBeLessThan(at(down, "publish").y);
+    const flowchart = validateTemplate(ARRANGE_FIXTURES.flowchart!());
+    const drawn = directedLayout(flowchart);
+    expect(extent(drawn).h).toBeGreaterThan(extent(drawn).w);
+  });
+
+  it("the other way round, when that is plainly the better picture: about a third cheaper as drawn", () => {
+    const priced = (down: number) => (_settled: DiagramTemplate, flow: string) => (flow === "down" ? down : 100);
+    const wide = (t: DiagramTemplate) => extent(t).w > extent(t).h;
+    // Measured by a cost that knows only which way a picture reads: 35% cheaper turns it, 25% doesn't.
+    expect(wide(autoPlaceWith(retry, {}, { cost: priced(65), lean: 0.7 }))).toBe(false);
+    expect(wide(autoPlaceWith(retry, {}, { cost: priced(75), lean: 0.7 }))).toBe(true);
+    // Without a lean, as Best fit chooses, any plain difference turns it.
+    expect(wide(autoPlaceWith(retry, {}, { cost: priced(95) }))).toBe(false);
+  });
+});
+
+describe("how long it takes", () => {
+  const random = (n: number, m: number) => {
+    let seed = 7;
+    const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const lines = new Map<string, unknown>();
+    while (lines.size < m) {
+      const a = Math.floor(next() * n);
+      const b = Math.floor(next() * n);
+      if (a !== b) lines.set(`${Math.min(a, b)}-${Math.max(a, b)}`, line(`n${Math.min(a, b)}`, `n${Math.max(a, b)}`));
+    }
+    return doc(Array.from({ length: n }, (_, i) => box(`n${i}`)), [...lines.values()]);
+  };
+
+  // It runs on the editor's thread: 120 boxes and 160 lines took 19 seconds, and
+  // 80 and 120 took 11, before the searches were shared and the routes indexed.
+  // Locally both now take one to four seconds; the bound is loose for slow machines.
+  it("a large tangle in seconds, not tens of seconds", { timeout: 60_000 }, () => {
+    for (const [n, m] of [[80, 120], [120, 160]] as const) {
+      const started = performance.now();
+      const arranged = directedLayout(random(n, m), { frames: "all" });
+      expect(performance.now() - started).toBeLessThan(15_000);
+      expect(arranged.nodes).toHaveLength(n);
+    }
   });
 });
 
