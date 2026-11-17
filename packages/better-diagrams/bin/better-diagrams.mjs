@@ -22,33 +22,42 @@ import { homedir, platform } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const disk = await import(new URL("../dist/disk.js", import.meta.url).href).catch(() => null);
-const appDir = fileURLToPath(new URL("../app/", import.meta.url));
-if (!disk || !existsSync(join(appDir, "index.html"))) {
-  console.error("better-diagrams: the package is not built — run `npm run build && npm run build:app` at the repo root first.");
-  process.exit(2);
-}
+const USAGE = "usage: better-diagrams [file.json | folder]... [--new] [--port <n>] [--no-open]";
 
 function parseArgs(argv) {
   const positional = [];
   const flags = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--port") flags.port = argv[++i];
+    if (a === "-h" || a === "--help") flags.help = true;
+    else if (a === "--port") {
+      // `--port` at the end, or before another flag, names no port: an error, not the default.
+      const value = argv[i + 1];
+      flags.port = value === undefined || value.startsWith("-") ? "" : argv[++i];
+    } else if (a.startsWith("--port=")) flags.port = a.slice("--port=".length);
     else if (a.startsWith("--")) flags[a.slice(2)] = true;
     else positional.push(a);
   }
   return { positional, flags };
 }
 
+// Before the build is looked for: help is there whether or not it is.
 const { positional, flags } = parseArgs(process.argv.slice(2));
-if (flags.help || flags.h) {
-  console.error("usage: better-diagrams [file.json | folder]... [--new] [--port <n>] [--no-open]");
+if (flags.help) {
+  console.error(USAGE); // on stderr, like everything else this prints (scripts/smoke-cli.mjs reads it there)
   process.exit(0);
 }
-const port = flags.port === undefined ? 5199 : Number(flags.port);
+const port = flags.port === undefined ? 5199 : flags.port === "" ? NaN : Number(flags.port);
 if (!Number.isInteger(port) || port < 0 || port > 65535) {
-  console.error(`better-diagrams: --port wants a port number, not ${flags.port}`);
+  console.error(flags.port ? `better-diagrams: --port wants a port number, not ${flags.port}` : "better-diagrams: --port wants a port number");
+  console.error(USAGE);
+  process.exit(2);
+}
+
+const disk = await import(new URL("../dist/disk.js", import.meta.url).href).catch(() => null);
+const appDir = fileURLToPath(new URL("../app/", import.meta.url));
+if (!disk || !existsSync(join(appDir, "index.html"))) {
+  console.error("better-diagrams: the package is not built — run `npm run build && npm run build:app` at the repo root first.");
   process.exit(2);
 }
 

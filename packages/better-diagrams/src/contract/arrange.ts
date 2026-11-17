@@ -1702,6 +1702,15 @@ export interface PlaceWith {
   flows?: { outer: Flow; inner: Flow };
   /** Told which directions won. */
   chose?: (flows: { outer: Flow; inner: Flow }) => void;
+  /**
+   * How much cheaper a picture that runs another way than the first direction
+   * tried has to be, as a share of the cheapest so far, to be chosen over it:
+   * 0.7 asks for 30% cheaper. Left out, any plain difference will do. The first direction is
+   * the one a document of its kind reads in (left to right, or down the page
+   * for a flowchart), and an arrangement that promises that reading keeps it
+   * unless the other way is clearly the better picture.
+   */
+  lean?: number;
 }
 
 /**
@@ -1732,6 +1741,7 @@ export function autoPlaceWith(template: DiagramTemplate, options: ArrangeOptions
   const lintOptions = { containerKinds: options.containerKinds, frames: options.frames ?? ("root" as const) };
   let best: DiagramTemplate | null = null;
   let bestCost = Infinity;
+  const first = pairs[0];
   for (const { outer, inner } of pairs) {
     const composed = composeDocument(template, prefs, outer, inner, options);
     const settled = settleLines(composed, { containerKinds: options.containerKinds, frames: options.frames, ...(own.engine ? { tight: true } : {}) });
@@ -1741,7 +1751,11 @@ export function autoPlaceWith(template: DiagramTemplate, options: ArrangeOptions
     }
     // The linter's cost already counts how small the words end up when the
     // picture is fitted to a window, so this chooses by what readers do.
-    const cost = own.cost ? own.cost(settled, outer) : lintLayout(settled, lintOptions).cost;
+    const measured = own.cost ? own.cost(settled, outer) : lintLayout(settled, lintOptions).cost;
+    // The lean is on the picture's overall reading. Inside containers either way
+    // may win: frames stacked down a flow that reads across often measure far
+    // better than every frame laid out as a row (both tried on the gallery).
+    const cost = own.lean === undefined || outer === first?.outer ? measured : measured / own.lean;
     // A real difference, or the first choice stands: flipping a diagram's
     // direction for a rounding error would make Tidy feel arbitrary.
     if (cost < bestCost * 0.97) {

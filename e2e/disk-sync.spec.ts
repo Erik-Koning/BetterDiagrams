@@ -157,7 +157,7 @@ test("an edit in the app saves back to the file, and never bounces back as a rel
   const { path } = await openPlan(studio, SCRATCH);
   await page.locator('.react-flow__node[data-id="design"]').getByRole("checkbox").click();
   await expect.poll(() => (nodeOf(read(path), "design") as { done?: boolean }).done).toBe(true);
-  // The server's own write is not announced, so the app never reloads itself.
+  // The server announces its own write as a save, which the tab that made it already shows: no reload.
   await page.waitForTimeout(800);
   await expect(reloadToasts(page)).toHaveCount(0);
 });

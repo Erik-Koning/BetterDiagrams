@@ -9,9 +9,21 @@ with VS Code's own language models, and agents get the format and a check of wha
 
 The file's text in VS Code is the only copy. An edit in the diagram is one edit of the text, so
 **⌘Z** and the toolbar's Undo and Redo, the dirty dot, **⌘S**, Save As, hot exit and source
-control all work as they do for any file. Typing in the JSON (**Better Diagrams: Show JSON**
+control all work as they do for any file: an arrangement is one ⌘Z, a word typed into a label is
+one, and ⌘Z inside a text field undoes the typing. Typing in the JSON (**Better Diagrams: Show JSON**
 opens it beside the diagram), pulling a branch or an agent rewriting the file moves the picture
 with it.
+
+## Arranging
+
+**Arrange** lays the diagram out for you, each choice one ⌘Z: **Best fit** (whatever measures best,
+in whatever shape), **Left to right**, **Untangle lines**, and **Directed flow**, which keeps lines
+from crossing first and running one way second, reading left to right unless the other way is
+plainly the better picture. Under it in the menu: **Priority** (fewer crossings or one direction),
+**Method** and **Direction**. **Layout panel…** scores the picture, says what's behind the score,
+polishes it, and shows the other arrangements to pick from; **Reset** puts the layout choices back
+to their defaults. The choice is stored in the file (`settings.arrange`, `settings.directed`,
+`settings.layout`), so the next Tidy, the web app and `bd-layout` arrange it the same way.
 
 ## Opening a diagram
 

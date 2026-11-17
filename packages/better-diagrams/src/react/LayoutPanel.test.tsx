@@ -35,6 +35,7 @@ const panel = (over: Partial<LayoutPanelProps> = {}) => {
   const handlers = {
     onPrefs: vi.fn(),
     onDirected: vi.fn(),
+    onReset: vi.fn(),
     onArrange: vi.fn(),
     onPolish: vi.fn(),
     onArrangeSelection: vi.fn(),
@@ -74,7 +75,7 @@ describe("LayoutPanel", () => {
   it("stops pointing at a finding that went away under the pointer", async () => {
     const user = userEvent.setup();
     const onPoint = vi.fn();
-    const props = { options: {}, canEdit: true, selected: 0, selectedLines: 0, onPrefs: vi.fn(), onDirected: vi.fn(), onArrange: vi.fn(), onPolish: vi.fn(), onArrangeSelection: vi.fn(), onStraighten: vi.fn(), onCandidate: vi.fn(), onJump: vi.fn(), onClose: vi.fn() };
+    const props = { options: {}, canEdit: true, selected: 0, selectedLines: 0, onPrefs: vi.fn(), onDirected: vi.fn(), onReset: vi.fn(), onArrange: vi.fn(), onPolish: vi.fn(), onArrangeSelection: vi.fn(), onStraighten: vi.fn(), onCandidate: vi.fn(), onJump: vi.fn(), onClose: vi.fn() };
     const { rerender } = render(<LayoutPanel template={OVERLAPPING} {...props} onPoint={onPoint} />);
     await user.click(screen.getByText("Boxes overlap"));
     await user.hover(screen.getByRole("button", { name: /"Alpha" and "Bravo" overlap/ }));
@@ -189,7 +190,7 @@ describe("LayoutPanel", () => {
   it("measures again once the document stops changing, not on every frame of a drag or a click", () => {
     vi.useFakeTimers();
     try {
-      const props = { options: {}, canEdit: true, selected: 0, selectedLines: 0, onPrefs: vi.fn(), onDirected: vi.fn(), onArrange: vi.fn(), onPolish: vi.fn(), onArrangeSelection: vi.fn(), onStraighten: vi.fn(), onCandidate: vi.fn(), onJump: vi.fn(), onPoint: vi.fn(), onClose: vi.fn() };
+      const props = { options: {}, canEdit: true, selected: 0, selectedLines: 0, onPrefs: vi.fn(), onDirected: vi.fn(), onReset: vi.fn(), onArrange: vi.fn(), onPolish: vi.fn(), onArrangeSelection: vi.fn(), onStraighten: vi.fn(), onCandidate: vi.fn(), onJump: vi.fn(), onPoint: vi.fn(), onClose: vi.fn() };
       const doc = ARRANGE_FIXTURES.gatewayHub!();
       const moved = (dx: number) => ({ ...doc, nodes: doc.nodes.map((n, i) => (i === 0 ? { ...n, x: n.x + dx } : n)) });
       const { rerender } = render(<LayoutPanel template={doc} {...props} />);
@@ -213,7 +214,7 @@ describe("LayoutPanel", () => {
   it("catches the score up once the document settles", () => {
     vi.useFakeTimers();
     try {
-      const props = { options: {}, canEdit: false, selected: 0, selectedLines: 0, onPrefs: vi.fn(), onDirected: vi.fn(), onArrange: vi.fn(), onPolish: vi.fn(), onArrangeSelection: vi.fn(), onStraighten: vi.fn(), onCandidate: vi.fn(), onJump: vi.fn(), onPoint: vi.fn(), onClose: vi.fn() };
+      const props = { options: {}, canEdit: false, selected: 0, selectedLines: 0, onPrefs: vi.fn(), onDirected: vi.fn(), onReset: vi.fn(), onArrange: vi.fn(), onPolish: vi.fn(), onArrangeSelection: vi.fn(), onStraighten: vi.fn(), onCandidate: vi.fn(), onJump: vi.fn(), onPoint: vi.fn(), onClose: vi.fn() };
       const { rerender } = render(<LayoutPanel template={OVERLAPPING} {...props} />);
       expect(screen.getByText("Boxes overlap")).toBeInTheDocument();
       const apart = { ...OVERLAPPING, nodes: OVERLAPPING.nodes.map((n) => (n.id === "b" ? { ...n, y: 300 } : n)) };
@@ -246,6 +247,22 @@ describe("LayoutPanel", () => {
     for (const name of ["Arrange", "Polish", "Selection"]) expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Direction" })).not.toBeInTheDocument();
     expect(screen.queryByTitle(/Use this arrangement/)).not.toBeInTheDocument();
+  });
+
+  it("Reset has nothing to take back until a choice is made, and then takes them all back", async () => {
+    const user = userEvent.setup();
+    panel();
+    expect(screen.getByRole("button", { name: "Reset" })).toBeDisabled();
+    document.body.innerHTML = "";
+    const { onReset } = panel({ template: { ...OVERLAPPING, settings: { arrange: "directed", directed: { method: "anneal" } } } });
+    await user.click(screen.getByRole("button", { name: "Reset" }));
+    expect(onReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a directed flow's direction to its own row, not to a second one among the flow's choices", () => {
+    panel({ template: { ...OVERLAPPING, settings: { arrange: "directed" } } });
+    expect(screen.getByRole("group", { name: "Direction" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Direction" })).not.toBeInTheDocument();
   });
 
   it("says so when there's nothing to fix", () => {
@@ -403,5 +420,53 @@ describe("in the studio", () => {
     await screen.findByText("Tidied");
     expect(last(onChange).settings?.arrange).toBe("flow");
     expect(last(onChange).edges.every((e) => !e.start?.auto)).toBe(true);
+  });
+
+  it("the Arrange menu turns a directed flow, which stays one, in one undo step", async () => {
+    const user = userEvent.setup();
+    const onChange = mount({ doc: { ...ARRANGE_FIXTURES.flowchart!(), settings: { arrange: "directed" } } });
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    const direction = screen.getByRole("combobox", { name: "Direction" });
+    expect(direction).toHaveValue("auto");
+    await user.selectOptions(direction, "Top to bottom");
+    await waitFor(() => expect(last(onChange).settings).toEqual({ arrange: "directed", layout: { direction: "down" } }));
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(last(onChange).settings).toEqual({ arrange: "directed" }));
+  });
+
+  it("Reset forgets every layout choice, keeps how the diagram is arranged, and undoes in one step", async () => {
+    const user = userEvent.setup();
+    const chosen = { arrange: "directed" as const, layout: { direction: "down" as const, spacing: "airy" as const }, directed: { method: "anneal" as const } };
+    const onChange = mount({ doc: { ...ARRANGE_FIXTURES.flowchart!(), settings: chosen } });
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    await user.click(screen.getByRole("menuitem", { name: /Layout panel/ }));
+    const region = await screen.findByRole("region", { name: "Layout" });
+    await user.click(within(region).getByRole("button", { name: "Reset" }));
+    await waitFor(() => expect(last(onChange).settings).toEqual({ arrange: "directed" }));
+    expect(within(region).getByRole("button", { name: "Reset" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(last(onChange).settings).toEqual(chosen));
+  });
+
+  it("an arrangement picked while drilled in says it arranged the level on screen", async () => {
+    const user = userEvent.setup();
+    const card = { icon: "box", description: "", w: 170, h: 76 };
+    mount({
+      doc: validateTemplate({
+        version: 1,
+        nodes: [
+          { ...card, id: "web", label: "Storefront", kind: "service", parentId: null, x: 100, y: 100 },
+          { ...card, id: "pay", label: "Payments Core", kind: "service", parentId: null, x: 500, y: 100 },
+          { ...card, id: "api", label: "Pay API", kind: "service", parentId: "pay", x: 20, y: 20 },
+          { ...card, id: "guard", label: "Auth Guard", kind: "service", parentId: "pay", x: 20, y: 20 },
+        ],
+        edges: [{ id: "wires", source: "api", target: "guard", label: "" }],
+      }),
+    });
+    fireEvent.doubleClick(screen.getByText("Payments Core"));
+    await waitFor(() => expect(screen.getByRole("navigation", { name: "Diagram level" })).toBeInTheDocument(), { timeout: 2000 });
+    await user.click(screen.getByRole("button", { name: "Arrange" }));
+    await user.click(screen.getByRole("radio", { name: "Directed flow" }));
+    expect(await screen.findByText(/^Arranged this level as a flow/)).toBeInTheDocument();
   });
 });

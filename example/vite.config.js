@@ -59,6 +59,12 @@ export default defineConfig({
   ],
   server: {
     port: 5173,
+    // No CORS at all. Vite's default answers any localhost origin, preflight
+    // included, which would let a page on another local port talk to the
+    // disk store and the AI route as though it were this app. Both refuse
+    // another origin themselves too; this is the first lock. (`vite preview`
+    // inherits it.)
+    cors: false,
   },
   resolve: {
     // Consume the library from source so `npm run dev` picks up edits with no rebuild.

@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDiagramRoute, createFetchHandler, resolveProvider, serveAiRequest, type CompletionRequest } from "./index";
 
 const BODY = { mode: "refine", input: "add a cache", systemPrompt: "You edit diagrams." };
+/** What the editor's own client (createProxyGenerator) declares its body as. */
+const JSON_TYPE = { "content-type": "application/json" };
 
 /** A local stand-in for a provider's API: records what it was sent and answers with `reply`. */
 async function fakeApi(reply: (req: IncomingMessage, body: string, res: ServerResponse) => void) {
@@ -340,12 +342,12 @@ describe("mounting the route", () => {
     const handler = createFetchHandler(createDiagramRoute({ env: {}, complete: async () => "ok" }));
     const status = await handler(new Request("http://x/api/diagram"));
     expect(await status.json()).toMatchObject({ configured: true });
-    const post = await handler(new Request("http://x/api/diagram", { method: "POST", body: JSON.stringify(BODY) }));
+    const post = await handler(new Request("http://x/api/diagram", { method: "POST", headers: JSON_TYPE, body: JSON.stringify(BODY) }));
     expect([post.status, await post.json()]).toEqual([200, { text: "ok" }]);
-    const bad = await handler(new Request("http://x/api/diagram", { method: "POST", body: "{nope" }));
+    const bad = await handler(new Request("http://x/api/diagram", { method: "POST", headers: JSON_TYPE, body: "{nope" }));
     expect(bad.status).toBe(400);
     const tooBig = createFetchHandler(createDiagramRoute({ env: {}, complete: async () => "ok" }), { bodyLimit: 10 });
-    expect((await tooBig(new Request("http://x", { method: "POST", body: JSON.stringify(BODY) }))).status).toBe(413);
+    expect((await tooBig(new Request("http://x", { method: "POST", headers: JSON_TYPE, body: JSON.stringify(BODY) }))).status).toBe(413);
     // A body that never states its length is cut off at the limit as it streams.
     let pulled = 0;
     const endless = new ReadableStream<Uint8Array>({
@@ -354,7 +356,7 @@ describe("mounting the route", () => {
         controller.enqueue(new TextEncoder().encode("x".repeat(64)));
       },
     });
-    const streamed = await tooBig(new Request("http://x", { method: "POST", body: endless, duplex: "half" } as RequestInit));
+    const streamed = await tooBig(new Request("http://x", { method: "POST", headers: JSON_TYPE, body: endless, duplex: "half" } as RequestInit));
     expect(streamed.status).toBe(413);
     expect(pulled).toBeLessThan(5);
     expect((await handler(new Request("http://x", { method: "PUT", body: "{}" }))).status).toBe(405);
@@ -375,7 +377,7 @@ describe("mounting the route", () => {
     const port = (server.address() as AddressInfo).port;
     const call = (path: string, method: string, body?: string) =>
       new Promise<{ status: number; body: string }>((resolve, reject) => {
-        const req = httpRequest({ host: "127.0.0.1", port, path, method }, (res) => {
+        const req = httpRequest({ host: "127.0.0.1", port, path, method, headers: body === undefined ? {} : JSON_TYPE }, (res) => {
           let text = "";
           res.on("data", (c) => (text += c));
           res.on("end", () => resolve({ status: res.statusCode ?? 0, body: text }));
@@ -396,7 +398,7 @@ describe("mounting the route", () => {
     servers.push(server);
     const port = (server.address() as AddressInfo).port;
     const result = await new Promise<string>((resolve) => {
-      const req = httpRequest({ host: "127.0.0.1", port, path: "/api/diagram", method: "POST" }, (res) => {
+      const req = httpRequest({ host: "127.0.0.1", port, path: "/api/diagram", method: "POST", headers: JSON_TYPE }, (res) => {
         let text = "";
         res.on("data", (c) => (text += c));
         res.on("end", () => resolve(`${res.statusCode} ${text}`));
@@ -405,5 +407,47 @@ describe("mounting the route", () => {
       req.end("x".repeat(200_000));
     });
     expect(result).toBe('413 {"error":"Request body too large."}');
+  });
+
+  // What a page on any other site can send with no CORS preflight: a form, or
+  // fetch with text/plain or no type at all. Parsed anyway, it would spend the
+  // key on that page's prompt.
+  const SIMPLE_TYPES = ["text/plain", "text/plain;charset=UTF-8", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x", undefined];
+
+  it("as a Fetch handler, refuses a body not sent as JSON without calling the model", async () => {
+    const complete = vi.fn(async () => "ok");
+    const handler = createFetchHandler(createDiagramRoute({ env: {}, complete }));
+    for (const type of SIMPLE_TYPES) {
+      // A Request with a string body and no type says text/plain itself; a Blob of no type says nothing.
+      const body = type === undefined ? new Blob([JSON.stringify(BODY)]) : JSON.stringify(BODY);
+      const answer = await handler(new Request("http://x/api/diagram", { method: "POST", headers: type ? { "content-type": type } : {}, body }));
+      expect(answer.status, String(type)).toBe(415);
+    }
+    expect(complete).not.toHaveBeenCalled();
+    const typed = await handler(new Request("http://x/api/diagram", { method: "POST", headers: { "content-type": "Application/JSON; charset=utf-8" }, body: JSON.stringify(BODY) }));
+    expect(typed.status).toBe(200);
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("on node:http, refuses a body not sent as JSON without calling the model", async () => {
+    const complete = vi.fn(async () => "ok");
+    const route = createDiagramRoute({ env: {}, complete });
+    const server = createServer((req, res) => void serveAiRequest(route, req, res));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    servers.push(server);
+    const port = (server.address() as AddressInfo).port;
+    const post = (type: string | undefined) =>
+      new Promise<number>((resolve, reject) => {
+        const req = httpRequest({ host: "127.0.0.1", port, path: "/api/diagram", method: "POST", headers: type ? { "content-type": type } : {} }, (res) => {
+          res.resume();
+          res.on("end", () => resolve(res.statusCode ?? 0));
+        });
+        req.on("error", reject);
+        req.end(JSON.stringify(BODY));
+      });
+    for (const type of SIMPLE_TYPES) expect(await post(type), String(type)).toBe(415);
+    expect(complete).not.toHaveBeenCalled();
+    expect(await post("application/json; charset=utf-8")).toBe(200);
+    expect(complete).toHaveBeenCalledTimes(1);
   });
 });

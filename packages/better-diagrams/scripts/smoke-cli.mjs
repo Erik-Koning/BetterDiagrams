@@ -5,10 +5,10 @@
  * that opens that diagram, not the editor's front page. Its links and scratch
  * go to a throwaway BD_HOME, never ~/.better-diagrams.
  *
- *   npm pack && node scripts/smoke-cli.mjs ./mosphere-better-diagrams-0.1.0.tgz
+ *   npm pack && node scripts/smoke-cli.mjs ./mosphere-better-diagrams-0.2.0.tgz
  */
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -105,6 +105,20 @@ const directed = layout("place", rough, "--mode", "directed", "--priority", "bal
 if (directed.status !== 0 || !directed.stderr.includes("directed flow")) fail("bd-layout place --mode directed failed", directed.stdout + directed.stderr);
 const relint = layout("lint", rough);
 if (relint.status !== 0 || relint.stdout.includes("box-overlap")) fail("bd-layout fix left the overlap", relint.stdout + relint.stderr);
+// What it chose is in the document, and placing it again with no --mode keeps to it, as Tidy does.
+const chosen = JSON.parse(readFileSync(join(work, "directed.json"), "utf8")).settings;
+if (chosen?.arrange !== "directed" || chosen?.directed?.priority !== "balanced") fail("bd-layout place should record the mode and priority", JSON.stringify(chosen));
+const again = layout("place", join(work, "directed.json"), "--out", "again.json");
+if (again.status !== 0 || !again.stderr.includes("directed flow")) fail("bd-layout place should keep the document's own arrangement", again.stdout + again.stderr);
+const untangle = layout("place", rough, "--mode", "untangle", "--out", "untangled.json");
+if (untangle.status !== 0) fail("bd-layout place should know every arrange mode the editor does", untangle.stdout + untangle.stderr);
+// A file whose reading drops something is not written over unless asked.
+const lossy = join(work, "lossy.json");
+writeFileSync(lossy, JSON.stringify({ version: 1, mystery: 1, nodes: [{ id: "a", label: "A", kind: "service", x: 0, y: 0, w: 170, h: 76 }], edges: [] }));
+const refused = layout("fix", lossy, "--write");
+if (refused.status !== 2 || !readFileSync(lossy, "utf8").includes("mystery")) fail("bd-layout fix --write should refuse to drop an unknown key", refused.stdout + refused.stderr);
+const forced = layout("fix", lossy, "--write", "--force");
+if (forced.status !== 0) fail("bd-layout fix --write --force should write", forced.stdout + forced.stderr);
 
 console.log(`smoke-cli: ok — ${link}`);
 stop();

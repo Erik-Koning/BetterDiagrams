@@ -72,9 +72,18 @@ export class Webview {
       });
     });
     await this.page.addInitScript(() => {
-      const w = window as unknown as { __posted: unknown[]; acquireVsCodeApi: () => unknown };
+      const w = window as unknown as { __posted: unknown[]; __forwarded: unknown[]; acquireVsCodeApi: () => unknown };
       w.__posted = [];
+      w.__forwarded = [];
       w.acquireVsCodeApi = () => ({ postMessage: (message: unknown) => w.__posted.push(message) });
+      // VS Code's preload, on the window before the page's own listeners: every
+      // key that reaches it goes to the workbench's keybindings, and ⌘Z and
+      // ⌘Y are kept from the page, for VS Code's Undo and Redo to act on.
+      window.addEventListener("keydown", (event) => {
+        const key = event.key.toLowerCase();
+        if ((event.ctrlKey || event.metaKey) && (key === "z" || key === "y")) event.preventDefault();
+        w.__forwarded.push({ key, mod: event.ctrlKey || event.metaKey, shift: event.shiftKey });
+      });
     });
     await this.page.goto(`${ORIGIN}/index.html`);
     await expect.poll(() => this.posted("ready")).toHaveLength(1);
@@ -99,6 +108,20 @@ export class Webview {
   async posted<T extends WebviewMessage["type"]>(type: T): Promise<Extract<WebviewMessage, { type: T }>[]> {
     const all = (await this.page.evaluate(() => (window as unknown as { __posted: WebviewMessage[] }).__posted)) ?? [];
     return all.filter((message): message is Extract<WebviewMessage, { type: T }> => message.type === type);
+  }
+
+  /** The ⌘ chords that reached VS Code's listener, as "z", "shift+z", "a"… */
+  async forwardedChords(): Promise<string[]> {
+    const all = await this.page.evaluate(
+      () => (window as unknown as { __forwarded: Array<{ key: string; mod: boolean; shift: boolean }> }).__forwarded,
+    );
+    return all.filter((key) => key.mod && key.key.length === 1).map((key) => `${key.shift ? "shift+" : ""}${key.key}`);
+  }
+
+  /** The types of everything posted, in order, from `from` on. */
+  async postedTypes(from = 0): Promise<string[]> {
+    const all = await this.page.evaluate(() => (window as unknown as { __posted: WebviewMessage[] }).__posted);
+    return all.slice(from).map((message) => message.type);
   }
 
   get root() {

@@ -11,12 +11,16 @@
  *       Keep the arrangement, fix what lint finds: line up what's nearly in line,
  *       clear overlaps, route lines and labels around what's in the way.
  *
- *   bd-layout place <file.json> [--algorithm <a>] [--direction <d>] [--shape <s>]
- *                               [--spacing <s>] [--write | --out <file>]
- *       Place everything from the graph, ignoring where things are now.
- *       --mode directed places it as a flow instead (lines kept from crossing
- *       first, running one way second), with --priority <p> for what to give up
- *       for what and --method <m> for how to look; --algorithm is then unused.
+ *   bd-layout place <file.json> [--mode <m>] [--algorithm <a>] [--direction <d>]
+ *                               [--shape <s>] [--spacing <s>] [--write | --out <file>]
+ *       Place everything from the graph, ignoring where things are now, the way
+ *       the editor's Arrange menu does: --mode auto (Best fit), flow (left to
+ *       right), untangle, directed or roadmap. Without --mode, the document's own
+ *       arrangement (settings.arrange), as Tidy does. --mode directed places it
+ *       as a flow (lines kept from crossing first, running one way second), with
+ *       --priority <p> for what to give up for what and --method <m> for how to
+ *       look. What was chosen is written into the document's settings, as the
+ *       editor does, so the next Tidy arranges it the same way.
  *
  *   bd-layout best <file.json> [--write | --out <file>]
  *       Keep the author's arrangement if it's any good (polished), otherwise
@@ -25,13 +29,15 @@
  * Every command also takes --kinds <a,b> for kinds of your own (a registry's),
  * and --container-kinds <a,b> for those of them that hold other boxes. Without
  * them a kind this package doesn't know is read as a plain service, so fix,
- * place and best refuse to write a document that has one.
+ * place and best refuse to write a document that has one. They also refuse to
+ * write a file when reading it dropped or changed anything (an unknown key, a
+ * line to a box that isn't there), listing what, unless --force is given.
  *
  * Without --write or --out the result goes to stdout, so it pipes. What was done
  * goes to stderr. Exits 2 for a bad command line or a file that isn't a diagram.
  * Runs against the built package (`npm run build` first when developing).
  */
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
 
 const contract = await import(new URL("../dist/contract.js", import.meta.url).href).catch((error) => {
   console.error(
@@ -42,23 +48,24 @@ const contract = await import(new URL("../dist/contract.js", import.meta.url).hr
   process.exit(2);
 });
 const {
+  ARRANGE_MODES,
   CONTAINER_KINDS,
   DIRECTED_METHODS,
   DIRECTED_PRIORITIES,
-  directedLayout,
   LAYOUT_ALGORITHMS,
   LAYOUT_DIRECTIONS,
   LAYOUT_SHAPES,
   LAYOUT_SPACINGS,
   arrangeBest,
-  autoPlace,
+  autoLayout,
   lintLayout,
   polishLayout,
   validateTemplate,
+  validateTemplateReport,
 } = contract;
 
 const VALUE_FLAGS = new Set(["min-score", "out", "algorithm", "direction", "shape", "spacing", "kinds", "container-kinds", "mode", "priority", "method"]);
-const SWITCHES = new Set(["json", "write", "all-canvases", "help"]);
+const SWITCHES = new Set(["json", "write", "all-canvases", "help", "force"]);
 
 function parseArgs(argv) {
   const positional = [];
@@ -98,10 +105,11 @@ function fail(message) {
 const USAGE = [
   "usage: bd-layout lint <file.json> [--json] [--min-score <n>] [--all-canvases]",
   "       bd-layout fix <file.json> [--write | --out <file>] [--all-canvases]",
-  "       bd-layout place <file.json> [--algorithm <a>] [--direction <d>] [--shape <s>] [--spacing <s>] [--write | --out <file>]",
+  "       bd-layout place <file.json> [--mode auto|flow|untangle|directed|roadmap] [--algorithm <a>] [--direction <d>] [--shape <s>] [--spacing <s>] [--write | --out <file>]",
   "       bd-layout place <file.json> --mode directed [--priority <p>] [--method <m>] [--direction <d>] [--write | --out <file>]",
   "       bd-layout best <file.json> [--write | --out <file>]",
-  "       each also takes --kinds <a,b> and --container-kinds <a,b> for kinds of your own",
+  "       each also takes --kinds <a,b> and --container-kinds <a,b> for kinds of your own,",
+  "       and fix, place and best take --force to write a file that reading changed",
 ].join("\n");
 
 function oneOf(value, allowed, name) {
@@ -144,6 +152,14 @@ if (lost.length) {
   console.error(`bd-layout: ${message} to measure ${lost.length === 1 ? "it" : "them"} as drawn`);
 }
 if (flags.write && flags.out) fail("--write and --out are two places to put one result; give one");
+// What reading the file dropped or changed would be lost from it for good once the result is written.
+const issues = command === "lint" ? [] : validateTemplateReport(raw, { knownKinds, ...(containerKinds ? { containerKinds } : {}) }).issues;
+if (issues.length && (flags.write || flags.out) && !flags.force) {
+  const shown = issues.slice(0, 12).map((i) => `  ${i.path || "/"}: ${i.message}`);
+  if (issues.length > shown.length) shown.push(`  …and ${issues.length - shown.length} more`);
+  fail(`reading ${file} changed ${issues.length === 1 ? "one thing" : `${issues.length} things`}, which writing would lose:\n${shown.join("\n")}\nFix the file, or pass --force to write it anyway.`);
+}
+if (issues.length && !flags.write && !flags.out) console.error(`bd-layout: reading ${file} changed ${issues.length === 1 ? "one thing" : `${issues.length} things`} (an unknown key, a line to nothing…); the result leaves ${issues.length === 1 ? "it" : "them"} out`);
 const frames = flags["all-canvases"] ? "all" : "root";
 const kindOptions = containerKinds ? { containerKinds } : {};
 
@@ -182,18 +198,34 @@ if (command === "fix") {
   result = polishLayout(doc, options);
   note = result === doc ? "nothing a polish could improve" : "polished";
 } else if (command === "place") {
-  const mode = oneOf(flags.mode, ["auto", "directed"], "mode") ?? "auto";
+  const mode = oneOf(flags.mode, ARRANGE_MODES, "mode") ?? doc.settings?.arrange ?? "auto";
   const priority = oneOf(flags.priority, DIRECTED_PRIORITIES, "priority");
   const method = oneOf(flags.method, DIRECTED_METHODS, "method");
   if (mode !== "directed" && (priority || method)) fail("--priority and --method go with --mode directed");
-  if (mode === "directed") {
-    if (options.algorithm) fail("--algorithm picks a family for Best fit; a directed flow has --method");
-    result = directedLayout(doc, { ...options, ...(priority ? { priority } : {}), ...(method ? { method } : {}) });
-    note = "placed as a directed flow";
-  } else {
-    result = autoPlace(doc, options);
-    note = "placed from the graph";
+  if (mode !== "auto" && options.algorithm) {
+    fail(mode === "directed" ? "--algorithm picks a family for Best fit; a directed flow has --method" : `--algorithm picks a family for Best fit, not for --mode ${mode}`);
   }
+  // Recorded the way the editor records a choice: a value equal to the default
+  // is left out, so a document only says what someone has said.
+  const { frames: _frames, containerKinds: _kinds, ...chosen } = options;
+  const layout = { ...doc.settings?.layout, ...chosen };
+  for (const [key, fallback] of [["algorithm", "auto"], ["direction", "auto"], ["shape", "any"], ["spacing", "normal"]]) if (layout[key] === fallback) delete layout[key];
+  const directed = { ...doc.settings?.directed, ...(priority ? { priority } : {}), ...(method ? { method } : {}) };
+  if (directed.priority === "mostly-crossings") delete directed.priority;
+  if (directed.method === "best") delete directed.method;
+  const { layout: _layout, directed: _directed, arrange: _arrange, ...settings } = doc.settings ?? {};
+  const recorded = {
+    ...doc,
+    settings: {
+      ...settings,
+      ...(mode !== "auto" || doc.settings?.arrange ? { arrange: mode } : {}),
+      ...(Object.keys(layout).length ? { layout } : {}),
+      ...(Object.keys(directed).length ? { directed } : {}),
+    },
+  };
+  if (!Object.keys(recorded.settings).length) delete recorded.settings;
+  result = autoLayout(recorded, { ...kindOptions, frames: options.frames, mode });
+  note = { auto: "placed from the graph", flow: "placed left to right", untangle: "placed to untangle the lines", directed: "placed as a directed flow", roadmap: "placed by date" }[mode];
 } else {
   const best = arrangeBest(doc, options);
   result = best.template;
@@ -213,9 +245,13 @@ if (!target) {
   process.stdout.write(json);
   return;
 }
+// Beside it first, then into place: a run cut short leaves the file as it was, not half written.
+const temporary = `${target}.bd-layout-${process.pid}.tmp`;
 try {
-  await writeFile(target, json);
+  await writeFile(temporary, json);
+  await rename(temporary, target);
 } catch (error) {
+  await rm(temporary, { force: true });
   fail(`couldn't write ${target}: ${error.message}`);
 }
 }

@@ -1,7 +1,24 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-11-16
 
+- **Arrange like the web app does**, the library's 0.2.0 in the editor: Best fit, Left to right,
+  Untangle and **Directed flow** (lines kept from crossing first and running one way second, left to
+  right unless the other way is plainly better), with its Priority, Method and Direction under it in
+  the Arrange menu; the **Layout panel** (a score, Polish, Arrange selection, Straighten, every
+  layout choice, Reset, and thumbnails of the other arrangements). Each arrangement is one ⌘Z.
+- ⌘Z, ⇧⌘Z and ⌘Y in a text field in the diagram editor (a label, the AI prompt, Edit JSON) undo and
+  redo the typing, where they stepped the diagram back; ⌘A selects the field's text.
+- A word typed into a label or field is one undo step, not one per letter, and ⌘S straight after
+  typing saves the typing too.
+- An undo that lands while an edit is still being written to the file is no longer overwritten: the
+  newer text wins, and the toolbar's Undo waits for edits already sent.
+- ⌘Y redoes on macOS, Ctrl+G groups without opening Go to Line, and ⌘A on the canvas selects the
+  diagram rather than the page's text.
+- An edit VS Code can't write shows a warning, and the diagram goes back to what the file holds.
+- Edits replace only the part of the JSON that changed, so the JSON open beside the diagram keeps
+  its scroll, folds and cursor.
+- A read-only diagram can't be undone or redone into an older version.
 - A **Settings** menu in the studio's toolbar with what the web app keeps in its header: Copy
   schema (scoped to the clouds you tick), Edit JSON (paste what an AI agent wrote), Derive
   sequence, the examples, and View: light or dark or follow VS Code, marketing or technical,

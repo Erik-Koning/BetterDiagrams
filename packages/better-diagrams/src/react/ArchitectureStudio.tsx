@@ -128,7 +128,7 @@ import {
 } from "../contract/states";
 import { focusPath, liftScopedReactFlow, scopedView } from "../contract/scope";
 import { DiffCanvas } from "./DiffCanvas";
-import { isMac, isTypingTarget } from "./keys";
+import { claimKeyboard, controlOwnsKey, isMac, isTypingTarget, ownsKeyboard as ownsKeyboardOf, releaseKeyboard } from "./keys";
 import {
   FileMenu,
   Breadcrumbs,
@@ -276,7 +276,7 @@ import {
   type DiagramGenerator,
   type GenerateTurn,
 } from "../contract/llm";
-import { isNodeLocked, type AlignMode, type EdgePatch, type NodePatch } from "./studio-shared";
+import { isNodeLocked, type AlignMode, type EdgePatch, type NodePatch, type PatchOptions } from "./studio-shared";
 import { ContextItem, EdgeInspector, MultiInspector, NodeInspector, ZoneInspector } from "./studio-inspectors";
 import {
   documentSelection,
@@ -394,9 +394,9 @@ export interface StudioHandle {
     edit: DiagramTemplate | ((current: DiagramTemplate) => DiagramTemplate),
     options?: StudioUpdateOptions,
   ) => ValidationReport;
-  /** Step back through the undo history; false when there was nothing to undo. */
+  /** Step back through the undo history; false when there was nothing to undo, or the editor is read-only. */
   undo: () => boolean;
-  /** Step forward again; false when there was nothing to redo. */
+  /** Step forward again; false when there was nothing to redo, or the editor is read-only. */
   redo: () => boolean;
   canUndo: () => boolean;
   canRedo: () => boolean;
@@ -817,24 +817,6 @@ function download(blob: Blob, filename: string): void {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-/**
- * Fields a person edits by TYPING, where the inspector commits on every
- * keystroke so a controlled host stays live.
- *
- * A run of commits into one of these collapses into a single undo entry (see
- * CommitOptions in history.ts); everything else — a kind, a status, a colour —
- * is one deliberate action per commit and undoes on its own.
- */
-/**
- * The editor the keyboard belongs to while nothing has DOM focus.
- *
- * Clicking a canvas leaves focus on <body>, so focus alone cannot tell two
- * mounted studios apart — or tell either of them from the host's own page.
- * The most recently pointed-at editor holds the claim; the first to mount
- * takes it so a lone editor works before anyone has touched it.
- */
-let activeStudio: symbol | null = null;
-
 /** Where an import lands: over the open diagram, or in a new file beside it. See `runImport`. */
 type ImportTarget = "here" | "new";
 
@@ -866,7 +848,16 @@ function changeCount(summary: { added: number; removed: number; changed: number 
 /** The node fields a wrapped card's height is measured from (`wrappedNodeHeight`). */
 const WRAP_MEASURED_KEYS = ["label", "description", "fontSize", "icon", "kind", "date"] as const;
 
-
+/**
+ * Fields a person edits by TYPING, where the inspector commits on every
+ * keystroke so a controlled host stays live.
+ *
+ * A run of commits into one of these collapses into a single undo entry (see
+ * CommitOptions in history.ts); everything else — a kind, a status, a colour
+ * swatch — is one deliberate action per commit and undoes on its own. A
+ * slider or a colour picker being dragged is the exception the inspector
+ * marks itself (`continuous`), since the same field also takes clicks.
+ */
 const TYPED_FIELDS = new Set([
   "label",
   "description",
@@ -894,9 +885,14 @@ const TASK_FILTERS: ReadonlyArray<[TaskFilterKind, string, string]> = [
 const EMPTY_PEOPLE: TaskAssignee[] = [];
 
 
-/** The coalescing key for a patch, or nothing when it is not a typing run. */
-function typingRunKey(scope: string, id: string, patch: object): string | undefined {
+/**
+ * The coalescing key for a patch, or nothing when it is not a typing run.
+ * `continuous` is a frame of a drag — a slider, a colour picker — which is a
+ * run whatever the field.
+ */
+function typingRunKey(scope: string, id: string, patch: object, continuous = false): string | undefined {
   const keys = Object.keys(patch);
+  if (continuous && keys.length) return `${scope}:${id}:${keys.sort().join("+")}`;
   return keys.length === 1 && TYPED_FIELDS.has(keys[0]!) ? `${scope}:${id}:${keys[0]}` : undefined;
 }
 
@@ -1388,15 +1384,13 @@ function StudioInner({
   /** The component's outermost element — how it tells its own keys from the host's. */
   const rootRef = useRef<HTMLDivElement>(null);
 
-  /** Identity for the keyboard claim. See `activeStudio`. */
+  /** Identity for the keyboard claim. See `ownsKeyboard` in keys.ts. */
   const studioId = useMemo(() => Symbol("studio"), []);
   // The first editor on the page claims the keyboard, so a lone one works
   // before it has been touched.
   useEffect(() => {
-    if (activeStudio === null) activeStudio = studioId;
-    return () => {
-      if (activeStudio === studioId) activeStudio = null;
-    };
+    claimKeyboard(studioId, { ifFree: true });
+    return () => releaseKeyboard(studioId);
   }, [studioId]);
   const abortRef = useRef<AbortController | null>(null);
   /** JSON of the last template this component emitted, so echoes don't re-sync. */
@@ -2436,6 +2430,7 @@ function StudioInner({
   const layoutActionsRef = useRef({
     setLayoutPrefs: (_patch: LayoutPatch) => {},
     setDirectedPrefs: (_patch: DirectedPreferences) => {},
+    resetLayoutPrefs: () => {},
     tidy: () => {},
     polishNow: () => {},
     arrangeSelected: () => {},
@@ -2480,6 +2475,7 @@ function StudioInner({
       selectedLines: selectedEdgeIds.length,
       onPrefs: (patch) => layoutActionsRef.current.setLayoutPrefs(patch),
       onDirected: (patch) => layoutActionsRef.current.setDirectedPrefs(patch),
+      onReset: () => layoutActionsRef.current.resetLayoutPrefs(),
       onArrange: () => layoutActionsRef.current.tidy(),
       onPolish: () => layoutActionsRef.current.polishNow(),
       onArrangeSelection: () => layoutActionsRef.current.arrangeSelected(),
@@ -3414,16 +3410,20 @@ function StudioInner({
         { fit: true },
       );
       const mod = isMac() ? "⌘" : "Ctrl+";
+      // Drilled in, only the level on screen was arranged (levelLayoutOptions),
+      // though the choice is the document's: say so, as Tidy does, so the
+      // levels left as they were don't read as a choice that didn't take.
+      const level = rfFocusRef.current ? " this level" : "";
       showToast(
         next === "auto"
-          ? `Arranged · ${mod}Z to undo`
+          ? `Arranged${level} · ${mod}Z to undo`
           : next === "directed"
-            ? `Arranged as a flow: fewest crossings, then one direction · ${mod}Z to undo`
+            ? `Arranged${level} as a flow: fewest crossings, then one direction · ${mod}Z to undo`
             : next === "untangle"
-            ? `Untangled the lines · ${mod}Z to undo`
+            ? `Untangled the lines${level ? " on this level" : ""} · ${mod}Z to undo`
             : next === "roadmap"
-              ? `Laid out by date · ${mod}Z to undo`
-              : `Arranged left to right · ${mod}Z to undo`,
+              ? `Laid out${level} by date · ${mod}Z to undo`
+              : `Arranged${level} left to right · ${mod}Z to undo`,
       );
     },
     [readOnly, applyTemplate, showToast, levelLayoutOptions],
@@ -3495,6 +3495,26 @@ function StudioInner({
     },
     [readOnly, applyTemplate, levelLayoutOptions],
   );
+
+  /**
+   * The Layout panel's Reset: forget every layout and directed-flow choice and
+   * arrange again, in one undo step. How the document is arranged
+   * (`settings.arrange`) stays — Reset puts the choices back to their
+   * defaults, it doesn't switch a directed flow to Best fit.
+   */
+  const resetLayoutPrefs = useCallback(() => {
+    if (readOnly) return;
+    const current = templateRef.current;
+    if (!current.settings?.layout && !current.settings?.directed) return;
+    const { layout: _layout, directed: _directed, ...settings } = current.settings;
+    const { settings: _settings, ...rest } = current;
+    applyTemplate(
+      autoLayout({ ...rest, ...(Object.keys(settings).length ? { settings } : {}) }, levelLayoutOptions()),
+      { fit: true },
+    );
+    const mod = isMac() ? "⌘" : "Ctrl+";
+    showToast(`Layout choices back to their defaults${rfFocusRef.current ? ", this level arranged again" : ""} · ${mod}Z to undo`);
+  }, [readOnly, applyTemplate, showToast, levelLayoutOptions]);
 
   /** Keep the arrangement and fix what lint finds. Never makes it measure worse. */
   const polishNow = useCallback(() => {
@@ -3574,7 +3594,7 @@ function StudioInner({
     showToast(`Straightened · ${mod}Z to undo`);
   }, [readOnly, flow, applyTemplate, showToast]);
 
-  layoutActionsRef.current = { setLayoutPrefs, setDirectedPrefs, tidy, polishNow, arrangeSelected, straighten, useLayoutCandidate };
+  layoutActionsRef.current = { setLayoutPrefs, setDirectedPrefs, resetLayoutPrefs, tidy, polishNow, arrangeSelected, straighten, useLayoutCandidate };
 
   const addZone = useCallback(() => {
     if (readOnly) return;
@@ -3923,7 +3943,7 @@ function StudioInner({
    * a tag to whatever tags it carries, say).
    */
   const patchNodes = useCallback(
-    (ids: readonly string[], patch: NodePatch) => {
+    (ids: readonly string[], patch: NodePatch, options?: PatchOptions) => {
       if (readOnly || !ids.length) return;
       const targets = new Set(ids);
       setNodes((current) =>
@@ -4025,7 +4045,9 @@ function StudioInner({
           };
         }),
       );
-      commitLater(typeof patch === "function" ? undefined : typingRunKey("node", ids.join("+"), patch));
+      commitLater(
+        typeof patch === "function" ? undefined : typingRunKey("node", ids.join("+"), patch, options?.continuous),
+      );
     },
     [readOnly, setNodes, registry, commitLater],
   );
@@ -4620,24 +4642,38 @@ function StudioInner({
     [materializeTemplate, onChange, deriveTemplate],
   );
 
+  // A read-only editor steps nowhere. Its history still fills — a host's
+  // change to `value` lands in it as a step — but undoing one would put the
+  // old document back and hand it to onChange, an edit from an editor that
+  // was told not to make any.
   const doUndo = useCallback(() => {
+    if (readOnly) return false;
     const snapshot = undoHistory();
     if (snapshot) applySnapshot(snapshot);
     return !!snapshot;
-  }, [undoHistory, applySnapshot]);
+  }, [readOnly, undoHistory, applySnapshot]);
 
   const doRedo = useCallback(() => {
+    if (readOnly) return false;
     const snapshot = redoHistory();
     if (snapshot) applySnapshot(snapshot);
     return !!snapshot;
-  }, [redoHistory, applySnapshot]);
+  }, [readOnly, redoHistory, applySnapshot]);
 
   // What the toolbar's Undo and Redo and the history keys do: the host's
-  // history when it keeps one, else this editor's.
-  const undoStep = useCallback(() => (hostHistory ? hostHistory.undo() : void doUndo()), [hostHistory, doUndo]);
-  const redoStep = useCallback(() => (hostHistory ? hostHistory.redo() : void doRedo()), [hostHistory, doRedo]);
-  const undoDisabled = hostHistory ? hostHistory.canUndo === false : !history.canUndo;
-  const redoDisabled = hostHistory ? hostHistory.canRedo === false : !history.canRedo;
+  // history when it keeps one, else this editor's. Neither while read-only.
+  const undoStep = useCallback(() => {
+    if (readOnly) return;
+    if (hostHistory) hostHistory.undo();
+    else doUndo();
+  }, [readOnly, hostHistory, doUndo]);
+  const redoStep = useCallback(() => {
+    if (readOnly) return;
+    if (hostHistory) hostHistory.redo();
+    else doRedo();
+  }, [readOnly, hostHistory, doRedo]);
+  const undoDisabled = readOnly || (hostHistory ? hostHistory.canUndo === false : !history.canUndo);
+  const redoDisabled = readOnly || (hostHistory ? hostHistory.canRedo === false : !history.canRedo);
 
   // ── Drill navigation (C4 levels) ──────────────────────────────────────────
 
@@ -6449,6 +6485,28 @@ function StudioInner({
       } else {
         next = coerceGeneratorResult(result, rOpts);
       }
+      // How a new diagram is to be arranged can be chosen before there is
+      // one: Directed flow picked on a blank canvas, then the chat asked to
+      // draw. A reply that says nothing about arranging keeps that choice,
+      // rather than dropping it with the document it replaces, and is
+      // arranged by it: the choice was made to be used.
+      let keptArrangement = false;
+      if (!split) {
+        const own = templateRef.current.settings;
+        const said = next.settings?.arrange || next.settings?.layout || next.settings?.directed;
+        if (!said && (own?.arrange || own?.layout || own?.directed)) {
+          next = {
+            ...next,
+            settings: {
+              ...next.settings,
+              ...(own.arrange ? { arrange: own.arrange } : {}),
+              ...(own.layout ? { layout: own.layout } : {}),
+              ...(own.directed ? { directed: own.directed } : {}),
+            },
+          };
+          keptArrangement = true;
+        }
+      }
       if (split) {
         // Whatever geometry the model emitted anyway is stripped by the
         // split; the document's own presentation is the only layout source —
@@ -6459,6 +6517,15 @@ function StudioInner({
           splitTemplate(templateRef.current, rOpts).presentation,
           rOpts,
         );
+      } else if (keptArrangement && ((next.settings?.arrange ?? "auto") !== "auto" || next.settings?.layout)) {
+        // Chosen before there was a diagram to arrange, so it is used as
+        // chosen: the model's own placement doesn't get a say over a
+        // directed flow, or a direction somebody picked.
+        next = autoLayout(next, {
+          containerKinds: registry.containerKinds,
+          ...modeLayoutOptions(studioMode),
+          frames: "all",
+        });
       } else if ((next.settings?.arrange ?? "auto") === "auto") {
         // A generated diagram keeps the arrangement it arrived with unless the
         // auto-placer's is clearly better, so a model that places boxes well
@@ -6858,7 +6925,7 @@ function StudioInner({
   }, [viewEdges, registry]);
 
   const patchZone = useCallback(
-    (zoneId: string, patch: Partial<DiagramZone>) => {
+    (zoneId: string, patch: Partial<DiagramZone>, options?: PatchOptions) => {
       if (readOnly) return;
       // Geometry patches go through the document so members scale with the
       // box — including provider-hidden members, which aren't in the store.
@@ -6898,7 +6965,7 @@ function StudioInner({
           };
         }),
       );
-      commitLater(typingRunKey("zone", zoneId, patch));
+      commitLater(typingRunKey("zone", zoneId, patch, options?.continuous));
     },
     [readOnly, setNodes, commitLater, registry, materializeTemplate, commit],
   );
@@ -7211,33 +7278,21 @@ function StudioInner({
   /** Any dialog is up, so the canvas is not what the keyboard is aimed at. */
   const modalOpen = welcomeOpen || !!pendingExport || !!pendingNest || !!fieldGrid || capacityOpen || htmlSettingsOpen;
 
-  /**
-   * Whether a keystroke on `window` was meant for THIS editor.
-   *
-   * The handler has to be on `window` — the canvas is not focusable and the
-   * user is usually pointing at it rather than tabbed into it — but "on
-   * window" is not the same as "for us". Embedded in a panel, the editor was
-   * answering Delete, N and the arrows while the user worked in the host's own
-   * UI, and two mounted studios both answered every key.
-   *
-   * Three signals, in order of how sure each one is:
-   *   focus inside us            → certainly ours
-   *   focus on something else    → certainly not ours
-   *   focus nowhere (the usual
-   *   state after a canvas click) → whichever editor was touched last
-   */
-  const ownsKeyboard = useCallback((): boolean => {
-    const root = rootRef.current;
-    if (!root) return false;
-    const active = typeof document !== "undefined" ? document.activeElement : null;
-    if (active && active !== document.body) return root.contains(active);
-    return activeStudio === studioId;
-  }, [studioId]);
+  /** Whether a keystroke on `window` was meant for THIS editor — see keys.ts. */
+  const ownsKeyboard = useCallback((): boolean => ownsKeyboardOf(rootRef.current, studioId), [studioId]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const mod = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
+
+      // Something on the way here already answered the key — a menu walking
+      // its rows, a control of the host's own — and said so. Acting on it as
+      // well moved the selected node while the arrows walked a menu. Chords
+      // are exempt: a host can see one before any listener of the page does
+      // (VS Code's webview listens first, and prevents the chords it handles
+      // itself), and the editor may still be the one that has to act on it.
+      if (event.defaultPrevented && !mod) return;
 
       // A dialog owns the keyboard while it is up. Without this, N inserts a
       // node behind the welcome modal, Delete removes the very group a Nesting
@@ -7275,13 +7330,17 @@ function StudioInner({
         void handleSave();
         return;
       }
-      if (isTypingTarget(event.target)) return;
+      if (isTypingTarget(event.target, event)) return;
 
       // Everything below acts on the canvas, so it only applies while the
       // pointer or focus is actually in this editor. Two studios on one page
       // both answering Delete — or one answering it while the user is working
       // in the host's own UI — is the same class of bug as the modal case.
       if (!ownsKeyboard()) return;
+
+      // The arrows on a slider, Enter on a button: the control with focus
+      // answers these itself (see controlOwnsKey).
+      if (controlOwnsKey(event.target, event)) return;
 
       // Compare shows a diff rather than the document, so shortcuts that would
       // edit what the user cannot see are blocked. Timeline mode is NOT in
@@ -7296,15 +7355,19 @@ function StudioInner({
         return;
       }
 
-      // ── History ──
+      // ── History. Not while read-only: the only steps in it are the host's
+      //    own changes, and stepping one back sent the old document out
+      //    through onChange from an editor that may not edit. ──
       if (mod && key === "z") {
         event.preventDefault();
+        if (readOnly) return;
         if (event.shiftKey) redoStep();
         else undoStep();
         return;
       }
       if (mod && key === "y") {
         event.preventDefault();
+        if (readOnly) return;
         redoStep();
         return;
       }
@@ -7350,9 +7413,11 @@ function StudioInner({
         else groupSelection();
         return;
       }
+      // Lock and restack edit the document, so compare — which shows a diff
+      // of it, not it — leaves them alone like the clipboard keys above.
       if (mod && event.shiftKey && key === "l") {
         event.preventDefault();
-        toggleLockSelection();
+        if (editing) toggleLockSelection();
         return;
       }
       if (mod && event.shiftKey && key === "e") {
@@ -7363,6 +7428,7 @@ function StudioInner({
       // Only zones carry a stored z — see restackZones for why nodes cannot.
       if (mod && (event.key === "]" || event.key === "[")) {
         event.preventDefault();
+        if (!editing) return;
         const forward = event.key === "]";
         restackZones(
           event.shiftKey ? (forward ? "front" : "back") : forward ? "forward" : "backward",
@@ -7467,6 +7533,9 @@ function StudioInner({
 
         if (selectedNodeIds.length) {
           event.preventDefault();
+          // Not while read-only, nor in compare, which draws the diff: the
+          // selection it would move is not on screen.
+          if (!editing) return;
           if (mod && event.shiftKey) {
             // ⌘⇧arrow aligns instead of moving, as Excalidraw does.
             alignSelection(
@@ -7808,9 +7877,7 @@ function StudioInner({
         data-mode={studioMode}
         data-color-scheme={colorSchemeOf(rootStyle)}
         style={rootStyle}
-        onPointerDownCapture={() => {
-          activeStudio = studioId;
-        }}
+        onPointerDownCapture={() => claimKeyboard(studioId)}
       >
         <div className="as-toolbar">
           {files?.length ? (
@@ -8133,7 +8200,15 @@ function StudioInner({
                 </label>
                 {/* What it gives up for what, and how it looks for it: only while it is the arrangement in use. */}
                 {arrangeMode === "directed" ? (
-                  <DirectedControls className="as-menu__fields" value={template.settings?.directed} onChange={setDirectedPrefs} />
+                  <DirectedControls
+                    className="as-menu__fields"
+                    value={template.settings?.directed}
+                    onChange={setDirectedPrefs}
+                    // The way the flow runs is a layout choice, which keeps a
+                    // directed flow directed (setLayoutPrefs).
+                    direction={template.settings?.layout?.direction}
+                    onDirection={(direction) => setLayoutPrefs({ direction })}
+                  />
                 ) : null}
                 {/* Offered once the plan has a date to go by. */}
                 {arrangeMode === "roadmap" || hasRoadmapWork(template) ? (

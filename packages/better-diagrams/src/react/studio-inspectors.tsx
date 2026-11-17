@@ -78,7 +78,7 @@ import { SvgIcon } from "./icons";
 import { iconKeywords, suggestIcons } from "./icon-suggest";
 import { relationDressing } from "../contract/relations";
 import { useStudio } from "./context";
-import { isNodeLocked, type AlignMode, type EdgePatch, type NodePatch } from "./studio-shared";
+import { isNodeLocked, type AlignMode, type EdgePatch, type NodePatch, type PatchOptions } from "./studio-shared";
 
 const EMPTY_NAMES: readonly string[] = [];
 
@@ -344,9 +344,9 @@ export function MultiInspector({
   labelOf: (nodeId: string) => string;
   /** One selected line still names its two ends, and each is a way there. */
   onNavigate: (nodeId: string) => void;
-  onPatchNodes: (ids: readonly string[], patch: NodePatch) => void;
+  onPatchNodes: (ids: readonly string[], patch: NodePatch, options?: PatchOptions) => void;
   onPatchEdges: (ids: readonly string[], patch: EdgePatch) => void;
-  onPatchZone: (id: string, patch: Partial<DiagramZone>) => void;
+  onPatchZone: (id: string, patch: Partial<DiagramZone>, options?: PatchOptions) => void;
   onSwapEnds: (ids: readonly string[]) => void;
   onClearRoutes: (ids: readonly string[]) => void;
   onAlign: (mode: AlignMode) => void;
@@ -523,7 +523,7 @@ export function ZoneInspector({
   registry: ResolvedRegistry;
   /** Every zone in the document — the palette harvests their custom colours. */
   zones: DiagramZone[];
-  onPatch: (zoneId: string, patch: Partial<DiagramZone>) => void;
+  onPatch: (zoneId: string, patch: Partial<DiagramZone>, options?: PatchOptions) => void;
   /** Same swap semantics as ⌘] / ⌘[ — see `restackZones`. */
   onRestack: (mode: "front" | "back" | "forward" | "backward") => void;
 }) {
@@ -624,7 +624,7 @@ export function ZoneInspector({
           className="as-swatch as-swatch--custom"
           type="color"
           value={ink}
-          onChange={(event) => onPatch(zone.id, { color: event.target.value.toLowerCase() })}
+          onChange={(event) => onPatch(zone.id, { color: event.target.value.toLowerCase() }, { continuous: true })}
           aria-label="Custom zone colour"
           title="Pick any outline colour — the fill derives from it"
         />
@@ -670,7 +670,7 @@ export function ZoneInspector({
           step={0.02}
           value={zone.opacity ?? DEFAULT_ZONE_OPACITY}
           disabled={zone.fill === false}
-          onChange={(event) => onPatch(zone.id, { opacity: Number(event.target.value) })}
+          onChange={(event) => onPatch(zone.id, { opacity: Number(event.target.value) }, { continuous: true })}
           aria-label="Fill opacity"
           title="How strong the background tint is"
         />
@@ -862,7 +862,7 @@ export function NodeInspector({
   relevantProviders: ReadonlySet<string>;
   /** Render the lock button. A mixed selection's bar draws its own, covering zones too. */
   lock?: boolean;
-  onPatch: (ids: readonly string[], patch: NodePatch) => void;
+  onPatch: (ids: readonly string[], patch: NodePatch, options?: PatchOptions) => void;
 }) {
   const ids = nodes.map((n) => n.id);
   const datas = nodes.map((n) => n.data as DiagramNodeData);
@@ -870,7 +870,7 @@ export function NodeInspector({
   const data = datas[0]!;
   const defs = datas.map((d) => kindDef(registry, d.kind));
   const def = defs[0]!;
-  const patch = (p: NodePatch) => onPatch(ids, p);
+  const patch = (p: NodePatch, options?: PatchOptions) => onPatch(ids, p, options);
   const read = <T,>(pick: (d: DiagramNodeData) => T) => sharedField(datas, pick);
 
   // Which sections the selection qualifies for — ALL of it, or none.
@@ -1230,7 +1230,7 @@ export function NodeInspector({
             step={0.02}
             value={opacity.mixed ? DEFAULT_CONTAINER_OPACITY : opacity.value}
             disabled={!fill.mixed && !fill.value}
-            onChange={(event) => patch({ opacity: Number(event.target.value) })}
+            onChange={(event) => patch({ opacity: Number(event.target.value) }, { continuous: true })}
             aria-label="Frame fill opacity"
             title={opacity.mixed ? "Mixed — drag to set one tint for all" : "How strong the background tint is"}
           />
@@ -1238,7 +1238,7 @@ export function NodeInspector({
             className="as-swatch as-swatch--custom"
             type="color"
             value={color.mixed || !color.value ? def.accent : color.value}
-            onChange={(event) => patch({ color: event.target.value })}
+            onChange={(event) => patch({ color: event.target.value }, { continuous: true })}
             aria-label="Frame colour"
             title={color.mixed ? "Mixed — pick one ink for all" : "Frame ink — the outline colour the fill is derived from"}
           />
@@ -1282,7 +1282,7 @@ export function NodeInspector({
             className="as-swatch as-swatch--custom"
             type="color"
             value={color.mixed || !color.value ? def.accent : color.value}
-            onChange={(event) => patch({ color: event.target.value.toLowerCase() })}
+            onChange={(event) => patch({ color: event.target.value.toLowerCase() }, { continuous: true })}
             aria-label="Custom node colour"
             title={color.mixed ? "Mixed — pick one colour for all" : "Pick any colour"}
           />

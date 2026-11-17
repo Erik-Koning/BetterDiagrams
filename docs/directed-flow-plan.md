@@ -7,6 +7,36 @@ not built.
 
 ## Where it stands
 
+**2026-11-16: left to right, and quick enough for the editor's thread.** Asked for an arrangement
+that reads mostly left to right. Before this, with no direction chosen, a picture down the page was
+taken whenever it measured 3% cheaper: 14 of the 35 documents ran down, half of them by 4 to 15%.
+- *A lean* (`LEAN` = 0.7 in `directed/index.ts`, `PlaceWith.lean` in `arrange.ts`): another overall
+  direction than the document's own (left to right; down for a flowchart) has to cost at most 0.7
+  of it as drawn. Inside frames either way may still win; leaning there too was tried and measured
+  worse (`largeSystem` 34 crossings against 13, `real-services` 37 against 16). Directed flow now
+  reads left to right on 31 of 35 documents (Best fit: 20). Best fit itself is unchanged.
+- *Blind paired review* of the fourteen documents the lean changed (`gallery/reviews/directed-flow-lean.json`):
+  24 picks for the left-to-right picture, 12 against, 6 ties. Unanimous for it: `ring`, `islands`,
+  `real-platform`, `real-services`, `flow-shortcuts`, `flow-long-skip`. Unanimous against:
+  `largeSystem` (3 against 5 to 6: its frames read best as tiers down the page), `bipartite` (5
+  against 6: the crossings squeezed into a narrow gap between two columns) and `flow-loops`.
+- `flow-loops` lost because across the page the cheapest picture began the loop at Test: a main
+  line turned to save two return lines, which the search's price allows. **A turned main line now
+  costs twice as much between whole pictures** (not in the search, where doubling it cost
+  `real-services` its gain). The loop starts at Plan again, both ways round.
+- *Time.* The five candidate pictures each made the ranking searches the others had made: they now
+  share them, made once and only when asked for (same pictures, 12% less time). Past 160 boxes and
+  lines together, Best of all compares the reader's ranks with the searched ones only. And the
+  router's shortest path tests a step only against the boxes whose span it crosses (same routes).
+  80 boxes and 120 lines: 11 s to 1.1 s; 120 and 160: 19 s to 4 s; 200 and 300: 21 s to 2.6 s;
+  `real-platform` 2.8 s to 1.5 s. Best fit over the gallery: 4.5 s to 1.9 s, every picture the same.
+- Totals now (35 documents; score, crossings, lines on lines): best 88.7, 372, 120; ranked 87.6,
+  399, 129; annealed 88.1, 384, 125; Best fit 87.6, 381, 103 (unchanged). The twelve flows: 16
+  crossings and no lines on lines, as before.
+- Known and left: arranging `real-platform` twice moves boxes the second time, because where its
+  frames are drawn decides which zone they fall in (zone membership is by position). No other
+  gallery document moves when arranged again.
+
 **Step 1, measuring.** `measureFlow` and `layoutStability` (`contract/directed/metrics.ts`), and
 `npm run gallery -- metrics`, which prints them for every gallery document in every arrangement.
 The gallery has twelve more documents (`flow-*` in `scripts/gallery/corpus.mjs`), each one shape a
