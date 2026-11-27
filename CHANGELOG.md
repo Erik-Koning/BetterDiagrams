@@ -21,6 +21,9 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   (`TaskStateChangeDetail`).
 - `onDocumentChange(diff, template)`: every edit made in the editor or through its `ref`, itemised
   as a `TemplateDiff`, positions included.
+- `onNodesMove(moves, template)`: once per finished move (a drag let go, a nudge, Align, Tidy, an
+  undo) with every node it moved and where each was and is. `nodeMoves(before, after)` and
+  `NodeMove` in the contract give the same list for any two versions of a document.
 - `onNodeClick`, `onNodeDoubleClick` and `onEdgeClick`, by document id.
 - On the `ref`: `getTaskState`, `setTaskState`, `getViewport` and `setViewport` (`StudioViewport`).
 

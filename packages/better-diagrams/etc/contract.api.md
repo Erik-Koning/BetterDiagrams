@@ -2463,6 +2463,39 @@ export type NodeInput = Partial<DiagramNode>;
 // @public (undocumented)
 export type NodeKind = (typeof NODE_KINDS)[number] | (string & {});
 
+// @public
+export interface NodeMove {
+    from: {
+        x: number;
+        y: number;
+        parentId: string | null;
+    };
+    // (undocumented)
+    nodeId: string;
+    to: {
+        x: number;
+        y: number;
+        parentId: string | null;
+    };
+}
+
+// @public
+export function nodeMoves(base: {
+    nodes: ReadonlyArray<{
+        id: string;
+        x: number;
+        y: number;
+        parentId?: string | null;
+    }>;
+}, current: {
+    nodes: ReadonlyArray<{
+        id: string;
+        x: number;
+        y: number;
+        parentId?: string | null;
+    }>;
+}): NodeMove[];
+
 // @public (undocumented)
 export type NodeOutline = (typeof NODE_OUTLINES)[number];
 

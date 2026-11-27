@@ -541,8 +541,10 @@ export {
   DEFAULT_DIFF_IGNORE,
   diffTemplates,
   diffSequences,
+  nodeMoves,
 } from "./diff";
 export type {
+  NodeMove,
   DiffState,
   ChangedEntry,
   CollectionDiff,

@@ -111,6 +111,7 @@ export interface ArchitectureStudioProps {
     onNewFileOnDisk?: () => void;
     onNodeClick?: (nodeId: string, event: MouseEvent_2) => void;
     onNodeDoubleClick?: (nodeId: string, event: MouseEvent_2) => void;
+    onNodesMove?: (moves: NodeMove[], template: DiagramTemplate) => void;
     onOpenFile?: () => Promise<File | null>;
     onPinsChange?: (pins: Pin[]) => void;
     onSave?: (template: DiagramTemplate) => void | Promise<void>;
@@ -2863,6 +2864,39 @@ export interface NodeKindDef {
     shape?: NodeShape;
     text: string;
 }
+
+// @public
+export interface NodeMove {
+    from: {
+        x: number;
+        y: number;
+        parentId: string | null;
+    };
+    // (undocumented)
+    nodeId: string;
+    to: {
+        x: number;
+        y: number;
+        parentId: string | null;
+    };
+}
+
+// @public
+export function nodeMoves(base: {
+    nodes: ReadonlyArray<{
+        id: string;
+        x: number;
+        y: number;
+        parentId?: string | null;
+    }>;
+}, current: {
+    nodes: ReadonlyArray<{
+        id: string;
+        x: number;
+        y: number;
+        parentId?: string | null;
+    }>;
+}): NodeMove[];
 
 // @public (undocumented)
 export type NodeOutline = (typeof NODE_OUTLINES)[number];

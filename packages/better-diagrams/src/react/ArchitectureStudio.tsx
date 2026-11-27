@@ -113,7 +113,7 @@ import {
   type DiagramZone,
 } from "../contract/zones";
 import { lintTemplate, type LintFinding } from "../contract/lint";
-import { diffTemplates, type TemplateDiff } from "../contract/diff";
+import { diffTemplates, nodeMoves, type NodeMove, type TemplateDiff } from "../contract/diff";
 import { setTaskState, taskState, taskStateChanges, taskStatesOf } from "../contract/task-states";
 import {
   openingCursor,
@@ -555,6 +555,16 @@ export interface ArchitectureStudioProps {
    * host made itself.
    */
   onDocumentChange?: (diff: TemplateDiff, template: DiagramTemplate) => void;
+  /**
+   * Nodes were moved. Fires ONCE per finished move with every node it moved
+   * — when a drag is let go, never during it — and likewise for an arrow-key
+   * nudge, Align, Distribute, Tidy, a paste into a frame, or an undo that
+   * puts things back. Each entry carries where the node was and where it is
+   * (`from`, `to`: the document's `x`, `y` and `parentId`; see `nodeMoves`).
+   * Like `onDocumentChange`, it reports edits made in the editor or through
+   * its `ref`, not a new `value`.
+   */
+  onNodesMove?: (moves: NodeMove[], template: DiagramTemplate) => void;
   /** A node was clicked. Fires with its document id; zones and canvas-only stand-ins don't report. */
   onNodeClick?: (nodeId: string, event: ReactMouseEvent) => void;
   /** A node was double-clicked — beside what the editor does with it (drill in, or rename). */
@@ -1009,6 +1019,7 @@ function StudioInner({
   onChange,
   onTaskDoneChange,
   onDocumentChange,
+  onNodesMove,
   onNodeClick: onHostNodeClick,
   onNodeDoubleClick: onHostNodeDoubleClick,
   onEdgeClick: onHostEdgeClick,
@@ -1711,8 +1722,8 @@ function StudioInner({
 
   // Read through a ref, so a host passing fresh callbacks each render doesn't
   // rebuild every commit path below.
-  const hostEvents = useRef({ onTaskDoneChange, onDocumentChange });
-  hostEvents.current = { onTaskDoneChange, onDocumentChange };
+  const hostEvents = useRef({ onTaskDoneChange, onDocumentChange, onNodesMove });
+  hostEvents.current = { onTaskDoneChange, onDocumentChange, onNodesMove };
   /** The document the host was last told about — what the next report is measured from. */
   const notifiedRef = useRef<DiagramTemplate>(initialTemplate);
   /**
@@ -1724,7 +1735,7 @@ function StudioInner({
     const before = notifiedRef.current;
     if (before === doc) return;
     notifiedRef.current = doc;
-    const { onTaskDoneChange: onTask, onDocumentChange: onDiff } = hostEvents.current;
+    const { onTaskDoneChange: onTask, onDocumentChange: onDiff, onNodesMove: onMove } = hostEvents.current;
     if (onTask) {
       for (const change of taskStateChanges(before, doc)) {
         const node = doc.nodes.find((n) => n.id === change.nodeId)!;
@@ -1735,6 +1746,10 @@ function StudioInner({
           node,
         });
       }
+    }
+    if (edited && onMove) {
+      const moves = nodeMoves(before, doc);
+      if (moves.length) onMove(moves, doc);
     }
     if (edited && onDiff) {
       const diff = diffTemplates(before, doc, { ignore: [] });

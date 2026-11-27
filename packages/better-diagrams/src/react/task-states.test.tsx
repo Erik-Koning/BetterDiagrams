@@ -273,6 +273,61 @@ describe("onDocumentChange", () => {
   });
 });
 
+describe("onNodesMove", () => {
+  it("reports a nudge once, with where the node was and is, and again on undo", async () => {
+    const ref = createRef<StudioHandle>();
+    const onNodesMove = vi.fn();
+    mount(<ArchitectureStudio ref={ref} defaultValue={plan()} onNodesMove={onNodesMove} welcome={false} />);
+    act(() => ref.current!.select({ nodes: ["svc"] }));
+    expect(onNodesMove).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    await waitFor(() => expect(onNodesMove).toHaveBeenCalledTimes(1));
+    const [moves, template] = onNodesMove.mock.calls[0]!;
+    expect(moves).toHaveLength(1);
+    expect(moves[0].nodeId).toBe("svc");
+    expect(moves[0].from).toEqual({ x: 700, y: 0, parentId: null });
+    expect(moves[0].to.x).toBeGreaterThan(700);
+    expect(template.nodes.find((n: { id: string }) => n.id === "svc").x).toBe(moves[0].to.x);
+
+    act(() => {
+      ref.current!.undo();
+    });
+    expect(onNodesMove).toHaveBeenCalledTimes(2);
+    expect(onNodesMove.mock.calls[1]![0]).toEqual([{ nodeId: "svc", from: moves[0].to, to: moves[0].from }]);
+  });
+
+  it("reports every node one edit moved in one call, and nothing for an edit that moves none", () => {
+    const ref = createRef<StudioHandle>();
+    const onNodesMove = vi.fn();
+    mount(<ArchitectureStudio ref={ref} defaultValue={plan()} onNodesMove={onNodesMove} welcome={false} />);
+    act(() => {
+      ref.current!.setTaskState("design", "done");
+    });
+    expect(onNodesMove).not.toHaveBeenCalled();
+    act(() => {
+      ref.current!.update((d) => ({ ...d, nodes: d.nodes.map((n) => (n.kind === "task" ? { ...n, y: n.y + 40 } : n)) }));
+    });
+    expect(onNodesMove).toHaveBeenCalledTimes(1);
+    expect(onNodesMove.mock.calls[0]![0].map((m: { nodeId: string }) => m.nodeId).sort()).toEqual(["build", "design"]);
+  });
+
+  it("stays quiet for the host's own value", async () => {
+    const onNodesMove = vi.fn();
+    const first = plan();
+    const { rerender } = mount(<ArchitectureStudio value={first} onNodesMove={onNodesMove} welcome={false} />);
+    rerender(
+      <ArchitectureStudio
+        value={{ ...first, nodes: first.nodes.map((n) => (n.id === "svc" ? { ...n, x: 900 } : n)) }}
+        onNodesMove={onNodesMove}
+        welcome={false}
+      />,
+    );
+    await act(async () => {});
+    expect(onNodesMove).not.toHaveBeenCalled();
+  });
+});
+
 describe("clicks", () => {
   it("report the node or connection by its document id", async () => {
     const onNodeClick = vi.fn();

@@ -346,6 +346,7 @@ const CONTRACT_EXPORTS = [
   "diffSequences",
   "PRE_ACTIVE_STATUSES",
   "diffTemplates",
+  "nodeMoves",
   // sequence
   "SEQ_CURRENT_VERSION",
   "SEQ_MIGRATIONS",
