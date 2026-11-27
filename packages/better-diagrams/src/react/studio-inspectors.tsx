@@ -69,6 +69,7 @@ import {
   MILESTONE_KIND,
   TASK_KIND,
 } from "../contract/tasks";
+import { DEFAULT_TASK_STATES, normalizeTaskStates, sameTaskStates, taskStateLabel } from "../contract/task-states";
 import { assigneeSwatch, swatchColor } from "./shapes";
 import { KindSelect } from "./KindSelect";
 import { SearchSelect } from "./SearchSelect";
@@ -327,6 +328,7 @@ export function MultiInspector({
   onGroup,
   kindOf,
   assigneeOptions,
+  taskStates,
 }: {
   /** The selected document nodes (ghosts and boundary frames already excluded). */
   nodes: readonly Node[];
@@ -334,6 +336,8 @@ export function MultiInspector({
   kindOf: (nodeId: string) => string | undefined;
   /** Everyone on a task in the document — see NodeInspector. */
   assigneeOptions: readonly string[];
+  /** The document's own task states — see NodeInspector. */
+  taskStates?: readonly string[];
   edges: readonly Edge[];
   zoneIds: string[];
   registry: ResolvedRegistry;
@@ -423,6 +427,7 @@ export function MultiInspector({
           lock={false}
           onPatch={onPatchNodes}
           assigneeOptions={assigneeOptions}
+          taskStates={taskStates}
         />
       ) : null}
 
@@ -841,9 +846,12 @@ export function NodeInspector({
   viewFieldsCount = 0,
   onViewFields,
   assigneeOptions = EMPTY_NAMES,
+  taskStates,
 }: {
   /** The selection — at least one. */
   nodes: readonly Node[];
+  /** The states every task shares (`settings.taskStates`); absent means "notDone" then "done". */
+  taskStates?: readonly string[];
   /** Everyone already on a task anywhere in the document — the assignee picker's offer. */
   assigneeOptions?: readonly string[];
   /** The row whose name input should take the cursor — the field menu's Edit…. */
@@ -939,6 +947,25 @@ export function NodeInspector({
   const storyPoints = read((d) => d.storyPoints);
   const done = read((d) => !!d.done);
   const stage = read((d) => (d.done ? "done" : (d.stage ?? "todo")));
+  // The states the selection can be in: a task's own, else the document's.
+  const inheritedStates = taskStates?.length ? taskStates : DEFAULT_TASK_STATES;
+  const statesOf = (d: DiagramNodeData): readonly string[] => d.states ?? inheritedStates;
+  const states = read((d) => [...statesOf(d)]);
+  const ownStates = read((d) => d.states ?? []);
+  /** A list of the selection's own, when it isn't the built-in pair with its built-in stages. */
+  const customStates = !states.mixed && !sameTaskStates(states.value, undefined) ? states.value : null;
+  const stateIn = (d: DiagramNodeData, list: readonly string[]): string => {
+    if (d.done) return list[list.length - 1]!;
+    const at = d.stage ? list.indexOf(d.stage) : -1;
+    return at > 0 && at < list.length - 1 ? list[at]! : list[0]!;
+  };
+  const state = read((d) => stateIn(d, statesOf(d)));
+  /** How a state is stored: the check for the last, a stage for one between, nothing for the first. */
+  const stateFields = (next: string, list: readonly string[]): Partial<DiagramNodeData> => {
+    const at = list.indexOf(next);
+    if (at === list.length - 1) return { done: true, stage: undefined };
+    return { done: undefined, stage: at > 0 ? next : undefined };
+  };
   const priority = read((d) => d.priority ?? "");
   const capacity = read((d) => d.capacity);
   // Icons the box's own words point at — one box's, so a multi-selection of
@@ -1057,21 +1084,32 @@ export function NodeInspector({
             aria-label="Story points"
             title="Estimate in story points — shown in the card's header"
           />
-          <SearchSelect
-            value={stage.value}
-            mixed={stage.mixed}
-            options={TASK_STAGE_OPTIONS}
-            onChange={(next) =>
-              // Done is the corner check; the others are an open task's stage.
-              patch(
-                next === "done"
-                  ? { done: true, stage: undefined }
-                  : { done: undefined, stage: next === "todo" ? undefined : (next as TaskStage) },
-              )
-            }
-            aria-label="Task status"
-            title="Where the task stands — to do, in progress, in review, or done"
-          />
+          {customStates ? (
+            <SearchSelect
+              value={state.value}
+              mixed={state.mixed}
+              options={customStates.map((value) => ({ value, label: taskStateLabel(value) }))}
+              onChange={(next) => patch(stateFields(next, customStates))}
+              aria-label="Task status"
+              title="The state the task is in — the last one counts as done"
+            />
+          ) : states.mixed ? null : (
+            <SearchSelect
+              value={stage.value}
+              mixed={stage.mixed}
+              options={TASK_STAGE_OPTIONS}
+              onChange={(next) =>
+                // Done is the corner check; the others are an open task's stage.
+                patch(
+                  next === "done"
+                    ? { done: true, stage: undefined }
+                    : { done: undefined, stage: next === "todo" ? undefined : (next as TaskStage) },
+                )
+              }
+              aria-label="Task status"
+              title="Where the task stands — to do, in progress, in review, or done"
+            />
+          )}
           <SearchSelect
             value={priority.value}
             mixed={priority.mixed}
@@ -1086,6 +1124,21 @@ export function NodeInspector({
             label="Done"
             title="Finished — the card's corner check turns green, and the tasks waiting on it are no longer blocked"
             onChange={(checked) => patch(checked ? { done: true, stage: undefined } : { done: undefined })}
+          />
+          <TaskStatesInput
+            states={ownStates.mixed ? [] : ownStates.value}
+            placeholder={ownStates.mixed ? "Mixed" : inheritedStates.join(", ")}
+            onChange={(next) =>
+              // Each task keeps its state when the new list still names it; a
+              // finished one stays finished, any other starts over.
+              patch((d) => {
+                const list = next && !sameTaskStates(next, inheritedStates) ? next : undefined;
+                const now = list ?? inheritedStates;
+                const was = stateIn(d, statesOf(d));
+                const kept = !d.done && now.includes(was) ? was : d.done ? now[now.length - 1]! : now[0]!;
+                return { states: list, ...stateFields(kept, now) };
+              })
+            }
           />
         </InspectorSection>
       ) : null}
@@ -1494,6 +1547,49 @@ export function NodeInspector({
  * on blur or Enter: splitting on every keystroke would eat the comma the
  * user just typed, and a chip list per row would not fit the row.
  */
+/**
+ * A task's own states as one comma-separated input, committed on blur or
+ * Enter like the field tags: a list is only a list once it is finished, and
+ * "todo, do" must not be judged a keystroke before "todo, doing".
+ */
+function TaskStatesInput({
+  states,
+  placeholder,
+  onChange,
+}: {
+  states: readonly string[];
+  placeholder: string;
+  onChange: (states: string[] | undefined) => void;
+}) {
+  const joined = states.join(", ");
+  const [draft, setDraft] = useState(joined);
+  // A change from outside — undo, another selection — resets the draft.
+  useEffect(() => setDraft(joined), [joined]);
+  const commit = () => {
+    const next = normalizeTaskStates(draft.split(","));
+    const text = next ? next.join(", ") : "";
+    if (text !== joined) onChange(next);
+    setDraft(text === joined ? joined : text);
+  };
+  return (
+    <input
+      className="as-input as-inspector__states"
+      value={draft}
+      placeholder={placeholder}
+      title="The states this task can be in, in order and comma-separated — the first is where it starts, the last counts as done. Empty uses the diagram's."
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          commit();
+        }
+      }}
+      aria-label="Task states"
+    />
+  );
+}
+
 function FieldTagsInput({
   tags,
   label,

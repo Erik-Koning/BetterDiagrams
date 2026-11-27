@@ -3,6 +3,31 @@
 All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 `packages/better-diagrams/etc/*.api.md`; a change there is listed here.
 
+## Unreleased
+
+### Added
+
+- Task states. A task is in one of an ordered list of states: `"notDone"` then `"done"` unless the
+  document names its own in `settings.taskStates`, or one task does in `states`. The first is where
+  a task starts and the last counts as done, so blocking, milestones and roll-ups read a custom list
+  as they read the default. A state between the two is stored in `stage`, which now takes any of
+  the task's own states. `taskState`, `taskStatesOf`, `setTaskState`, `setTaskStates`,
+  `taskStateChanges`, `isDoneState`, `taskStateLabel`, `normalizeTaskStates`, `DEFAULT_TASK_STATES`,
+  `MAX_TASK_STATES` and `MAX_TASK_STATE_LENGTH` in the contract. The task inspector lists a task's
+  own states and has a States field to name them.
+- `onTaskDoneChange(nodeId, state, detail)` on `ArchitectureStudio`: fires once per task whose state
+  changed, whatever changed it. `detail` is `{ previous, done, states, node }`
+  (`TaskStateChangeDetail`).
+- `onDocumentChange(diff, template)`: every edit made in the editor or through its `ref`, itemised
+  as a `TemplateDiff`, positions included.
+- `onNodeClick`, `onNodeDoubleClick` and `onEdgeClick`, by document id.
+- On the `ref`: `getTaskState`, `setTaskState`, `getViewport` and `setViewport` (`StudioViewport`).
+
+### Changed
+
+- `DiagramNode.stage` is typed `TaskStage | string`: with states of its own, a task's stage is one
+  of them. The JSON editor no longer flags a stage outside the built-in two; the validation report
+  still names one the task can't be in.
 ## 0.2.0 — 2026-11-16
 
 ### Security

@@ -62,6 +62,7 @@ import {
 import { ZONE_KEYS, ZONE_OUTLINES, ZONE_SHAPES } from "./zones";
 import { PATH_KEYS } from "./paths";
 import { TASK_KIND } from "./tasks";
+import { sameTaskStates, taskStatesOf } from "./task-states";
 
 export const VALIDATION_ISSUE_CODES = [
   /** An element that couldn't be read at all — no usable id, or not an object. */
@@ -189,7 +190,16 @@ export function validateTemplateReport(raw: unknown, opts: ValidateOptions = {})
     vocab(node, "status", NODE_STATUSES, at, `the node is "active"`);
     vocab(node, "textAlign", NODE_TEXT_ALIGNS, at, defaultTextAlign(out.kind) === "center" ? `the text is centred` : `the text is left-aligned`);
     vocab(node, "textVAlign", NODE_TEXT_VALIGNS, at, `the text is centred vertically`);
-    vocab(node, "stage", TASK_STAGES, at, `the task reads as "to do"`);
+    // A stage is one of the task's own states when it has them, else a built-in one.
+    if (given(node.stage) && node.stage !== out.stage && !out.done) {
+      const states = taskStatesOf(template, out);
+      const allowed = sameTaskStates(states, undefined) ? TASK_STAGES : states.slice(1, -1);
+      add(
+        "unknown-value",
+        `${at}/stage`,
+        `${show(node.stage)} isn't a stage value (${allowed.join(", ")}), so the task reads as "${sameTaskStates(states, undefined) ? "to do" : states[0]}".`,
+      );
+    }
     vocab(node, "priority", TASK_PRIORITIES, at, `it has no priority`);
     date(node, at, out.date);
     if (out.kind !== TASK_KIND && given(node.startDate)) {

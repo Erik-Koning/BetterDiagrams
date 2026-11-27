@@ -13,6 +13,8 @@ export type {
   StudioSelection,
   StudioSlotContext,
   StudioUpdateOptions,
+  StudioViewport,
+  TaskStateChangeDetail,
 } from "./ArchitectureStudio";
 export { DiffCanvas } from "./DiffCanvas";
 // The field grid on its own, for a host that opens it from chrome of its own.

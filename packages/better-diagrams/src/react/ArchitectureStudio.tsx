@@ -20,6 +20,7 @@ import {
   useState,
   type CSSProperties,
   type DragEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type Ref,
 } from "react";
@@ -112,7 +113,8 @@ import {
   type DiagramZone,
 } from "../contract/zones";
 import { lintTemplate, type LintFinding } from "../contract/lint";
-import { diffTemplates } from "../contract/diff";
+import { diffTemplates, type TemplateDiff } from "../contract/diff";
+import { setTaskState, taskState, taskStateChanges, taskStatesOf } from "../contract/task-states";
 import {
   openingCursor,
   templateTimeline,
@@ -373,6 +375,25 @@ export interface StudioUpdateOptions {
   fit?: boolean;
 }
 
+/** Where the canvas is looking: the pan in screen pixels and the zoom (1 is actual size). */
+export interface StudioViewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+/** What `onTaskDoneChange` says beyond the task and its new state. */
+export interface TaskStateChangeDetail {
+  /** The state the task was in before. */
+  previous: string;
+  /** Whether the new state is the task's last — it now counts as done. */
+  done: boolean;
+  /** Every state the task can be in, in order (see `taskStatesOf`). */
+  states: string[];
+  /** The task as the document now holds it. */
+  node: DiagramNode;
+}
+
 export interface StudioHandle {
   // ── The document ──
   /** The document as it stands now — what `onChange` last reported. */
@@ -394,6 +415,19 @@ export interface StudioHandle {
     edit: DiagramTemplate | ((current: DiagramTemplate) => DiagramTemplate),
     options?: StudioUpdateOptions,
   ) => ValidationReport;
+  /**
+   * The state a task is in — "notDone" or "done" unless the document or the
+   * task names its own (`settings.taskStates`, `node.states`). Undefined
+   * when the document holds no task by that id.
+   */
+  getTaskState: (nodeId: string) => string | undefined;
+  /**
+   * Move a task to a state, as one undo step — what ticking its corner check
+   * does for the last state. Reported through `onChange` and
+   * `onTaskDoneChange` like any other edit. Returns false, and changes
+   * nothing, when there is no such task or the state isn't one of its own.
+   */
+  setTaskState: (nodeId: string, state: string) => boolean;
   /** Step back through the undo history; false when there was nothing to undo, or the editor is read-only. */
   undo: () => boolean;
   /** Step forward again; false when there was nothing to redo, or the editor is read-only. */
@@ -414,6 +448,10 @@ export interface StudioHandle {
    * them is drawn the view stays where it is.
    */
   fitView: (nodeIds?: readonly string[]) => void;
+  /** Where the canvas is looking now — to keep, and hand back to `setViewport` later. */
+  getViewport: () => StudioViewport;
+  /** Look somewhere else: a pan and a zoom, animated over `duration` ms when given. */
+  setViewport: (viewport: StudioViewport, options?: { duration?: number }) => void;
 
   // ── The view ──
   /** The drill-in stack, root first — empty at the top level. */
@@ -496,6 +534,33 @@ export interface ArchitectureStudioProps {
   defaultValue?: DiagramTemplate;
   /** Fires on every committed edit with the full, validated template. */
   onChange?: (template: DiagramTemplate) => void;
+  /**
+   * Fires once per task whose state changed, with the task's id and the
+   * state it is in now — "done" or "notDone" unless the document or the task
+   * names its own states (`settings.taskStates`, `node.states`). Whatever
+   * changed it is reported: the corner check, the inspector, undo and redo,
+   * an AI reply, the `ref`'s `setTaskState` or `update`, or a new `value`.
+   * A task added or removed is not a change of state; `onDocumentChange`
+   * lists those. A host that shows another document in the same editor
+   * without `activeFileId` should remount it with a `key`, or tasks sharing
+   * an id across the two will be compared.
+   */
+  onTaskDoneChange?: (nodeId: string, state: string, detail: TaskStateChangeDetail) => void;
+  /**
+   * `onChange`, itemised: which nodes, edges and zones an edit added,
+   * removed or changed, and which of their fields — positions included, so a
+   * drag lists `x` and `y`. Fires after every edit made in the editor or
+   * through its `ref` that changed any of those (a change to `settings`
+   * alone is `onChange`'s to report), and not for a new `value`, which the
+   * host made itself.
+   */
+  onDocumentChange?: (diff: TemplateDiff, template: DiagramTemplate) => void;
+  /** A node was clicked. Fires with its document id; zones and canvas-only stand-ins don't report. */
+  onNodeClick?: (nodeId: string, event: ReactMouseEvent) => void;
+  /** A node was double-clicked — beside what the editor does with it (drill in, or rename). */
+  onNodeDoubleClick?: (nodeId: string, event: ReactMouseEvent) => void;
+  /** A connection was clicked. Fires with its document id. */
+  onEdgeClick?: (edgeId: string, event: ReactMouseEvent) => void;
   /** Shows a Save button in the toolbar when provided. */
   onSave?: (template: DiagramTemplate) => void | Promise<void>;
   /** Disable all editing; the canvas stays pannable and exportable. */
@@ -942,6 +1007,11 @@ function StudioInner({
   value,
   defaultValue,
   onChange,
+  onTaskDoneChange,
+  onDocumentChange,
+  onNodeClick: onHostNodeClick,
+  onNodeDoubleClick: onHostNodeDoubleClick,
+  onEdgeClick: onHostEdgeClick,
   onSave,
   readOnly = false,
   registry: registryExtensions,
@@ -1637,6 +1707,42 @@ function StudioInner({
     [registry, showHidden, viewFold, flow, setNodes, setEdges],
   );
 
+  // ── What the host hears beside onChange ───────────────────────────────────
+
+  // Read through a ref, so a host passing fresh callbacks each render doesn't
+  // rebuild every commit path below.
+  const hostEvents = useRef({ onTaskDoneChange, onDocumentChange });
+  hostEvents.current = { onTaskDoneChange, onDocumentChange };
+  /** The document the host was last told about — what the next report is measured from. */
+  const notifiedRef = useRef<DiagramTemplate>(initialTemplate);
+  /**
+   * Tell the host what moved between the last document it heard of and this
+   * one: each task whose state changed, and — for an edit made here, not one
+   * the host handed in — the edit itemised.
+   */
+  const notifyHost = useCallback((doc: DiagramTemplate, edited = true) => {
+    const before = notifiedRef.current;
+    if (before === doc) return;
+    notifiedRef.current = doc;
+    const { onTaskDoneChange: onTask, onDocumentChange: onDiff } = hostEvents.current;
+    if (onTask) {
+      for (const change of taskStateChanges(before, doc)) {
+        const node = doc.nodes.find((n) => n.id === change.nodeId)!;
+        onTask(change.nodeId, change.state, {
+          previous: change.previous,
+          done: change.done,
+          states: taskStatesOf(doc, node),
+          node,
+        });
+      }
+    }
+    if (edited && onDiff) {
+      const diff = diffTemplates(before, doc, { ignore: [] });
+      const { added, removed, changed } = diff.summary;
+      if (added || removed || changed || diff.meta.length) onDiff(diff, doc);
+    }
+  }, []);
+
   // ── Commit: snapshot for undo, then notify the host ───────────────────────
 
   const commit = useCallback(
@@ -1654,13 +1760,14 @@ function StudioInner({
       // `coalesce` folds a run of keystrokes in one field into one entry; see
       // CommitOptions in history.ts.
       commitHistory({ nodes: n, edges: e, meta: meta.current, template: next }, { coalesce });
+      notifyHost(next);
       if (!onChange) return;
       const json = JSON.stringify(next);
       if (json === lastEmitted.current) return;
       lastEmitted.current = json;
       onChange(next);
     },
-    [commitHistory, onChange, deriveTemplate, registry, materializeTemplate],
+    [commitHistory, onChange, deriveTemplate, registry, materializeTemplate, notifyHost],
   );
 
   /**
@@ -1725,7 +1832,11 @@ function StudioInner({
       template: templateRef.current,
     });
     if (!value) {
-      if (fileChanged) resetHistory(current());
+      if (fileChanged) {
+        resetHistory(current());
+        // Another file: nothing in it changed state, it is simply what is open.
+        notifiedRef.current = templateRef.current;
+      }
       return;
     }
     // Compare the VALIDATED form on both sides. Comparing the raw prop against
@@ -1747,16 +1858,26 @@ function StudioInner({
     if (json === lastEmitted.current) {
       // The echo of our own onChange — or a new file with the same content,
       // whose history must not reach back into the last file's.
-      if (fileChanged) resetHistory(current());
+      if (fileChanged) {
+        resetHistory(current());
+        notifiedRef.current = templateRef.current;
+      }
       return;
     }
 
     lastEmitted.current = json;
     const next = materializeTemplate(validated);
     const snapshot: Snapshot = { nodes: next.nodes, edges: next.edges, meta: meta.current, template: validated };
-    if (fileChanged) resetHistory(snapshot);
-    else commitHistory(snapshot);
-  }, [value, activeFileId, registry, materializeTemplate, resetHistory, commitHistory, flow]);
+    if (fileChanged) {
+      resetHistory(snapshot);
+      notifiedRef.current = validated;
+    } else {
+      commitHistory(snapshot);
+      // The host's own edit: it knows what it changed, but whoever listens
+      // for a task changing state hears of it wherever the change came from.
+      notifyHost(validated, false);
+    }
+  }, [value, activeFileId, registry, materializeTemplate, resetHistory, commitHistory, flow, notifyHost]);
 
   /**
    * Re-render the canvas when a zone's provider changes.
@@ -1856,6 +1977,7 @@ function StudioInner({
         { nodes: next.nodes, edges: next.edges, meta: meta.current, template: validated },
         { coalesce },
       );
+      notifyHost(validated);
       if (onChange) {
         const json = JSON.stringify(validated);
         lastEmitted.current = json;
@@ -1863,7 +1985,7 @@ function StudioInner({
       }
       if (fit) window.setTimeout(() => fitPicture(300), 50);
     },
-    [registry, materializeTemplate, commitHistory, onChange, fitPicture],
+    [registry, materializeTemplate, commitHistory, onChange, fitPicture, notifyHost],
   );
 
   // ── Node / edge mutations ─────────────────────────────────────────────────
@@ -3972,6 +4094,7 @@ function StudioInner({
             "storyPoints",
             "done",
             "stage",
+            "states",
             "priority",
             "capacity",
             "status",
@@ -4634,12 +4757,13 @@ function StudioInner({
         (snapshot.template as DiagramTemplate | undefined) ??
         deriveTemplate(snapshot.nodes, snapshot.edges);
       materializeTemplate(doc);
+      notifyHost(doc);
       if (onChange) {
         lastEmitted.current = JSON.stringify(doc);
         onChange(doc);
       }
     },
-    [materializeTemplate, onChange, deriveTemplate],
+    [materializeTemplate, onChange, deriveTemplate, notifyHost],
   );
 
   // A read-only editor steps nowhere. Its history still fills — a host's
@@ -5395,6 +5519,18 @@ function StudioInner({
     () => ({
       getTemplate: () => templateRef.current,
       update: updateDocument,
+      getTaskState: (nodeId: string) => taskState(templateRef.current, nodeId),
+      setTaskState: (nodeId: string, state: string) => {
+        const current = templateRef.current;
+        let next: DiagramTemplate;
+        try {
+          next = setTaskState(current, nodeId, state);
+        } catch {
+          return false; // no such task, or not a state of its own
+        }
+        if (next !== current) updateDocument(next);
+        return true;
+      },
       undo: doUndo,
       redo: doRedo,
       canUndo: hasUndo,
@@ -5416,6 +5552,10 @@ function StudioInner({
           duration: 250,
           ...(drawn ? { nodes: drawn.map((id) => ({ id })) } : {}),
         });
+      },
+      getViewport: () => flow.getViewport(),
+      setViewport: (viewport: StudioViewport, options?: { duration?: number }) => {
+        void flow.setViewport(viewport, options?.duration ? { duration: options.duration } : undefined);
       },
       getFocus: () => focusStackRef.current,
       drillTo: drillToLevel,
@@ -9582,6 +9722,30 @@ function StudioInner({
               // an EMPTY selection, since a drill empties it on the way.)
               setHighlightFields(NO_FIELDS);
             }}
+            onNodeClick={
+              onHostNodeClick
+                ? (event, node) => {
+                    const id = documentSelection([node.id], []).nodes[0];
+                    if (id !== undefined) onHostNodeClick(id, event);
+                  }
+                : undefined
+            }
+            onNodeDoubleClick={
+              onHostNodeDoubleClick
+                ? (event, node) => {
+                    const id = documentSelection([node.id], []).nodes[0];
+                    if (id !== undefined) onHostNodeDoubleClick(id, event);
+                  }
+                : undefined
+            }
+            onEdgeClick={
+              onHostEdgeClick
+                ? (event, edge) => {
+                    const id = documentSelection([], [edge.id]).edges[0];
+                    if (id !== undefined) onHostEdgeClick(id, event);
+                  }
+                : undefined
+            }
             onNodeContextMenu={(event, node) => openContextMenu(event, node.id)}
             onEdgeContextMenu={(event, edge) => openContextMenu(event, undefined, edge.id)}
             onPaneContextMenu={(event) => openContextMenu(event as React.MouseEvent)}
@@ -9967,6 +10131,7 @@ function StudioInner({
                 onGroup={groupSelection}
                 kindOf={nodeKindOf}
                 assigneeOptions={assigneeNames}
+                taskStates={template.settings?.taskStates}
               />
               {renderSlot(inspectorExtras)}
             </InspectorBar>
@@ -10016,6 +10181,7 @@ function StudioInner({
                   viewFieldsCount={selectedFieldCount}
                   onViewFields={(nodeId) => setFieldGrid({ nodeId })}
                   assigneeOptions={assigneeNames}
+                  taskStates={template.settings?.taskStates}
                 />
               ) : null}
               {selectedEdge && isGhostEdgeId(selectedEdge.id) ? (

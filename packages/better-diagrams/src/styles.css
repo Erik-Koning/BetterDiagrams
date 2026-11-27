@@ -3688,6 +3688,10 @@ button.as-task__check--blocked {
   width: 72px;
 }
 
+.as-inspector .as-inspector__states {
+  flex: 1 1 150px;
+}
+
 .as-inspector .as-inspector__tech {
   flex: 1 1 130px;
 }

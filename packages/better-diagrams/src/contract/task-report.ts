@@ -24,11 +24,13 @@ import {
   workDone,
 } from "./tasks";
 
+import { taskStateLabel } from "./task-states";
+
 const STAGE_TEXT: Record<string, string> = { "in-progress": "In progress", "in-review": "In review" };
 
-/** A task's status in words: Done, In progress, In review, or To do. */
+/** A task's status in words: Done, In progress, In review, or To do — or the state it names of its own. */
 function statusOf(n: { done?: boolean; stage?: string }): string {
-  return n.done ? "Done" : (STAGE_TEXT[n.stage ?? ""] ?? "To do");
+  return n.done ? "Done" : (STAGE_TEXT[n.stage ?? ""] ?? (n.stage ? taskStateLabel(n.stage) : "To do"));
 }
 
 /** The nearest container above a node, by label — its phase or sprint. */

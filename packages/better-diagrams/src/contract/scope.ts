@@ -373,6 +373,7 @@ export function scopedView(
       ...(repNode.storyPoints !== undefined ? { storyPoints: repNode.storyPoints } : {}),
       ...(repNode.done ? { done: true } : {}),
       ...(repNode.stage !== undefined ? { stage: repNode.stage } : {}),
+      ...(repNode.states !== undefined ? { states: repNode.states } : {}),
       ...(repNode.priority !== undefined ? { priority: repNode.priority } : {}),
       ...(repNode.status !== undefined ? { status: repNode.status } : {}),
       ...(date !== undefined ? { date } : {}),

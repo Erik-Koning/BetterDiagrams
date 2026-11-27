@@ -122,6 +122,9 @@ shadow.
 | `hostHistory` | `HostHistory` | Leave the undo history to the host: the toolbar's Undo and Redo, and `⌘Z`, `⇧⌘Z` and `⌘Y`, call its `undo` and `redo` instead of stepping the editor's own, and the host's next `value` shows the result. For a host whose file already has an undo (the VS Code extension: the text's), so there is one history, not two. The buttons stay enabled unless `canUndo` / `canRedo` is `false`; the handle's `undo` and `redo` still step the editor's own. Both editors take it. |
 | `onNavigateFile` | `(ref) => void` | Fired when a node url with the `file:` prefix (e.g. `file:Order flow`) has its ↗ clicked — resolve by id, then name, and switch documents. |
 | `onSelectionChange` | `(sel) => void` | The canvas selection in **document terms** — ids bucketed by template section (`{ nodes, edges, zones }` here; `{ participants, messages, activations, fragments, notes }` on the sequence editor), so a host can mirror it, e.g. highlight the matching entries of a live JSON view (the example app does exactly this). Fires on mount too, so a host that remounts per file never keeps a stale selection. |
+| `onTaskDoneChange` | `(nodeId, state, detail) => void` | A task changed state. `state` is `"done"` or `"notDone"` unless the document or the task names its own states; `detail` is `{ previous, done, states, node }`. Fires once per task, whatever changed it: the corner check, the inspector, undo, an AI reply, the `ref`, or a new `value`. See [Task states and events](#task-states-and-events). |
+| `onDocumentChange` | `(diff: TemplateDiff, template) => void` | `onChange`, itemised: the nodes, edges and zones an edit added, removed or changed, and which of their fields (positions included). Fires for edits made in the editor or through the `ref`, not for a new `value`. |
+| `onNodeClick` / `onNodeDoubleClick` / `onEdgeClick` | `(id, event) => void` | A node or a connection was clicked, by its document id. A double-click still drills in or renames as well. |
 | `onPinsChange` | `(pins: Pin[]) => void` | The **pins** — a field (`{ nodeId, fieldId }`) or a whole table (`{ nodeId }`) — mirrored like the two above: fires on mount (empty) and on every change. View state — never in the document; a pin is dropped when its node leaves the document. See **Fields beyond the rows** below. |
 | `onCoverageChange` | `(keys: FieldRef[]) => void` | The keys the **Key coverage** panel is scoring, mirrored like the pins. View state; pruned when a key's table leaves the document. |
 | `onKeyUsageChange` | `(names: string[]) => void` | The field names the **Key usage** panel has picked, lowercased, mirrored like the pins. View state; a name no table carries is kept and scores nothing. |
@@ -352,6 +355,10 @@ const { issues } = studio.current!.update((doc) => addNode(doc, { id: "cache", l
 studio.current!.select({ nodes: ["cache"] });
 studio.current!.undo(); // takes the whole edit back
 ```
+
+The handle also reads and moves one task's state (`getTaskState(id)`, `setTaskState(id, state)`;
+see [Task states and events](#task-states-and-events)) and the canvas view (`getViewport()`,
+`setViewport({ x, y, zoom }, { duration? })`, for a host that keeps where each reader was looking).
 
 A controlled host gets the same undo behaviour from `value`: a new document within the same
 `activeFileId` is one undo step. The sequence editor has the same handle (`SequenceStudioHandle`:
@@ -1646,6 +1653,62 @@ New lines start as prerequisites. The inspector of a line between two tasks has 
 direction states no order, and a self-loop is ignored. Two open tasks waiting on each other
 are both blocked. `blockedTasks(doc)` and `taskAssignees(doc)` are the pure versions, in
 `contract/tasks.ts`.
+
+### Task states and events
+
+A task is in one of an ordered list of **states**. With nothing said the list is `"notDone"`,
+then `"done"`. A document names its own in `settings.taskStates`, and one task names its own in
+`states`, which wins over the document's:
+
+```jsonc
+{
+  "settings": { "taskStates": ["todo", "doing", "review", "shipped"] },
+  "nodes": [
+    { "id": "login", "kind": "task", "label": "Build login", "stage": "review" },
+    { "id": "sign", "kind": "task", "label": "Legal sign-off", "states": ["waiting", "signed"], "done": true }
+  ]
+}
+```
+
+The **first** state is where a task starts and the **last** counts as done: only a task in its
+last state unblocks what waits on it, reaches a milestone or counts in a roll-up. That is also
+how a state is stored, in the two fields a task always had: nothing for the first state,
+`"stage": "<state>"` for one in between, `"done": true` for the last. A document written before
+states existed means what it always meant. A list needs at least two states and holds at most
+twelve.
+
+In the editor, the task inspector's status picker lists the task's own states, and its **States**
+field names them for the selected tasks (comma-separated; empty goes back to the diagram's). The
+corner check moves a task to its last state, and back to its first.
+
+To build logic on a plan, listen for the change:
+
+```tsx
+<ArchitectureStudio
+  defaultValue={plan}
+  onTaskDoneChange={(nodeId, state, { previous, done, states, node }) => {
+    // "login", "review", { previous: "doing", done: false, states: [...], node }
+    if (done) notifyTeam(node.label);
+  }}
+/>
+```
+
+It fires once per task whose state changed, whatever changed it: the corner check, the inspector,
+undo and redo, an AI reply, the `ref`, or a new `value`. A task that is added or removed has not
+changed state, so it is not reported (`onDocumentChange` lists those). From outside,
+`studio.current.setTaskState("login", "shipped")` moves a task as one undo step and returns
+`false` when there is no such task or state, and `getTaskState("login")` reads it.
+
+The same in the dependency-free `contract` entry, for a server or a file watcher:
+
+| Function | What it does |
+|---|---|
+| `taskState(doc, id)` | The state a task is in; `undefined` for anything that isn't a task |
+| `taskStatesOf(doc, idOrNode)` | The states it can be in, in order |
+| `setTaskState(doc, id, state)` | A new document with the task moved; throws on an unknown task or state |
+| `setTaskStates(doc, states, id?)` | Name the document's states, or one task's; `null` takes the list away. Tasks keep their state where the new list still names it |
+| `taskStateChanges(before, after)` | `{ nodeId, state, previous, done }` for every task in another state: what `onTaskDoneChange` reports, between any two versions |
+| `isDoneState(doc, idOrNode, state)` / `taskStateLabel(state)` | Whether a state is the last one / its name in words (`"notDone"` → "Not done") |
 
 **People.** The legend lists everyone on a task, with a count. Each name works two ways, and
 both are views: they work for readers too and are never saved.

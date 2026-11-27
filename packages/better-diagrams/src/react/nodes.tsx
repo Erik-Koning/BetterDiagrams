@@ -36,6 +36,8 @@ import {
 } from "./shapes";
 import { MILESTONE_KIND, TASK_KIND, hasAssigneeStrip, rollupFraction, rollupLabel, type TaskRollup } from "../contract/tasks";
 
+import { taskStateLabel } from "../contract/task-states";
+
 /** The words an open task's stage reads as on its card. */
 const STAGE_LABELS: Record<string, string> = { "in-progress": "In progress", "in-review": "In review" };
 import { approxTextWidth } from "../contract/text";
@@ -589,7 +591,9 @@ export const ShapeNode = memo(function ShapeNode({
               </span>
             ) : null}
             {isTask && !done && data.stage ? (
-              <span className={`as-node__stage as-node__stage--${data.stage}`}>{STAGE_LABELS[data.stage]}</span>
+              <span className={`as-node__stage${STAGE_LABELS[data.stage] ? ` as-node__stage--${data.stage}` : ""}`}>
+                {STAGE_LABELS[data.stage] ?? taskStateLabel(data.stage)}
+              </span>
             ) : null}
             {childCount > 0 ? (
               <button

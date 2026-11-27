@@ -96,6 +96,7 @@ import {
 import { dayX, isRoadmap, roadmapAxisOf, roadmapTicks, unscheduledEdge, type RoadmapAxis } from "../contract/roadmap";
 import { kindDef, iconPaths, providerDef, relationDef, zoneInk, type ResolvedRegistry } from "./registry-types";
 import { resolveStudioMode, type StudioMode } from "./theme";
+import { taskStateLabel } from "../contract/task-states";
 
 export const PAD = 48;
 
@@ -2121,7 +2122,7 @@ export function emitTemplate(
     if (isTask && node.priority) fixedPills.push({ label: node.priority.toUpperCase(), ink: PRIORITY_INK[node.priority] ?? palette.textDim });
     if (isTask && node.stage && (!done || interactive)) {
       fixedPills.push({
-        label: STAGE_TEXT[node.stage] ?? node.stage.toUpperCase(),
+        label: STAGE_TEXT[node.stage] ?? taskStateLabel(node.stage).toUpperCase(),
         ink: STAGE_INK[node.stage] ?? palette.textDim,
         ...(interactive ? { part: { name: "stage", on: !done } } : {}),
       });
