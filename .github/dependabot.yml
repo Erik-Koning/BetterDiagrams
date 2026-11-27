@@ -14,6 +14,10 @@ updates:
       minor-and-patch:
         update-types: ["minor", "patch"]
     ignore:
+      # The extension's types must not run ahead of the oldest VS Code it
+      # supports (`engines.vscode`): vsce refuses to package it otherwise,
+      # which is how the 0.3.0 release of the extension stopped.
+      - dependency-name: "@types/vscode"
       # React 19 and the tooling majors are deliberate upgrades, not chores:
       # the library's peer range is ">=18", its tests mount on 18, and CI
       # runs them on 19 as well (see workflows/ci.yml).
