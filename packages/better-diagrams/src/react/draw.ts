@@ -96,7 +96,7 @@ import {
 import { dayX, isRoadmap, roadmapAxisOf, roadmapTicks, unscheduledEdge, type RoadmapAxis } from "../contract/roadmap";
 import { kindDef, iconPaths, providerDef, relationDef, zoneInk, type ResolvedRegistry } from "./registry-types";
 import { resolveStudioMode, type StudioMode } from "./theme";
-import { taskStateLabel } from "../contract/task-states";
+import { TASK_DONE_INK, taskStateInk, taskStateLabel, taskStatePill } from "../contract/task-states";
 
 export const PAD = 48;
 
@@ -1976,7 +1976,9 @@ export function emitTemplate(
     // reach it at any moment, and its pill needs the row. (The canvas collapses
     // an empty row in marketing — a small, deliberate difference, so reaching
     // it in the page never lands the pill on the title.)
-    const hasPills = isTask ? !!node.priority || !!node.stage : reached;
+    const hasPills = isTask
+      ? !!node.priority || !!node.stage || (!interactive && !!taskStatePill(node, template.settings?.taskStates))
+      : reached;
     // The row's last item on the canvas is the `⊞ N` of a card with things
     // inside — which keeps the row in marketing too.
     const drillCount = drillCountOf(node.id);
@@ -2120,10 +2122,19 @@ export function emitTemplate(
     const STAGE_INK: Record<string, string> = { "in-progress": edgeHex.sky ?? "#38bdf8", "in-review": "#8b5cf6" };
     const fixedPills: Array<{ label: string; ink: string; part?: { name: string; on: boolean } }> = [];
     if (isTask && node.priority) fixedPills.push({ label: node.priority.toUpperCase(), ink: PRIORITY_INK[node.priority] ?? palette.textDim });
-    if (isTask && node.stage && (!done || interactive)) {
+    // States of the task's own wear the canvas's pill: muted where a task
+    // starts, a hue per state between, done's green at the end. A live page
+    // flips the check itself, so it keeps only the pill a toggle can hide.
+    const statePill = isTask ? taskStatePill(node, template.settings?.taskStates) : null;
+    if (statePill && !interactive) {
+      fixedPills.push({
+        label: statePill.label.toUpperCase(),
+        ink: statePill.position === "between" ? taskStateInk(statePill.index) : statePill.position === "last" ? TASK_DONE_INK : palette.textDim,
+      });
+    } else if (isTask && node.stage && (!done || interactive)) {
       fixedPills.push({
         label: STAGE_TEXT[node.stage] ?? taskStateLabel(node.stage).toUpperCase(),
-        ink: STAGE_INK[node.stage] ?? palette.textDim,
+        ink: STAGE_INK[node.stage] ?? (statePill ? taskStateInk(statePill.index) : palette.textDim),
         ...(interactive ? { part: { name: "stage", on: !done } } : {}),
       });
     }

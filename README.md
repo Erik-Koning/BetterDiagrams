@@ -1677,9 +1677,12 @@ how a state is stored, in the two fields a task always had: nothing for the firs
 states existed means what it always meant. A list needs at least two states and holds at most
 twelve.
 
-In the editor, the task inspector's status picker lists the task's own states, and its **States**
-field names them for the selected tasks (comma-separated; empty goes back to the diagram's). The
-corner check moves a task to its last state, and back to its first.
+In the editor, a task with states of its own always wears its state as a pill in the card's
+header, led by a dot: grey where it starts, a colour per state in between, green when done. The
+task inspector's **state** picker lists the task's own states, and its last row, **Edit states…**,
+opens a small panel that names them for the selected tasks (comma-separated; **Use diagram
+states** goes back to the inherited list). The corner check moves a task to its last state, and
+back to its first. Picture exports draw the same pills.
 
 To build logic on a plan, listen for the change:
 

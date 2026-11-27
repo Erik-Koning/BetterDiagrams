@@ -36,7 +36,7 @@ import {
 } from "./shapes";
 import { MILESTONE_KIND, TASK_KIND, hasAssigneeStrip, rollupFraction, rollupLabel, type TaskRollup } from "../contract/tasks";
 
-import { taskStateLabel } from "../contract/task-states";
+import { TASK_DONE_INK, taskStateInk, taskStatePill } from "../contract/task-states";
 
 /** The words an open task's stage reads as on its card. */
 const STAGE_LABELS: Record<string, string> = { "in-progress": "In progress", "in-review": "In review" };
@@ -344,7 +344,7 @@ export const ShapeNode = memo(function ShapeNode({
   width,
   height,
 }: NodeProps<ShapeNodeType>) {
-  const { registry, readOnly, mode, tagFilter, showTeams, showLinks, requestCommit, navigateFile, drillInto, navigateToNode, setRenamingId, childCounts, dimmedIds, pinnedFields, highlightFields, domainTint, blockedIds, taskLabelOf, personPreview, personFocus, overdueIds, reachedIds, taskFilterIds, today } = useStudio();
+  const { registry, readOnly, mode, tagFilter, showTeams, showLinks, requestCommit, navigateFile, drillInto, navigateToNode, setRenamingId, childCounts, dimmedIds, pinnedFields, highlightFields, domainTint, blockedIds, taskStates, taskLabelOf, personPreview, personFocus, overdueIds, reachedIds, taskFilterIds, today } = useStudio();
   const { updateNodeData, updateNode } = useReactFlow();
   const def = kindDef(registry, data.kind);
   const paths = iconPaths(registry, data.icon);
@@ -439,6 +439,7 @@ export const ShapeNode = memo(function ShapeNode({
   const filteredOut = isTask && !!taskFilterIds && !taskFilterIds.has(docId);
   const dimmed = (tagFilter.length > 0 && !tableTagged && !rowTagged) || outsideKeep || personMuted || filteredOut;
   const done = isTask && !!data.done;
+  const statePill = isTask ? taskStatePill({ id, ...data }, taskStates) : null;
   const blockers = isTask && !done ? blockedIds?.get(docId) : undefined;
   const isMilestone = data.kind === MILESTONE_KIND;
   const reached = isMilestone && !!reachedIds?.has(docId);
@@ -590,10 +591,25 @@ export const ShapeNode = memo(function ShapeNode({
                 {data.priority.toUpperCase()}
               </span>
             ) : null}
-            {isTask && !done && data.stage ? (
-              <span className={`as-node__stage${STAGE_LABELS[data.stage] ? ` as-node__stage--${data.stage}` : ""}`}>
-                {STAGE_LABELS[data.stage] ?? taskStateLabel(data.stage)}
+            {statePill ? (
+              // States of the task's own: the pill always says which it is in
+              // — muted where it starts, done's green where it ends, and a
+              // hue of its own for each state between.
+              <span
+                className={`as-node__stage as-node__stage--${statePill.position}`}
+                style={
+                  statePill.position === "between"
+                    ? ({ "--as-pill": taskStateInk(statePill.index) } as CSSProperties)
+                    : statePill.position === "last"
+                      ? ({ "--as-pill": TASK_DONE_INK } as CSSProperties)
+                      : undefined
+                }
+                title={`State: ${statePill.label}`}
+              >
+                {statePill.label}
               </span>
+            ) : isTask && !done && data.stage && STAGE_LABELS[data.stage] ? (
+              <span className={`as-node__stage as-node__stage--${data.stage}`}>{STAGE_LABELS[data.stage]}</span>
             ) : null}
             {childCount > 0 ? (
               <button

@@ -127,6 +127,8 @@ export interface StudioContextValue {
    * work on another level still says so. Absent, no card is blocked.
    */
   blockedIds?: ReadonlyMap<string, readonly string[]>;
+  /** The states every task shares (`settings.taskStates`); absent means the default pair. */
+  taskStates?: readonly string[];
   /** A task's current label by document id — for naming blockers. Stable. */
   taskLabelOf?: (id: string) => string;
   /** Work past its date and unfinished — a task due, a milestone not reached. */

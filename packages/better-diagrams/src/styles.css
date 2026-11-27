@@ -2888,6 +2888,49 @@ button.as-task__check--blocked {
 .as-node__priority--p0 { --as-pill: var(--as-warn-strong); }
 .as-node__priority--p1 { --as-pill: var(--as-overdue); }
 .as-node__priority--p2 { --as-pill: var(--as-accent); }
+/* One of a task's own states leads with a dot, which is what tells it from
+   the priority badge beside it: a badge ranks, a dot says where things are. */
+.as-node__stage--first::before,
+.as-node__stage--between::before,
+.as-node__stage--last::before {
+  content: "";
+  display: inline-block;
+  width: 0.55em;
+  height: 0.55em;
+  margin-right: 0.4em;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--as-pill) 82%, var(--as-text));
+  vertical-align: 0.05em;
+}
+
+/* A fuller coat than the badge beside it, so a violet state still stands off
+   a violet card. */
+.as-node__stage--between,
+.as-node__stage--last {
+  background: color-mix(in srgb, var(--as-pill) 26%, var(--as-node-bg, transparent));
+}
+
+/* Grey and filled where a task starts: a hollow ring is the corner check's. */
+.as-node__stage--first::before {
+  background: color-mix(in srgb, var(--as-pill) 60%, transparent);
+}
+
+
+
+/* The first of a task's own states: nothing has happened yet, so it is the
+   quietest thing in the header. */
+.as-node__stage--first {
+  font-weight: 600;
+}
+
+/* With the kind's name tucked away (marketing) a pill can open the header:
+   it lines up with the title then, not a gap to its right. */
+.as-root--marketing .as-node__kindname + .as-node__priority,
+.as-root--marketing .as-node__kindname + .as-node__stage,
+.as-root--marketing .as-node__kindname + .as-node__reached {
+  margin-left: 0;
+}
+
 .as-node__stage--in-progress { --as-pill: var(--as-accent); }
 .as-node__stage--in-review { --as-pill: #8b5cf6; }
 .as-node__reached { --as-pill: #16a34a; }
@@ -3688,8 +3731,117 @@ button.as-task__check--blocked {
   width: 72px;
 }
 
-.as-inspector .as-inspector__states {
-  flex: 1 1 150px;
+/* A task's own states: a small panel hung from the state picker, asked for
+   from the picker's last row, so the bar itself never moves. */
+.as-statesanchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.as-statespop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 18px);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 340px;
+  padding: 12px;
+  border: 1px solid var(--as-border);
+  border-radius: 10px;
+  background: var(--as-surface);
+  box-shadow: 0 12px 32px rgb(15 23 42 / 0.18);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.as-statespop__title {
+  color: var(--as-text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.as-inspector .as-statespop .as-statespop__input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.as-statespop__preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--as-text);
+  font-size: 0.75rem;
+}
+
+.as-statespop__chip {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.as-statespop__done {
+  padding-left: 6px;
+}
+
+.as-statespop__chip .as-statedot {
+  margin-right: 5px;
+}
+
+.as-statespop__hint {
+  color: var(--as-text-dim);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.as-statespop__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.as-statespop__spacer {
+  flex: 1;
+}
+
+/* In a picker's row: a word that isn't part of the name, and a row that is
+   something to do rather than a value. */
+.as-kindmenu__hint {
+  margin-left: auto;
+  padding-left: 14px;
+  color: var(--as-text-dim);
+  font-size: 0.6875rem;
+  font-weight: 400;
+}
+
+.as-searchmenu .as-kindmenu__option.as-kindmenu__option--action {
+  position: relative;
+  margin-top: 9px;
+  color: var(--as-text-dim);
+}
+
+.as-searchmenu .as-kindmenu__option.as-kindmenu__option--action::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -5px;
+  border-top: 1px solid var(--as-border);
+}
+
+/* A state's dot: in the picker's rows, and leading its pill on the card. */
+.as-statedot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+}
+
+.as-statedot--first {
+  background: color-mix(in srgb, var(--as-text-dim) 55%, transparent);
 }
 
 .as-inspector .as-inspector__tech {

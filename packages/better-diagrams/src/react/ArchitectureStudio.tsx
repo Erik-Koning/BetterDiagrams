@@ -2834,6 +2834,13 @@ function StudioInner({
     };
   }, [taskSig, today]);
   const blockedIds = taskGraph?.blocked;
+  // The document's own task states, held by content: the list is rebuilt with
+  // every derive, and a new array each frame of a drag would redraw every card.
+  const taskStatesKey = (template.settings?.taskStates ?? []).join("\u0000");
+  const sharedTaskStates = useMemo(
+    () => (taskStatesKey ? taskStatesKey.split("\u0000") : undefined),
+    [taskStatesKey],
+  );
   /**
    * The View menu's task filter: the tasks it keeps bright, every other task
    * card receding. A view, like the tag filter — never saved.
@@ -7961,6 +7968,7 @@ function StudioInner({
       dimmedIds,
       domainTint: analysis.tint,
       blockedIds,
+      taskStates: sharedTaskStates,
       taskLabelOf,
       assigneeColorOf,
       personPreview,
@@ -7972,7 +7980,7 @@ function StudioInner({
       today,
       notation,
     }),
-    [registry, readOnly, studioMode, tagFilter, showTeams, showLinks, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast, openFieldMenu, pinnedFields, shownHighlights, dimmedIds, analysis.tint, blockedIds, taskLabelOf, assigneeColorOf, personPreview, personFocus, taskGraph, taskFilterIds, today, notation],
+    [registry, readOnly, studioMode, tagFilter, showTeams, showLinks, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast, openFieldMenu, pinnedFields, shownHighlights, dimmedIds, analysis.tint, blockedIds, sharedTaskStates, taskLabelOf, assigneeColorOf, personPreview, personFocus, taskGraph, taskFilterIds, today, notation],
   );
   const rootStyle = { ...themeToStyle(theme), ...style };
   const modeClass = modeClassName(studioMode, gradients);
@@ -10131,7 +10139,7 @@ function StudioInner({
                 onGroup={groupSelection}
                 kindOf={nodeKindOf}
                 assigneeOptions={assigneeNames}
-                taskStates={template.settings?.taskStates}
+                taskStates={sharedTaskStates}
               />
               {renderSlot(inspectorExtras)}
             </InspectorBar>
@@ -10181,7 +10189,7 @@ function StudioInner({
                   viewFieldsCount={selectedFieldCount}
                   onViewFields={(nodeId) => setFieldGrid({ nodeId })}
                   assigneeOptions={assigneeNames}
-                  taskStates={template.settings?.taskStates}
+                  taskStates={sharedTaskStates}
                 />
               ) : null}
               {selectedEdge && isGhostEdgeId(selectedEdge.id) ? (

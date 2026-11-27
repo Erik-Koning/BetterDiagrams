@@ -218,6 +218,51 @@ export function taskStateChanges(before: TaskStateDocument, after: TaskStateDocu
   return out;
 }
 
+/** Where a state sits in its list: where a task starts, where it is done, or between. */
+export type TaskStatePosition = "first" | "between" | "last";
+
+/** The pill a task with states of its own wears on its card and in a picture. */
+export interface TaskStatePill {
+  state: string;
+  /** The state's name in words — see `taskStateLabel`. */
+  label: string;
+  position: TaskStatePosition;
+  /** The state's place in the list, from 0. */
+  index: number;
+}
+
+/**
+ * The inks a state between the first and the last takes, by its place in
+ * the list, so "doing" and "review" read apart at a glance. The first state
+ * is muted (nothing has happened yet) and the last is done's green.
+ */
+export const TASK_STATE_INKS: readonly string[] = ["#0ea5e9", "#8b5cf6", "#d97706", "#0d9488", "#db2777"];
+/** Done's green — the corner check's, and a milestone's Reached. */
+export const TASK_DONE_INK = "#16a34a";
+
+/** The ink of a state between the first and the last, by its place in the list. */
+export function taskStateInk(index: number): string {
+  return TASK_STATE_INKS[(Math.max(1, index) - 1) % TASK_STATE_INKS.length]!;
+}
+
+/**
+ * The pill a task wears when it has states of its own — its node's, else
+ * `shared` (the document's `settings.taskStates`). Null on the default pair:
+ * there the corner check says everything, as it always has.
+ */
+export function taskStatePill(node: TaskStateNode, shared?: readonly string[]): TaskStatePill | null {
+  const states = node.states && node.states.length >= 2 ? node.states : shared && shared.length >= 2 ? shared : null;
+  if (!states || sameTaskStates(states, undefined)) return null;
+  const state = stateIn(node, states);
+  const index = states.indexOf(state);
+  return {
+    state,
+    label: taskStateLabel(state),
+    position: index === 0 ? "first" : index === states.length - 1 ? "last" : "between",
+    index,
+  };
+}
+
 /**
  * A state's name as a person reads it: "notDone" → "Not done",
  * "in-review" → "In review", "QA" → "QA".

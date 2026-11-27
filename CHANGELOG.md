@@ -13,8 +13,9 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   as they read the default. A state between the two is stored in `stage`, which now takes any of
   the task's own states. `taskState`, `taskStatesOf`, `setTaskState`, `setTaskStates`,
   `taskStateChanges`, `isDoneState`, `taskStateLabel`, `normalizeTaskStates`, `DEFAULT_TASK_STATES`,
-  `MAX_TASK_STATES` and `MAX_TASK_STATE_LENGTH` in the contract. The task inspector lists a task's
-  own states and has a States field to name them.
+  `MAX_TASK_STATES` and `MAX_TASK_STATE_LENGTH` in the contract. A task with states of
+  its own wears its state as a pill on its card and in picture exports; the task inspector's state
+  picker lists them, and its Edit states… row names them.
 - `onTaskDoneChange(nodeId, state, detail)` on `ArchitectureStudio`: fires once per task whose state
   changed, whatever changed it. `detail` is `{ previous, done, states, node }`
   (`TaskStateChangeDetail`).

@@ -188,22 +188,55 @@ describe("the task inspector", () => {
     mount(<ArchitectureStudio ref={ref} defaultValue={plan()} onTaskDoneChange={onTaskDoneChange} welcome={false} />);
     act(() => ref.current!.select({ nodes: ["design"] }));
 
+    // The field is asked for from the picker's last row, not always there.
+    expect(screen.queryByRole("textbox", { name: "Task states" })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Task status" }));
+    fireEvent.click(screen.getByRole("option", { name: /Edit states/ }));
     const states = await screen.findByRole("textbox", { name: "Task states" });
-    expect(states).toHaveAttribute("placeholder", "notDone, done");
+    expect(states).toHaveAttribute("placeholder", "Not done, Done");
+    // The default pair keeps its Done check; states of the task's own replace it with the picker.
+    expect(screen.getByRole("checkbox", { name: "Done" })).toBeInTheDocument();
     fireEvent.change(states, { target: { value: "open, testing, closed" } });
-    fireEvent.blur(states);
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() =>
       expect(ref.current!.getTemplate().nodes.find((n) => n.id === "design")!.states).toEqual(["open", "testing", "closed"]),
     );
     expect(ref.current!.getTaskState("design")).toBe("open");
+    expect(screen.queryByRole("checkbox", { name: "Done" })).toBeNull();
+    // Applied, the panel is gone again.
+    expect(screen.queryByRole("textbox", { name: "Task states" })).toBeNull();
     // Naming the states moved nothing: "notDone" became the new first state.
     expect(onTaskDoneChange).toHaveBeenCalledTimes(1);
     expect(onTaskDoneChange).toHaveBeenLastCalledWith("design", "open", expect.objectContaining({ previous: "notDone" }));
 
-    // Emptied, the task goes back to the diagram's.
-    fireEvent.change(screen.getByRole("textbox", { name: "Task states" }), { target: { value: "" } });
-    fireEvent.blur(screen.getByRole("textbox", { name: "Task states" }));
+    // Opened again it shows them as the card does, and offers the way back.
+    fireEvent.click(screen.getByRole("button", { name: "Task status" }));
+    fireEvent.click(screen.getByRole("option", { name: /Edit states/ }));
+    expect(await screen.findByRole("textbox", { name: "Task states" })).toHaveValue("Open, Testing, Closed");
+    fireEvent.click(screen.getByRole("button", { name: "Use default states" }));
     await waitFor(() => expect(ref.current!.getTemplate().nodes.find((n) => n.id === "design")).not.toHaveProperty("states"));
+  });
+});
+
+describe("a task card with states of its own", () => {
+  it("always says which state it is in: where it starts, between, and done", async () => {
+    const d = setTaskState(setTaskState(plan({ taskStates: FLOW }), "design", "review"), "build", "shipped");
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={{ ...d, nodes: [...d.nodes, { ...d.nodes[0]!, id: "later", label: "Later", x: 0, y: 300 }] }} welcome={false} />,
+    );
+    await waitFor(() => expect(node(container, "design")).toBeTruthy());
+    const pill = (id: string) => node(container, id).querySelector<HTMLElement>(".as-node__stage")!;
+    expect(pill("design").textContent).toBe("Review");
+    expect(pill("design").classList.contains("as-node__stage--between")).toBe(true);
+    expect(pill("build").textContent).toBe("Shipped");
+    expect(pill("build").classList.contains("as-node__stage--last")).toBe(true);
+    expect(node(container, "svc").querySelector(".as-node__stage")).toBeNull();
+  });
+
+  it("wears no pill on the default pair: the corner check says it", async () => {
+    const { container } = mount(<ArchitectureStudio defaultValue={plan()} welcome={false} />);
+    await waitFor(() => expect(node(container, "design")).toBeTruthy());
+    expect(node(container, "design").querySelector(".as-node__stage")).toBeNull();
   });
 });
 
