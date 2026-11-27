@@ -1457,6 +1457,54 @@
   cursor: default;
 }
 
+/* A host's mark on a node (`nodeDecorations`): a ring round it and a badge
+   riding its top edge, clear of everything the card itself draws. */
+.as-node--ringed {
+  outline: 2px solid var(--as-deco-ring);
+  outline-offset: 3px;
+}
+
+.as-node__deco {
+  position: absolute;
+  top: -10px;
+  right: 10px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 20px);
+  padding: 0 7px;
+  border: 1.5px solid var(--as-deco-ring, var(--as-accent));
+  border-radius: 999px;
+  background: var(--as-surface);
+  color: var(--as-text);
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: default;
+}
+
+/* A host's own field in the node inspector (`dataFields`): its name, then its input. */
+.as-datafield {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.as-datafield__label {
+  color: var(--as-text-dim);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.as-datafield__input {
+  width: 132px;
+}
+
 /* Tag filter: non-matching nodes dim but stay present and selectable. The
    level is a variable the shared "Dimmed elements" section below reads — see
    it for why this is no longer `opacity` on the card. */

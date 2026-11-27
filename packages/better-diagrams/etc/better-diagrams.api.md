@@ -75,6 +75,8 @@ export interface ArchitectureStudioProps {
     aiModels?: AiModelOption[];
     // (undocumented)
     className?: string;
+    contextMenuItems?: (target: StudioMenuTarget) => StudioMenuItem[] | null | undefined;
+    dataFields?: readonly StudioDataField[];
     defaultShowHidden?: boolean;
     defaultValue?: DiagramTemplate;
     diffBase?: DiagramTemplate;
@@ -85,15 +87,21 @@ export interface ArchitectureStudioProps {
     gradients?: boolean;
     hostHistory?: HostHistory;
     inspectorExtras?: ReactNode | ((ctx: StudioSlotContext) => ReactNode);
+    isValidConnection?: (connection: StudioConnection, template: DiagramTemplate) => boolean;
     legend?: boolean;
     minimap?: boolean;
     mode?: StudioMode;
+    nodeDecorations?: Readonly<Record<string, NodeDecoration>>;
     onActivePathsChange?: (ids: string[]) => void;
     onAiModelChange?: (id: string) => void;
+    onBeforeChange?: (next: DiagramTemplate, previous: DiagramTemplate) => boolean | string | DiagramTemplate | void;
     onChange?: (template: DiagramTemplate) => void;
+    onConnect?: (edges: DiagramEdge[], template: DiagramTemplate) => void;
     onCoverageChange?: (keys: FieldRef[]) => void;
     onDocumentChange?: (diff: TemplateDiff, template: DiagramTemplate) => void;
     onEdgeClick?: (edgeId: string, event: MouseEvent_2) => void;
+    onEdgesDelete?: (edges: DiagramEdge[], template: DiagramTemplate) => void;
+    onError?: (message: string) => void;
     onFileCreate?: (init?: StudioFileInit) => void;
     // (undocumented)
     onFileDelete?: (id: string) => void;
@@ -111,6 +119,9 @@ export interface ArchitectureStudioProps {
     onNewFileOnDisk?: () => void;
     onNodeClick?: (nodeId: string, event: MouseEvent_2) => void;
     onNodeDoubleClick?: (nodeId: string, event: MouseEvent_2) => void;
+    onNodeHover?: (nodeId: string | null) => void;
+    onNodesAdd?: (nodes: DiagramNode[], template: DiagramTemplate) => void;
+    onNodesDelete?: (nodes: DiagramNode[], template: DiagramTemplate) => void;
     onNodesMove?: (moves: NodeMove[], template: DiagramTemplate) => void;
     onOpenFile?: () => Promise<File | null>;
     onPinsChange?: (pins: Pin[]) => void;
@@ -118,6 +129,7 @@ export interface ArchitectureStudioProps {
     onSaveFileAs?: () => void;
     onSelectionChange?: (selection: StudioSelection) => void;
     onTaskDoneChange?: (nodeId: string, state: string, detail: TaskStateChangeDetail) => void;
+    onViewportChange?: (viewport: StudioViewport) => void;
     readOnly?: boolean;
     registry?: RegistryExtensions;
     removedFiles?: StudioFile[];
@@ -2832,6 +2844,14 @@ export interface NodeBaseline {
 }
 
 // @public
+export interface NodeDecoration {
+    badge?: ReactNode;
+    className?: string;
+    ring?: string;
+    title?: string;
+}
+
+// @public
 export interface NodeField {
     derived?: boolean;
     description?: string;
@@ -4154,6 +4174,29 @@ export interface StructureSummary {
 export const STUDIO_MODES: readonly StudioMode[];
 
 // @public
+export interface StudioConnection {
+    // (undocumented)
+    source: string;
+    // (undocumented)
+    target: string;
+}
+
+// @public
+export interface StudioDataField {
+    key: string;
+    kinds?: readonly string[];
+    // (undocumented)
+    label: string;
+    options?: ReadonlyArray<string | {
+        value: string;
+        label: string;
+    }>;
+    // (undocumented)
+    placeholder?: string;
+    type?: "text" | "number" | "checkbox" | "select";
+}
+
+// @public
 export interface StudioFile {
     empty?: boolean;
     // (undocumented)
@@ -4209,6 +4252,26 @@ export interface StudioHandle {
     }) => void;
     undo: () => boolean;
     update: (edit: DiagramTemplate | ((current: DiagramTemplate) => DiagramTemplate), options?: StudioUpdateOptions) => ValidationReport;
+}
+
+// @public
+export interface StudioMenuItem {
+    danger?: boolean;
+    // (undocumented)
+    disabled?: boolean;
+    hint?: string;
+    // (undocumented)
+    label: string;
+    // (undocumented)
+    onSelect: () => void;
+}
+
+// @public
+export interface StudioMenuTarget {
+    kind: "node" | "edge" | "zone" | "pane";
+    selection: StudioSelection;
+    // (undocumented)
+    template: DiagramTemplate;
 }
 
 // @public

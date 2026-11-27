@@ -20,7 +20,7 @@ import {
 import type { CSSProperties, KeyboardEvent, SyntheticEvent } from "react";
 import { fieldKey } from "../contract/fields";
 import { SvgIcon } from "./icons";
-import { useStudio } from "./context";
+import { useStudio, type NodeDecoration } from "./context";
 import { DateChip } from "./chrome";
 import { isOverdue } from "../contract/timeline";
 import { kindDef, iconPaths } from "./registry-types";
@@ -344,7 +344,7 @@ export const ShapeNode = memo(function ShapeNode({
   width,
   height,
 }: NodeProps<ShapeNodeType>) {
-  const { registry, readOnly, mode, tagFilter, showTeams, showLinks, requestCommit, navigateFile, drillInto, navigateToNode, setRenamingId, childCounts, dimmedIds, pinnedFields, highlightFields, domainTint, blockedIds, taskStates, taskLabelOf, personPreview, personFocus, overdueIds, reachedIds, taskFilterIds, today } = useStudio();
+  const { registry, readOnly, mode, tagFilter, showTeams, showLinks, requestCommit, navigateFile, drillInto, navigateToNode, setRenamingId, childCounts, dimmedIds, pinnedFields, highlightFields, domainTint, blockedIds, taskStates, taskLabelOf, personPreview, personFocus, overdueIds, reachedIds, taskFilterIds, today, nodeDecorations } = useStudio();
   const { updateNodeData, updateNode } = useReactFlow();
   const def = kindDef(registry, data.kind);
   const paths = iconPaths(registry, data.icon);
@@ -441,6 +441,8 @@ export const ShapeNode = memo(function ShapeNode({
   const done = isTask && !!data.done;
   const statePill = isTask ? taskStatePill({ id, ...data }, taskStates) : null;
   const blockers = isTask && !done ? blockedIds?.get(docId) : undefined;
+  // The host's mark on this node, if it has one — never on a stand-in.
+  const deco = scopeGhost || data.ghost ? undefined : nodeDecorations?.[docId];
   const isMilestone = data.kind === MILESTONE_KIND;
   const reached = isMilestone && !!reachedIds?.has(docId);
   // Work's date is a due date: it is overdue when it passes unfinished,
@@ -461,6 +463,7 @@ export const ShapeNode = memo(function ShapeNode({
       ? { "--as-node-font": `${data.fontSize}px` }
       : {}),
     ...(domainTint?.get(docId) ? { "--as-node-domain": domainTint.get(docId) } : {}),
+    ...(deco?.ring ? { "--as-deco-ring": deco.ring } : {}),
     ...(room
       ? {
           paddingTop: 6 + room.top,
@@ -481,6 +484,8 @@ export const ShapeNode = memo(function ShapeNode({
     data.ghost || scopeGhost ? "as-ghost" : "",
     scopeGhost ? "as-node--scope-ghost" : "",
     dimmed ? "as-node--dimmed" : "",
+    deco?.ring ? "as-node--ringed" : "",
+    deco?.className ?? "",
     personMuted ? "as-node--person-muted" : "",
     domainTint?.get(docId) ? "as-node--domain" : "",
     pinnedFields.has(fieldKey({ nodeId: docId })) ? "as-node--pinned" : "",
@@ -717,6 +722,7 @@ export const ShapeNode = memo(function ShapeNode({
             🔒
           </span>
         ) : null}
+        <DecorationBadge deco={deco} />
         {data.ghost ? <span className="as-ghost__badge">{data.providers?.join(" · ")}</span> : null}
         {hasAssigneeStrip(data) ? (
           <AssigneeStrip
@@ -737,6 +743,16 @@ export const ShapeNode = memo(function ShapeNode({
     </>
   );
 });
+
+/** The badge of a host's mark on a node — see `NodeDecoration`. */
+function DecorationBadge({ deco }: { deco: NodeDecoration | undefined }) {
+  if (deco?.badge === undefined || deco.badge === null || deco.badge === false || deco.badge === "") return null;
+  return (
+    <span className="as-node__deco nodrag" title={deco.title}>
+      {deco.badge}
+    </span>
+  );
+}
 
 /**
  * A container's task roll-up: done over total (points, or tasks when nothing
@@ -939,7 +955,7 @@ function AssigneeStrip({ assignees, team, width }: { assignees: readonly string[
 // ─── Group ───────────────────────────────────────────────────────────────────
 
 export const GroupNode = memo(function GroupNode({ id, data, selected }: NodeProps<GroupNodeType>) {
-  const { registry, readOnly, showTeams, requestCommit, focus, drillInto, navigateToNode, childCounts, dimmedIds, rollups, today } = useStudio();
+  const { registry, readOnly, showTeams, requestCommit, focus, drillInto, navigateToNode, childCounts, dimmedIds, rollups, today, nodeDecorations } = useStudio();
   const { updateNodeData, getNodes, setNodes } = useReactFlow();
   // A phase's or sprint's progress, when it holds tasks: "8/21 pts" and a
   // bar, warn-coloured past the capacity set on it.
@@ -1038,6 +1054,10 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
     "--as-group-outline": data.outline ?? "dashed",
     "--as-group-border-width": data.outline === "none" ? "0" : "1px",
   } as CSSProperties;
+  // The host's mark on this frame, if it has one — never on a stand-in.
+  const deco = scopeGhost ? undefined : nodeDecorations?.[id];
+  const decoClass = `${deco?.ring ? " as-node--ringed" : ""}${deco?.className ? ` ${deco.className}` : ""}`;
+  const decoStyle = deco?.ring ? ({ ...style, "--as-deco-ring": deco.ring } as CSSProperties) : style;
   const teamBadge =
     data.team && showTeams ? (
       <span
@@ -1091,8 +1111,8 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
         <ConnectHandles hidden={readOnly} />
         <div
           ref={handles.hostRef}
-          className={`as-group-chip${selected ? " as-group-chip--selected" : ""}${scopeGhost ? " as-ghost as-node--scope-ghost" : ""}${dimmed ? " as-node--dimmed" : ""}`}
-          style={style}
+          className={`as-group-chip${selected ? " as-group-chip--selected" : ""}${scopeGhost ? " as-ghost as-node--scope-ghost" : ""}${dimmed ? " as-node--dimmed" : ""}${decoClass}`}
+          style={decoStyle}
           onDoubleClick={onDoubleClick}
           title={
             scopeGhost
@@ -1112,6 +1132,7 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
           <DateChip date={data.date} inline prefix="Lands" overdue={isOverdue(data.date, data.status, today)} />
           {rollupBadge}
           {teamBadge}
+          <DecorationBadge deco={deco} />
         </div>
       </>
     );
@@ -1141,9 +1162,10 @@ export const GroupNode = memo(function GroupNode({ id, data, selected }: NodePro
       <ConnectHandles hidden={readOnly} />
       <div
         ref={handles.hostRef}
-        className={`as-group${selected ? " as-group--selected" : ""}${data.status ? ` as-node--status-${data.status}` : ""}`}
-        style={style}
+        className={`as-group${selected ? " as-group--selected" : ""}${data.status ? ` as-node--status-${data.status}` : ""}${decoClass}`}
+        style={decoStyle}
       >
+        <DecorationBadge deco={deco} />
         <div className="as-group__label" title={data.label} onDoubleClick={onDoubleClick}>
           {!readOnly && !inScopedView ? toggle : null}
           {/* The name owns the truncation so the chips after it stay whole. */}

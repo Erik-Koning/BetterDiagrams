@@ -25,6 +25,18 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   undo) with every node it moved and where each was and is. `nodeMoves(before, after)` and
   `NodeMove` in the contract give the same list for any two versions of a document.
 - `onNodeClick`, `onNodeDoubleClick` and `onEdgeClick`, by document id.
+- `onBeforeChange(next, previous)`: asked before an edit lands. `false` or a string refuses it, a
+  document is committed in its place. Not asked for undo, redo or a new `value`.
+  `isValidConnection({ source, target }, template)` refuses a connection as it is drawn
+  (`StudioConnection`).
+- `onNodesAdd`, `onNodesDelete`, `onConnect` and `onEdgesDelete`: what an edit added and removed,
+  one call per edit. `onNodeHover`, `onViewportChange` (when a pan or zoom ends) and `onError` (the
+  message of a failed save, export, import or generation).
+- `contextMenuItems(target)`: a host's rows in the right-click menu (`StudioMenuItem`,
+  `StudioMenuTarget`).
+- `nodeDecorations`: a badge and a ring on nodes from the host's live state, never saved or
+  exported (`NodeDecoration`).
+- `dataFields`: inputs in the node inspector for keys of a node's `data` bag (`StudioDataField`).
 - On the `ref`: `getTaskState`, `setTaskState`, `getViewport` and `setViewport` (`StudioViewport`).
 
 ### Changed

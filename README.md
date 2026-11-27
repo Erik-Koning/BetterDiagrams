@@ -126,6 +126,16 @@ shadow.
 | `onDocumentChange` | `(diff: TemplateDiff, template) => void` | `onChange`, itemised: the nodes, edges and zones an edit added, removed or changed, and which of their fields (positions included). Fires for edits made in the editor or through the `ref`, not for a new `value`. |
 | `onNodesMove` | `(moves: NodeMove[], template) => void` | Nodes were moved. Fires **once per finished move** with every node it moved: when a drag is let go (never during it), and for an arrow-key nudge, Align, Distribute, Tidy or an undo. Each entry is `{ nodeId, from, to }`, where `from` and `to` are the document's `{ x, y, parentId }`, so a card carried inside a dragged frame isn't listed; the frame is. Not fired for a new `value`. `nodeMoves(before, after)` in the contract gives the same list for any two versions. |
 | `onNodeClick` / `onNodeDoubleClick` / `onEdgeClick` | `(id, event) => void` | A node or a connection was clicked, by its document id. A double-click still drills in or renames as well. |
+| `onBeforeChange` | `(next, previous) => false \| string \| DiagramTemplate \| void` | Asked before an edit lands. `false` refuses it (a string words the notice), a document is committed in its place, anything else lets it through. See [Host hooks](#host-hooks-rules-menus-marks-and-fields). |
+| `isValidConnection` | `({ source, target }, template) => boolean` | Whether a connection being drawn may be made, by the document ids of its ends. |
+| `onNodesAdd` / `onNodesDelete` | `(nodes, template) => void` | Nodes were added or removed. One call per edit; an undo that brings nodes back reports them as added. Not fired for a new `value`. |
+| `onConnect` / `onEdgesDelete` | `(edges, template) => void` | Connections were added or removed, including those a deleted node took with it. One call per edit. |
+| `onNodeHover` | `(nodeId \| null) => void` | The pointer is on a node, or left it. |
+| `onViewportChange` | `(viewport) => void` | The view was panned or zoomed. Fires when the gesture ends. |
+| `onError` | `(message) => void` | A save, export, import or generation failed; the message is the one the editor showed. |
+| `contextMenuItems` | `(target) => StudioMenuItem[]` | Rows to add to the right-click menu. `target` is `{ kind, selection, template }`. |
+| `nodeDecorations` | `Record<nodeId, NodeDecoration>` | A badge and a ring on nodes that are the host's, not the document's: `{ badge, ring, title, className }`. Never saved, exported or undone. |
+| `dataFields` | `StudioDataField[]` | Fields of the host's own in the node inspector, each editing one key of `node.data`. |
 | `onPinsChange` | `(pins: Pin[]) => void` | The **pins** — a field (`{ nodeId, fieldId }`) or a whole table (`{ nodeId }`) — mirrored like the two above: fires on mount (empty) and on every change. View state — never in the document; a pin is dropped when its node leaves the document. See **Fields beyond the rows** below. |
 | `onCoverageChange` | `(keys: FieldRef[]) => void` | The keys the **Key coverage** panel is scoring, mirrored like the pins. View state; pruned when a key's table leaves the document. |
 | `onKeyUsageChange` | `(names: string[]) => void` | The field names the **Key usage** panel has picked, lowercased, mirrored like the pins. View state; a name no table carries is kept and scores nothing. |
@@ -1426,6 +1436,73 @@ vocabulary, or a custom kind is "repaired" into a `service` and a custom contain
 styling. `registryValidateOptions(createRegistry(extensions))` is the options object the editor
 itself validates with; pass it to `validateTemplate`, `validateTemplateReport` or
 `diagramJsonSchema`.
+
+### Host hooks: rules, menus, marks and fields
+
+The registry adds vocabulary. These props add behaviour, and none of them changes anything
+until it is passed.
+
+**Rules.** `onBeforeChange(next, previous)` is asked before an edit lands, whether it came from
+the canvas, the inspector, a paste, an AI reply or the `ref`. Return `false` to refuse it: the
+canvas goes back to `previous`, nothing is added to undo, and `onChange` never fires. Return a
+string to refuse with your own wording, or return a document to commit that instead. It is not
+asked for undo and redo, nor for a new `value`.
+
+```jsx
+import { taskStateChanges } from "@mosphere/better-diagrams/contract";
+
+<ArchitectureStudio
+  onBeforeChange={(next, previous) => {
+    // Nobody but a reviewer finishes a task.
+    if (taskStateChanges(previous, next).some((c) => c.done) && !user.isReviewer) {
+      return "Only a reviewer can mark a task done";
+    }
+    // Nothing tagged "core" is deleted.
+    const kept = new Set(next.nodes.map((n) => n.id));
+    if (previous.nodes.some((n) => n.tags?.includes("core") && !kept.has(n.id))) return false;
+  }}
+  isValidConnection={({ source, target }, template) => source !== target}
+/>
+```
+
+`isValidConnection` is the short form for one case: it is asked when a connection drag is let
+go on a node, and `false` leaves no line behind.
+
+**Menus.** `contextMenuItems(target)` returns rows for the right-click menu, shown above the
+editor's own. `target.kind` is `"node"`, `"edge"`, `"zone"` or `"pane"`, and `target.selection`
+is what the menu acts on.
+
+```jsx
+contextMenuItems={({ kind, selection }) =>
+  kind === "node" && selection.nodes.length === 1
+    ? [{ label: "Open in tracker", onSelect: () => openTicket(selection.nodes[0]) }]
+    : []
+}
+```
+
+**Marks.** `nodeDecorations` puts live state on nodes without putting it in the document: a
+`badge` (text or any React node) on the card's top edge, a `ring` round it in any CSS colour,
+a `title` for the badge's tooltip and a `className` for styling of your own. They are drawn on
+the canvas only. Keep the object's identity stable while nothing changed, so cards don't
+re-render.
+
+```jsx
+nodeDecorations={{ api: { badge: "Failing", ring: "#dc2626", title: "2 alerts firing" } }}
+```
+
+**Fields.** Every node and edge has a `data` bag the editor carries and never reads.
+`dataFields` gives the node inspector inputs for it, under a Data caption. A field is
+`{ key, label, type, options, kinds, placeholder }`; `type` is `"text"` (the default),
+`"number"`, `"checkbox"` or `"select"`, and `kinds` limits it to those node kinds. An emptied
+field removes its key.
+
+```jsx
+dataFields={[
+  { key: "ticket", label: "Ticket", placeholder: "ABC-1" },
+  { key: "tier", label: "Tier", type: "select", options: ["gold", "standard"] },
+  { key: "sprint", label: "Sprint", kinds: ["task"] },
+]}
+```
 
 ## Exports
 

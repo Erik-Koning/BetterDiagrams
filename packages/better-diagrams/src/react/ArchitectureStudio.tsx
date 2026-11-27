@@ -87,6 +87,7 @@ import {
   ZONE_DRAG_HANDLE,
   visibleElements,
   type DiagramEdgeData,
+  type DiagramEdge,
   type DiagramNode,
   type DiagramNodeData,
   type DiagramTemplate,
@@ -256,7 +257,7 @@ import { RoadmapBackdrop, RoadmapRuler } from "./RoadmapChrome";
 import { addBeside, containerInk, type QuickAddSide } from "./quick-add";
 import { EDGE_TYPES } from "./edges";
 import { topDropTarget } from "./dangling";
-import { StudioContext } from "./context";
+import { StudioContext, type NodeDecoration } from "./context";
 import { useToday } from "./today";
 import {
   modeClassName,
@@ -278,7 +279,7 @@ import {
   type DiagramGenerator,
   type GenerateTurn,
 } from "../contract/llm";
-import { isNodeLocked, type AlignMode, type EdgePatch, type NodePatch, type PatchOptions } from "./studio-shared";
+import { isNodeLocked, type AlignMode, type EdgePatch, type NodePatch, type PatchOptions, type StudioDataField } from "./studio-shared";
 import { ContextItem, EdgeInspector, MultiInspector, NodeInspector, ZoneInspector } from "./studio-inspectors";
 import {
   documentSelection,
@@ -392,6 +393,32 @@ export interface TaskStateChangeDetail {
   states: string[];
   /** The task as the document now holds it. */
   node: DiagramNode;
+}
+
+/** A connection someone is drawing, as `isValidConnection` is asked about it: the document ids of its two ends. */
+export interface StudioConnection {
+  source: string;
+  target: string;
+}
+
+/** What was right-clicked, as `contextMenuItems` is asked about it. */
+export interface StudioMenuTarget {
+  /** What the pointer was on; "pane" is the empty canvas. */
+  kind: "node" | "edge" | "zone" | "pane";
+  /** What the menu acts on: the selection, which a right-click on something outside it replaces. */
+  selection: StudioSelection;
+  template: DiagramTemplate;
+}
+
+/** A row a host adds to the right-click menu. */
+export interface StudioMenuItem {
+  label: string;
+  /** Quiet text at the row's right edge: a shortcut, a count. */
+  hint?: string;
+  /** Drawn as a destructive action. */
+  danger?: boolean;
+  disabled?: boolean;
+  onSelect: () => void;
 }
 
 export interface StudioHandle {
@@ -565,6 +592,55 @@ export interface ArchitectureStudioProps {
    * its `ref`, not a new `value`.
    */
   onNodesMove?: (moves: NodeMove[], template: DiagramTemplate) => void;
+  /**
+   * Asked before an edit lands, with the document it would produce and the
+   * one it replaces. Return `false` to refuse it (the canvas goes back to
+   * `previous` and a short notice says so; return a string to word that
+   * notice yourself), or a document to commit in its place — the edit with
+   * something corrected. Anything else lets it through. Asked for edits made
+   * in the editor or through its `ref`; not for undo and redo, which only
+   * return to documents already let through, nor for a new `value`. Compare
+   * the two with `diffTemplates`, `taskStateChanges` or `nodeMoves`. Runs
+   * inside the edit, so keep it quick and synchronous.
+   */
+  onBeforeChange?: (next: DiagramTemplate, previous: DiagramTemplate) => boolean | string | DiagramTemplate | void;
+  /**
+   * Whether a connection being drawn may be made. Asked when the drag is let
+   * go on a node, with the document ids of both ends; `false` leaves no line
+   * behind. `onBeforeChange` sees connections too — this is the short form.
+   */
+  isValidConnection?: (connection: StudioConnection, template: DiagramTemplate) => boolean;
+  /** Nodes were added — drawn, pasted, duplicated, generated, or brought back by an undo. One call per edit. */
+  onNodesAdd?: (nodes: DiagramNode[], template: DiagramTemplate) => void;
+  /** Nodes were removed. One call per edit, with the nodes as they last were. */
+  onNodesDelete?: (nodes: DiagramNode[], template: DiagramTemplate) => void;
+  /** Connections were added. One call per edit. */
+  onConnect?: (edges: DiagramEdge[], template: DiagramTemplate) => void;
+  /** Connections were removed — their own delete, or their node's. One call per edit, with the edges as they last were. */
+  onEdgesDelete?: (edges: DiagramEdge[], template: DiagramTemplate) => void;
+  /** The pointer came to rest on a node (its document id), or left it (`null`). */
+  onNodeHover?: (nodeId: string | null) => void;
+  /** The view was panned or zoomed. Fires when the gesture ends, not during it. */
+  onViewportChange?: (viewport: StudioViewport) => void;
+  /** Something failed and the editor said so: a save, an export, an import, a generation. The message is the one shown. */
+  onError?: (message: string) => void;
+  /**
+   * Rows to add to the right-click menu, above the editor's own. Asked each
+   * time the menu opens. The menu does not open in a read-only editor.
+   */
+  contextMenuItems?: (target: StudioMenuTarget) => StudioMenuItem[] | null | undefined;
+  /**
+   * Marks on nodes that are the host's, not the document's: a badge in the
+   * card's corner and a ring round it, by document node id. Never saved,
+   * exported or undone — live state such as "failing" or "being edited by
+   * Ana". Keep the object's identity stable while nothing changed.
+   */
+  nodeDecorations?: Readonly<Record<string, NodeDecoration>>;
+  /**
+   * Fields of the host's own to edit in the node inspector. Each reads and
+   * writes one key of the node's `data` bag, as one undo step.
+   */
+  dataFields?: readonly StudioDataField[];
   /** A node was clicked. Fires with its document id; zones and canvas-only stand-ins don't report. */
   onNodeClick?: (nodeId: string, event: ReactMouseEvent) => void;
   /** A node was double-clicked — beside what the editor does with it (drill in, or rename). */
@@ -1012,6 +1088,13 @@ export const ArchitectureStudio = forwardRef<StudioHandle, ArchitectureStudioPro
   },
 );
 
+/** What one list of nodes or edges holds that the other doesn't, by id: [added, removed]. */
+function addedAndRemoved<T extends { id: string }>(before: readonly T[], after: readonly T[]): [T[], T[]] {
+  const was = new Set(before.map((item) => item.id));
+  const is = new Set(after.map((item) => item.id));
+  return [after.filter((item) => !was.has(item.id)), before.filter((item) => !is.has(item.id))];
+}
+
 function StudioInner({
   handleRef,
   value,
@@ -1020,6 +1103,18 @@ function StudioInner({
   onTaskDoneChange,
   onDocumentChange,
   onNodesMove,
+  onBeforeChange,
+  isValidConnection,
+  onNodesAdd,
+  onNodesDelete,
+  onConnect: onHostConnect,
+  onEdgesDelete,
+  onNodeHover,
+  onViewportChange,
+  onError,
+  contextMenuItems,
+  nodeDecorations,
+  dataFields,
   onNodeClick: onHostNodeClick,
   onNodeDoubleClick: onHostNodeDoubleClick,
   onEdgeClick: onHostEdgeClick,
@@ -1244,6 +1339,11 @@ function StudioInner({
   const [dropActive, setDropActive] = useState(false);
   const [toast, setToast] = useState<{ message: string; color?: string } | null>(null);
   const [error, setError] = useState("");
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+  useEffect(() => {
+    if (error) onErrorRef.current?.(error);
+  }, [error]);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [createInput, setCreateInput] = useState("");
@@ -1722,8 +1822,8 @@ function StudioInner({
 
   // Read through a ref, so a host passing fresh callbacks each render doesn't
   // rebuild every commit path below.
-  const hostEvents = useRef({ onTaskDoneChange, onDocumentChange, onNodesMove });
-  hostEvents.current = { onTaskDoneChange, onDocumentChange, onNodesMove };
+  const hostEvents = useRef({ onTaskDoneChange, onDocumentChange, onNodesMove, onBeforeChange, isValidConnection, onNodesAdd, onNodesDelete, onHostConnect, onEdgesDelete });
+  hostEvents.current = { onTaskDoneChange, onDocumentChange, onNodesMove, onBeforeChange, isValidConnection, onNodesAdd, onNodesDelete, onHostConnect, onEdgesDelete };
   /** The document the host was last told about — what the next report is measured from. */
   const notifiedRef = useRef<DiagramTemplate>(initialTemplate);
   /**
@@ -1756,7 +1856,43 @@ function StudioInner({
       const { added, removed, changed } = diff.summary;
       if (added || removed || changed || diff.meta.length) onDiff(diff, doc);
     }
+    const { onNodesAdd: onAdd, onNodesDelete: onDelete, onHostConnect: onLink, onEdgesDelete: onUnlink } = hostEvents.current;
+    if (edited && (onAdd || onDelete)) {
+      const [added, removed] = addedAndRemoved(before.nodes, doc.nodes);
+      if (added.length) onAdd?.(added, doc);
+      if (removed.length) onDelete?.(removed, doc);
+    }
+    if (edited && (onLink || onUnlink)) {
+      const [added, removed] = addedAndRemoved(before.edges, doc.edges);
+      if (added.length) onLink?.(added, doc);
+      if (removed.length) onUnlink?.(removed, doc);
+    }
   }, []);
+
+  /**
+   * Put an edit to the host before it lands (`onBeforeChange`). Returns the
+   * document to commit — the edit, or the host's correction of it — or null
+   * when the host refused, after saying so.
+   */
+  const askHost = useCallback(
+    (next: DiagramTemplate): DiagramTemplate | null => {
+      const ask = hostEvents.current.onBeforeChange;
+      const previous = notifiedRef.current;
+      // Not every commit changes the document (a selection settling, a
+      // re-materialized view): the host is asked about edits, not those.
+      if (!ask || next === previous || JSON.stringify(next) === JSON.stringify(previous)) return next;
+      const answer = ask(next, previous);
+      if (answer === false || typeof answer === "string") {
+        showToast(typeof answer === "string" && answer ? answer : "That change isn't allowed here");
+        return null;
+      }
+      if (!answer || answer === true || answer === next) return next;
+      return settleRoadmap(validateTemplate(answer, registryValidateOptions(registry)), {
+        containerKinds: registry.containerKinds,
+      });
+    },
+    [registry, showToast],
+  );
 
   // ── Commit: snapshot for undo, then notify the host ───────────────────────
 
@@ -1767,7 +1903,13 @@ function StudioInner({
       // changed — a date in the inspector, a card added or dragged — the plan
       // is re-laid in the SAME commit: one undo step, and the host only ever
       // hears of a laid-out document. A no-op on any other document.
-      const next = settleRoadmap(edited, { containerKinds: registry.containerKinds });
+      const next = askHost(settleRoadmap(edited, { containerKinds: registry.containerKinds }));
+      if (next === null) {
+        // Refused: the canvas already shows the edit, so put back the
+        // document it was made on — what an undo does, with nothing to undo.
+        materializeTemplate(notifiedRef.current);
+        return;
+      }
       if (next !== edited) ({ nodes: n, edges: e } = materializeTemplate(next));
       // The snapshot carries the full document so undo can re-materialize it
       // instead of re-deriving against whatever frame is current by then —
@@ -1782,7 +1924,7 @@ function StudioInner({
       lastEmitted.current = json;
       onChange(next);
     },
-    [commitHistory, onChange, deriveTemplate, registry, materializeTemplate, notifyHost],
+    [commitHistory, onChange, deriveTemplate, registry, materializeTemplate, notifyHost, askHost],
   );
 
   /**
@@ -1981,12 +2123,15 @@ function StudioInner({
       // The declaration is truth on import: a generated document usually gets
       // membership right and coordinates approximately right, so move the node
       // to match its declared zone rather than dropping the membership.
-      const validated = settleRoadmap(
-        snapNodesIntoZones(validateTemplate(incoming, registryValidateOptions(registry)), {
-          containerKinds: registry.containerKinds,
-        }),
-        { containerKinds: registry.containerKinds },
+      const validated = askHost(
+        settleRoadmap(
+          snapNodesIntoZones(validateTemplate(incoming, registryValidateOptions(registry)), {
+            containerKinds: registry.containerKinds,
+          }),
+          { containerKinds: registry.containerKinds },
+        ),
       );
+      if (validated === null) return;
       const next = materializeTemplate(validated, select);
       commitHistory(
         { nodes: next.nodes, edges: next.edges, meta: meta.current, template: validated },
@@ -2000,7 +2145,7 @@ function StudioInner({
       }
       if (fit) window.setTimeout(() => fitPicture(300), 50);
     },
-    [registry, materializeTemplate, commitHistory, onChange, fitPicture, notifyHost],
+    [registry, materializeTemplate, commitHistory, onChange, fitPicture, notifyHost, askHost],
   );
 
   // ── Node / edge mutations ─────────────────────────────────────────────────
@@ -3865,6 +4010,17 @@ function StudioInner({
   const onConnect = useCallback(
     (connection: Connection, targetBox?: EdgeBox) => {
       if (readOnly) return;
+      const allow = hostEvents.current.isValidConnection;
+      if (
+        allow &&
+        !allow(
+          { source: documentNodeOf(connection.source), target: documentNodeOf(connection.target) },
+          templateRef.current,
+        )
+      ) {
+        showToast("Those two can't be connected here");
+        return;
+      }
       // source === target is a SELF-LOOP — a retry arrow, drawn out one face
       // and back into an adjacent one. Legal since validation learned it.
       //
@@ -4121,6 +4277,7 @@ function StudioInner({
             "capacity",
             "status",
             "plain",
+            "data",
           ] as const) {
             if (key in own && own[key] === undefined) delete data[key];
           }
@@ -7958,6 +8115,17 @@ function StudioInner({
     [focusId, focusStack.length],
   );
 
+  // The host's rows for the open right-click menu — asked while it is open,
+  // against the selection the menu acts on.
+  const hostMenuItems: StudioMenuItem[] =
+    contextMenu && contextMenu.kind !== "field" && contextMenuItems
+      ? (contextMenuItems({
+          kind: contextMenu.kind,
+          selection: documentSelection(selectedNodeIds, selectedEdgeIds),
+          template,
+        }) ?? [])
+      : [];
+
   const studioContext = useMemo(
     () => ({
       registry,
@@ -7984,6 +8152,7 @@ function StudioInner({
       domainTint: analysis.tint,
       blockedIds,
       taskStates: sharedTaskStates,
+      nodeDecorations,
       taskLabelOf,
       assigneeColorOf,
       personPreview,
@@ -7995,7 +8164,7 @@ function StudioInner({
       today,
       notation,
     }),
-    [registry, readOnly, studioMode, tagFilter, showTeams, showLinks, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast, openFieldMenu, pinnedFields, shownHighlights, dimmedIds, analysis.tint, blockedIds, sharedTaskStates, taskLabelOf, assigneeColorOf, personPreview, personFocus, taskGraph, taskFilterIds, today, notation],
+    [registry, readOnly, studioMode, tagFilter, showTeams, showLinks, commitLater, beginZoneResize, endZoneResize, onNavigateFile, focusContext, drillInto, navigateToNode, childCounts, renamingId, showToast, openFieldMenu, pinnedFields, shownHighlights, dimmedIds, analysis.tint, blockedIds, sharedTaskStates, nodeDecorations, taskLabelOf, assigneeColorOf, personPreview, personFocus, taskGraph, taskFilterIds, today, notation],
   );
   const rootStyle = { ...themeToStyle(theme), ...style };
   const modeClass = modeClassName(studioMode, gradients);
@@ -9706,15 +9875,25 @@ function StudioInner({
             nodes={viewNodes}
             edges={displayEdges}
             onNodeMouseEnter={
-              trackHover
+              trackHover || onNodeHover
                 ? (_, node) => {
-                    if (edgesOnHover || dependencyEnds.has(node.id)) setHoveredNodeId(node.id);
+                    if (trackHover && (edgesOnHover || dependencyEnds.has(node.id))) setHoveredNodeId(node.id);
+                    const id = onNodeHover ? documentSelection([node.id], []).nodes[0] : undefined;
+                    if (id !== undefined) onNodeHover!(id);
                   }
                 : undefined
             }
             onNodeMouseLeave={
-              trackHover
-                ? (_, node) => setHoveredNodeId((current) => (current === node.id ? null : current))
+              trackHover || onNodeHover
+                ? (_, node) => {
+                    if (trackHover) setHoveredNodeId((current) => (current === node.id ? null : current));
+                    if (onNodeHover && documentSelection([node.id], []).nodes.length) onNodeHover(null);
+                  }
+                : undefined
+            }
+            onMoveEnd={
+              onViewportChange
+                ? (_, viewport) => onViewportChange({ x: viewport.x, y: viewport.y, zoom: viewport.zoom })
                 : undefined
             }
             onNodesChange={onNodesChange}
@@ -10205,6 +10384,7 @@ function StudioInner({
                   onViewFields={(nodeId) => setFieldGrid({ nodeId })}
                   assigneeOptions={assigneeNames}
                   taskStates={sharedTaskStates}
+                  dataFields={dataFields}
                 />
               ) : null}
               {selectedEdge && isGhostEdgeId(selectedEdge.id) ? (
@@ -10483,6 +10663,24 @@ function StudioInner({
             style={{ left: contextMenu.x, top: contextMenu.y }}
             onPointerDown={(event) => event.stopPropagation()}
           >
+            {/* The host's rows lead: the menu scrolls past a dozen rows, and
+                what a host added is what its user came for. */}
+            {contextMenu.kind !== "field" && hostMenuItems.length ? (
+              <>
+                {hostMenuItems.map((item, index) => (
+                  <ContextItem
+                    key={`${index}:${item.label}`}
+                    label={item.label}
+                    hint={item.hint}
+                    danger={item.danger}
+                    disabled={item.disabled}
+                    onPick={item.onSelect}
+                    close={closeContext}
+                  />
+                ))}
+                <hr className="as-context__rule" />
+              </>
+            ) : null}
             {contextMenu.kind === "field" ? (
               (() => {
                 const { ref } = contextMenu;

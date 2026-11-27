@@ -87,7 +87,7 @@ import { SvgIcon } from "./icons";
 import { iconKeywords, suggestIcons } from "./icon-suggest";
 import { relationDressing } from "../contract/relations";
 import { useStudio } from "./context";
-import { isNodeLocked, type AlignMode, type EdgePatch, type NodePatch, type PatchOptions } from "./studio-shared";
+import { isNodeLocked, type AlignMode, type EdgePatch, type NodePatch, type PatchOptions, type StudioDataField } from "./studio-shared";
 
 const EMPTY_NAMES: readonly string[] = [];
 
@@ -864,7 +864,10 @@ export function NodeInspector({
   onViewFields,
   assigneeOptions = EMPTY_NAMES,
   taskStates,
+  dataFields,
 }: {
+  /** The host's own fields, each editing one key of `node.data` — see `StudioDataField`. */
+  dataFields?: readonly StudioDataField[];
   /** The selection — at least one. */
   nodes: readonly Node[];
   /** The states every task shares (`settings.taskStates`); absent means "notDone" then "done". */
@@ -990,6 +993,17 @@ export function NodeInspector({
   };
   const priority = read((d) => d.priority ?? "");
   const capacity = read((d) => d.capacity);
+  // The host's fields this selection qualifies for — every node's kind, or none.
+  const shownDataFields = (dataFields ?? []).filter(
+    (field) => !field.kinds || datas.every((d) => field.kinds!.includes(d.kind as string)),
+  );
+  /** Write one key of each node's `data` bag; undefined takes the key away, and an emptied bag with it. */
+  const setData = (key: string, value: unknown) =>
+    patch((d) => {
+      const { [key]: _old, ...rest } = d.data ?? {};
+      const next = value === undefined ? rest : { ...rest, [key]: value };
+      return { data: Object.keys(next).length ? next : undefined };
+    });
   // Icons the box's own words point at — one box's, so a multi-selection of
   // different things isn't offered one guess for all.
   const iconPicks = single ? suggestIcons(`${data.label} ${data.description ?? ""}`, registry.iconNames) : [];
@@ -1582,6 +1596,68 @@ export function NodeInspector({
           >
             Clear link{linked.length > 1 ? "s" : ""} ({linked.length})
           </button>
+        </InspectorSection>
+      ) : null}
+
+      {shownDataFields.length ? (
+        <InspectorSection caption="Data">
+          {shownDataFields.map((field) => {
+            const stored = read((d) => d.data?.[field.key]);
+            const value = stored.mixed ? undefined : stored.value;
+            if (field.type === "checkbox") {
+              return (
+                <label className="as-check" key={field.key}>
+                  <input
+                    type="checkbox"
+                    checked={value === true}
+                    onChange={(event) => setData(field.key, event.target.checked ? true : undefined)}
+                  />
+                  {field.label}
+                </label>
+              );
+            }
+            if (field.type === "select") {
+              return (
+                <label className="as-datafield" key={field.key}>
+                  <span className="as-datafield__label">{field.label}</span>
+                  <select
+                    className="as-select as-datafield__input"
+                    value={typeof value === "string" ? value : ""}
+                    onChange={(event) => setData(field.key, event.target.value || undefined)}
+                  >
+                    <option value="">{stored.mixed ? "Mixed" : (field.placeholder ?? "None")}</option>
+                    {(field.options ?? []).map((option) => {
+                      const o = typeof option === "string" ? { value: option, label: option } : option;
+                      return (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+              );
+            }
+            const numeric = field.type === "number";
+            return (
+              <label className="as-datafield" key={field.key}>
+                <span className="as-datafield__label">{field.label}</span>
+                <input
+                  className="as-input as-datafield__input"
+                  type={numeric ? "number" : "text"}
+                  step={numeric ? "any" : undefined}
+                  value={typeof value === "string" || typeof value === "number" ? value : ""}
+                  placeholder={stored.mixed ? "Mixed" : field.placeholder}
+                  onChange={(event) => {
+                    const text = event.target.value;
+                    if (!numeric) return setData(field.key, text || undefined);
+                    const n = Number.parseFloat(text);
+                    setData(field.key, Number.isFinite(n) ? n : undefined);
+                  }}
+                />
+              </label>
+            );
+          })}
         </InspectorSection>
       ) : null}
 
