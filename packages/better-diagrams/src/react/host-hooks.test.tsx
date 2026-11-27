@@ -168,12 +168,49 @@ describe("onBeforeChange", () => {
   });
 });
 
+describe("a refused edit, to whoever asked for it", () => {
+  it("keeps its notice: the action that was refused doesn't go on to say it worked", async () => {
+    const { container } = mount(
+      <ArchitectureStudio defaultValue={plan()} onBeforeChange={() => "Layout is frozen"} welcome={false} />,
+    );
+    await waitFor(() => expect(node(container, "svc")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+    fireEvent.click((await screen.findAllByRole("menuitem", { name: /^Tidy/ }))[0]!);
+    await waitFor(() => expect(screen.getByText("Layout is frozen")).toBeTruthy());
+    expect(screen.queryByText(/^Tidied/)).toBeNull();
+  });
+
+  it("tells the ref: setTaskState is false, and update hands back the document as it was", () => {
+    const ref = createRef<StudioHandle>();
+    let allow = false;
+    mount(<ArchitectureStudio ref={ref} defaultValue={plan()} onBeforeChange={() => allow} welcome={false} />);
+    let done = true;
+    act(() => {
+      done = ref.current!.setTaskState("design", "done");
+    });
+    expect(done).toBe(false);
+    expect(ref.current!.getTaskState("design")).toBe("notDone");
+    let report: ReturnType<StudioHandle["update"]> | undefined;
+    act(() => {
+      report = ref.current!.update((d) => removeNodes(d, ["svc"]));
+    });
+    expect(find(report!.template, "svc")).toBeTruthy();
+
+    allow = true;
+    act(() => {
+      done = ref.current!.setTaskState("design", "done");
+    });
+    expect(done).toBe(true);
+    expect(ref.current!.getTaskState("design")).toBe("done");
+  });
+});
+
 describe("what an edit added and removed", () => {
   it("reports nodes and connections once per edit, and again when undo brings them back", async () => {
     const ref = createRef<StudioHandle>();
     const onNodesAdd = vi.fn();
     const onNodesDelete = vi.fn();
-    const onConnect = vi.fn();
+    const onEdgesAdd = vi.fn();
     const onEdgesDelete = vi.fn();
     const { container } = mount(
       <ArchitectureStudio
@@ -181,7 +218,7 @@ describe("what an edit added and removed", () => {
         defaultValue={plan()}
         onNodesAdd={onNodesAdd}
         onNodesDelete={onNodesDelete}
-        onConnect={onConnect}
+        onEdgesAdd={onEdgesAdd}
         onEdgesDelete={onEdgesDelete}
         welcome={false}
       />,
@@ -196,8 +233,8 @@ describe("what an edit added and removed", () => {
     });
     expect(onNodesAdd).toHaveBeenCalledTimes(1);
     expect(onNodesAdd.mock.calls[0]![0].map((n: { id: string }) => n.id)).toEqual(["ship"]);
-    expect(onConnect).toHaveBeenCalledTimes(1);
-    expect(onConnect.mock.calls[0]![0]).toEqual([expect.objectContaining({ id: "then", source: "build", target: "ship" })]);
+    expect(onEdgesAdd).toHaveBeenCalledTimes(1);
+    expect(onEdgesAdd.mock.calls[0]![0]).toEqual([expect.objectContaining({ id: "then", source: "build", target: "ship" })]);
     expect(onNodesDelete).not.toHaveBeenCalled();
 
     // Deleting a node takes its connections with it: one report of each.
@@ -213,7 +250,7 @@ describe("what an edit added and removed", () => {
     });
     expect(onNodesAdd).toHaveBeenCalledTimes(2);
     expect(onNodesAdd.mock.calls[1]![0].map((n: { id: string }) => n.id)).toEqual(["design"]);
-    expect(onConnect).toHaveBeenCalledTimes(2);
+    expect(onEdgesAdd).toHaveBeenCalledTimes(2);
   });
 
   it("stays quiet for the host's own value", async () => {
@@ -339,6 +376,31 @@ describe("dataFields", () => {
     fireEvent.change(within(group).getByLabelText("Tier"), { target: { value: "" } });
     fireEvent.click(within(group).getByLabelText("Audited"));
     await waitFor(() => expect(data()).toBeUndefined());
+  });
+
+  it("undoes a run of typing in one field as the one edit it was", async () => {
+    const ref = createRef<StudioHandle>();
+    mount(<ArchitectureStudio ref={ref} defaultValue={plan()} dataFields={fields} welcome={false} />);
+    act(() => ref.current!.select({ nodes: ["svc"] }));
+    const group = await screen.findByRole("group", { name: "Data" });
+    const data = () => find(ref.current!.getTemplate(), "svc")?.data;
+    for (const text of ["A", "AB", "ABC"]) {
+      fireEvent.change(within(group).getByLabelText("Ticket"), { target: { value: text } });
+      await waitFor(() => expect(data()).toEqual({ ticket: text }));
+    }
+    // Another field is another edit.
+    fireEvent.change(within(group).getByLabelText("Tier"), { target: { value: "gold" } });
+    await waitFor(() => expect(data()).toEqual({ ticket: "ABC", tier: "gold" }));
+
+    act(() => {
+      ref.current!.undo();
+    });
+    expect(data()).toEqual({ ticket: "ABC" });
+    act(() => {
+      ref.current!.undo();
+    });
+    expect(data()).toBeUndefined();
+    expect(ref.current!.canUndo()).toBe(false);
   });
 
   it("keeps the keys it doesn't name, and offers a kind's own fields on that kind", async () => {

@@ -56,4 +56,10 @@ export interface StudioDataField {
 
 export interface PatchOptions {
   continuous?: boolean;
+  /**
+   * Names the field being typed in, for a patch written as a function — so
+   * a run of keystrokes there undoes as one edit, as it does for a plain
+   * patch of a typed field.
+   */
+  typing?: string;
 }

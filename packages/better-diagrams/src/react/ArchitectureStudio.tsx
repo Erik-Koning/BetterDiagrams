@@ -436,7 +436,8 @@ export interface StudioHandle {
    * Returns the document as applied and what validation repaired in the
    * edit (see `validateTemplateReport`) — an edge to a typo'd id is listed,
    * not silently lost. Selection and the drill level carry over for
-   * everything that still exists.
+   * everything that still exists. When `onBeforeChange` refuses the edit,
+   * the document returned is the one that was there before.
    */
   update: (
     edit: DiagramTemplate | ((current: DiagramTemplate) => DiagramTemplate),
@@ -452,7 +453,8 @@ export interface StudioHandle {
    * Move a task to a state, as one undo step — what ticking its corner check
    * does for the last state. Reported through `onChange` and
    * `onTaskDoneChange` like any other edit. Returns false, and changes
-   * nothing, when there is no such task or the state isn't one of its own.
+   * nothing, when there is no such task, the state isn't one of its own, or
+   * `onBeforeChange` refused the change.
    */
   setTaskState: (nodeId: string, state: string) => boolean;
   /** Step back through the undo history; false when there was nothing to undo, or the editor is read-only. */
@@ -605,24 +607,26 @@ export interface ArchitectureStudioProps {
    */
   onBeforeChange?: (next: DiagramTemplate, previous: DiagramTemplate) => boolean | string | DiagramTemplate | void;
   /**
-   * Whether a connection being drawn may be made. Asked when the drag is let
+   * Whether a connection being DRAWN may be made. Asked when the drag is let
    * go on a node, with the document ids of both ends; `false` leaves no line
-   * behind. `onBeforeChange` sees connections too — this is the short form.
+   * behind. It covers that gesture alone: a connection that arrives another
+   * way (a paste, swapped ends, an AI reply, the `ref`) is not put to it. A
+   * rule that must always hold belongs in `onBeforeChange`, which sees them all.
    */
   isValidConnection?: (connection: StudioConnection, template: DiagramTemplate) => boolean;
   /** Nodes were added — drawn, pasted, duplicated, generated, or brought back by an undo. One call per edit. */
   onNodesAdd?: (nodes: DiagramNode[], template: DiagramTemplate) => void;
   /** Nodes were removed. One call per edit, with the nodes as they last were. */
   onNodesDelete?: (nodes: DiagramNode[], template: DiagramTemplate) => void;
-  /** Connections were added. One call per edit. */
-  onConnect?: (edges: DiagramEdge[], template: DiagramTemplate) => void;
+  /** Connections were added — drawn, pasted, generated, or brought back by an undo. One call per edit. */
+  onEdgesAdd?: (edges: DiagramEdge[], template: DiagramTemplate) => void;
   /** Connections were removed — their own delete, or their node's. One call per edit, with the edges as they last were. */
   onEdgesDelete?: (edges: DiagramEdge[], template: DiagramTemplate) => void;
   /** The pointer came to rest on a node (its document id), or left it (`null`). */
   onNodeHover?: (nodeId: string | null) => void;
   /** The view was panned or zoomed. Fires when the gesture ends, not during it. */
   onViewportChange?: (viewport: StudioViewport) => void;
-  /** Something failed and the editor said so: a save, an export, an import, a generation. The message is the one shown. */
+  /** Something failed and the editor said so: a save, an export, an import, opening a file, an AI request. The message is the one shown. */
   onError?: (message: string) => void;
   /**
    * Rows to add to the right-click menu, above the editor's own. Asked each
@@ -1107,7 +1111,7 @@ function StudioInner({
   isValidConnection,
   onNodesAdd,
   onNodesDelete,
-  onConnect: onHostConnect,
+  onEdgesAdd,
   onEdgesDelete,
   onNodeHover,
   onViewportChange,
@@ -1618,7 +1622,15 @@ function StudioInner({
    * when the confirmation matters most.
    */
   const toastTimer = useRef<number | null>(null);
+  /**
+   * True for the rest of the tick in which a host refused an edit
+   * (`onBeforeChange`). Whatever asked for the edit goes on to say it
+   * worked — "Tidied", "Diagram generated" — and that would replace the
+   * notice saying it didn't.
+   */
+  const refusalHold = useRef(false);
   const showToast = useCallback((message: string, color?: string) => {
+    if (refusalHold.current) return;
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
     setToast({ message, color });
     toastTimer.current = window.setTimeout(() => {
@@ -1822,8 +1834,8 @@ function StudioInner({
 
   // Read through a ref, so a host passing fresh callbacks each render doesn't
   // rebuild every commit path below.
-  const hostEvents = useRef({ onTaskDoneChange, onDocumentChange, onNodesMove, onBeforeChange, isValidConnection, onNodesAdd, onNodesDelete, onHostConnect, onEdgesDelete });
-  hostEvents.current = { onTaskDoneChange, onDocumentChange, onNodesMove, onBeforeChange, isValidConnection, onNodesAdd, onNodesDelete, onHostConnect, onEdgesDelete };
+  const hostEvents = useRef({ onTaskDoneChange, onDocumentChange, onNodesMove, onBeforeChange, isValidConnection, onNodesAdd, onNodesDelete, onEdgesAdd, onEdgesDelete });
+  hostEvents.current = { onTaskDoneChange, onDocumentChange, onNodesMove, onBeforeChange, isValidConnection, onNodesAdd, onNodesDelete, onEdgesAdd, onEdgesDelete };
   /** The document the host was last told about — what the next report is measured from. */
   const notifiedRef = useRef<DiagramTemplate>(initialTemplate);
   /**
@@ -1856,7 +1868,7 @@ function StudioInner({
       const { added, removed, changed } = diff.summary;
       if (added || removed || changed || diff.meta.length) onDiff(diff, doc);
     }
-    const { onNodesAdd: onAdd, onNodesDelete: onDelete, onHostConnect: onLink, onEdgesDelete: onUnlink } = hostEvents.current;
+    const { onNodesAdd: onAdd, onNodesDelete: onDelete, onEdgesAdd: onLink, onEdgesDelete: onUnlink } = hostEvents.current;
     if (edited && (onAdd || onDelete)) {
       const [added, removed] = addedAndRemoved(before.nodes, doc.nodes);
       if (added.length) onAdd?.(added, doc);
@@ -1884,6 +1896,10 @@ function StudioInner({
       const answer = ask(next, previous);
       if (answer === false || typeof answer === "string") {
         showToast(typeof answer === "string" && answer ? answer : "That change isn't allowed here");
+        refusalHold.current = true;
+        window.setTimeout(() => {
+          refusalHold.current = false;
+        }, 0);
         return null;
       }
       if (!answer || answer === true || answer === next) return next;
@@ -2131,7 +2147,7 @@ function StudioInner({
           { containerKinds: registry.containerKinds },
         ),
       );
-      if (validated === null) return;
+      if (validated === null) return false;
       const next = materializeTemplate(validated, select);
       commitHistory(
         { nodes: next.nodes, edges: next.edges, meta: meta.current, template: validated },
@@ -2144,6 +2160,7 @@ function StudioInner({
         onChange(validated);
       }
       if (fit) window.setTimeout(() => fitPicture(300), 50);
+      return true;
     },
     [registry, materializeTemplate, commitHistory, onChange, fitPicture, notifyHost, askHost],
   );
@@ -4348,7 +4365,11 @@ function StudioInner({
         }),
       );
       commitLater(
-        typeof patch === "function" ? undefined : typingRunKey("node", ids.join("+"), patch, options?.continuous),
+        options?.typing
+          ? `node:${ids.join("+")}:${options.typing}`
+          : typeof patch === "function"
+            ? undefined
+            : typingRunKey("node", ids.join("+"), patch, options?.continuous),
       );
     },
     [readOnly, setNodes, registry, commitLater],
@@ -5655,19 +5676,25 @@ function StudioInner({
   activePathIdsRef.current = activePathIds;
 
   /** The handle's `update`: a host's edit, landed the way an AI reply or an import does. */
-  const updateDocument = useCallback(
+  /** The handle's `update`, and whether the edit landed — a host's `onBeforeChange` may have refused it. */
+  const applyEdit = useCallback(
     (
       edit: DiagramTemplate | ((current: DiagramTemplate) => DiagramTemplate),
       options: StudioUpdateOptions = {},
-    ): ValidationReport => {
+    ): { applied: boolean; report: ValidationReport } => {
       const next = typeof edit === "function" ? edit(templateRef.current) : edit;
       const report = validateTemplateReport(next, registryValidateOptions(registry));
-      applyTemplate(layoutIfUnpositioned(report.template, modeLayoutOptions(studioModeRef.current)), {
+      const applied = applyTemplate(layoutIfUnpositioned(report.template, modeLayoutOptions(studioModeRef.current)), {
         fit: options.fit ?? false,
       });
-      return { template: templateRef.current, issues: report.issues };
+      return { applied, report: { template: templateRef.current, issues: report.issues } };
     },
     [registry, applyTemplate],
+  );
+  const updateDocument = useCallback(
+    (edit: DiagramTemplate | ((current: DiagramTemplate) => DiagramTemplate), options?: StudioUpdateOptions) =>
+      applyEdit(edit, options).report,
+    [applyEdit],
   );
 
   /** The handle's `select`: document ids to the canvas elements drawing them. */
@@ -5707,8 +5734,7 @@ function StudioInner({
         } catch {
           return false; // no such task, or not a state of its own
         }
-        if (next !== current) updateDocument(next);
-        return true;
+        return next === current || applyEdit(next).applied;
       },
       undo: doUndo,
       redo: doRedo,
@@ -6408,7 +6434,11 @@ function StudioInner({
       (file) => {
         if (file) runImport(file.name, (into) => void loadFile(file, into));
       },
-      (err: unknown) => showToast(`Could not open the file: ${(err as Error).message}`),
+      (err: unknown) => {
+        const message = `Could not open the file: ${(err as Error).message}`;
+        showToast(message);
+        onErrorRef.current?.(message);
+      },
     );
   }, [onOpenFile, runImport, loadFile, showToast]);
 
@@ -6990,6 +7020,7 @@ function StudioInner({
           .join(" · "),
       });
     } catch (err) {
+      if ((err as Error).name !== "AbortError") onErrorRef.current?.((err as Error).message || "The request failed.");
       say({
         role: "assistant",
         text:

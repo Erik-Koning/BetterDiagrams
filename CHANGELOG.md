@@ -28,10 +28,10 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 - `onBeforeChange(next, previous)`: asked before an edit lands. `false` or a string refuses it, a
   document is committed in its place. Not asked for undo, redo or a new `value`.
   `isValidConnection({ source, target }, template)` refuses a connection as it is drawn
-  (`StudioConnection`).
-- `onNodesAdd`, `onNodesDelete`, `onConnect` and `onEdgesDelete`: what an edit added and removed,
+  (`StudioConnection`); that gesture only. A refused `ref.setTaskState` returns `false`.
+- `onNodesAdd`, `onNodesDelete`, `onEdgesAdd` and `onEdgesDelete`: what an edit added and removed,
   one call per edit. `onNodeHover`, `onViewportChange` (when a pan or zoom ends) and `onError` (the
-  message of a failed save, export, import or generation).
+  message of a failed save, export, import, file open or AI request).
 - `contextMenuItems(target)`: a host's rows in the right-click menu (`StudioMenuItem`,
   `StudioMenuTarget`).
 - `nodeDecorations`: a badge and a ring on nodes from the host's live state, never saved or

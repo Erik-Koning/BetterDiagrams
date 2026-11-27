@@ -96,10 +96,10 @@ export interface ArchitectureStudioProps {
     onAiModelChange?: (id: string) => void;
     onBeforeChange?: (next: DiagramTemplate, previous: DiagramTemplate) => boolean | string | DiagramTemplate | void;
     onChange?: (template: DiagramTemplate) => void;
-    onConnect?: (edges: DiagramEdge[], template: DiagramTemplate) => void;
     onCoverageChange?: (keys: FieldRef[]) => void;
     onDocumentChange?: (diff: TemplateDiff, template: DiagramTemplate) => void;
     onEdgeClick?: (edgeId: string, event: MouseEvent_2) => void;
+    onEdgesAdd?: (edges: DiagramEdge[], template: DiagramTemplate) => void;
     onEdgesDelete?: (edges: DiagramEdge[], template: DiagramTemplate) => void;
     onError?: (message: string) => void;
     onFileCreate?: (init?: StudioFileInit) => void;

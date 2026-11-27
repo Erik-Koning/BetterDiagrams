@@ -127,12 +127,12 @@ shadow.
 | `onNodesMove` | `(moves: NodeMove[], template) => void` | Nodes were moved. Fires **once per finished move** with every node it moved: when a drag is let go (never during it), and for an arrow-key nudge, Align, Distribute, Tidy or an undo. Each entry is `{ nodeId, from, to }`, where `from` and `to` are the document's `{ x, y, parentId }`, so a card carried inside a dragged frame isn't listed; the frame is. Not fired for a new `value`. `nodeMoves(before, after)` in the contract gives the same list for any two versions. |
 | `onNodeClick` / `onNodeDoubleClick` / `onEdgeClick` | `(id, event) => void` | A node or a connection was clicked, by its document id. A double-click still drills in or renames as well. |
 | `onBeforeChange` | `(next, previous) => false \| string \| DiagramTemplate \| void` | Asked before an edit lands. `false` refuses it (a string words the notice), a document is committed in its place, anything else lets it through. See [Host hooks](#host-hooks-rules-menus-marks-and-fields). |
-| `isValidConnection` | `({ source, target }, template) => boolean` | Whether a connection being drawn may be made, by the document ids of its ends. |
+| `isValidConnection` | `({ source, target }, template) => boolean` | Whether a connection being drawn may be made, by the document ids of its ends. Asked for that gesture only; `onBeforeChange` sees every way a connection can arrive. |
 | `onNodesAdd` / `onNodesDelete` | `(nodes, template) => void` | Nodes were added or removed. One call per edit; an undo that brings nodes back reports them as added. Not fired for a new `value`. |
-| `onConnect` / `onEdgesDelete` | `(edges, template) => void` | Connections were added or removed, including those a deleted node took with it. One call per edit. |
+| `onEdgesAdd` / `onEdgesDelete` | `(edges, template) => void` | Connections were added or removed, including those a deleted node took with it. One call per edit. |
 | `onNodeHover` | `(nodeId \| null) => void` | The pointer is on a node, or left it. |
 | `onViewportChange` | `(viewport) => void` | The view was panned or zoomed. Fires when the gesture ends. |
-| `onError` | `(message) => void` | A save, export, import or generation failed; the message is the one the editor showed. |
+| `onError` | `(message) => void` | A save, an export, an import, opening a file or an AI request failed; the message is the one the editor showed. |
 | `contextMenuItems` | `(target) => StudioMenuItem[]` | Rows to add to the right-click menu. `target` is `{ kind, selection, template }`. |
 | `nodeDecorations` | `Record<nodeId, NodeDecoration>` | A badge and a ring on nodes that are the host's, not the document's: `{ badge, ring, title, className }`. Never saved, exported or undone. |
 | `dataFields` | `StudioDataField[]` | Fields of the host's own in the node inspector, each editing one key of `node.data`. |
@@ -1465,8 +1465,11 @@ import { taskStateChanges } from "@mosphere/better-diagrams/contract";
 />
 ```
 
-`isValidConnection` is the short form for one case: it is asked when a connection drag is let
-go on a node, and `false` leaves no line behind.
+`isValidConnection` covers one gesture: it is asked when a connection drag is let go on a node,
+and `false` leaves no line behind. A connection that arrives another way (a paste, swapped
+ends, an AI reply, the `ref`) is not put to it, so a rule that must always hold belongs in
+`onBeforeChange`. A refused `ref.setTaskState` returns `false`, and a refused `ref.update`
+returns the document that was there before.
 
 **Menus.** `contextMenuItems(target)` returns rows for the right-click menu, shown above the
 editor's own. `target.kind` is `"node"`, `"edge"`, `"zone"` or `"pane"`, and `target.selection`

@@ -998,12 +998,15 @@ export function NodeInspector({
     (field) => !field.kinds || datas.every((d) => field.kinds!.includes(d.kind as string)),
   );
   /** Write one key of each node's `data` bag; undefined takes the key away, and an emptied bag with it. */
-  const setData = (key: string, value: unknown) =>
-    patch((d) => {
-      const { [key]: _old, ...rest } = d.data ?? {};
-      const next = value === undefined ? rest : { ...rest, [key]: value };
-      return { data: Object.keys(next).length ? next : undefined };
-    });
+  const setData = (key: string, value: unknown, typed = false) =>
+    patch(
+      (d) => {
+        const { [key]: _old, ...rest } = d.data ?? {};
+        const next = value === undefined ? rest : { ...rest, [key]: value };
+        return { data: Object.keys(next).length ? next : undefined };
+      },
+      typed ? { typing: `data.${key}` } : undefined,
+    );
   // Icons the box's own words point at — one box's, so a multi-selection of
   // different things isn't offered one guess for all.
   const iconPicks = single ? suggestIcons(`${data.label} ${data.description ?? ""}`, registry.iconNames) : [];
@@ -1650,9 +1653,9 @@ export function NodeInspector({
                   placeholder={stored.mixed ? "Mixed" : field.placeholder}
                   onChange={(event) => {
                     const text = event.target.value;
-                    if (!numeric) return setData(field.key, text || undefined);
+                    if (!numeric) return setData(field.key, text || undefined, true);
                     const n = Number.parseFloat(text);
-                    setData(field.key, Number.isFinite(n) ? n : undefined);
+                    setData(field.key, Number.isFinite(n) ? n : undefined, true);
                   }}
                 />
               </label>
