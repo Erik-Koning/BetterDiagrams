@@ -40,6 +40,31 @@ describe("taskReportMarkdown", () => {
   });
 });
 
+describe("states of the plan's own", () => {
+  const OWN = validateTemplate({
+    version: 1,
+    settings: { taskStates: ["todo", "doing", "shipped"] },
+    nodes: [
+      { id: "a", label: "A", kind: "task", x: 0, y: 0 },
+      { id: "b", label: "B", kind: "task", x: 0, y: 0, stage: "doing" },
+      { id: "c", label: "C", kind: "task", x: 0, y: 0, done: true },
+      { id: "d", label: "D", kind: "task", x: 0, y: 0, states: ["open", "closed"], done: true },
+    ],
+    edges: [],
+  });
+
+  it("are the status a row carries, first and last included", () => {
+    const status = Object.fromEntries(
+      tasksCsv(OWN, { today: "2026-06-01" }).trim().split("\r\n").slice(1).map((row) => row.split(",")).map((cells) => [cells[0], cells[2]]),
+    );
+    expect(status).toEqual({ a: "Todo", b: "Doing", c: "Shipped", d: "Closed" });
+  });
+
+  it("name a started task in the report", () => {
+    expect(taskReportMarkdown(OWN, { today: "2026-06-01" })).toContain("· doing");
+  });
+});
+
 describe("tasksCsv", () => {
   it("is every task, one row each, with its status and what blocks it", () => {
     const rows = tasksCsv(PLAN, { today: "2026-06-01" }).trim().split("\r\n");

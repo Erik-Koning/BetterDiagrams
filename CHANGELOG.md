@@ -3,6 +3,53 @@
 All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 `packages/better-diagrams/etc/*.api.md`; a change there is listed here.
 
+## 0.3.0 — 2026-11-27
+
+### Added
+
+- Task states. A task is in one of an ordered list of states: `"notDone"` then `"done"` unless the
+  document names its own in `settings.taskStates`, or one task does in `states`. The first is where
+  a task starts and the last counts as done, so blocking, milestones and roll-ups read a custom list
+  as they read the default. A state between the two is stored in `stage`, which now takes any of
+  the task's own states. `taskState`, `taskStatesOf`, `setTaskState`, `setTaskStates`,
+  `taskStateChanges`, `isDoneState`, `taskStateLabel`, `normalizeTaskStates`, `DEFAULT_TASK_STATES`,
+  `MAX_TASK_STATES` and `MAX_TASK_STATE_LENGTH` in the contract. A task with states of
+  its own wears its state as a pill on its card and in picture exports; the task inspector's state
+  picker lists them, and its Edit states… row names them.
+- `onTaskDoneChange(nodeId, state, detail)` on `ArchitectureStudio`: fires once per task whose state
+  changed, whatever changed it. `detail` is `{ previous, done, states, node }`
+  (`TaskStateChangeDetail`).
+- `onDocumentChange(diff, template)`: every edit made in the editor or through its `ref`, itemised
+  as a `TemplateDiff`, positions included.
+- `onNodesMove(moves, template)`: once per finished move (a drag let go, a nudge, Align, Tidy, an
+  undo) with every node it moved and where each was and is. `nodeMoves(before, after)` and
+  `NodeMove` in the contract give the same list for any two versions of a document.
+- `onNodeClick`, `onNodeDoubleClick` and `onEdgeClick`, by document id.
+- `onBeforeChange(next, previous)`: asked before an edit lands. `false` or a string refuses it, a
+  document is committed in its place. Not asked for undo, redo or a new `value`.
+  `isValidConnection({ source, target }, template)` refuses a connection as it is drawn
+  (`StudioConnection`); that gesture only. A refused `ref.setTaskState` returns `false`.
+- `onNodesAdd`, `onNodesDelete`, `onEdgesAdd` and `onEdgesDelete`: what an edit added and removed,
+  one call per edit. `onNodeHover`, `onViewportChange` (when a pan or zoom ends) and `onError` (the
+  message of a failed save, export, import, file open or AI request).
+- `contextMenuItems(target)`: a host's rows in the right-click menu (`StudioMenuItem`,
+  `StudioMenuTarget`).
+- `nodeDecorations`: a badge and a ring on nodes from the host's live state, never saved or
+  exported (`NodeDecoration`).
+- `dataFields`: inputs in the node inspector for keys of a node's `data` bag (`StudioDataField`).
+- On the `ref`: `getTaskState`, `setTaskState`, `getViewport` and `setViewport` (`StudioViewport`).
+- The states panel's **Use for every task in this diagram** names the states once for the whole
+  diagram (`settings.taskStates`), which until now only JSON or `setTaskStates` could.
+- The interactive HTML export shows a task's own state on its card, and its last state once the
+  task is ticked in the page.
+- The task report and the tasks CSV name a task's own states, first and last included, where they
+  said "To do" and "Done".
+
+### Changed
+
+- `DiagramNode.stage` is typed `TaskStage | string`: with states of its own, a task's stage is one
+  of them. The JSON editor no longer flags a stage outside the built-in two; the validation report
+  still names one the task can't be in.
 ## 0.2.0 — 2026-11-16
 
 ### Security

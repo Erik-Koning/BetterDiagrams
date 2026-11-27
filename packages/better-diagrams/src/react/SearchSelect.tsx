@@ -217,6 +217,10 @@ export interface SearchOption {
   title?: string;
   /** A picture before the label — an icon's own glyph, in the icon picker. */
   icon?: ReactNode;
+  /** A muted word after the label in its row — "done" — that isn't part of the name. */
+  hint?: string;
+  /** Not a value but something to do ("Edit states…"): set apart under a rule. */
+  action?: boolean;
 }
 
 export interface SearchSelectProps {
@@ -229,6 +233,8 @@ export interface SearchSelectProps {
   disabled?: boolean;
   title?: string;
   className?: string;
+  /** Words before the value on the button — "state: " — where the value alone wouldn't say what it is. */
+  valuePrefix?: string;
   "aria-label": string;
 }
 
@@ -241,6 +247,7 @@ export function SearchSelect({
   disabled = false,
   title,
   className,
+  valuePrefix,
   "aria-label": label,
 }: SearchSelectProps) {
   const menu = useSearchMenu({ disabled, selected: mixed ? null : value });
@@ -307,7 +314,10 @@ export function SearchSelect({
         {/* A value no row offers (a 12px note, a registry's own icon) shows
             as itself: "Mixed" would claim a disagreement there isn't. */}
         {!mixed && current?.icon ? current.icon : null}
-        <span className="as-searchselect__value">{mixed ? placeholder : (current?.label ?? value)}</span>
+        <span className="as-searchselect__value">
+          {valuePrefix}
+          {mixed ? placeholder : (current?.label ?? value)}
+        </span>
       </button>
       {menu.open ? (
         <div ref={menuRef} className="as-menu as-searchmenu">
@@ -324,7 +334,7 @@ export function SearchSelect({
                 aria-disabled={o.disabled || undefined}
                 title={o.title}
                 data-active={o === active}
-                className={`as-kindmenu__option${o === current ? " as-kindmenu__option--active" : ""}`}
+                className={`as-kindmenu__option${o === current ? " as-kindmenu__option--active" : ""}${o.action ? " as-kindmenu__option--action" : ""}`}
                 // Keep focus in the search box, so the keys go on working
                 // after a row is hovered or pressed.
                 onMouseDown={(event) => event.preventDefault()}
@@ -333,6 +343,7 @@ export function SearchSelect({
               >
                 {o.icon}
                 {o.label}
+                {o.hint ? <span className="as-kindmenu__hint">{o.hint}</span> : null}
               </button>
             ))}
             {!visible.length ? <div className="as-searchmenu__empty">No matches</div> : null}

@@ -473,6 +473,9 @@ export const DEFAULT_SENSITIVE_TAG: RegExp;
 export const DEFAULT_SENSITIVITY_RULES: readonly SensitivityRule[];
 
 // @public
+export const DEFAULT_TASK_STATES: readonly string[];
+
+// @public
 export const DEFAULT_TYPE_ALIASES: Readonly<Record<string, string>>;
 
 // @public
@@ -599,8 +602,9 @@ export interface DiagramNode {
     plain?: boolean;
     priority?: TaskPriority_2;
     providers?: string[];
-    stage?: TaskStage;
+    stage?: TaskStage | (string & {});
     startDate?: DiagramDate;
+    states?: string[];
     status?: NodeStatus;
     storyPoints?: number;
     tags?: string[];
@@ -633,7 +637,8 @@ export type DiagramNodeData = {
     assignees?: string[];
     storyPoints?: number;
     done?: boolean;
-    stage?: TaskStage;
+    stage?: TaskStage | (string & {});
+    states?: string[];
     priority?: TaskPriority_2;
     capacity?: number;
     status?: NodeStatus;
@@ -691,6 +696,7 @@ export interface DiagramSettings {
     layout?: LayoutPreferences;
     notation?: Notation;
     roadmap?: RoadmapAxis;
+    taskStates?: string[];
 }
 
 // @public (undocumented)
@@ -1896,6 +1902,9 @@ export const isBoundaryNodeId: (id: string) => boolean;
 // @public
 export function isDbtManifest(raw: unknown): boolean;
 
+// @public
+export function isDoneState(doc: TaskStateDocument, node: string | TaskStateNode, state: string): boolean;
+
 // @public (undocumented)
 export const isGhostEdgeId: (id: string) => boolean;
 
@@ -2291,6 +2300,12 @@ export const MAX_LINEAGE = 50000;
 // @public
 export const MAX_NODE_FIELDS = 500;
 
+// @public (undocumented)
+export const MAX_TASK_STATE_LENGTH = 40;
+
+// @public
+export const MAX_TASK_STATES = 12;
+
 // @public
 export function measureFlow(template: DiagramTemplate, opts?: MeasureFlowOptions): FlowMetrics;
 
@@ -2448,6 +2463,39 @@ export type NodeInput = Partial<DiagramNode>;
 // @public (undocumented)
 export type NodeKind = (typeof NODE_KINDS)[number] | (string & {});
 
+// @public
+export interface NodeMove {
+    from: {
+        x: number;
+        y: number;
+        parentId: string | null;
+    };
+    // (undocumented)
+    nodeId: string;
+    to: {
+        x: number;
+        y: number;
+        parentId: string | null;
+    };
+}
+
+// @public
+export function nodeMoves(base: {
+    nodes: ReadonlyArray<{
+        id: string;
+        x: number;
+        y: number;
+        parentId?: string | null;
+    }>;
+}, current: {
+    nodes: ReadonlyArray<{
+        id: string;
+        x: number;
+        y: number;
+        parentId?: string | null;
+    }>;
+}): NodeMove[];
+
 // @public (undocumented)
 export type NodeOutline = (typeof NODE_OUTLINES)[number];
 
@@ -2493,6 +2541,9 @@ export function nodeTextWidth(w: number, hasIcon: boolean): number;
 
 // @public
 export function normalizeDate(raw: unknown): DiagramDate | undefined;
+
+// @public
+export function normalizeTaskStates(raw: unknown): string[] | undefined;
 
 // @public
 export function normalizeType(raw: string | undefined, aliases?: Readonly<Record<string, string>>): TypeFamily;
@@ -3327,6 +3378,12 @@ export function sequenceTimelineView(template: SequenceTemplate, at: DiagramDate
 export function setAllZoneProviders(template: DiagramTemplate, provider: string): DiagramTemplate;
 
 // @public
+export function setTaskState<T extends TaskStateDocument>(doc: T, nodeId: string, state: string): T;
+
+// @public
+export function setTaskStates<T extends TaskStateDocument>(doc: T, states: readonly string[] | null, nodeId?: string): T;
+
+// @public
 export function settleLines(template: DiagramTemplate, opts?: SettleOptions): DiagramTemplate;
 
 // @public (undocumented)
@@ -3612,6 +3669,51 @@ export function taskRollups(doc: TaskDocument): Map<string, TaskRollup>;
 export function tasksCsv(t: DiagramTemplate, opts?: {
     today?: string;
 }): string;
+
+// @public
+export function taskState(doc: TaskStateDocument, nodeId: string): string | undefined;
+
+// @public
+export interface TaskStateChange {
+    done: boolean;
+    // (undocumented)
+    nodeId: string;
+    previous: string;
+    state: string;
+}
+
+// @public
+export function taskStateChanges(before: TaskStateDocument, after: TaskStateDocument): TaskStateChange[];
+
+// @public
+export interface TaskStateDocument {
+    // (undocumented)
+    nodes: ReadonlyArray<TaskStateNode>;
+    // (undocumented)
+    settings?: {
+        taskStates?: readonly string[];
+    };
+}
+
+// @public
+export function taskStateLabel(state: string): string;
+
+// @public
+export interface TaskStateNode {
+    // (undocumented)
+    done?: boolean;
+    // (undocumented)
+    id: string;
+    // (undocumented)
+    kind?: string;
+    // (undocumented)
+    stage?: string;
+    // (undocumented)
+    states?: readonly string[];
+}
+
+// @public
+export function taskStatesOf(doc: TaskStateDocument, node: string | TaskStateNode): string[];
 
 // @public
 export interface TaskWorkload {

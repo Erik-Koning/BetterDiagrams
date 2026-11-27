@@ -203,6 +203,21 @@ export {
   taskChanges,
 } from "./tasks";
 export type { TaskDocument, TaskAssignee, TaskWorkload, TaskRollup, TaskChanges } from "./tasks";
+// The states a task can be in: the default pair, a document's own, one task's own.
+export {
+  DEFAULT_TASK_STATES,
+  MAX_TASK_STATES,
+  MAX_TASK_STATE_LENGTH,
+  normalizeTaskStates,
+  taskStatesOf,
+  taskState,
+  isDoneState,
+  setTaskState,
+  setTaskStates,
+  taskStateChanges,
+  taskStateLabel,
+} from "./task-states";
+export type { TaskStateDocument, TaskStateNode, TaskStateChange } from "./task-states";
 export { taskLintRules } from "./task-lint";
 export type { TaskLintOptions } from "./task-lint";
 export { taskReportMarkdown, tasksCsv } from "./task-report";
@@ -526,8 +541,10 @@ export {
   DEFAULT_DIFF_IGNORE,
   diffTemplates,
   diffSequences,
+  nodeMoves,
 } from "./diff";
 export type {
+  NodeMove,
   DiffState,
   ChangedEntry,
   CollectionDiff,

@@ -6,6 +6,7 @@
  */
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -69,16 +70,24 @@ import {
   MILESTONE_KIND,
   TASK_KIND,
 } from "../contract/tasks";
+import {
+  DEFAULT_TASK_STATES,
+  TASK_DONE_INK,
+  normalizeTaskStates,
+  sameTaskStates,
+  taskStateInk,
+  taskStateLabel,
+} from "../contract/task-states";
 import { assigneeSwatch, swatchColor } from "./shapes";
 import { KindSelect } from "./KindSelect";
-import { SearchSelect } from "./SearchSelect";
+import { SearchSelect, type SearchOption } from "./SearchSelect";
 import type { ResolvedRegistry } from "./registry-types";
 import { iconPaths, kindDef, providerDef, relationDef, zoneInk } from "./registry-types";
 import { SvgIcon } from "./icons";
 import { iconKeywords, suggestIcons } from "./icon-suggest";
 import { relationDressing } from "../contract/relations";
 import { useStudio } from "./context";
-import { isNodeLocked, type AlignMode, type EdgePatch, type NodePatch, type PatchOptions } from "./studio-shared";
+import { isNodeLocked, type AlignMode, type EdgePatch, type NodePatch, type PatchOptions, type StudioDataField } from "./studio-shared";
 
 const EMPTY_NAMES: readonly string[] = [];
 
@@ -327,6 +336,7 @@ export function MultiInspector({
   onGroup,
   kindOf,
   assigneeOptions,
+  taskStates,
 }: {
   /** The selected document nodes (ghosts and boundary frames already excluded). */
   nodes: readonly Node[];
@@ -334,6 +344,8 @@ export function MultiInspector({
   kindOf: (nodeId: string) => string | undefined;
   /** Everyone on a task in the document — see NodeInspector. */
   assigneeOptions: readonly string[];
+  /** The document's own task states — see NodeInspector. */
+  taskStates?: readonly string[];
   edges: readonly Edge[];
   zoneIds: string[];
   registry: ResolvedRegistry;
@@ -423,6 +435,7 @@ export function MultiInspector({
           lock={false}
           onPatch={onPatchNodes}
           assigneeOptions={assigneeOptions}
+          taskStates={taskStates}
         />
       ) : null}
 
@@ -754,6 +767,15 @@ const TASK_STAGE_OPTIONS = [
   { value: "in-review", label: "In review" },
   { value: "done", label: "Done" },
 ];
+/** The picker's last row: not a state, but the way to name a task's own. */
+const EDIT_STATES = "\u0000edit-states";
+const EDIT_STATES_OPTION: SearchOption = {
+  value: EDIT_STATES,
+  label: "Edit states…",
+  title: "Name the states this task can be in",
+  action: true,
+};
+const TASK_STAGE_OPTIONS_EDITABLE: SearchOption[] = [...TASK_STAGE_OPTIONS, EDIT_STATES_OPTION];
 const TASK_PRIORITY_OPTIONS = [
   { value: "", label: "No priority" },
   ...TASK_PRIORITIES.map((p) => ({ value: p, label: p.toUpperCase() })),
@@ -841,9 +863,18 @@ export function NodeInspector({
   viewFieldsCount = 0,
   onViewFields,
   assigneeOptions = EMPTY_NAMES,
+  taskStates,
+  onSetDiagramTaskStates,
+  dataFields,
 }: {
+  /** Name the states of every task in the diagram (`settings.taskStates`); null goes back to the default pair. Absent hides the offer. */
+  onSetDiagramTaskStates?: (states: string[] | null, nodeIds: readonly string[]) => void;
+  /** The host's own fields, each editing one key of `node.data` — see `StudioDataField`. */
+  dataFields?: readonly StudioDataField[];
   /** The selection — at least one. */
   nodes: readonly Node[];
+  /** The states every task shares (`settings.taskStates`); absent means "notDone" then "done". */
+  taskStates?: readonly string[];
   /** Everyone already on a task anywhere in the document — the assignee picker's offer. */
   assigneeOptions?: readonly string[];
   /** The row whose name input should take the cursor — the field menu's Edit…. */
@@ -867,6 +898,11 @@ export function NodeInspector({
   const ids = nodes.map((n) => n.id);
   const datas = nodes.map((n) => n.data as DiagramNodeData);
   const single = nodes.length === 1;
+  // The field that names a task's own states is asked for (the picker's last
+  // row), not always there: it is set once, where the state changes daily.
+  const [editStates, setEditStates] = useState(false);
+  const selectionKey = ids.join("\u0000");
+  useEffect(() => setEditStates(false), [selectionKey]);
   const data = datas[0]!;
   const defs = datas.map((d) => kindDef(registry, d.kind));
   const def = defs[0]!;
@@ -939,8 +975,41 @@ export function NodeInspector({
   const storyPoints = read((d) => d.storyPoints);
   const done = read((d) => !!d.done);
   const stage = read((d) => (d.done ? "done" : (d.stage ?? "todo")));
+  // The states the selection can be in: a task's own, else the document's.
+  const inheritedStates = taskStates?.length ? taskStates : DEFAULT_TASK_STATES;
+  const statesOf = (d: DiagramNodeData): readonly string[] => d.states ?? inheritedStates;
+  const states = read((d) => [...statesOf(d)]);
+  const ownStates = read((d) => d.states ?? []);
+  /** A list of the selection's own, when it isn't the built-in pair with its built-in stages. */
+  const customStates = !states.mixed && !sameTaskStates(states.value, undefined) ? states.value : null;
+  const stateIn = (d: DiagramNodeData, list: readonly string[]): string => {
+    if (d.done) return list[list.length - 1]!;
+    const at = d.stage ? list.indexOf(d.stage) : -1;
+    return at > 0 && at < list.length - 1 ? list[at]! : list[0]!;
+  };
+  const state = read((d) => stateIn(d, statesOf(d)));
+  /** How a state is stored: the check for the last, a stage for one between, nothing for the first. */
+  const stateFields = (next: string, list: readonly string[]): Partial<DiagramNodeData> => {
+    const at = list.indexOf(next);
+    if (at === list.length - 1) return { done: true, stage: undefined };
+    return { done: undefined, stage: at > 0 ? next : undefined };
+  };
   const priority = read((d) => d.priority ?? "");
   const capacity = read((d) => d.capacity);
+  // The host's fields this selection qualifies for — every node's kind, or none.
+  const shownDataFields = (dataFields ?? []).filter(
+    (field) => !field.kinds || datas.every((d) => field.kinds!.includes(d.kind as string)),
+  );
+  /** Write one key of each node's `data` bag; undefined takes the key away, and an emptied bag with it. */
+  const setData = (key: string, value: unknown, typed = false) =>
+    patch(
+      (d) => {
+        const { [key]: _old, ...rest } = d.data ?? {};
+        const next = value === undefined ? rest : { ...rest, [key]: value };
+        return { data: Object.keys(next).length ? next : undefined };
+      },
+      typed ? { typing: `data.${key}` } : undefined,
+    );
   // Icons the box's own words point at — one box's, so a multi-selection of
   // different things isn't offered one guess for all.
   const iconPicks = single ? suggestIcons(`${data.label} ${data.description ?? ""}`, registry.iconNames) : [];
@@ -1043,6 +1112,81 @@ export function NodeInspector({
 
       {allTasks ? (
         <InspectorSection caption="Task">
+          <span className="as-statesanchor">
+          {customStates ? (
+            <SearchSelect
+              value={state.value}
+              mixed={state.mixed}
+              options={customStates.map((value, i): SearchOption => ({
+                value,
+                // The last state is the one that counts as done: say so where it is chosen.
+                label: taskStateLabel(value),
+                ...(i === customStates.length - 1 ? { hint: "done" } : {}),
+                // The dot its pill wears on the card, so picker and card read as one thing.
+                icon: (
+                  <span
+                    className={`as-statedot${i === 0 ? " as-statedot--first" : ""}`}
+                    style={
+                      i === 0
+                        ? undefined
+                        : { background: i === customStates.length - 1 ? TASK_DONE_INK : taskStateInk(i) }
+                    }
+                    aria-hidden="true"
+                  />
+                ),
+              })).concat(EDIT_STATES_OPTION)}
+              onChange={(next) => (next === EDIT_STATES ? setEditStates(true) : patch(stateFields(next, customStates)))}
+              valuePrefix="state: "
+              aria-label="Task status"
+              title="The state the task is in — the last one counts as done"
+            />
+          ) : states.mixed ? (
+            // Tasks with different lists share no picker — only the way to give them one.
+            <button type="button" className="as-btn" onClick={() => setEditStates(true)} title="Name the states these tasks can be in">
+              Edit states…
+            </button>
+          ) : (
+            <SearchSelect
+              value={stage.value}
+              mixed={stage.mixed}
+              options={TASK_STAGE_OPTIONS_EDITABLE}
+              valuePrefix="state: "
+              onChange={(next) =>
+                // Done is the corner check; the others are an open task's stage.
+                next === EDIT_STATES
+                  ? setEditStates(true)
+                  : patch(
+                      next === "done"
+                        ? { done: true, stage: undefined }
+                        : { done: undefined, stage: next === "todo" ? undefined : (next as TaskStage) },
+                    )
+              }
+              aria-label="Task status"
+              title="Where the task stands — to do, in progress, in review, or done"
+            />
+          )}
+          {editStates ? (
+          <TaskStatesEditor
+            states={ownStates.mixed ? [] : ownStates.value}
+            mixed={ownStates.mixed}
+            onChange={(next) =>
+              // Each task keeps its state when the new list still names it; a
+              // finished one stays finished, any other starts over.
+              patch((d) => {
+                const list = next && !sameTaskStates(next, inheritedStates) ? next : undefined;
+                const now = list ?? inheritedStates;
+                const was = stateIn(d, statesOf(d));
+                const kept = !d.done && now.includes(was) ? was : d.done ? now[now.length - 1]! : now[0]!;
+                return { states: list, ...stateFields(kept, now) };
+              })
+            }
+            inherited={inheritedStates}
+            fromDiagram={!!taskStates?.length}
+            onChangeDiagram={onSetDiagramTaskStates ? (next) => onSetDiagramTaskStates(next ?? null, ids) : undefined}
+            onClose={() => setEditStates(false)}
+          />
+          ) : null}
+          </span>
           <input
             className="as-input as-inspector__points"
             type="number"
@@ -1058,21 +1202,6 @@ export function NodeInspector({
             title="Estimate in story points — shown in the card's header"
           />
           <SearchSelect
-            value={stage.value}
-            mixed={stage.mixed}
-            options={TASK_STAGE_OPTIONS}
-            onChange={(next) =>
-              // Done is the corner check; the others are an open task's stage.
-              patch(
-                next === "done"
-                  ? { done: true, stage: undefined }
-                  : { done: undefined, stage: next === "todo" ? undefined : (next as TaskStage) },
-              )
-            }
-            aria-label="Task status"
-            title="Where the task stands — to do, in progress, in review, or done"
-          />
-          <SearchSelect
             value={priority.value}
             mixed={priority.mixed}
             options={TASK_PRIORITY_OPTIONS}
@@ -1080,13 +1209,17 @@ export function NodeInspector({
             aria-label="Priority"
             title="How urgent — P0 the most; shown as a badge on the card"
           />
-          <SharedCheck
-            checked={done.value}
-            mixed={done.mixed}
-            label="Done"
-            title="Finished — the card's corner check turns green, and the tasks waiting on it are no longer blocked"
-            onChange={(checked) => patch(checked ? { done: true, stage: undefined } : { done: undefined })}
-          />
+          {customStates ? null : (
+            // With states of its own the picker's last one is "done"; a second
+            // control saying the same thing would only raise the question.
+            <SharedCheck
+              checked={done.value}
+              mixed={done.mixed}
+              label="Done"
+              title="Finished — the card's corner check turns green, and the tasks waiting on it are no longer blocked"
+              onChange={(checked) => patch(checked ? { done: true, stage: undefined } : { done: undefined })}
+            />
+          )}
         </InspectorSection>
       ) : null}
 
@@ -1473,6 +1606,68 @@ export function NodeInspector({
         </InspectorSection>
       ) : null}
 
+      {shownDataFields.length ? (
+        <InspectorSection caption="Data">
+          {shownDataFields.map((field) => {
+            const stored = read((d) => d.data?.[field.key]);
+            const value = stored.mixed ? undefined : stored.value;
+            if (field.type === "checkbox") {
+              return (
+                <label className="as-check" key={field.key}>
+                  <input
+                    type="checkbox"
+                    checked={value === true}
+                    onChange={(event) => setData(field.key, event.target.checked ? true : undefined)}
+                  />
+                  {field.label}
+                </label>
+              );
+            }
+            if (field.type === "select") {
+              return (
+                <label className="as-datafield" key={field.key}>
+                  <span className="as-datafield__label">{field.label}</span>
+                  <select
+                    className="as-select as-datafield__input"
+                    value={typeof value === "string" ? value : ""}
+                    onChange={(event) => setData(field.key, event.target.value || undefined)}
+                  >
+                    <option value="">{stored.mixed ? "Mixed" : (field.placeholder ?? "None")}</option>
+                    {(field.options ?? []).map((option) => {
+                      const o = typeof option === "string" ? { value: option, label: option } : option;
+                      return (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+              );
+            }
+            const numeric = field.type === "number";
+            return (
+              <label className="as-datafield" key={field.key}>
+                <span className="as-datafield__label">{field.label}</span>
+                <input
+                  className="as-input as-datafield__input"
+                  type={numeric ? "number" : "text"}
+                  step={numeric ? "any" : undefined}
+                  value={typeof value === "string" || typeof value === "number" ? value : ""}
+                  placeholder={stored.mixed ? "Mixed" : field.placeholder}
+                  onChange={(event) => {
+                    const text = event.target.value;
+                    if (!numeric) return setData(field.key, text || undefined, true);
+                    const n = Number.parseFloat(text);
+                    setData(field.key, Number.isFinite(n) ? n : undefined, true);
+                  }}
+                />
+              </label>
+            );
+          })}
+        </InspectorSection>
+      ) : null}
+
       {lock ? (
         <button
           type="button"
@@ -1486,6 +1681,145 @@ export function NodeInspector({
         </button>
       ) : null}
     </>
+  );
+}
+
+/**
+ * The states a task can be in, edited in a small panel that hangs from the
+ * state picker: one comma-separated input, with each state's dot drawn as it
+ * is typed. It shows a state as the card and the picker do ("Ready for QA"),
+ * and a name left as it was keeps the id it stood for, so a task doesn't lose
+ * its place. Applied on Enter or Apply — a list is only a list once it is
+ * finished, and "todo, do" must not be judged a keystroke before "todo, doing".
+ */
+function TaskStatesEditor({
+  states,
+  inherited,
+  fromDiagram,
+  mixed,
+  onChange,
+  onChangeDiagram,
+  onClose,
+}: {
+  /** Name the states of every task in the diagram instead; absent hides the choice. */
+  onChangeDiagram?: (states: string[] | undefined) => void;
+  /** The selection's own list; empty when it inherits. */
+  states: readonly string[];
+  /** What it inherits: the diagram's list, else the default pair. */
+  inherited: readonly string[];
+  /** Whether `inherited` is the diagram's own (`settings.taskStates`). */
+  fromDiagram: boolean;
+  mixed: boolean;
+  onChange: (states: string[] | undefined) => void;
+  onClose: () => void;
+}) {
+  // Shown with the list in force, so "every task" starts from what is there.
+  const joined = states.map(taskStateLabel).join(", ");
+  const [everyTask, setEveryTask] = useState(false);
+  const [draft, setDraft] = useState(joined);
+  // A change from outside — undo — resets the draft.
+  useEffect(() => setDraft(joined), [joined]);
+  const parse = (text: string) => {
+    const idOf = new Map(states.map((id) => [taskStateLabel(id), id]));
+    return normalizeTaskStates(text.split(/,|→|->/).map((name) => idOf.get(name.trim()) ?? name));
+  };
+  const typed = parse(draft);
+  // What the task would have: the list as typed, else what it inherits.
+  const preview = typed ?? inherited;
+  const source = fromDiagram ? "diagram" : "default";
+  const apply = () => {
+    const text = typed ? typed.map(taskStateLabel).join(", ") : "";
+    if (everyTask && onChangeDiagram) onChangeDiagram(typed);
+    else if (text !== joined) onChange(typed);
+    onClose();
+  };
+  // Kept on screen: the picker may sit at the bar's right end.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    el.style.transform = "";
+    const over = el.getBoundingClientRect().right - (window.innerWidth - 16);
+    if (over > 0) el.style.transform = `translateX(${-over}px)`;
+  });
+  return (
+    <div
+      ref={panelRef}
+      className="as-statespop"
+      role="dialog"
+      aria-label="Task states"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <div className="as-statespop__title">
+        States for {everyTask ? "every task in this diagram" : mixed ? "these tasks" : "this task"}
+      </div>
+      <input
+        className="as-input as-statespop__input"
+        value={draft}
+        placeholder={mixed ? "Mixed" : inherited.map(taskStateLabel).join(", ")}
+        autoFocus
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            apply();
+          }
+        }}
+        aria-label="Task states"
+      />
+      <div className="as-statespop__preview" aria-hidden="true">
+        {preview.map((id, i) => (
+          <span key={id} className="as-statespop__chip">
+            <span
+              className={`as-statedot${i === 0 ? " as-statedot--first" : ""}`}
+              style={i === 0 ? undefined : { background: i === preview.length - 1 ? TASK_DONE_INK : taskStateInk(i) }}
+            />
+            {taskStateLabel(id)}
+            {i === preview.length - 1 ? <span className="as-kindmenu__hint as-statespop__done">done</span> : null}
+          </span>
+        ))}
+      </div>
+      <div className="as-statespop__hint">
+        {typed || !draft.trim()
+          ? `Comma-separated, in order. A task starts in the first state and is done in the last.${
+              typed ? "" : ` Empty uses the ${source} states.`
+            }`
+          : "A task needs at least two states."}
+      </div>
+      {onChangeDiagram ? (
+        <label className="as-check as-statespop__scope" title="Name the states once for the whole diagram. A task with a list of its own keeps it.">
+          <input type="checkbox" checked={everyTask} onChange={(event) => setEveryTask(event.target.checked)} />
+          Use for every task in this diagram
+        </label>
+      ) : null}
+      <div className="as-statespop__actions">
+        {joined && !everyTask ? (
+          <button
+            type="button"
+            className="as-btn"
+            title={`Drop this list and use the ${source} states: ${inherited.map(taskStateLabel).join(", ")}`}
+            onClick={() => {
+              onChange(undefined);
+              onClose();
+            }}
+          >
+            Use {source} states
+          </button>
+        ) : null}
+        <span className="as-statespop__spacer" />
+        <button type="button" className="as-btn" onClick={onClose}>
+          Cancel
+        </button>
+        <button type="button" className="as-btn as-btn--primary" onClick={apply} disabled={!!draft.trim() && !typed}>
+          Apply
+        </button>
+      </div>
+    </div>
   );
 }
 

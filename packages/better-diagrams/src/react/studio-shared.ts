@@ -37,6 +37,29 @@ export type EdgePatch = Partial<DiagramEdgeData> | ((data: DiagramEdgeData) => P
  * undo as the one change they were, the way a run of typing does. A click on
  * a swatch is a choice of its own and leaves it off.
  */
+/**
+ * A field of the host's own in the node inspector — see `dataFields`. It
+ * edits `node.data[key]`; an emptied field removes the key.
+ */
+export interface StudioDataField {
+  /** The key in the node's `data` bag. */
+  key: string;
+  label: string;
+  /** What kind of input to show. Default "text". */
+  type?: "text" | "number" | "checkbox" | "select";
+  /** A select's choices: the stored value, or the value and what to call it. */
+  options?: ReadonlyArray<string | { value: string; label: string }>;
+  /** Show the field only on these node kinds. Default: every kind. */
+  kinds?: readonly string[];
+  placeholder?: string;
+}
+
 export interface PatchOptions {
   continuous?: boolean;
+  /**
+   * Names the field being typed in, for a patch written as a function — so
+   * a run of keystrokes there undoes as one edit, as it does for a plain
+   * patch of a typed field.
+   */
+  typing?: string;
 }

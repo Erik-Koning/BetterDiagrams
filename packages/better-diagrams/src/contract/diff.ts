@@ -96,6 +96,39 @@ function diffCollection<T extends { id: string }>(
   return { added, removed, changed };
 }
 
+/** One node's change of place between two versions of a document — see `nodeMoves`. */
+export interface NodeMove {
+  nodeId: string;
+  /** Where it was: `x`, `y` as the document stores them (relative to its container), and that container. */
+  from: { x: number; y: number; parentId: string | null };
+  /** Where it is now, in the same terms. */
+  to: { x: number; y: number; parentId: string | null };
+}
+
+/**
+ * Every node that sits somewhere else in `current` than it did in `base`:
+ * its `x` or `y` changed, or it went into or out of a container. Positions
+ * are the document's own — relative to the node's container — so a card
+ * carried along inside a dragged frame hasn't moved and isn't listed; the
+ * frame is. A node in only one of the two is added or removed, not moved.
+ * In `current`'s order.
+ */
+export function nodeMoves(
+  base: { nodes: ReadonlyArray<{ id: string; x: number; y: number; parentId?: string | null }> },
+  current: { nodes: ReadonlyArray<{ id: string; x: number; y: number; parentId?: string | null }> },
+): NodeMove[] {
+  const was = new Map(base.nodes.map((n) => [n.id, n]));
+  const out: NodeMove[] = [];
+  for (const n of current.nodes) {
+    const before = was.get(n.id);
+    if (!before) continue;
+    const from = { x: before.x, y: before.y, parentId: before.parentId ?? null };
+    const to = { x: n.x, y: n.y, parentId: n.parentId ?? null };
+    if (from.x !== to.x || from.y !== to.y || from.parentId !== to.parentId) out.push({ nodeId: n.id, from, to });
+  }
+  return out;
+}
+
 /** Compare two templates by id. `opts.ignore` replaces the positional default. */
 export function diffTemplates(
   base: DiagramTemplate,

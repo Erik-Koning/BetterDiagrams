@@ -34,6 +34,7 @@ import { normalizeDate, type DiagramDate } from "./timeline";
 import { parseLlmJsonReport } from "./json-repair";
 import { approxTextWidth, wrappedLineCount } from "./text";
 import { MILESTONE_KIND, TASK_KIND } from "./tasks";
+import { normalizeTaskStates, sameTaskStates } from "./task-states";
 import { validatePaths, type DiagramPath, type PathGlow } from "./paths";
 import { validateAnalyses, type SavedAnalysis } from "./analyses";
 import { validateLineage, type LineageLink } from "./lineage-links";
@@ -1019,9 +1020,17 @@ export interface DiagramNode {
   /**
    * Where an open task stands in its workflow: absent is "to do", and a
    * done task has finished with it (checking it done clears this). Drawn in
-   * the eyebrow and filterable. See TASK_STAGES.
+   * the eyebrow and filterable. See TASK_STAGES. When the task has states of
+   * its own (`states`, or the document's `settings.taskStates`) this is the
+   * state it is in, when that is neither the first nor the last.
    */
-  stage?: TaskStage;
+  stage?: TaskStage | (string & {});
+  /**
+   * The states this task can be in, in order, when they differ from the
+   * document's (`settings.taskStates`, else "notDone" then "done"). The
+   * first is where it starts and the last counts as done. See task-states.ts.
+   */
+  states?: string[];
   /** How urgent a task is, P0 the most. A badge in the eyebrow. See TASK_PRIORITIES. */
   priority?: TaskPriority;
   /**
@@ -1248,6 +1257,13 @@ export interface DiagramSettings {
    * entry has no limit.
    */
   capacity?: Record<string, number>;
+  /**
+   * The states every task can be in, in order — "todo", "doing", "review",
+   * "shipped". The first is where a task starts and the last counts as done.
+   * Absent means "notDone" then "done"; one task may name its own in
+   * `states`. See task-states.ts.
+   */
+  taskStates?: string[];
 }
 
 export interface DiagramTemplate {
@@ -1351,6 +1367,7 @@ const SETTINGS_KEY_MAP: Record<keyof DiagramSettings, true> = {
   htmlLater: true,
   htmlLegend: true,
   capacity: true,
+  taskStates: true,
 };
 export const SETTINGS_KEYS: readonly string[] = Object.keys(SETTINGS_KEY_MAP);
 
@@ -1383,6 +1400,7 @@ const NODE_KEY_MAP: Record<keyof DiagramNode, true> = {
   storyPoints: true,
   done: true,
   stage: true,
+  states: true,
   priority: true,
   capacity: true,
   status: true,
@@ -1564,7 +1582,7 @@ Rules:
 - "point" = the bare endpoint of a dangling arrow: a tiny dot an edge can end on, for an arrow into empty space (a dependency on something that doesn't exist yet). label ""${geo ? ", w=h=12" : ""}; use ONLY as an edge's source/target, and only when the user asks for an open-ended/abstract arrow.
 - FLOW CHARTS: "terminator" (stadium) for start/end, "decision" (diamond) for branches — label its outgoing edges "yes"/"no" — "io" (parallelogram) for input/output, "service" for process steps. An edge may target its own source ("source"==="target") to draw a retry/self loop. Use these kinds only for flow charts, not architecture.
 - LANGUAGE MODELS: "lm-small" (on-device or a few B params), "lm-medium" (self-hosted mid-size), "llm" (frontier, typically hosted) — pick by the weight class the design depends on, and name the actual model in the description ("Phi-3 mini", "Llama 3 8B", "Claude Opus 5"). When the box is the cloud SERVICE hosting a model rather than the model itself, prefer that provider's own model kind where one is listed below.
-- TASKS: "task" = a unit of work, like a ticket. label = the summary; description = the detail (may span lines); "storyPoints" = the estimate as a number; "assignees" = the people's names as written ("Ana","Ravi"); "done":true only for finished work; "stage":"in-progress"|"in-review" for open work that has started; "priority":"p0"…"p3" when the user ranks urgency; "date" is a task's due date. "milestone" = a checkpoint (a release, a sign-off) that is reached when everything feeding it is done; give it a "date" and no assignees. A "group" of tasks is a phase or sprint; "capacity" on it caps its story points, and settings.capacity {"Name": points} caps each person's open points. An ordinary edge A→B means A is a PREREQUISITE of B (the arrow points at the next task); "relation":"dependency" marks a dependency on a task elsewhere in the plan, drawn only when either end is hovered. Use "task" only for work planning, and omit storyPoints/assignees/done when the user gives none.
+- TASKS: "task" = a unit of work, like a ticket. label = the summary; description = the detail (may span lines); "storyPoints" = the estimate as a number; "assignees" = the people's names as written ("Ana","Ravi"); "done":true only for finished work; "stage":"in-progress"|"in-review" for open work that has started; "priority":"p0"…"p3" when the user ranks urgency; ONLY when the user names their own workflow states, list them in order in settings.taskStates (["todo","doing","review","shipped"]: the first is where a task starts, the last counts as done), then a task in a state between says "stage":"review" and a task in the last says "done":true; "date" is a task's due date. "milestone" = a checkpoint (a release, a sign-off) that is reached when everything feeding it is done; give it a "date" and no assignees. A "group" of tasks is a phase or sprint; "capacity" on it caps its story points, and settings.capacity {"Name": points} caps each person's open points. An ordinary edge A→B means A is a PREREQUISITE of B (the arrow points at the next task); "relation":"dependency" marks a dependency on a task elsewhere in the plan, drawn only when either end is hovered. Use "task" only for work planning, and omit storyPoints/assignees/done when the user gives none.
 - Edge "startHead"/"endHead" (${EDGE_HEADS.join("|")}) override the glyph at each end when the user asks for UML-style notation (hollow "diamond" at the source = aggregation, "diamond-filled" at the source = composition, hollow "triangle" at the target = generalization/inheritance, "open" arrow = dependency); omit for normal arrows.
 - ${geo ? "Regular nodes: w 160-200, h 64-84. Pick" : "Pick"} a fitting icon. description is an optional one-line tech detail (C4 style, e.g. "Node.js / Express").
 - Edge style semantics: dashed = async/event-driven, dotted = cache/optional/telemetry, solid = synchronous. Vary color by concern (e.g. amber = data, violet = messaging).${geo ? " labelT (0.15-0.85) slides the label along the arrow to avoid collisions." : ""}
@@ -1677,6 +1695,8 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
   // `api_2`, the duplicate becomes `api_3` and the real `api_2` keeps its own
   // id — along with the edges and children that point at it.
   const claimed = new Set<string>(rawNodes.map((n) => idOf(n.id) as string));
+  // The states every task shares, read ahead of the nodes that are judged by them.
+  const documentTaskStates = documentTaskStatesOf(r.settings);
 
   const seen = new Set<string>();
   const nodes: DiagramNode[] = rawNodes
@@ -1786,8 +1806,7 @@ export function validateTemplate(raw: unknown, opts: ValidateOptions = {}): Diag
         ...(storyPoints !== undefined ? { storyPoints } : {}),
         // Open is the default, so only a finished task says anything — and a
         // finished task has left its workflow, so its stage goes with it.
-        ...(n.done === true ? { done: true } : {}),
-        ...(n.done !== true && TASK_STAGES.includes(n.stage as TaskStage) ? { stage: n.stage as TaskStage } : {}),
+        ...taskStateFields(n as unknown as Record<string, unknown>, documentTaskStates),
         ...(TASK_PRIORITIES.includes(n.priority as TaskPriority) ? { priority: n.priority as TaskPriority } : {}),
         // A sprint's or phase's capacity — a frame concept, like collapse.
         ...(containerSet.has(kind) && storyPointsOf(n.capacity) ? { capacity: storyPointsOf(n.capacity) } : {}),
@@ -1981,6 +2000,40 @@ function validateDataBag(raw: unknown): Record<string, unknown> | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
+/** `settings.taskStates` as the document keeps it: absent when it only restates the default. */
+function documentTaskStatesOf(settings: unknown): string[] | undefined {
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return undefined;
+  const states = normalizeTaskStates((settings as Record<string, unknown>).taskStates);
+  return states && !sameTaskStates(states, undefined) ? states : undefined;
+}
+
+/**
+ * A task's state as the document stores it: `done` for its last state, `stage`
+ * for one between, nothing for its first — and `states` when the node names a
+ * list of its own. Open is the default, so only a finished task says `done`,
+ * and a finished task has left its workflow, so its stage goes with it.
+ */
+function taskStateFields(
+  n: Record<string, unknown>,
+  shared: string[] | undefined,
+): { done?: true; stage?: string; states?: string[] } {
+  const named = normalizeTaskStates(n.states);
+  const own = named && !sameTaskStates(named, shared) ? named : undefined;
+  const states = own ?? shared;
+  const out: { done?: true; stage?: string; states?: string[] } = {};
+  if (!states) {
+    // No list of its own: the check, and the built-in stages of an open task.
+    if (n.done === true) out.done = true;
+    else if (TASK_STAGES.includes(n.stage as TaskStage)) out.stage = n.stage as TaskStage;
+  } else {
+    const at = typeof n.stage === "string" ? states.indexOf(n.stage.trim()) : -1;
+    if (n.done === true || at === states.length - 1) out.done = true;
+    else if (at > 0) out.stage = states[at]!;
+  }
+  if (own) out.states = own;
+  return out;
+}
+
 /**
  * Coerce the settings object. Strict where `meta` is lenient: a key the
  * schema doesn't define is dropped, a value outside its vocabulary is dropped,
@@ -2055,6 +2108,8 @@ function validateSettings(raw: unknown): DiagramSettings | undefined {
     }
     if (Object.keys(capacity).length) out.capacity = capacity;
   }
+  const taskStates = documentTaskStatesOf(r);
+  if (taskStates) out.taskStates = taskStates;
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -3493,7 +3548,8 @@ export type DiagramNodeData = {
   assignees?: string[];
   storyPoints?: number;
   done?: boolean;
-  stage?: TaskStage;
+  stage?: TaskStage | (string & {});
+  states?: string[];
   priority?: TaskPriority;
   capacity?: number;
   status?: NodeStatus;
@@ -3948,6 +4004,7 @@ export function toReactFlow(
           ...(n.storyPoints !== undefined ? { storyPoints: n.storyPoints } : {}),
           ...(n.done ? { done: true } : {}),
           ...(n.stage ? { stage: n.stage } : {}),
+          ...(n.states ? { states: n.states } : {}),
           ...(n.priority ? { priority: n.priority } : {}),
           ...(n.capacity !== undefined ? { capacity: n.capacity } : {}),
           ...(n.status ? { status: n.status } : {}),
@@ -4200,6 +4257,7 @@ export function fromReactFlow(
       storyPoints: n.data?.storyPoints,
       done: n.data?.done,
       stage: n.data?.stage,
+      states: n.data?.states,
       priority: n.data?.priority,
       capacity: n.data?.capacity,
       status: n.data?.status,

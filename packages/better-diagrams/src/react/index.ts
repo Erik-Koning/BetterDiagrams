@@ -10,10 +10,17 @@ export { ArchitectureStudio } from "./ArchitectureStudio";
 export type {
   ArchitectureStudioProps,
   StudioHandle,
+  StudioConnection,
+  StudioMenuItem,
+  StudioMenuTarget,
   StudioSelection,
   StudioSlotContext,
   StudioUpdateOptions,
+  StudioViewport,
+  TaskStateChangeDetail,
 } from "./ArchitectureStudio";
+export type { NodeDecoration } from "./context";
+export type { StudioDataField } from "./studio-shared";
 export { DiffCanvas } from "./DiffCanvas";
 // The field grid on its own, for a host that opens it from chrome of its own.
 export { FieldGridModal } from "./FieldGridModal";

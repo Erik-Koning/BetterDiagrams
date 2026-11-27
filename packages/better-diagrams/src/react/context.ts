@@ -6,7 +6,7 @@
  * the registry into every node's `data` — out of the serialised document.
  */
 import type { Notation } from "../contract/schema";
-import { createContext, useContext } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 import { createRegistry } from "./create-registry";
 import type { ZoneBox } from "../contract/schema";
 import type { FieldRef } from "../contract/fields";
@@ -14,8 +14,25 @@ import type { ResolvedRegistry } from "./registry-types";
 import type { StudioMode } from "./theme";
 import type { TaskRollup } from "../contract/tasks";
 
+/**
+ * A mark a host puts on a node that is its own, not the document's — see
+ * `nodeDecorations`. Shown on the canvas only: never saved or exported.
+ */
+export interface NodeDecoration {
+  /** Shown in the card's top corner: a short word, a count, an avatar. */
+  badge?: ReactNode;
+  /** A ring round the node, in any CSS colour. */
+  ring?: string;
+  /** The badge's tooltip. */
+  title?: string;
+  /** A class added to the node, for styling of the host's own. */
+  className?: string;
+}
+
 export interface StudioContextValue {
   registry: ResolvedRegistry;
+  /** The host's marks, by document node id — see `NodeDecoration`. */
+  nodeDecorations?: Readonly<Record<string, NodeDecoration>>;
   /** Editing is disabled; renderers hide affordances and block inline edits. */
   readOnly: boolean;
   /**
@@ -127,6 +144,8 @@ export interface StudioContextValue {
    * work on another level still says so. Absent, no card is blocked.
    */
   blockedIds?: ReadonlyMap<string, readonly string[]>;
+  /** The states every task shares (`settings.taskStates`); absent means the default pair. */
+  taskStates?: readonly string[];
   /** A task's current label by document id — for naming blockers. Stable. */
   taskLabelOf?: (id: string) => string;
   /** Work past its date and unfinished — a task due, a milestone not reached. */

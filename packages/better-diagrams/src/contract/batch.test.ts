@@ -911,6 +911,7 @@ describe("settings.groupContents — the document-wide fold", () => {
       "htmlLater",
       "htmlLegend",
       "capacity",
+      "taskStates",
     ]);
   });
 

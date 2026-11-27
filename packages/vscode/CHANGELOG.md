@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 — 2026-11-27
+
+The library's 0.3.0 in the editor.
+
+- **Task states.** A task flow can name its own states (`todo, doing, review, shipped`) instead of
+  done and not done. The task inspector's state picker lists them, its **Edit states…** row names
+  them for one task or, with **Use for every task in this diagram**, for all of them, and each
+  task wears its state as a pill. The first state is where a task starts and the last counts as
+  done, so blocking, milestones and roll-ups work as before.
+- The schema and the brief the agent tools hand out describe `settings.taskStates` and a task's
+  own `states`, and `validate_better_diagram` names a stage a task can't be in.
+- The interactive HTML export, the task report and the tasks CSV show a task's own states.
+
 ## 0.2.0 — 2026-11-16
 
 - **Arrange like the web app does**, the library's 0.2.0 in the editor: Best fit, Left to right,
