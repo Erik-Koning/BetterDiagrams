@@ -24,12 +24,21 @@ import {
   workDone,
 } from "./tasks";
 
-import { taskStateLabel } from "./task-states";
+import { taskStateLabel, taskStatePill } from "./task-states";
 
 const STAGE_TEXT: Record<string, string> = { "in-progress": "In progress", "in-review": "In review" };
 
-/** A task's status in words: Done, In progress, In review, or To do — or the state it names of its own. */
-function statusOf(n: { done?: boolean; stage?: string }): string {
+/**
+ * A task's status in words: Done, In progress, In review, or To do — or,
+ * where the task or the document (`shared`) names states of its own, the
+ * state it is in by that name, first and last included.
+ */
+function statusOf(
+  n: { id: string; done?: boolean; stage?: string; states?: readonly string[] },
+  shared?: readonly string[],
+): string {
+  const own = taskStatePill(n, shared);
+  if (own) return own.label;
   return n.done ? "Done" : (STAGE_TEXT[n.stage ?? ""] ?? (n.stage ? taskStateLabel(n.stage) : "To do"));
 }
 
@@ -93,7 +102,7 @@ export function taskReportMarkdown(t: DiagramTemplate, opts: TaskReportOptions =
   const started = tasks.filter((n) => !n.done && n.stage);
   if (started.length) {
     out.push("## In progress", "");
-    for (const n of started) out.push(`${item(n)} · ${statusOf(n).toLowerCase()}`);
+    for (const n of started) out.push(`${item(n)} · ${statusOf(n, t.settings?.taskStates).toLowerCase()}`);
     out.push("");
   }
   const readyList = tasks.filter((n) => ready.has(n.id));
@@ -146,7 +155,7 @@ export function tasksCsv(t: DiagramTemplate, opts: { today?: string } = {}): str
     .map((n) => [
       n.id,
       n.label,
-      statusOf(n),
+      statusOf(n, t.settings?.taskStates),
       n.priority ? n.priority.toUpperCase() : "",
       n.storyPoints !== undefined ? String(n.storyPoints) : "",
       (n.assignees ?? []).join("; "),

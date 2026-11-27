@@ -115,7 +115,7 @@ import {
 } from "../contract/zones";
 import { lintTemplate, type LintFinding } from "../contract/lint";
 import { diffTemplates, nodeMoves, type NodeMove, type TemplateDiff } from "../contract/diff";
-import { setTaskState, taskState, taskStateChanges, taskStatesOf } from "../contract/task-states";
+import { setTaskState, setTaskStates, taskState, taskStateChanges, taskStatesOf } from "../contract/task-states";
 import {
   openingCursor,
   templateTimeline,
@@ -10415,6 +10415,15 @@ function StudioInner({
                   onViewFields={(nodeId) => setFieldGrid({ nodeId })}
                   assigneeOptions={assigneeNames}
                   taskStates={sharedTaskStates}
+                  onSetDiagramTaskStates={(states, ids) => {
+                    // The diagram's list, and the selection following it:
+                    // a list of its own would go on winning over it.
+                    let next = setTaskStates(templateRef.current, states);
+                    for (const id of ids) {
+                      if (next.nodes.some((n) => n.id === id)) next = setTaskStates(next, null, id);
+                    }
+                    applyTemplate(next, { fit: false });
+                  }}
                   dataFields={dataFields}
                 />
               ) : null}

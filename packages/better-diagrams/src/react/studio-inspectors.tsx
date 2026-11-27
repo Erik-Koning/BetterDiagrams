@@ -864,8 +864,11 @@ export function NodeInspector({
   onViewFields,
   assigneeOptions = EMPTY_NAMES,
   taskStates,
+  onSetDiagramTaskStates,
   dataFields,
 }: {
+  /** Name the states of every task in the diagram (`settings.taskStates`); null goes back to the default pair. Absent hides the offer. */
+  onSetDiagramTaskStates?: (states: string[] | null, nodeIds: readonly string[]) => void;
   /** The host's own fields, each editing one key of `node.data` — see `StudioDataField`. */
   dataFields?: readonly StudioDataField[];
   /** The selection — at least one. */
@@ -1179,6 +1182,7 @@ export function NodeInspector({
             }
             inherited={inheritedStates}
             fromDiagram={!!taskStates?.length}
+            onChangeDiagram={onSetDiagramTaskStates ? (next) => onSetDiagramTaskStates(next ?? null, ids) : undefined}
             onClose={() => setEditStates(false)}
           />
           ) : null}
@@ -1694,8 +1698,11 @@ function TaskStatesEditor({
   fromDiagram,
   mixed,
   onChange,
+  onChangeDiagram,
   onClose,
 }: {
+  /** Name the states of every task in the diagram instead; absent hides the choice. */
+  onChangeDiagram?: (states: string[] | undefined) => void;
   /** The selection's own list; empty when it inherits. */
   states: readonly string[];
   /** What it inherits: the diagram's list, else the default pair. */
@@ -1706,7 +1713,9 @@ function TaskStatesEditor({
   onChange: (states: string[] | undefined) => void;
   onClose: () => void;
 }) {
+  // Shown with the list in force, so "every task" starts from what is there.
   const joined = states.map(taskStateLabel).join(", ");
+  const [everyTask, setEveryTask] = useState(false);
   const [draft, setDraft] = useState(joined);
   // A change from outside — undo — resets the draft.
   useEffect(() => setDraft(joined), [joined]);
@@ -1720,7 +1729,8 @@ function TaskStatesEditor({
   const source = fromDiagram ? "diagram" : "default";
   const apply = () => {
     const text = typed ? typed.map(taskStateLabel).join(", ") : "";
-    if (text !== joined) onChange(typed);
+    if (everyTask && onChangeDiagram) onChangeDiagram(typed);
+    else if (text !== joined) onChange(typed);
     onClose();
   };
   // Kept on screen: the picker may sit at the bar's right end.
@@ -1745,7 +1755,9 @@ function TaskStatesEditor({
         }
       }}
     >
-      <div className="as-statespop__title">States for {mixed ? "these tasks" : "this task"}</div>
+      <div className="as-statespop__title">
+        States for {everyTask ? "every task in this diagram" : mixed ? "these tasks" : "this task"}
+      </div>
       <input
         className="as-input as-statespop__input"
         value={draft}
@@ -1779,8 +1791,14 @@ function TaskStatesEditor({
             }`
           : "A task needs at least two states."}
       </div>
+      {onChangeDiagram ? (
+        <label className="as-check as-statespop__scope" title="Name the states once for the whole diagram. A task with a list of its own keeps it.">
+          <input type="checkbox" checked={everyTask} onChange={(event) => setEveryTask(event.target.checked)} />
+          Use for every task in this diagram
+        </label>
+      ) : null}
       <div className="as-statespop__actions">
-        {joined ? (
+        {joined && !everyTask ? (
           <button
             type="button"
             className="as-btn"

@@ -114,6 +114,44 @@ describe("the exported SVG", () => {
   });
 });
 
+describe("states of the plan's own, in the page", () => {
+  const OWN = validateTemplate({
+    version: 1,
+    settings: { taskStates: ["todo", "doing", "shipped"] },
+    nodes: [
+      { id: "a", label: "Alpha", kind: "task", x: 0, y: 0, stage: "doing" },
+      { id: "b", label: "Beta", kind: "task", x: 300, y: 0, done: true },
+    ],
+    edges: [],
+  });
+  const text = (g: Element) => [...g.querySelectorAll("text")].map((t) => t.textContent).join(" ");
+
+  it("shows the state a task is in, and its last state once it is ticked", async () => {
+    const p = await openPage(await exportHtml(OWN));
+    // Open in "doing": that pill shows, and the last state's waits.
+    expect(text(p.part("a", "stage"))).toBe("DOING");
+    expect(p.on(p.part("a", "stage"))).toBe(true);
+    expect(text(p.part("a", "state-done"))).toBe("SHIPPED");
+    expect(p.on(p.part("a", "state-done"))).toBe(false);
+    // Saved finished: the last state shows; an untick puts it back at the first.
+    expect(p.on(p.part("b", "state-done"))).toBe(true);
+    expect(text(p.part("b", "stage"))).toBe("TODO");
+    expect(p.on(p.part("b", "stage"))).toBe(false);
+
+    p.click(p.part("a", "check-open"));
+    expect(p.on(p.part("a", "state-done"))).toBe(true);
+    expect(p.on(p.part("a", "stage"))).toBe(false);
+    p.click(p.part("b", "check-done"));
+    expect(p.on(p.part("b", "state-done"))).toBe(false);
+    expect(p.on(p.part("b", "stage"))).toBe(true);
+  });
+
+  it("draws neither pill for the default pair", async () => {
+    const p = await openPage(await exportHtml());
+    expect(p.doc.querySelectorAll('[data-part="state-done"]')).toHaveLength(0);
+  });
+});
+
 describe("checks in the page", () => {
   it("toggle on click, and every check waiting on it follows — without selecting the card", async () => {
     const p = await openPage(await exportHtml());

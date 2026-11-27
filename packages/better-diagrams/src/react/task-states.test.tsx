@@ -219,6 +219,34 @@ describe("the task inspector", () => {
 });
 
 describe("a task card with states of its own", () => {
+  it("names the states of every task in the diagram, when asked to", async () => {
+    const ref = createRef<StudioHandle>();
+    const start = plan();
+    mount(
+      <ArchitectureStudio
+        ref={ref}
+        defaultValue={{ ...start, nodes: start.nodes.map((n) => (n.id === "design" ? { ...n, states: ["open", "closed"] } : n)) }}
+        welcome={false}
+      />,
+    );
+    act(() => ref.current!.select({ nodes: ["design"] }));
+    fireEvent.click(await screen.findByRole("button", { name: "Task status" }));
+    fireEvent.click(screen.getByRole("option", { name: /Edit states/ }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "Task states" }), { target: { value: "todo, doing, shipped" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Use for every task in this diagram" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(ref.current!.getTemplate().settings?.taskStates).toEqual(["todo", "doing", "shipped"]));
+    // The task it was set from follows the diagram now, as every other does.
+    expect(ref.current!.getTemplate().nodes.find((n) => n.id === "design")!.states).toBeUndefined();
+    expect(ref.current!.getTaskState("design")).toBe("todo");
+    expect(ref.current!.getTaskState("build")).toBe("todo");
+    act(() => {
+      ref.current!.undo();
+    });
+    expect(ref.current!.getTemplate().settings?.taskStates).toBeUndefined();
+    expect(ref.current!.getTemplate().nodes.find((n) => n.id === "design")!.states).toEqual(["open", "closed"]);
+  });
+
   it("always says which state it is in: where it starts, between, and done", async () => {
     const d = setTaskState(setTaskState(plan({ taskStates: FLOW }), "design", "review"), "build", "shipped");
     const { container } = mount(

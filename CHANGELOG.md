@@ -3,7 +3,7 @@
 All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
 `packages/better-diagrams/etc/*.api.md`; a change there is listed here.
 
-## Unreleased
+## 0.3.0 — 2026-11-27
 
 ### Added
 
@@ -38,6 +38,12 @@ All notable changes to `@mosphere/better-diagrams`. The public API is pinned in
   exported (`NodeDecoration`).
 - `dataFields`: inputs in the node inspector for keys of a node's `data` bag (`StudioDataField`).
 - On the `ref`: `getTaskState`, `setTaskState`, `getViewport` and `setViewport` (`StudioViewport`).
+- The states panel's **Use for every task in this diagram** names the states once for the whole
+  diagram (`settings.taskStates`), which until now only JSON or `setTaskStates` could.
+- The interactive HTML export shows a task's own state on its card, and its last state once the
+  task is ticked in the page.
+- The task report and the tasks CSV name a task's own states, first and last included, where they
+  said "To do" and "Done".
 
 ### Changed
 

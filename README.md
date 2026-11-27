@@ -1762,8 +1762,11 @@ In the editor, a task with states of its own always wears its state as a pill in
 header, led by a dot: grey where it starts, a colour per state in between, green when done. The
 task inspector's **state** picker lists the task's own states, and its last row, **Edit states…**,
 opens a small panel that names them for the selected tasks (comma-separated; **Use diagram
-states** goes back to the inherited list). The corner check moves a task to its last state, and
-back to its first. Picture exports draw the same pills.
+states** goes back to the inherited list). Tick **Use for every task in this diagram** there to
+name them once for the whole diagram instead (`settings.taskStates`). The corner check moves a
+task to its last state, and back to its first. Picture exports draw the same pills; the
+interactive HTML export shows the state a task is in and switches to its last state when the
+task is ticked in the page. The task report and the tasks CSV use the same names.
 
 To build logic on a plan, listen for the change:
 

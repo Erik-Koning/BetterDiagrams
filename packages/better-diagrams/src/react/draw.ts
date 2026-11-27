@@ -96,7 +96,7 @@ import {
 import { dayX, isRoadmap, roadmapAxisOf, roadmapTicks, unscheduledEdge, type RoadmapAxis } from "../contract/roadmap";
 import { kindDef, iconPaths, providerDef, relationDef, zoneInk, type ResolvedRegistry } from "./registry-types";
 import { resolveStudioMode, type StudioMode } from "./theme";
-import { TASK_DONE_INK, taskStateInk, taskStateLabel, taskStatePill } from "../contract/task-states";
+import { TASK_DONE_INK, taskStateInk, taskStateLabel, taskStatePill, taskStatesOf } from "../contract/task-states";
 
 export const PAD = 48;
 
@@ -1977,7 +1977,7 @@ export function emitTemplate(
     // an empty row in marketing — a small, deliberate difference, so reaching
     // it in the page never lands the pill on the title.)
     const hasPills = isTask
-      ? !!node.priority || !!node.stage || (!interactive && !!taskStatePill(node, template.settings?.taskStates))
+      ? !!node.priority || !!node.stage || !!taskStatePill(node, template.settings?.taskStates)
       : reached;
     // The row's last item on the canvas is the `⊞ N` of a card with things
     // inside — which keeps the row in marketing too.
@@ -2131,15 +2131,26 @@ export function emitTemplate(
         label: statePill.label.toUpperCase(),
         ink: statePill.position === "between" ? taskStateInk(statePill.index) : statePill.position === "last" ? TASK_DONE_INK : palette.textDim,
       });
-    } else if (isTask && node.stage && (!done || interactive)) {
+    } else if (!statePill && isTask && node.stage && (!done || interactive)) {
       fixedPills.push({
         label: STAGE_TEXT[node.stage] ?? taskStateLabel(node.stage).toUpperCase(),
-        ink: STAGE_INK[node.stage] ?? (statePill ? taskStateInk(statePill.index) : palette.textDim),
+        ink: STAGE_INK[node.stage] ?? palette.textDim,
         ...(interactive ? { part: { name: "stage", on: !done } } : {}),
       });
     }
     const slot: Array<{ label: string; ink: string; name: string; on: boolean }> = [];
     if (isMilestone) slot.push({ label: "REACHED", ink: "#16a34a", name: "reached", on: reached });
+    // A live page ticks tasks itself, so a task with states of its own
+    // carries two pills in the one slot: the state it is in while open (the
+    // first, when it is saved finished — where an untick puts it) and its
+    // last state, shown once it is ticked.
+    if (statePill && interactive) {
+      const states = taskStatesOf(template, node);
+      const open = statePill.position === "last" ? states[0]! : statePill.state;
+      const openAt = states.indexOf(open);
+      slot.push({ label: taskStateLabel(open).toUpperCase(), ink: openAt > 0 ? taskStateInk(openAt) : palette.textDim, name: "stage", on: !done });
+      slot.push({ label: taskStateLabel(states[states.length - 1]!).toUpperCase(), ink: TASK_DONE_INK, name: "state-done", on: done });
+    }
     // A fixed picture draws the slot only when it's on; a live page always.
     const slotShown = live ? slot : slot.filter((p) => p.on);
     const slotW = slotShown.reduce((w, p) => Math.max(w, pillW(p.label)), 0);

@@ -325,7 +325,7 @@ const TASK_JS = `
     switch (p.part) {
       case "check-open": return !done[p.id] && !blocked(p.id);
       case "check-blocked": return blocked(p.id);
-      case "check-done": case "strike": return !!done[p.id];
+      case "check-done": case "strike": case "state-done": return !!done[p.id];
       case "stage": return !done[p.id];
       case "reached": return finished(p.id);
       case "due": return !late(p.id);
